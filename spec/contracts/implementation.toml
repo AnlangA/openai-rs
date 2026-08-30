@@ -1,0 +1,151 @@
+# Explicit implementation registry. Entries are reviewed evidence, never inferred
+# from filenames or symbols. Operation ids must exist in the pinned OpenAPI.
+
+schema_version = 1
+
+[[operations]]
+operation_id = "createResponse"
+status = "verified"
+milestone = "M1-responses-client"
+units = ["CreateResponse", "CreateStreamingResponse"]
+tests = ["openai-rs-client::responses::tests::create_stream_decodes_events_and_stops_at_done", "openai-rs-client::responses::tests::create_stream_surfaces_in_band_error_once"]
+
+[[operations]]
+operation_id = "getResponse"
+status = "verified"
+milestone = "M1-responses-client"
+units = ["RetrieveResponse", "RetrieveResponseStream"]
+tests = ["openai-rs-client::responses::tests::retrieve_stream_encodes_resume_query_and_repeated_include"]
+
+[[operations]]
+operation_id = "deleteResponse"
+status = "verified"
+milestone = "M1-responses-client"
+units = ["DeleteResponse"]
+tests = ["openai-rs-client::responses::tests::delete_encodes_id_as_one_segment_and_accepts_empty_success"]
+
+[[operations]]
+operation_id = "cancelResponse"
+status = "verified"
+milestone = "M1-responses-client"
+units = ["CancelResponse"]
+tests = ["openai-rs-client::responses contract and loopback suite"]
+
+[[operations]]
+operation_id = "Compactconversation"
+status = "verified"
+milestone = "M1-responses-client"
+units = ["CompactResponse"]
+tests = ["openai-rs-client::responses contract and loopback suite"]
+
+[[operations]]
+operation_id = "listInputItems"
+status = "verified"
+milestone = "M1-responses-client"
+units = ["ListInputItems"]
+tests = ["openai-rs-client::responses::tests::input_items_encodes_cursor_query_without_following_a_url"]
+
+[[operations]]
+operation_id = "Getinputtokencounts"
+status = "verified"
+milestone = "M1-responses-client"
+units = ["CountInputTokens"]
+tests = ["openai-rs-client::responses::tests::count_input_tokens_sends_typed_json_and_preserves_metadata"]
+
+[[operations]]
+operation_id = "listModels"
+status = "verified"
+milestone = "M1-core-resources"
+units = ["ListModels"]
+tests = ["openai-rs-client::core_resources::tests::safe_operation_retries_before_delivering_a_response"]
+
+[[operations]]
+operation_id = "retrieveModel"
+status = "verified"
+milestone = "M1-core-resources"
+units = ["RetrieveModel"]
+tests = ["openai-rs-client::core_resources::tests::models_retrieve_percent_encodes_opaque_id"]
+
+[[operations]]
+operation_id = "deleteModel"
+status = "verified"
+milestone = "M1-core-resources"
+units = ["DeleteModel"]
+tests = ["openai-rs-client::core_resources operation metadata suite"]
+
+[[operations]]
+operation_id = "createEmbedding"
+status = "verified"
+milestone = "M1-core-resources"
+units = ["CreateEmbedding", "CreateEncodedEmbedding"]
+tests = ["openai-rs-client::core_resources::tests::embeddings_create_sends_typed_body", "openai-rs-client::core_resources::tests::encoded_embeddings_force_matching_wire_discriminator"]
+
+[[operations]]
+operation_id = "createModeration"
+status = "verified"
+milestone = "M1-core-resources"
+units = ["CreateModeration"]
+tests = ["openai-rs-client::core_resources::tests::moderations_create_sends_typed_body"]
+
+[[operations]]
+operation_id = "createFile"
+status = "partial"
+milestone = "M3-files-client"
+units = ["types-only"]
+tests = ["openai-rs-types::files::tests::expiration_policy_validates_range_and_shape", "openai-rs-types::files::tests::multipart_requests_keep_binary_out_of_json; client multipart encoder pending"]
+
+[[operations]]
+operation_id = "listFiles"
+status = "partial"
+milestone = "M3-files-client"
+units = ["types-only"]
+tests = ["openai-rs-types::files::tests::file_list_params_build_without_manual_json", "openai-rs-types::files::tests::list_page_and_delete_response_keep_future_fields; client operation pending"]
+
+[[operations]]
+operation_id = "retrieveFile"
+status = "partial"
+milestone = "M3-files-client"
+units = ["types-only"]
+tests = ["openai-rs-types::files::tests::file_object_preserves_unknown_enums_and_extra_fields; client operation pending"]
+
+[[operations]]
+operation_id = "deleteFile"
+status = "partial"
+milestone = "M3-files-client"
+units = ["types-only"]
+tests = ["openai-rs-types::files::tests::list_page_and_delete_response_keep_future_fields; client operation pending"]
+
+[[operations]]
+operation_id = "downloadFile"
+status = "partial"
+milestone = "M3-files-client"
+units = ["types-only", "raw-response-contract"]
+tests = ["openai-rs-types::files::tests::raw_file_content_is_not_mistaken_for_json_or_logged", "OVR-0001 contract generated; client raw download pending"]
+
+[[operations]]
+operation_id = "createUpload"
+status = "partial"
+milestone = "M3-files-client"
+units = ["types-only"]
+tests = ["openai-rs-types::files::tests::upload_create_and_complete_requests_have_strict_json", "openai-rs-types::files::tests::upload_object_is_required_by_the_sdk_contract_override; client operation pending"]
+
+[[operations]]
+operation_id = "addUploadPart"
+status = "partial"
+milestone = "M3-files-client"
+units = ["types-only"]
+tests = ["openai-rs-types::files::tests::multipart_requests_keep_binary_out_of_json; client operation pending"]
+
+[[operations]]
+operation_id = "completeUpload"
+status = "partial"
+milestone = "M3-files-client"
+units = ["types-only"]
+tests = ["openai-rs-types::files::tests::upload_create_and_complete_requests_have_strict_json; client operation pending"]
+
+[[operations]]
+operation_id = "cancelUpload"
+status = "partial"
+milestone = "M3-files-client"
+units = ["types-only"]
+tests = ["openai-rs-types::files::tests::upload_and_part_preserve_unknown_values_and_fields; client operation pending"]

@@ -4,6 +4,7 @@ pub mod chat;
 pub mod core;
 pub mod files;
 pub mod kernel;
+pub mod media;
 pub mod responses;
 pub mod scalar;
 pub mod secret;

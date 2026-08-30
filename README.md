@@ -14,18 +14,23 @@ Responses API.
 The workspace, crate boundaries, feature flags, MSRV policy, and initial
 contract-test infrastructure are present. The pre-release MVP includes typed
 Responses create, retrieve, delete, cancel, compact, input-item listing, and
-input-token counting operations and a public SSE create-stream path. Complete
-stable event coverage, broader resource families, and most optional features
+input-token counting operations; a public SSE path with the 58-event stable
+union; and typed Models, Embeddings, and Moderations resource methods. Chat
+Completions and Files/Uploads wire types are present, but their HTTP resource
+facades are not wired yet. Most other resource families and optional features
 remain in progress, scaffolded, or planned.
 
 | Area | Status |
 |---|---|
 | Lossless Serde primitives | Implemented for the MVP; still pre-release |
 | Typed Responses REST slice | Implemented for the MVP; contract coverage is still growing |
-| Responses SSE streaming | Public MVP path implemented; full event coverage is incomplete |
+| Responses SSE streaming | Public MVP path and 58-event stable union implemented |
+| Models, Embeddings, Moderations | Typed MVP resource methods implemented |
+| Chat Completions | Typed request/response/stream models implemented; HTTP facade pending |
+| Files and Uploads | Typed wire/multipart models implemented; HTTP facade pending |
 | Full OpenAPI resource coverage | Not implemented |
 | Realtime, administration, and webhook helpers | Feature boundaries reserved; not complete |
-| RMCP bridge | Optional scaffold; not production-ready |
+| RMCP bridge | Typed local bridge MVP implemented; transport/server integration remains pre-release |
 | Codex app-server integration | Experimental; only one exact Codex 0.144.5 macOS arm64 artifact is audited |
 | Direct Codex Responses transport | Experimental, private-backend compatibility work only |
 

@@ -2,4 +2,80 @@
 # satisfy manual-overrides.schema.json and cite immutable official evidence.
 
 schema_version = 1
-overrides = []
+
+[[overrides]]
+id = "OVR-0001"
+target = "/paths/~1files~1{file_id}~1content/get/responses/200/content"
+action = "replace"
+value = "raw_binary"
+sources = [{ category = "raw_openapi", fixture_status = "captured", url = "https://raw.githubusercontent.com/openai/openai-openapi/690521b1753dce0c6d6b275f583d22537679cff9/openapi.json", sha256 = "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899", excerpt = "Pinned schema declares application/json string." }, { category = "official_reference", fixture_status = "pending", note = "Capture the exact official downloadFile raw-binary reference and a binary response fixture." }]
+reviewed_at = "2026-08-30"
+reason = "downloadFile returns raw file bytes; the pinned application/json string response is not the wire contract."
+impact = ["response codec", "operations.json"]
+tests = ["generated downloadFile contract uses response.mode=raw", "pending binary wire fixture"]
+
+[[overrides]]
+id = "OVR-0002"
+target = "/paths/~1files/post/requestBody/content/multipart~1form-data"
+action = "merge"
+value = ["expires_after[anchor]", "expires_after[seconds]"]
+sources = [{ category = "official_sdk", fixture_status = "pending", note = "Capture the official SDK multipart body showing bracket-form expires_after keys." }]
+reviewed_at = "2026-08-30"
+reason = "CreateFile serializes the nested expiration policy as bracketed multipart field names."
+impact = ["multipart encoder", "createFile request contract"]
+tests = ["pending multipart capture for both bracketed fields", "client encoder implementation deferred"]
+
+[[overrides]]
+id = "OVR-0003"
+target = "/components/schemas/Upload/required"
+action = "merge"
+value = ["object"]
+sources = [{ category = "official_sdk", fixture_status = "captured", url = "https://raw.githubusercontent.com/openai/openai-node/eea2292a4a523da9405161dde0a79ac5dc2ecb2a/api_reference/openapi.transformed.yml", sha256 = "1a9e90cd0c3b98cec8fec7d12b7aaeaa5e4d5110a0bd3f6456a6958a08127430", excerpt = "Official transformed SDK contract requires Upload.object." }]
+reviewed_at = "2026-08-30"
+reason = "Upload.object is a constant wire discriminator and is required by the official SDK contract."
+impact = ["request/response schema requiredness split", "Upload DTO"]
+tests = ["Upload output fixture requires object=upload"]
+
+[[overrides]]
+id = "OVR-0004"
+target = "/components/schemas/CreateUploadRequest/properties/purpose/enum"
+action = "replace"
+value = ["assistants", "batch", "fine-tune", "vision", "user_data", "evals"]
+sources = [{ category = "official_sdk", fixture_status = "captured", url = "https://raw.githubusercontent.com/openai/openai-node/eea2292a4a523da9405161dde0a79ac5dc2ecb2a/api_reference/openapi.transformed.yml", sha256 = "1a9e90cd0c3b98cec8fec7d12b7aaeaa5e4d5110a0bd3f6456a6958a08127430", excerpt = "Reuse the six-value official SDK File purpose domain for CreateUpload." }]
+reviewed_at = "2026-08-30"
+reason = "The pinned CreateUpload request exposes only four values while the official SDK File-purpose contract exposes six accepted values."
+impact = ["CreateUpload purpose enum", "request validation"]
+tests = ["CreateUpload accepts user_data and evals"]
+
+[[overrides]]
+id = "OVR-0005"
+target = "/components/schemas/OpenAIFile/required"
+action = "merge"
+value = ["status"]
+sources = [{ category = "raw_openapi", fixture_status = "captured", url = "https://raw.githubusercontent.com/openai/openai-openapi/690521b1753dce0c6d6b275f583d22537679cff9/openapi.json", sha256 = "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899", excerpt = "OpenAIFile.required includes status." }, { category = "official_sdk", fixture_status = "captured", url = "https://raw.githubusercontent.com/openai/openai-node/eea2292a4a523da9405161dde0a79ac5dc2ecb2a/api_reference/openapi.transformed.yml", sha256 = "1a9e90cd0c3b98cec8fec7d12b7aaeaa5e4d5110a0bd3f6456a6958a08127430", excerpt = "Official SDK contract also requires status." }, { category = "wire_fixture", fixture_status = "pending", note = "The official example omits status; capture an actual File response before closing the discrepancy." }]
+reviewed_at = "2026-08-30"
+reason = "Keep File.status required according to raw and SDK contracts despite the incomplete official example."
+impact = ["OpenAIFile output requiredness", "fixture quarantine"]
+tests = ["pending File response fixture containing status", "example omission remains recorded"]
+
+[[overrides]]
+id = "OVR-0006"
+target = "/components/schemas/ListFilesResponse/required"
+action = "merge"
+value = ["first_id", "last_id"]
+sources = [{ category = "raw_openapi", fixture_status = "captured", url = "https://raw.githubusercontent.com/openai/openai-openapi/690521b1753dce0c6d6b275f583d22537679cff9/openapi.json", sha256 = "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899", excerpt = "ListFilesResponse.required includes first_id and last_id." }, { category = "wire_fixture", fixture_status = "pending", note = "Capture an empty listFiles response to confirm whether both ids are present on the wire." }]
+reviewed_at = "2026-08-30"
+reason = "Use raw-spec requiredness provisionally until an empty-list fixture proves nullable or absent behavior."
+impact = ["ListFilesResponse output requiredness", "pagination fixture"]
+tests = ["pending empty listFiles fixture"]
+
+[[overrides]]
+id = "OVR-0007"
+target = "/components/schemas/MCPApprovalResponse/required"
+action = "quarantine"
+value = "input request_id optional; output request_id required until wire fixture resolves ghost field"
+sources = [{ category = "raw_openapi", fixture_status = "captured", url = "https://raw.githubusercontent.com/openai/openai-openapi/690521b1753dce0c6d6b275f583d22537679cff9/openapi.json", sha256 = "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899", excerpt = "required contains request_id but properties does not define it." }, { category = "wire_fixture", fixture_status = "pending", note = "Capture MCP approval input and output payloads to determine whether request_id or approval_request_id is authoritative." }]
+reviewed_at = "2026-08-30"
+reason = "The pinned schema contains a ghost required field. Directional DTOs must not fabricate an undefined input property, while output decoding preserves current wire-requiredness."
+impact = ["MCPApprovalResponse request/output split", "schema anomaly manifest"]
+tests = ["input DTO does not require request_id", "output resource requires and preserves request_id", "pending bidirectional wire fixtures"]

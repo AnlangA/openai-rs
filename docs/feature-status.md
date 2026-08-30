@@ -16,7 +16,7 @@ Status terms:
 
 | Feature | Default | Status | Notes |
 |---|---:|---|---|
-| `client` | Yes | MVP | Enables the Platform API client facade. Initial coverage is Responses-first. |
+| `client` | Yes | MVP | Enables the Platform API client facade. Coverage currently includes Responses plus Models, Embeddings, and Moderations. |
 | `rustls-tls` | Yes | MVP | Rustls-backed Platform transport. Implies `client`. |
 | `native-tls` | No | Scaffold | Native TLS transport selection. Implies `client`. |
 | `structured-output` | Yes | MVP | Typed schema generation and strict-subset normalization are implemented; keyword/limit coverage remains pre-release. |
@@ -31,7 +31,7 @@ Status terms:
 
 | Feature | Status | Notes |
 |---|---|---|
-| `rmcp` | Scaffold | Typed client-side bridge; no automatic exposure of paid OpenAI operations. |
+| `rmcp` | MVP | Typed catalog, arguments, execution control, local dispatch, and lossless result encoding; no automatic exposure of paid OpenAI operations. |
 | `rmcp-stdio` | Scaffold | Child-process stdio transport. |
 | `rmcp-http-rustls` | Scaffold | Streamable HTTP client with rustls. |
 | `rmcp-http-native-tls` | Scaffold | Streamable HTTP client with native TLS. |
@@ -65,8 +65,13 @@ specification. Until then:
 
 - The REST MVP covers Responses create, retrieve, delete, cancel, compact,
   input-item listing, and input-token counting.
-- Responses SSE create-stream and bounded decoding exist; only a major-event
-  subset is typed today, so the full stable event contract remains incomplete.
+- Responses SSE create-stream, bounded decoding, and all 58 events in the
+  pinned stable union are typed.
+- Models list/retrieve/delete, Embeddings create, and Moderations create have
+  typed client resource methods.
+- Chat Completions and Files/Uploads have typed wire models, including stream
+  and replayable multipart shapes, but their HTTP resource facades are not wired
+  yet.
 - Additional operations are added only with typed request/response and error
   fixtures.
 - Other resource families remain incomplete even if their feature boundary is

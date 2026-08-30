@@ -77,9 +77,7 @@ fn validate_override_manifest(input: &str, path: &Path) -> Result<()> {
     let has_schema_version = input
         .lines()
         .any(|line| line.trim() == "schema_version = 1");
-    let declares_empty = input
-        .lines()
-        .any(|line| line.trim() == "overrides = []");
+    let declares_empty = input.lines().any(|line| line.trim() == "overrides = []");
     let mut blocks = Vec::new();
     let mut current: Option<BTreeSet<String>> = None;
     let mut ids = BTreeSet::new();
@@ -131,7 +129,7 @@ fn validate_override_manifest(input: &str, path: &Path) -> Result<()> {
         blocks.push(block);
     }
 
-    if !has_schema_version || (declares_empty == !blocks.is_empty()) {
+    if !has_schema_version || (declares_empty != blocks.is_empty()) {
         return Err(Error::message(format!(
             "{} must declare schema_version = 1 and exactly one of `overrides = []` or [[overrides]] entries",
             path.display()

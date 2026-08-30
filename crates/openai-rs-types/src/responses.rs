@@ -2651,7 +2651,7 @@ macro_rules! impl_create_response_builders {
 
             /// Sets instructions.
             #[must_use]
-            pub fn instructions(mut self, instructions: impl Into<ResponseInstructions>) -> Self {
+            pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
                 self.body.instructions = Omittable::Value(Nullable::Value(instructions.into()));
                 self
             }
@@ -2666,7 +2666,7 @@ macro_rules! impl_create_response_builders {
             /// Enables or disables background execution.
             #[must_use]
             pub fn background(mut self, background: bool) -> Self {
-                self.body.background = Omittable::Value(background);
+                self.body.background = Omittable::Value(Nullable::Value(background));
                 self
             }
 
@@ -2677,10 +2677,29 @@ macro_rules! impl_create_response_builders {
                 self
             }
 
+            /// Serializes and adds one context-management rule.
+            pub fn context_management<T: Serialize>(
+                mut self,
+                rule: &T,
+            ) -> Result<Self, serde_json::Error> {
+                let mut rules = match std::mem::take(&mut self.body.context_management) {
+                    Omittable::Value(Nullable::Value(rules)) => rules,
+                    Omittable::Omitted | Omittable::Value(Nullable::Null) => Vec::new(),
+                };
+                rules.push(serde_json::to_value(rule)?);
+                self.body.context_management = Omittable::Value(Nullable::Value(rules));
+                Ok(self)
+            }
+
             /// Adds one optional response field to include.
             #[must_use]
             pub fn include(mut self, include: impl Into<String>) -> Self {
-                self.body.include.push(include.into());
+                let mut includes = match std::mem::take(&mut self.body.include) {
+                    Omittable::Value(Nullable::Value(includes)) => includes,
+                    Omittable::Omitted | Omittable::Value(Nullable::Null) => Vec::new(),
+                };
+                includes.push(include.into());
+                self.body.include = Omittable::Value(Nullable::Value(includes));
                 self
             }
 
@@ -2701,14 +2720,29 @@ macro_rules! impl_create_response_builders {
             /// Inserts one metadata pair.
             #[must_use]
             pub fn metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-                self.body.metadata.insert(key.into(), value.into());
+                let mut metadata = match std::mem::take(&mut self.body.metadata) {
+                    Omittable::Value(Nullable::Value(metadata)) => metadata,
+                    Omittable::Omitted | Omittable::Value(Nullable::Null) => BTreeMap::new(),
+                };
+                metadata.insert(key.into(), value.into());
+                self.body.metadata = Omittable::Value(Nullable::Value(metadata));
                 self
+            }
+
+            /// Serializes moderation configuration without requiring JSON text.
+            pub fn moderation<T: Serialize>(
+                mut self,
+                moderation: &T,
+            ) -> Result<Self, serde_json::Error> {
+                self.body.moderation =
+                    Omittable::Value(Nullable::Value(serde_json::to_value(moderation)?));
+                Ok(self)
             }
 
             /// Controls parallel tool calls.
             #[must_use]
             pub fn parallel_tool_calls(mut self, enabled: bool) -> Self {
-                self.body.parallel_tool_calls = Omittable::Value(enabled);
+                self.body.parallel_tool_calls = Omittable::Value(Nullable::Value(enabled));
                 self
             }
 
@@ -2723,6 +2757,30 @@ macro_rules! impl_create_response_builders {
             #[must_use]
             pub fn prompt(mut self, prompt: PromptReference) -> Self {
                 self.body.prompt = Omittable::Value(Nullable::Value(prompt));
+                self
+            }
+
+            /// Sets a prompt-cache key.
+            #[must_use]
+            pub fn prompt_cache_key(mut self, key: impl Into<String>) -> Self {
+                self.body.prompt_cache_key = Omittable::Value(Nullable::Value(key.into()));
+                self
+            }
+
+            /// Serializes prompt-cache options without requiring JSON text.
+            pub fn prompt_cache_options<T: Serialize>(
+                mut self,
+                options: &T,
+            ) -> Result<Self, serde_json::Error> {
+                self.body.prompt_cache_options = Omittable::Value(serde_json::to_value(options)?);
+                Ok(self)
+            }
+
+            /// Sets the deprecated prompt-cache retention policy.
+            #[must_use]
+            pub fn prompt_cache_retention(mut self, retention: impl Into<String>) -> Self {
+                self.body.prompt_cache_retention =
+                    Omittable::Value(Nullable::Value(retention.into()));
                 self
             }
 
@@ -2750,7 +2808,7 @@ macro_rules! impl_create_response_builders {
             /// Controls response storage.
             #[must_use]
             pub fn store(mut self, store: bool) -> Self {
-                self.body.store = Omittable::Value(store);
+                self.body.store = Omittable::Value(Nullable::Value(store));
                 self
             }
 
@@ -2771,7 +2829,12 @@ macro_rules! impl_create_response_builders {
             /// Adds a tool.
             #[must_use]
             pub fn tool(mut self, tool: impl Into<ResponseTool>) -> Self {
-                self.body.tools.push(tool.into());
+                let mut tools = match std::mem::take(&mut self.body.tools) {
+                    Omittable::Value(tools) => tools,
+                    Omittable::Omitted => Vec::new(),
+                };
+                tools.push(tool.into());
+                self.body.tools = Omittable::Value(tools);
                 self
             }
 
@@ -2781,7 +2844,12 @@ macro_rules! impl_create_response_builders {
                 mut self,
                 tools: impl IntoIterator<Item = impl Into<ResponseTool>>,
             ) -> Self {
-                self.body.tools.extend(tools.into_iter().map(Into::into));
+                let mut configured = match std::mem::take(&mut self.body.tools) {
+                    Omittable::Value(configured) => configured,
+                    Omittable::Omitted => Vec::new(),
+                };
+                configured.extend(tools.into_iter().map(Into::into));
+                self.body.tools = Omittable::Value(configured);
                 self
             }
 
@@ -2799,10 +2867,17 @@ macro_rules! impl_create_response_builders {
                 self
             }
 
+            /// Requests token log probabilities at each output position.
+            #[must_use]
+            pub fn top_logprobs(mut self, top_logprobs: u32) -> Self {
+                self.body.top_logprobs = Omittable::Value(top_logprobs);
+                self
+            }
+
             /// Sets the truncation strategy.
             #[must_use]
             pub fn truncation(mut self, truncation: TruncationStrategy) -> Self {
-                self.body.truncation = Omittable::Value(truncation);
+                self.body.truncation = Omittable::Value(Nullable::Value(truncation));
                 self
             }
 
@@ -2834,7 +2909,10 @@ macro_rules! impl_create_response_builders {
             /// Returns configured tools.
             #[must_use]
             pub fn tools_ref(&self) -> &[ResponseTool] {
-                &self.body.tools
+                match &self.body.tools {
+                    Omittable::Value(tools) => tools,
+                    Omittable::Omitted => &[],
+                }
             }
         }
     };
@@ -3257,7 +3335,7 @@ pub struct CompactResponseRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input: Omittable<ResponseInput>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    instructions: Omittable<Nullable<ResponseInstructions>>,
+    instructions: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     previous_response_id: Omittable<Nullable<String>>,
 }
@@ -3296,7 +3374,7 @@ impl CompactResponseRequest {
 
     /// Sets compaction instructions.
     #[must_use]
-    pub fn instructions(mut self, instructions: impl Into<ResponseInstructions>) -> Self {
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
         self.instructions = Omittable::Value(Nullable::Value(instructions.into()));
         self
     }
@@ -3453,25 +3531,25 @@ pub struct CountInputTokensRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     conversation: Omittable<Nullable<ConversationReference>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    input: Omittable<ResponseInput>,
+    input: Omittable<Nullable<ResponseInput>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    instructions: Omittable<Nullable<ResponseInstructions>>,
+    instructions: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    model: Omittable<String>,
+    model: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    parallel_tool_calls: Omittable<bool>,
+    parallel_tool_calls: Omittable<Nullable<bool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     previous_response_id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    prompt: Omittable<Nullable<PromptReference>>,
+    personality: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     reasoning: Omittable<Nullable<ReasoningConfig>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    text: Omittable<ResponseTextConfig>,
+    text: Omittable<Nullable<ResponseTextConfig>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    tool_choice: Omittable<ToolChoice>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<ResponseTool>,
+    tool_choice: Omittable<Nullable<ToolChoice>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    tools: Omittable<Nullable<Vec<ResponseTool>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     truncation: Omittable<TruncationStrategy>,
 }
@@ -3492,20 +3570,20 @@ impl CountInputTokensRequest {
     /// Sets the model id.
     #[must_use]
     pub fn model(mut self, model: impl Into<String>) -> Self {
-        self.model = Omittable::Value(model.into());
+        self.model = Omittable::Value(Nullable::Value(model.into()));
         self
     }
 
     /// Sets the input to count.
     #[must_use]
     pub fn input(mut self, input: impl Into<ResponseInput>) -> Self {
-        self.input = Omittable::Value(input.into());
+        self.input = Omittable::Value(Nullable::Value(input.into()));
         self
     }
 
     /// Sets instructions.
     #[must_use]
-    pub fn instructions(mut self, instructions: impl Into<ResponseInstructions>) -> Self {
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
         self.instructions = Omittable::Value(Nullable::Value(instructions.into()));
         self
     }
@@ -3517,17 +3595,29 @@ impl CountInputTokensRequest {
         self
     }
 
+    /// Selects a model-owned personality preset.
+    #[must_use]
+    pub fn personality(mut self, personality: impl Into<String>) -> Self {
+        self.personality = Omittable::Value(personality.into());
+        self
+    }
+
     /// Adds a function or native MCP tool.
     #[must_use]
     pub fn tool(mut self, tool: impl Into<ResponseTool>) -> Self {
-        self.tools.push(tool.into());
+        let mut tools = match std::mem::take(&mut self.tools) {
+            Omittable::Value(Nullable::Value(tools)) => tools,
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => Vec::new(),
+        };
+        tools.push(tool.into());
+        self.tools = Omittable::Value(Nullable::Value(tools));
         self
     }
 
     /// Sets tool choice.
     #[must_use]
     pub fn tool_choice(mut self, tool_choice: ToolChoice) -> Self {
-        self.tool_choice = Omittable::Value(tool_choice);
+        self.tool_choice = Omittable::Value(Nullable::Value(tool_choice));
         self
     }
 }
@@ -6089,6 +6179,40 @@ mod tests {
             .expect("all create properties are optional in the frozen schema");
         assert!(empty.model_ref().is_none());
         assert!(empty.input_ref().is_none());
+    }
+
+    #[test]
+    fn create_and_token_count_requests_preserve_omitted_null_and_empty() {
+        let create_fixture = json!({
+            "background": null,
+            "include": [],
+            "metadata": {},
+            "parallel_tool_calls": null,
+            "store": null,
+            "tools": [],
+            "truncation": null
+        });
+        let create: CreateResponseRequest =
+            serde_json::from_value(create_fixture.clone()).expect("decode tri-state create body");
+        assert_eq!(
+            serde_json::to_value(create).expect("encode tri-state create body"),
+            create_fixture
+        );
+
+        let count_fixture = json!({
+            "model": null,
+            "input": null,
+            "parallel_tool_calls": null,
+            "text": null,
+            "tool_choice": null,
+            "tools": []
+        });
+        let count: CountInputTokensRequest = serde_json::from_value(count_fixture.clone())
+            .expect("decode tri-state token-count body");
+        assert_eq!(
+            serde_json::to_value(count).expect("encode tri-state token-count body"),
+            count_fixture
+        );
     }
 
     #[test]

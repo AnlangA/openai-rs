@@ -7,7 +7,13 @@
   "counts": {
     "client": 288,
     "webhook": 18,
-    "total": 306
+    "total": 306,
+    "implementation_statuses": {
+      "partial": 9,
+      "planned": 267,
+      "verified": 12
+    },
+    "verified_units": 15
   },
   "client_operations": [
     {
@@ -74,7 +80,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -108,7 +119,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -145,7 +161,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -190,7 +211,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -227,7 +253,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -262,7 +293,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -300,7 +336,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -335,7 +376,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -382,7 +428,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -416,7 +467,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -453,7 +509,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -498,7 +559,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -535,7 +601,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -569,7 +640,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -616,7 +692,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -650,7 +731,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -687,7 +773,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -724,7 +815,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -803,7 +899,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -839,7 +940,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -876,7 +982,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -921,7 +1032,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -958,7 +1074,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1025,7 +1146,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1059,7 +1185,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1096,7 +1227,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1175,7 +1311,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1212,7 +1353,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1249,7 +1395,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1328,7 +1479,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1362,7 +1518,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1429,7 +1590,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1463,7 +1629,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1500,7 +1671,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1533,7 +1709,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1600,7 +1781,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1646,7 +1832,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1693,7 +1884,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1736,7 +1932,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1779,7 +1980,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1813,7 +2019,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1847,7 +2058,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1884,7 +2100,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1929,7 +2150,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -1966,7 +2192,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2045,7 +2276,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2102,7 +2338,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2161,7 +2402,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2208,7 +2454,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2242,7 +2493,18 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "verified",
+        "milestone": "M1-core-resources",
+        "units": [
+          "CreateEmbedding",
+          "CreateEncodedEmbedding"
+        ],
+        "tests": [
+          "openai-rs-client::core_resources::tests::embeddings_create_sends_typed_body",
+          "openai-rs-client::core_resources::tests::encoded_embeddings_force_matching_wire_discriminator"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -2309,7 +2571,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2343,7 +2610,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2380,7 +2652,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2425,7 +2702,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2460,7 +2742,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2537,7 +2824,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2582,7 +2874,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2629,7 +2926,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2676,7 +2978,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2721,7 +3028,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2808,7 +3120,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2865,7 +3182,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -2932,7 +3254,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "partial",
+        "milestone": "M3-files-client",
+        "units": [
+          "types-only"
+        ],
+        "tests": [
+          "openai-rs-types::files serde tests; client operation pending"
+        ]
+      },
       "manual_overrides": [
         "OVR-0006"
       ]
@@ -2968,7 +3299,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "partial",
+        "milestone": "M3-files-client",
+        "units": [
+          "types-only"
+        ],
+        "tests": [
+          "openai-rs-types::files serde tests; client multipart encoder pending"
+        ]
+      },
       "manual_overrides": [
         "OVR-0002"
       ]
@@ -3007,7 +3347,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "partial",
+        "milestone": "M3-files-client",
+        "units": [
+          "types-only"
+        ],
+        "tests": [
+          "openai-rs-types::files serde tests; client operation pending"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -3044,7 +3393,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "partial",
+        "milestone": "M3-files-client",
+        "units": [
+          "types-only"
+        ],
+        "tests": [
+          "openai-rs-types::files serde tests; client operation pending"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -3079,7 +3437,17 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "partial",
+        "milestone": "M3-files-client",
+        "units": [
+          "types-only",
+          "raw-response-contract"
+        ],
+        "tests": [
+          "OVR-0001 contract generated; client raw download pending"
+        ]
+      },
       "manual_overrides": [
         "OVR-0001"
       ]
@@ -3115,7 +3483,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3149,7 +3522,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3226,7 +3604,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3271,7 +3654,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3318,7 +3706,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3375,7 +3768,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3409,7 +3807,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3446,7 +3849,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3483,7 +3891,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3540,7 +3953,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3597,7 +4015,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3634,7 +4057,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3671,7 +4099,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3709,7 +4142,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3745,7 +4183,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3779,7 +4222,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -3805,7 +4253,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "verified",
+        "milestone": "M1-core-resources",
+        "units": [
+          "ListModels"
+        ],
+        "tests": [
+          "openai-rs-client::core_resources::tests::safe_operation_retries_before_delivering_a_response"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -3842,7 +4299,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "verified",
+        "milestone": "M1-core-resources",
+        "units": [
+          "RetrieveModel"
+        ],
+        "tests": [
+          "openai-rs-client::core_resources::tests::models_retrieve_percent_encodes_opaque_id"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -3879,7 +4345,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "verified",
+        "milestone": "M1-core-resources",
+        "units": [
+          "DeleteModel"
+        ],
+        "tests": [
+          "openai-rs-client::core_resources operation metadata suite"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -3913,7 +4388,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "verified",
+        "milestone": "M1-core-resources",
+        "units": [
+          "CreateModeration"
+        ],
+        "tests": [
+          "openai-rs-client::core_resources::tests::moderations_create_sends_typed_body"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -3970,7 +4454,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4002,7 +4491,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4039,7 +4533,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4074,7 +4573,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4203,7 +4707,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4260,7 +4769,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4294,7 +4808,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4328,7 +4847,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4362,7 +4886,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4409,7 +4938,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4454,7 +4988,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4491,7 +5030,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4598,7 +5142,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4624,7 +5173,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4658,7 +5212,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4715,7 +5274,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4749,7 +5313,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4786,7 +5355,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4831,7 +5405,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4868,7 +5447,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4935,7 +5519,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -4980,7 +5569,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5027,7 +5621,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5074,7 +5673,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5141,7 +5745,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5186,7 +5795,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5233,7 +5847,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5280,7 +5899,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5327,7 +5951,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5361,7 +5990,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5398,7 +6032,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5435,7 +6074,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5492,7 +6136,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5526,7 +6175,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5563,7 +6217,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5608,7 +6267,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5675,7 +6339,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5722,7 +6391,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5769,7 +6443,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5806,7 +6485,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5873,7 +6557,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5918,7 +6607,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -5963,7 +6657,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6000,7 +6699,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6045,7 +6749,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6112,7 +6821,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6157,7 +6871,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6214,7 +6933,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6261,7 +6985,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6298,7 +7027,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6343,7 +7077,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6380,7 +7119,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6425,7 +7169,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6462,7 +7211,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6529,7 +7283,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6584,7 +7343,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6641,7 +7405,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6686,7 +7455,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6733,7 +7507,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6788,7 +7567,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6835,7 +7619,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6890,7 +7679,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -6967,7 +7761,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7012,7 +7811,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7059,7 +7863,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7114,7 +7923,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7161,7 +7975,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7198,7 +8017,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7243,7 +8067,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7280,7 +8109,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7337,7 +8171,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7382,7 +8221,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7429,7 +8273,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7484,7 +8333,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7531,7 +8385,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7588,7 +8447,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7622,7 +8486,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7659,7 +8528,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7704,7 +8578,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7741,7 +8620,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7808,7 +8692,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7842,7 +8731,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7879,7 +8773,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7924,7 +8823,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7961,7 +8865,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -7987,7 +8896,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -8021,7 +8935,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -8047,7 +8966,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -8174,7 +9098,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -8301,7 +9230,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -8398,7 +9332,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -8535,7 +9474,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -8662,7 +9606,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -8789,7 +9738,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -8936,7 +9890,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9063,7 +10022,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9160,7 +10124,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9297,7 +10266,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9354,7 +10328,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9391,7 +10370,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9436,7 +10420,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9473,7 +10462,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9540,7 +10534,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9585,7 +10584,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9632,7 +10636,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9679,7 +10688,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9756,7 +10770,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9811,7 +10830,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9868,7 +10892,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9925,7 +10954,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -9992,7 +11026,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10037,7 +11076,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10084,7 +11128,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10139,7 +11188,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10186,7 +11240,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10263,7 +11322,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10318,7 +11382,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10375,7 +11444,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10432,7 +11506,12 @@
       },
       "lifecycle": "active",
       "feature": "admin",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10465,7 +11544,12 @@
       },
       "lifecycle": "active",
       "feature": "realtime",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10506,7 +11590,12 @@
       },
       "lifecycle": "active",
       "feature": "realtime",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10539,7 +11628,12 @@
       },
       "lifecycle": "active",
       "feature": "realtime",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10580,7 +11674,12 @@
       },
       "lifecycle": "active",
       "feature": "realtime",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10621,7 +11720,12 @@
       },
       "lifecycle": "active",
       "feature": "realtime",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10655,7 +11759,12 @@
       },
       "lifecycle": "active",
       "feature": "realtime",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10689,7 +11798,12 @@
       },
       "lifecycle": "active",
       "feature": "realtime",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10723,7 +11837,12 @@
       },
       "lifecycle": "active",
       "feature": "realtime",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10757,7 +11876,12 @@
       },
       "lifecycle": "active",
       "feature": "realtime",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10793,7 +11917,18 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "verified",
+        "milestone": "M1-responses-client",
+        "units": [
+          "CreateResponse",
+          "CreateStreamingResponse"
+        ],
+        "tests": [
+          "openai-rs-client::responses::tests::create_stream_decodes_events_and_stops_at_done",
+          "openai-rs-client::responses::tests::create_stream_surfaces_in_band_error_once"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -10827,7 +11962,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "verified",
+        "milestone": "M1-responses-client",
+        "units": [
+          "CompactResponse"
+        ],
+        "tests": [
+          "openai-rs-client::responses contract and loopback suite"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -10872,7 +12016,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -10906,7 +12055,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "verified",
+        "milestone": "M1-responses-client",
+        "units": [
+          "CountInputTokens"
+        ],
+        "tests": [
+          "openai-rs-client::responses::tests::count_input_tokens_sends_typed_json_and_preserves_metadata"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -10951,7 +12109,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11030,7 +12193,17 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "verified",
+        "milestone": "M1-responses-client",
+        "units": [
+          "RetrieveResponse",
+          "RetrieveResponseStream"
+        ],
+        "tests": [
+          "openai-rs-client::responses::tests::retrieve_stream_encodes_resume_query_and_repeated_include"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -11063,7 +12236,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "verified",
+        "milestone": "M1-responses-client",
+        "units": [
+          "DeleteResponse"
+        ],
+        "tests": [
+          "openai-rs-client::responses::tests::delete_encodes_id_as_one_segment_and_accepts_empty_success"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -11100,7 +12282,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "verified",
+        "milestone": "M1-responses-client",
+        "units": [
+          "CancelResponse"
+        ],
+        "tests": [
+          "openai-rs-client::responses contract and loopback suite"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -11147,7 +12338,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11226,7 +12422,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "verified",
+        "milestone": "M1-responses-client",
+        "units": [
+          "ListInputItems"
+        ],
+        "tests": [
+          "openai-rs-client::responses::tests::input_items_encodes_cursor_query_without_following_a_url"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -11315,7 +12520,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11404,7 +12614,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11447,7 +12662,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11494,7 +12714,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11553,7 +12778,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11588,7 +12818,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11625,7 +12860,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11670,7 +12910,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11707,7 +12952,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11743,7 +12993,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11812,7 +13067,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11858,7 +13118,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11905,7 +13170,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11952,7 +13222,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -11998,7 +13273,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12032,7 +13312,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12066,7 +13351,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12103,7 +13393,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12148,7 +13443,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12185,7 +13485,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12272,7 +13577,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12317,7 +13627,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12364,7 +13679,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12419,7 +13739,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12466,7 +13791,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12543,7 +13873,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12598,7 +13933,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12645,7 +13985,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12700,7 +14045,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12747,7 +14097,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12844,7 +14199,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12911,7 +14271,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -12966,7 +14331,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13000,7 +14370,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "partial",
+        "milestone": "M3-files-client",
+        "units": [
+          "types-only"
+        ],
+        "tests": [
+          "OVR-0004 type contract recorded; client operation pending"
+        ]
+      },
       "manual_overrides": [
         "OVR-0004"
       ]
@@ -13039,7 +14418,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "partial",
+        "milestone": "M3-files-client",
+        "units": [
+          "types-only"
+        ],
+        "tests": [
+          "openai-rs-types::files serde tests; client operation pending"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -13084,7 +14472,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "partial",
+        "milestone": "M3-files-client",
+        "units": [
+          "types-only"
+        ],
+        "tests": [
+          "openai-rs-types::files serde tests; client operation pending"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -13129,7 +14526,16 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "partial",
+        "milestone": "M3-files-client",
+        "units": [
+          "types-only"
+        ],
+        "tests": [
+          "openai-rs-types::files serde tests; client operation pending"
+        ]
+      },
       "manual_overrides": []
     },
     {
@@ -13196,7 +14602,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13230,7 +14641,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13267,7 +14683,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13312,7 +14733,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13349,7 +14775,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13394,7 +14825,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13441,7 +14877,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13488,7 +14929,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13585,7 +15031,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13672,7 +15123,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13717,7 +15173,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13764,7 +15225,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13819,7 +15285,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13866,7 +15337,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13913,7 +15389,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -13958,7 +15439,12 @@
       },
       "lifecycle": "active",
       "feature": "default",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14017,7 +15503,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14053,7 +15544,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14087,7 +15583,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14124,7 +15625,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14160,7 +15666,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14196,7 +15707,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14233,7 +15749,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14270,7 +15791,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14319,7 +15845,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14365,7 +15896,12 @@
       },
       "lifecycle": "deprecated",
       "feature": "legacy",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     }
   ],
@@ -14397,7 +15933,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14427,7 +15968,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14457,7 +16003,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14487,7 +16038,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14517,7 +16073,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14547,7 +16108,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14577,7 +16143,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14607,7 +16178,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14637,7 +16213,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14667,7 +16248,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14697,7 +16283,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14727,7 +16318,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14757,7 +16353,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14787,7 +16388,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14817,7 +16423,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14847,7 +16458,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14877,7 +16493,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     },
     {
@@ -14907,7 +16528,12 @@
       },
       "lifecycle": "active",
       "feature": "webhooks",
-      "implementation": "planned",
+      "implementation": {
+        "status": "planned",
+        "milestone": "unassigned",
+        "units": [],
+        "tests": []
+      },
       "manual_overrides": []
     }
   ]

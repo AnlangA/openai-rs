@@ -13,6 +13,7 @@ const OPERATIONS_PATH: &str = "spec/contracts/operations.json";
 const DISCRIMINATORS_PATH: &str = "spec/contracts/discriminators.json";
 const NULLABILITY_PATH: &str = "spec/contracts/nullability.json";
 const SCHEMA_IR_PATH: &str = "spec/contracts/schema-ir.json";
+const IMPLEMENTATION_PATH: &str = "spec/contracts/implementation.toml";
 const EXPECTED_CLIENT_OPERATIONS: usize = 288;
 const EXPECTED_WEBHOOK_OPERATIONS: usize = 18;
 const HTTP_METHODS: [&str; 8] = [
@@ -54,6 +55,8 @@ struct OperationCounts {
     client: usize,
     webhook: usize,
     total: usize,
+    implementation_statuses: BTreeMap<String, usize>,
+    verified_units: usize,
 }
 
 #[derive(Serialize)]
@@ -65,7 +68,7 @@ struct OperationContract {
     response: ResponseContract,
     lifecycle: String,
     feature: String,
-    implementation: &'static str,
+    implementation: ImplementationStatus,
     manual_overrides: Vec<&'static str>,
 }
 
@@ -101,6 +104,14 @@ struct ResponseContract {
     content_types: Vec<String>,
     schema_refs: Vec<String>,
     mode: String,
+}
+
+#[derive(Clone, Serialize)]
+struct ImplementationStatus {
+    status: String,
+    milestone: String,
+    units: Vec<String>,
+    tests: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -200,7 +211,8 @@ pub(super) fn render(repository_root: &Path) -> Result<Vec<RenderedArtifact>> {
         source,
     })?;
 
-    let operations = build_operations(&document)?;
+    let implementation_registry = load_implementation_registry(repository_root)?;
+    let operations = build_operations(&document, &implementation_registry)?;
     let discriminators = build_discriminators(&document)?;
     let nullability = build_nullability(&document)?;
     let schema_ir = build_schema_ir(&document)?;
@@ -231,9 +243,13 @@ fn artifact(path: &str, value: &impl Serialize) -> Result<RenderedArtifact> {
     })
 }
 
-fn build_operations(document: &Value) -> Result<OperationsArtifact> {
-    let client_operations = collect_operations(document, "/paths", false)?;
-    let webhook_operations = collect_operations(document, "/webhooks", true)?;
+fn build_operations(
+    document: &Value,
+    implementation_registry: &BTreeMap<String, ImplementationStatus>,
+) -> Result<OperationsArtifact> {
+    let client_operations = collect_operations(document, "/paths", false, implementation_registry)?;
+    let webhook_operations =
+        collect_operations(document, "/webhooks", true, implementation_registry)?;
     if client_operations.len() != EXPECTED_CLIENT_OPERATIONS
         || webhook_operations.len() != EXPECTED_WEBHOOK_OPERATIONS
     {
@@ -244,6 +260,32 @@ fn build_operations(document: &Value) -> Result<OperationsArtifact> {
         )));
     }
 
+    let known_operation_ids = client_operations
+        .iter()
+        .filter_map(|operation| operation.operation_id.as_ref())
+        .collect::<BTreeSet<_>>();
+    let orphaned = implementation_registry
+        .keys()
+        .filter(|operation_id| !known_operation_ids.contains(operation_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !orphaned.is_empty() {
+        return Err(Error::message(format!(
+            "implementation registry contains unknown operation ids: {}",
+            orphaned.join(", ")
+        )));
+    }
+    let mut implementation_statuses = BTreeMap::new();
+    let mut verified_units = 0;
+    for operation in &client_operations {
+        *implementation_statuses
+            .entry(operation.implementation.status.clone())
+            .or_insert(0) += 1;
+        if operation.implementation.status == "verified" {
+            verified_units += operation.implementation.units.len();
+        }
+    }
+
     Ok(OperationsArtifact {
         schema_version: 1,
         source: source_identity(),
@@ -251,6 +293,8 @@ fn build_operations(document: &Value) -> Result<OperationsArtifact> {
             client: client_operations.len(),
             webhook: webhook_operations.len(),
             total: client_operations.len() + webhook_operations.len(),
+            implementation_statuses,
+            verified_units,
         },
         client_operations,
         webhook_operations,
@@ -261,6 +305,7 @@ fn collect_operations(
     document: &Value,
     collection_pointer: &str,
     webhook: bool,
+    implementation_registry: &BTreeMap<String, ImplementationStatus>,
 ) -> Result<Vec<OperationContract>> {
     let collection = object_at(document, collection_pointer)?;
     let mut operations = Vec::new();
@@ -316,7 +361,11 @@ fn collect_operations(
                 response: response_contract(document, operation, &operation_label)?,
                 lifecycle,
                 feature,
-                implementation: "planned",
+                implementation: operation_id
+                    .as_ref()
+                    .and_then(|operation_id| implementation_registry.get(operation_id))
+                    .cloned()
+                    .unwrap_or_else(planned_implementation),
                 manual_overrides: operation_id
                     .as_deref()
                     .map(operation_override_ids)
@@ -332,6 +381,153 @@ fn collect_operations(
             .then_with(|| left.operation_id.cmp(&right.operation_id))
     });
     Ok(operations)
+}
+
+fn planned_implementation() -> ImplementationStatus {
+    ImplementationStatus {
+        status: "planned".to_owned(),
+        milestone: "unassigned".to_owned(),
+        units: Vec::new(),
+        tests: Vec::new(),
+    }
+}
+
+fn load_implementation_registry(
+    repository_root: &Path,
+) -> Result<BTreeMap<String, ImplementationStatus>> {
+    let path = repository_root.join(IMPLEMENTATION_PATH);
+    let input = fs::read_to_string(&path)
+        .map_err(|source| Error::io("read implementation registry", &path, source))?;
+    let mut schema_version = None;
+    let mut current: Option<BTreeMap<String, String>> = None;
+    let mut entries = Vec::new();
+
+    for (line_index, raw_line) in input.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line == "[[operations]]" {
+            if let Some(entry) = current.take() {
+                entries.push(entry);
+            }
+            current = Some(BTreeMap::new());
+            continue;
+        }
+        let (key, value) = line.split_once('=').ok_or_else(|| {
+            Error::message(format!(
+                "invalid implementation registry assignment in {} at line {}",
+                path.display(),
+                line_index + 1
+            ))
+        })?;
+        let key = key.trim();
+        let value = value.trim();
+        if let Some(entry) = current.as_mut() {
+            if entry.insert(key.to_owned(), value.to_owned()).is_some() {
+                return Err(Error::message(format!(
+                    "duplicate implementation key `{key}` in {}",
+                    path.display()
+                )));
+            }
+        } else if key == "schema_version" && schema_version.is_none() {
+            schema_version = Some(value.parse::<u64>().map_err(|source| {
+                Error::message(format!(
+                    "implementation schema_version in {} must be an integer: {source}",
+                    path.display()
+                ))
+            })?);
+        } else {
+            return Err(Error::message(format!(
+                "unknown or duplicate top-level implementation key `{key}` in {}",
+                path.display()
+            )));
+        }
+    }
+    if let Some(entry) = current {
+        entries.push(entry);
+    }
+    if schema_version != Some(1) {
+        return Err(Error::message(format!(
+            "{} must declare schema_version = 1",
+            path.display()
+        )));
+    }
+
+    let mut registry = BTreeMap::new();
+    for mut entry in entries {
+        let operation_id = take_registry_string(&mut entry, "operation_id", &path)?;
+        let status = take_registry_string(&mut entry, "status", &path)?;
+        let milestone = take_registry_string(&mut entry, "milestone", &path)?;
+        let units = take_registry_array(&mut entry, "units", &path)?;
+        let tests = take_registry_array(&mut entry, "tests", &path)?;
+        if !matches!(status.as_str(), "planned" | "partial" | "verified") {
+            return Err(Error::message(format!(
+                "implementation status for {operation_id} must be planned, partial, or verified"
+            )));
+        }
+        if milestone.is_empty() || units.is_empty() || tests.is_empty() {
+            return Err(Error::message(format!(
+                "implementation registry entry {operation_id} requires non-empty milestone, units, and tests"
+            )));
+        }
+        if !entry.is_empty() {
+            return Err(Error::message(format!(
+                "unknown implementation keys for {operation_id}: {}",
+                entry.keys().cloned().collect::<Vec<_>>().join(", ")
+            )));
+        }
+        let status = ImplementationStatus {
+            status,
+            milestone,
+            units,
+            tests,
+        };
+        if registry.insert(operation_id.clone(), status).is_some() {
+            return Err(Error::message(format!(
+                "duplicate implementation registry operation `{operation_id}`"
+            )));
+        }
+    }
+    Ok(registry)
+}
+
+fn take_registry_string(
+    values: &mut BTreeMap<String, String>,
+    key: &str,
+    path: &Path,
+) -> Result<String> {
+    let raw = values.remove(key).ok_or_else(|| {
+        Error::message(format!(
+            "implementation entry in {} is missing `{key}`",
+            path.display()
+        ))
+    })?;
+    serde_json::from_str::<String>(&raw).map_err(|source| {
+        Error::message(format!(
+            "implementation key `{key}` in {} must be a TOML basic string compatible with JSON quoting: {source}",
+            path.display()
+        ))
+    })
+}
+
+fn take_registry_array(
+    values: &mut BTreeMap<String, String>,
+    key: &str,
+    path: &Path,
+) -> Result<Vec<String>> {
+    let raw = values.remove(key).ok_or_else(|| {
+        Error::message(format!(
+            "implementation entry in {} is missing `{key}`",
+            path.display()
+        ))
+    })?;
+    serde_json::from_str::<Vec<String>>(&raw).map_err(|source| {
+        Error::message(format!(
+            "implementation key `{key}` in {} must be a one-line string array: {source}",
+            path.display()
+        ))
+    })
 }
 
 fn request_contract(

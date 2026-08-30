@@ -1,31 +1,91 @@
-use crate::Error;
+//! Private, experimental ChatGPT Codex Responses backend.
+//!
+//! This module is deliberately sealed to one origin and one operation family.
+//! It is not an OpenAI-compatible proxy and exposes no raw URL request API.
 
-/// Placeholder for the explicitly experimental direct Codex transport.
-///
-/// Direct OAuth and private endpoint emulation are deliberately not present in
-/// the MVP. Enabling the feature makes the boundary visible but construction
-/// still fails closed.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DirectCodexResponsesClient {
-    _private: (),
+mod auth;
+mod jwt;
+mod sse;
+mod transport;
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+pub use auth::{
+    BrowserLogin, CredentialStore, DeviceCodeLogin, DirectAuthClient, EphemeralStore,
+    StoredCodexSession, TokenManager,
+};
+pub use jwt::ChatGptAccountId;
+pub use transport::{DirectCodexResponsesClient, DirectResponseStream};
+
+/// The only model endpoint reachable by the direct backend.
+pub const CODEX_RESPONSES_ENDPOINT: &str =
+    "https://chatgpt.com/backend-api/codex/responses";
+
+/// Errors from the private experimental direct backend.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum DirectError {
+    #[error("invalid direct Codex configuration: {0}")]
+    Configuration(String),
+    #[error("secure randomness failed")]
+    Random,
+    #[error("direct Codex HTTP request failed: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("direct Codex JSON codec failed: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("OIDC token validation failed: {0}")]
+    Jwt(String),
+    #[error("OAuth protocol failed: {0}")]
+    OAuth(String),
+    #[error("credential store failed: {0}")]
+    Store(String),
+    #[error("operation was cancelled")]
+    Cancelled,
+    #[error("operation timed out")]
+    Timeout,
+    #[error("HTTP redirect was rejected")]
+    RedirectRejected,
+    #[error("direct Codex returned HTTP {status}: {message}")]
+    HttpStatus { status: u16, message: String },
+    #[error("response body exceeded the configured limit")]
+    BodyTooLarge,
+    #[error("invalid SSE stream: {0}")]
+    Sse(String),
+    #[error("request field {0} is not supported by the sealed Codex backend")]
+    UnsupportedRequestField(&'static str),
+    #[error("authentication is required")]
+    ReauthenticationRequired,
 }
 
-impl DirectCodexResponsesClient {
-    pub fn new() -> Result<Self, Error> {
-        Err(Error::UnsupportedDirectTransport)
+/// Cloneable cooperative cancellation signal used by browser/device flows.
+#[derive(Debug, Clone, Default)]
+pub struct CancellationToken {
+    inner: Arc<CancellationInner>,
+}
+
+#[derive(Debug, Default)]
+struct CancellationInner {
+    cancelled: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+impl CancellationToken {
+    pub fn cancel(&self) {
+        if !self.inner.cancelled.swap(true, Ordering::AcqRel) {
+            self.inner.notify.notify_waiters();
+        }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::DirectCodexResponsesClient;
-    use crate::Error;
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.inner.cancelled.load(Ordering::Acquire)
+    }
 
-    #[test]
-    fn direct_transport_fails_closed() {
-        assert!(matches!(
-            DirectCodexResponsesClient::new(),
-            Err(Error::UnsupportedDirectTransport)
-        ));
+    pub(crate) async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        self.inner.notify.notified().await;
     }
 }

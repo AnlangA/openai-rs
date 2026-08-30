@@ -1022,10 +1022,14 @@ name = "openai-rs-codex"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "futures-core",
+ "futures-util",
+ "getrandom 0.3.4",
  "openai-rs-types",
  "reqwest 0.12.28",
+ "ring",
  "secrecy",
  "serde",
  "serde_json",

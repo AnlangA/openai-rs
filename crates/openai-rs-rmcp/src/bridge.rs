@@ -232,7 +232,7 @@ mod tests {
             panic!("fake tool call should succeed");
         };
         assert!(!outcome.is_tool_error());
-        assert_eq!(outcome.output().call_id(), "call_1");
+        assert_eq!(outcome.output().call_id(), Some("call_1"));
         let payload = outcome.output().deserialize_output::<Value>();
         assert!(matches!(
             payload,
