@@ -2387,10 +2387,28 @@ impl fmt::Debug for RealtimeCreateClientSecretResponse {
 pub struct RealtimeSdp(pub String);
 
 impl RealtimeSdp {
+    /// Wraps SDP text without normalizing line endings or attributes.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
     /// Borrows the SDP text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl From<String> for RealtimeSdp {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&str> for RealtimeSdp {
+    fn from(value: &str) -> Self {
+        Self::new(value)
     }
 }
 
@@ -2404,6 +2422,33 @@ pub struct RealtimeCallCreateRequest {
     extra: ExtraFields,
 }
 
+impl RealtimeCallCreateRequest {
+    /// Creates a call-signaling request containing an SDP offer.
+    #[must_use]
+    pub fn new(sdp: impl Into<RealtimeSdp>) -> Self {
+        Self {
+            sdp: sdp.into(),
+            session: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Adds a typed initial Realtime session configuration.
+    #[must_use]
+    pub fn with_session(mut self, session: RealtimeSessionCreateRequest) -> Self {
+        self.session = Omittable::Value(session);
+        self
+    }
+
+    /// Omits the initial session configuration.
+    #[must_use]
+    pub fn clear_session(mut self) -> Self {
+        self.session = Omittable::Omitted;
+        self
+    }
+
+}
+
 /// JSON request accepted when attaching a session to an incoming call.
 pub type RealtimeCallAcceptRequest = RealtimeSessionCreateRequest;
 
@@ -2415,6 +2460,23 @@ pub struct RealtimeCallReferRequest {
     extra: ExtraFields,
 }
 
+impl RealtimeCallReferRequest {
+    /// Creates a SIP transfer request for an already parsed absolute URI.
+    #[must_use]
+    pub fn new(target_uri: url::Url) -> Self {
+        Self {
+            target_uri,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Parses and validates an absolute transfer URI.
+    pub fn parse(target_uri: &str) -> Result<Self, url::ParseError> {
+        url::Url::parse(target_uri).map(Self::new)
+    }
+
+}
+
 /// Request to reject an incoming SIP call.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeCallRejectRequest {
@@ -2422,6 +2484,29 @@ pub struct RealtimeCallRejectRequest {
     pub status_code: Omittable<i64>,
     #[serde(flatten)]
     extra: ExtraFields,
+}
+
+impl RealtimeCallRejectRequest {
+    /// Creates a request using the service-default rejection status.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sends an explicit SIP rejection status code.
+    #[must_use]
+    pub fn with_status_code(mut self, status_code: i64) -> Self {
+        self.status_code = Omittable::Value(status_code);
+        self
+    }
+
+    /// Returns to the service-default rejection status.
+    #[must_use]
+    pub fn clear_status_code(mut self) -> Self {
+        self.status_code = Omittable::Omitted;
+        self
+    }
+
 }
 
 /// Marker for the body-less Realtime call hangup operation.
@@ -4216,14 +4301,23 @@ mod tests {
             secret_fixture
         );
 
-        let call = RealtimeCallCreateRequest {
-            sdp: RealtimeSdp("v=0\r\n".to_owned()),
-            session: Omittable::Value(RealtimeSessionCreateRequest::default()),
-            extra: ExtraFields::new(),
-        };
+        let call = RealtimeCallCreateRequest::new("v=0\r\n")
+            .with_session(RealtimeSessionCreateRequest::default());
         assert_eq!(
             serde_json::to_value(call).expect("encode call"),
             json!({"sdp": "v=0\r\n", "session": {"type": "realtime"}})
+        );
+
+        let refer = RealtimeCallReferRequest::parse("sip:agent@example.com")
+            .expect("absolute SIP URI");
+        assert_eq!(
+            serde_json::to_value(refer).expect("encode refer"),
+            json!({"target_uri": "sip:agent@example.com"})
+        );
+        assert_eq!(
+            serde_json::to_value(RealtimeCallRejectRequest::new().with_status_code(486))
+                .expect("encode reject"),
+            json!({"status_code": 486})
         );
 
         let webhook = json!({

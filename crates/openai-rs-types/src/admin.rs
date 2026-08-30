@@ -214,6 +214,30 @@ impl<T> AdminCursorPage<T> {
     }
 }
 
+/// Cursor page whose frozen schema requires non-null first/last IDs.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AdminRequiredCursorPage<T> {
+    pub object: AdminListObject,
+    pub data: Vec<T>,
+    pub first_id: String,
+    pub last_id: String,
+    pub has_more: bool,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl<T> AdminRequiredCursorPage<T> {
+    #[must_use]
+    pub fn next_after(&self) -> Option<&str> {
+        self.has_more.then_some(self.last_id.as_str())
+    }
+
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 /// Common `next` cursor page used by groups and roles.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdminNextPage<T> {
@@ -592,8 +616,8 @@ pub struct CertificateScopeResponse {
     extra: ExtraFields,
 }
 
-pub type ListCertificatesResponse = AdminCursorPage<Certificate>;
-pub type ListProjectCertificatesResponse = AdminCursorPage<Certificate>;
+pub type ListCertificatesResponse = AdminRequiredCursorPage<Certificate>;
+pub type ListProjectCertificatesResponse = AdminRequiredCursorPage<Certificate>;
 pub type OrganizationCertificateActivationResponse = CertificateScopeResponse;
 pub type OrganizationCertificateDeactivationResponse = CertificateScopeResponse;
 pub type OrganizationProjectCertificateActivationResponse = CertificateScopeResponse;
@@ -1467,8 +1491,8 @@ pub struct SpendAlert {
 
 pub type OrganizationSpendAlert = SpendAlert;
 pub type ProjectSpendAlert = SpendAlert;
-pub type OrganizationSpendAlertListResource = AdminCursorPage<SpendAlert>;
-pub type ProjectSpendAlertListResource = AdminCursorPage<SpendAlert>;
+pub type OrganizationSpendAlertListResource = AdminRequiredCursorPage<SpendAlert>;
+pub type ProjectSpendAlertListResource = AdminRequiredCursorPage<SpendAlert>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpendAlertDeletedResource {
@@ -1766,10 +1790,12 @@ pub struct UsageWebSearchCallsResult {
 }
 
 /// Monetary amount in a costs result.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CostAmount {
-    pub value: f64,
-    pub currency: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub value: Omittable<f64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub currency: Omittable<String>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }

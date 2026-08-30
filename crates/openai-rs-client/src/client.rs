@@ -6,9 +6,10 @@ use url::{Host, Url};
 #[cfg(feature = "realtime")]
 use crate::Realtime;
 use crate::{
-    ApiKey, Audio, Batches, ChatCompletions, Embeddings, Error, Files, Images, Models, Moderations,
-    Responses, RetryPolicy, Uploads, VectorStores, multipart::MultipartTransport, sse::SseLimits,
-    transport::Transport,
+    ApiKey, Audio, Batches, ChatCompletions, Containers, ContentProvenanceChecks, Conversations,
+    Embeddings, Error, Evals, Files, FineTuning, Images, Models, Moderations, Responses,
+    RetryPolicy, Skills, Uploads, VectorStores,
+    multipart::MultipartTransport, sse::SseLimits, transport::Transport,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
@@ -77,6 +78,42 @@ impl Client {
     #[must_use]
     pub fn batches(&self) -> Batches {
         Batches::new(self.clone())
+    }
+
+    /// Returns the Evals resource facade.
+    #[must_use]
+    pub fn evals(&self) -> Evals {
+        Evals::new(self.clone())
+    }
+
+    /// Returns the Containers resource facade.
+    #[must_use]
+    pub fn containers(&self) -> Containers {
+        Containers::new(self.clone())
+    }
+
+    /// Returns the Skills resource facade.
+    #[must_use]
+    pub fn skills(&self) -> Skills {
+        Skills::new(self.clone())
+    }
+
+    /// Returns the Fine-tuning resource facade.
+    #[must_use]
+    pub fn fine_tuning(&self) -> FineTuning {
+        FineTuning::new(self.clone())
+    }
+
+    /// Returns the Conversations resource facade.
+    #[must_use]
+    pub fn conversations(&self) -> Conversations {
+        Conversations::new(self.clone())
+    }
+
+    /// Returns the Content Provenance Checks resource facade.
+    #[must_use]
+    pub fn content_provenance_checks(&self) -> ContentProvenanceChecks {
+        ContentProvenanceChecks::new(self.clone())
     }
 
     /// Returns the Vector Stores resource facade.

@@ -1335,6 +1335,15 @@ impl ListEvalsParams {
         self
     }
 
+    /// Returns the configured starting cursor.
+    #[must_use]
+    pub const fn after_ref(&self) -> Option<&EvalId> {
+        match &self.after {
+            Omittable::Value(id) => Some(id),
+            Omittable::Omitted => None,
+        }
+    }
+
     /// Sets page size.
     #[must_use]
     pub fn limit(mut self, limit: u32) -> Self {
@@ -1387,6 +1396,30 @@ impl EvalList {
     #[must_use]
     pub const fn has_more(&self) -> bool {
         self.has_more
+    }
+
+    /// Returns the first cursor when the page is non-empty.
+    #[must_use]
+    pub const fn first_id(&self) -> Option<&EvalId> {
+        match &self.first_id {
+            Nullable::Value(id) => Some(id),
+            Nullable::Null => None,
+        }
+    }
+
+    /// Returns the last cursor used for forward pagination.
+    #[must_use]
+    pub const fn last_id(&self) -> Option<&EvalId> {
+        match &self.last_id {
+            Nullable::Value(id) => Some(id),
+            Nullable::Null => None,
+        }
+    }
+
+    /// Returns future response fields retained during decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -1950,6 +1983,44 @@ pub struct EvalRunList {
     extra: ExtraFields,
 }
 
+impl EvalRunList {
+    /// Returns runs in service order.
+    #[must_use]
+    pub fn data(&self) -> &[EvalRun] {
+        &self.data
+    }
+
+    /// Returns the first cursor when the page is non-empty.
+    #[must_use]
+    pub const fn first_id(&self) -> Option<&EvalRunId> {
+        match &self.first_id {
+            Nullable::Value(id) => Some(id),
+            Nullable::Null => None,
+        }
+    }
+
+    /// Returns the last cursor used for forward pagination.
+    #[must_use]
+    pub const fn last_id(&self) -> Option<&EvalRunId> {
+        match &self.last_id {
+            Nullable::Value(id) => Some(id),
+            Nullable::Null => None,
+        }
+    }
+
+    /// Returns whether another page exists.
+    #[must_use]
+    pub const fn has_more(&self) -> bool {
+        self.has_more
+    }
+
+    /// Returns future response fields retained during decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 /// Query parameters for listing Eval runs.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ListEvalRunsParams {
@@ -1982,6 +2053,15 @@ impl ListEvalRunsParams {
     pub fn after(mut self, after: impl Into<EvalRunId>) -> Self {
         self.after = Omittable::Value(after.into());
         self
+    }
+
+    /// Returns the configured starting cursor.
+    #[must_use]
+    pub const fn after_ref(&self) -> Option<&EvalRunId> {
+        match &self.after {
+            Omittable::Value(id) => Some(id),
+            Omittable::Omitted => None,
+        }
     }
 
     /// Sets page size.
@@ -2157,6 +2237,36 @@ impl EvalRunOutputItemList {
     pub fn data(&self) -> &[EvalRunOutputItem] {
         &self.data
     }
+
+    /// Returns the first cursor when the page is non-empty.
+    #[must_use]
+    pub const fn first_id(&self) -> Option<&EvalRunOutputItemId> {
+        match &self.first_id {
+            Nullable::Value(id) => Some(id),
+            Nullable::Null => None,
+        }
+    }
+
+    /// Returns the last cursor used for forward pagination.
+    #[must_use]
+    pub const fn last_id(&self) -> Option<&EvalRunOutputItemId> {
+        match &self.last_id {
+            Nullable::Value(id) => Some(id),
+            Nullable::Null => None,
+        }
+    }
+
+    /// Returns whether another page exists.
+    #[must_use]
+    pub const fn has_more(&self) -> bool {
+        self.has_more
+    }
+
+    /// Returns future response fields retained during decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Query parameters for listing Eval output items.
@@ -2191,6 +2301,15 @@ impl ListEvalRunOutputItemsParams {
     pub fn after(mut self, after: impl Into<EvalRunOutputItemId>) -> Self {
         self.after = Omittable::Value(after.into());
         self
+    }
+
+    /// Returns the configured starting cursor.
+    #[must_use]
+    pub const fn after_ref(&self) -> Option<&EvalRunOutputItemId> {
+        match &self.after {
+            Omittable::Value(id) => Some(id),
+            Omittable::Omitted => None,
+        }
     }
 
     /// Sets page size.

@@ -8,9 +8,14 @@ mod batches;
 mod chat_completions;
 mod chat_stream;
 mod client;
+mod containers;
+mod content_provenance;
+mod conversations;
 mod core_resources;
 mod error;
+mod evals;
 mod files;
+mod fine_tuning;
 mod media;
 mod multipart;
 mod operation;
@@ -21,6 +26,7 @@ mod responses;
 #[cfg(feature = "realtime")]
 mod responses_websocket;
 mod retry;
+mod skills;
 pub mod sse;
 pub(crate) mod transport;
 mod vector_stores;
@@ -37,9 +43,24 @@ pub use chat_completions::{
 };
 pub use chat_stream::ChatCompletionEventStream;
 pub use client::{Client, ClientBuilder, TlsBackend};
+pub use containers::{
+    ContainerFileContentStream, ContainerFilePageStream, ContainerFiles, ContainerPageStream,
+    Containers,
+};
+pub use content_provenance::*;
+pub use conversations::{ConversationItemPageStream, ConversationItems, Conversations};
 pub use core_resources::{Embeddings, Models, Moderations};
 pub use error::{ApiError, BodyPreview, Error, StreamError};
+pub use evals::{
+    EvalPageStream, EvalRunOutputItemPageStream, EvalRunOutputItems, EvalRunPageStream,
+    EvalRunPollError, EvalRunPollOptions, EvalRuns, Evals,
+};
 pub use files::{Files, Uploads};
+pub use fine_tuning::{
+    FineTuning, FineTuningCheckpointPageStream, FineTuningEventPageStream, FineTuningJobCheckpoints,
+    FineTuningJobEvents, FineTuningJobPageStream, FineTuningJobs, FineTuningPollCancellationToken,
+    FineTuningPollError, FineTuningPollOptions,
+};
 pub use media::{
     Audio, ImageEditEventStream, ImageGenerationEventStream, Images, MediaByteStream,
     MediaEventStream, MediaTextBody, SpeechEventStream, TranscriptionEventStream,
@@ -62,6 +83,7 @@ pub use responses_websocket::{
     ResponsesWebSocket, ResponsesWebSocketConfig, WebSocketReconnectPolicy,
 };
 pub use retry::RetryPolicy;
+pub use skills::{SkillContentStream, SkillPageStream, SkillVersionPageStream, SkillVersions, Skills};
 pub use vector_stores::{
     PollCancellationToken, PollError, PollOptions, VectorStoreFileBatches,
     VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream, VectorStores,

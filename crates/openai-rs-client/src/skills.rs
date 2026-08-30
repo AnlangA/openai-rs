@@ -1,0 +1,842 @@
+//! Skill and immutable Skill Version resource facades.
+
+use std::{collections::HashSet, pin::Pin};
+
+use futures_core::Stream;
+use http::{Method, StatusCode};
+use openai_rs_types::{
+    Omittable,
+    skills::{
+        CreateSkillRequest, CreateSkillVersionRequest, DeletedSkillResource,
+        DeletedSkillVersionResource, SetDefaultSkillVersionBody, SkillId, SkillListParams,
+        SkillListResource, SkillResource, SkillVersionListResource, SkillVersionNumber,
+        SkillVersionResource,
+    },
+};
+
+use crate::{
+    ApiResponse, Client, Error,
+    multipart::{FileContentStream, PreparedReplayableSource, ReplayableMultipartForm},
+    operation::{
+        AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, RetryClass,
+        private::Sealed,
+    },
+    transport::PathSegment,
+};
+
+const JSON_MIME: &str = "application/json";
+const BINARY_MIME: &str = "application/binary";
+const OK: &[StatusCode] = &[StatusCode::OK];
+
+/// Pages returned by `GET /skills`.
+pub type SkillPageStream =
+    Pin<Box<dyn Stream<Item = Result<ApiResponse<SkillListResource>, Error>> + Send + 'static>>;
+
+/// Pages returned by `GET /skills/{skill_id}/versions`.
+pub type SkillVersionPageStream = Pin<
+    Box<dyn Stream<Item = Result<ApiResponse<SkillVersionListResource>, Error>> + Send + 'static>,
+>;
+
+/// Streaming raw Skill zip content with bounded collection helpers.
+pub type SkillContentStream = FileContentStream;
+
+/// Operations on project Skills.
+#[derive(Clone, Debug)]
+pub struct Skills {
+    client: Client,
+}
+
+impl Skills {
+    pub(crate) const fn new(client: Client) -> Self {
+        Self { client }
+    }
+
+    /// Creates a Skill from a replayable zip or one-to-500 file sources.
+    pub async fn create(
+        &self,
+        request: CreateSkillRequest,
+    ) -> Result<ApiResponse<SkillResource>, Error> {
+        let path = [PathSegment::literal("skills")];
+        let form = prepare_skill_form(request.files(), Omittable::Omitted).await?;
+        let response = self
+            .client
+            .multipart_transport()
+            .send_replayable_form(&path, &form, JSON_MIME)
+            .await?;
+        self.client
+            .multipart_transport()
+            .decode_json(response)
+            .await
+    }
+
+    /// Lists Skills with typed cursor parameters.
+    pub async fn list(
+        &self,
+        params: SkillListParams,
+    ) -> Result<ApiResponse<SkillListResource>, Error> {
+        let path = [PathSegment::literal("skills")];
+        self.client
+            .transport()
+            .execute_json::<ListSkills, _>(&path, Some(&params), None)
+            .await
+    }
+
+    /// Streams forward Skill pages and rejects repeated cursors.
+    #[must_use]
+    pub fn list_pages(&self, params: SkillListParams) -> SkillPageStream {
+        let skills = self.clone();
+        Box::pin(async_stream::try_stream! {
+            let mut params = params;
+            let mut seen = HashSet::<String>::new();
+            if let Omittable::Value(cursor) = &params.after {
+                seen.insert(cursor.clone());
+            }
+            loop {
+                let page = skills.list(params.clone()).await?;
+                let next = next_skill_cursor(page.has_more, page.next_after(), &mut seen, "Skill")?;
+                yield page;
+                match next {
+                    Some(cursor) => params.after = Omittable::Value(cursor),
+                    None => break,
+                }
+            }
+        })
+    }
+
+    /// Retrieves one Skill.
+    pub async fn retrieve(&self, skill_id: &SkillId) -> Result<ApiResponse<SkillResource>, Error> {
+        let path = skill_path(skill_id)?;
+        self.client
+            .transport()
+            .execute_json::<RetrieveSkill, ()>(&path, None, None)
+            .await
+    }
+
+    /// Changes the default immutable version pointer.
+    pub async fn set_default_version(
+        &self,
+        skill_id: &SkillId,
+        request: SetDefaultSkillVersionBody,
+    ) -> Result<ApiResponse<SkillResource>, Error> {
+        let path = skill_path(skill_id)?;
+        self.client
+            .transport()
+            .execute_json::<UpdateSkillDefaultVersion, ()>(&path, None, Some(&request))
+            .await
+    }
+
+    /// Deletes one Skill.
+    pub async fn delete(
+        &self,
+        skill_id: &SkillId,
+    ) -> Result<ApiResponse<DeletedSkillResource>, Error> {
+        let path = skill_path(skill_id)?;
+        self.client
+            .transport()
+            .execute_json::<DeleteSkill, ()>(&path, None, None)
+            .await
+    }
+
+    /// Streams the current default Skill zip. `collect(limit)` buffers with an
+    /// explicit upper bound.
+    pub async fn content(&self, skill_id: &SkillId) -> Result<SkillContentStream, Error> {
+        let path = [
+            PathSegment::literal("skills"),
+            skill_id_segment(skill_id)?,
+            PathSegment::literal("content"),
+        ];
+        self.client
+            .multipart_transport()
+            .download_path(&path, BINARY_MIME)
+            .await
+    }
+
+    /// Returns immutable version operations.
+    #[must_use]
+    pub fn versions(&self) -> SkillVersions {
+        SkillVersions::new(self.client.clone())
+    }
+}
+
+/// Operations on immutable Skill Versions.
+#[derive(Clone, Debug)]
+pub struct SkillVersions {
+    client: Client,
+}
+
+impl SkillVersions {
+    pub(crate) const fn new(client: Client) -> Self {
+        Self { client }
+    }
+
+    /// Creates a new immutable version from replayable sources.
+    pub async fn create(
+        &self,
+        skill_id: &SkillId,
+        request: CreateSkillVersionRequest,
+    ) -> Result<ApiResponse<SkillVersionResource>, Error> {
+        let path = skill_versions_path(skill_id)?;
+        let form = prepare_skill_form(request.files(), request.default.clone()).await?;
+        let response = self
+            .client
+            .multipart_transport()
+            .send_replayable_form(&path, &form, JSON_MIME)
+            .await?;
+        self.client
+            .multipart_transport()
+            .decode_json(response)
+            .await
+    }
+
+    /// Lists immutable versions.
+    pub async fn list(
+        &self,
+        skill_id: &SkillId,
+        params: SkillListParams,
+    ) -> Result<ApiResponse<SkillVersionListResource>, Error> {
+        let path = skill_versions_path(skill_id)?;
+        self.client
+            .transport()
+            .execute_json::<ListSkillVersions, _>(&path, Some(&params), None)
+            .await
+    }
+
+    /// Streams forward Skill Version pages.
+    #[must_use]
+    pub fn list_pages(&self, skill_id: SkillId, params: SkillListParams) -> SkillVersionPageStream {
+        let versions = self.clone();
+        Box::pin(async_stream::try_stream! {
+            let mut params = params;
+            let mut seen = HashSet::<String>::new();
+            if let Omittable::Value(cursor) = &params.after {
+                seen.insert(cursor.clone());
+            }
+            loop {
+                let page = versions.list(&skill_id, params.clone()).await?;
+                let next = next_skill_cursor(
+                    page.has_more,
+                    page.next_after(),
+                    &mut seen,
+                    "Skill Version",
+                )?;
+                yield page;
+                match next {
+                    Some(cursor) => params.after = Omittable::Value(cursor),
+                    None => break,
+                }
+            }
+        })
+    }
+
+    /// Retrieves one immutable version.
+    pub async fn retrieve(
+        &self,
+        skill_id: &SkillId,
+        version: &SkillVersionNumber,
+    ) -> Result<ApiResponse<SkillVersionResource>, Error> {
+        let path = skill_version_path(skill_id, version)?;
+        self.client
+            .transport()
+            .execute_json::<RetrieveSkillVersion, ()>(&path, None, None)
+            .await
+    }
+
+    /// Deletes one immutable version.
+    pub async fn delete(
+        &self,
+        skill_id: &SkillId,
+        version: &SkillVersionNumber,
+    ) -> Result<ApiResponse<DeletedSkillVersionResource>, Error> {
+        let path = skill_version_path(skill_id, version)?;
+        self.client
+            .transport()
+            .execute_json::<DeleteSkillVersion, ()>(&path, None, None)
+            .await
+    }
+
+    /// Streams one immutable version's zip content.
+    pub async fn content(
+        &self,
+        skill_id: &SkillId,
+        version: &SkillVersionNumber,
+    ) -> Result<SkillContentStream, Error> {
+        let path = [
+            PathSegment::literal("skills"),
+            skill_id_segment(skill_id)?,
+            PathSegment::literal("versions"),
+            skill_version_segment(version)?,
+            PathSegment::literal("content"),
+        ];
+        self.client
+            .multipart_transport()
+            .download_path(&path, BINARY_MIME)
+            .await
+    }
+}
+
+async fn prepare_skill_form(
+    files: &[openai_rs_types::files::ReplayableMultipartSource],
+    default: Omittable<bool>,
+) -> Result<ReplayableMultipartForm, Error> {
+    if files.is_empty() || files.len() > 500 {
+        return Err(Error::InvalidConfiguration(
+            "Skill upload requires between 1 and 500 files".into(),
+        ));
+    }
+    let field = if files.len() == 1 { "files" } else { "files[]" };
+    let mut form = ReplayableMultipartForm::new();
+    if let Omittable::Value(default) = default {
+        form = form.text("default", default.to_string());
+    }
+    for source in files {
+        form = form.part(field, PreparedReplayableSource::prepare(source).await?);
+    }
+    Ok(form)
+}
+
+fn next_skill_cursor(
+    has_more: bool,
+    cursor: Option<&str>,
+    seen: &mut HashSet<String>,
+    resource: &'static str,
+) -> Result<Option<String>, Error> {
+    if !has_more {
+        return Ok(None);
+    }
+    let cursor = cursor.ok_or_else(|| {
+        Error::InvalidConfiguration(
+            format!("{resource} page advertises more results without last_id").into(),
+        )
+    })?;
+    if cursor.is_empty() {
+        return Err(Error::InvalidConfiguration(
+            format!("{resource} page returned an empty pagination cursor").into(),
+        ));
+    }
+    if !seen.insert(cursor.to_owned()) {
+        return Err(Error::InvalidConfiguration(
+            format!("{resource} pagination returned a repeated cursor").into(),
+        ));
+    }
+    Ok(Some(cursor.to_owned()))
+}
+
+fn skill_path(skill_id: &SkillId) -> Result<[PathSegment<'_>; 2], Error> {
+    Ok([PathSegment::literal("skills"), skill_id_segment(skill_id)?])
+}
+
+fn skill_versions_path(skill_id: &SkillId) -> Result<[PathSegment<'_>; 3], Error> {
+    Ok([
+        PathSegment::literal("skills"),
+        skill_id_segment(skill_id)?,
+        PathSegment::literal("versions"),
+    ])
+}
+
+fn skill_version_path<'a>(
+    skill_id: &'a SkillId,
+    version: &'a SkillVersionNumber,
+) -> Result<[PathSegment<'a>; 4], Error> {
+    Ok([
+        PathSegment::literal("skills"),
+        skill_id_segment(skill_id)?,
+        PathSegment::literal("versions"),
+        skill_version_segment(version)?,
+    ])
+}
+
+fn skill_id_segment(skill_id: &SkillId) -> Result<PathSegment<'_>, Error> {
+    PathSegment::parameter("skill_id", skill_id.as_str())
+}
+
+fn skill_version_segment(version: &SkillVersionNumber) -> Result<PathSegment<'_>, Error> {
+    PathSegment::parameter("version", version.as_str())
+}
+
+macro_rules! operation {
+    (
+        $name:ident,
+        request = $request:ty,
+        response = $response:ty,
+        method = $method:expr,
+        route = $route:literal,
+        request_encoding = $request_encoding:expr,
+        retry = $retry:expr $(,)?
+    ) => {
+        struct $name;
+
+        impl Sealed for $name {}
+
+        impl Operation for $name {
+            type Request = $request;
+            type Response = $response;
+
+            const META: OperationMeta = OperationMeta {
+                id: stringify!($name),
+                method: $method,
+                route: $route,
+                auth: AuthScope::Platform,
+                request_encoding: $request_encoding,
+                response_mode: ResponseMode::Json,
+                retry: $retry,
+                success_statuses: OK,
+            };
+        }
+    };
+}
+
+operation!(
+    ListSkills,
+    request = (),
+    response = SkillListResource,
+    method = Method::GET,
+    route = "/skills",
+    request_encoding = RequestEncoding::None,
+    retry = RetryClass::Safe,
+);
+operation!(
+    RetrieveSkill,
+    request = (),
+    response = SkillResource,
+    method = Method::GET,
+    route = "/skills/{skill_id}",
+    request_encoding = RequestEncoding::None,
+    retry = RetryClass::Safe,
+);
+operation!(
+    UpdateSkillDefaultVersion,
+    request = SetDefaultSkillVersionBody,
+    response = SkillResource,
+    method = Method::POST,
+    route = "/skills/{skill_id}",
+    request_encoding = RequestEncoding::Json,
+    retry = RetryClass::Replayable,
+);
+operation!(
+    DeleteSkill,
+    request = (),
+    response = DeletedSkillResource,
+    method = Method::DELETE,
+    route = "/skills/{skill_id}",
+    request_encoding = RequestEncoding::None,
+    retry = RetryClass::Replayable,
+);
+operation!(
+    ListSkillVersions,
+    request = (),
+    response = SkillVersionListResource,
+    method = Method::GET,
+    route = "/skills/{skill_id}/versions",
+    request_encoding = RequestEncoding::None,
+    retry = RetryClass::Safe,
+);
+operation!(
+    RetrieveSkillVersion,
+    request = (),
+    response = SkillVersionResource,
+    method = Method::GET,
+    route = "/skills/{skill_id}/versions/{version}",
+    request_encoding = RequestEncoding::None,
+    retry = RetryClass::Safe,
+);
+operation!(
+    DeleteSkillVersion,
+    request = (),
+    response = DeletedSkillVersionResource,
+    method = Method::DELETE,
+    route = "/skills/{skill_id}/versions/{version}",
+    request_encoding = RequestEncoding::None,
+    retry = RetryClass::Replayable,
+);
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use openai_rs_types::{
+        Omittable,
+        files::ReplayableMultipartSource,
+        skills::{
+            CreateSkillRequest, CreateSkillVersionRequest, SetDefaultSkillVersionBody, SkillId,
+            SkillListLimit, SkillListOrder, SkillListParams, SkillVersionNumber,
+        },
+    };
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+    use url::Url;
+
+    use super::*;
+    use crate::{ApiKey, RetryPolicy};
+
+    #[derive(Clone, Debug)]
+    struct CapturedRequest {
+        method: Method,
+        path_and_query: String,
+        authorization: Option<String>,
+        accept: Option<String>,
+        content_type: Option<String>,
+        body: Vec<u8>,
+    }
+
+    #[derive(Clone)]
+    struct StubResponse {
+        content_type: &'static str,
+        body: Bytes,
+    }
+
+    impl StubResponse {
+        fn json(body: String) -> Self {
+            Self {
+                content_type: "application/json",
+                body: Bytes::from(body),
+            }
+        }
+
+        fn binary(body: &'static [u8]) -> Self {
+            Self {
+                content_type: "application/zip",
+                body: Bytes::from_static(body),
+            }
+        }
+    }
+
+    async fn serve_script(
+        responses: Vec<StubResponse>,
+    ) -> (Client, Arc<Mutex<Vec<CapturedRequest>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind Skill server");
+        let address = listener.local_addr().expect("Skill address");
+        let responses = Arc::new(responses);
+        let next_response = Arc::new(AtomicUsize::new(0));
+        let captures = Arc::new(Mutex::new(Vec::new()));
+        let server_captures = Arc::clone(&captures);
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let responses = Arc::clone(&responses);
+                let next_response = Arc::clone(&next_response);
+                let captures = Arc::clone(&server_captures);
+                tokio::spawn(async move {
+                    let service = service_fn(move |request: Request<Incoming>| {
+                        let responses = Arc::clone(&responses);
+                        let next_response = Arc::clone(&next_response);
+                        let captures = Arc::clone(&captures);
+                        async move {
+                            let method = request.method().clone();
+                            let path_and_query = request
+                                .uri()
+                                .path_and_query()
+                                .map(ToString::to_string)
+                                .unwrap_or_default();
+                            let authorization =
+                                header_string(&request, http::header::AUTHORIZATION);
+                            let accept = header_string(&request, http::header::ACCEPT);
+                            let content_type = header_string(&request, http::header::CONTENT_TYPE);
+                            let body = request
+                                .into_body()
+                                .collect()
+                                .await
+                                .expect("collect Skill request")
+                                .to_bytes()
+                                .to_vec();
+                            captures
+                                .lock()
+                                .expect("Skill capture lock")
+                                .push(CapturedRequest {
+                                    method,
+                                    path_and_query,
+                                    authorization,
+                                    accept,
+                                    content_type,
+                                    body,
+                                });
+                            let index = next_response.fetch_add(1, Ordering::SeqCst);
+                            let response = responses.get(index).cloned().unwrap_or_else(|| {
+                                StubResponse::json(
+                                    json!({
+                                        "error": {
+                                            "message": "unexpected request",
+                                            "type": "test_error",
+                                            "param": null,
+                                            "code": "unexpected"
+                                        }
+                                    })
+                                    .to_string(),
+                                )
+                            });
+                            let status = if index < responses.len() {
+                                StatusCode::OK
+                            } else {
+                                StatusCode::INTERNAL_SERVER_ERROR
+                            };
+                            Ok::<_, Infallible>(
+                                hyper::Response::builder()
+                                    .status(status)
+                                    .header(http::header::CONTENT_TYPE, response.content_type)
+                                    .header("x-request-id", format!("req_skill_{index}"))
+                                    .body(Full::new(response.body))
+                                    .expect("Skill response"),
+                            )
+                        }
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("Skill base URL");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test API key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(RetryPolicy::disabled())
+            .build()
+            .expect("Skill client");
+        (client, captures)
+    }
+
+    fn header_string(
+        request: &Request<Incoming>,
+        name: http::header::HeaderName,
+    ) -> Option<String> {
+        request
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned)
+    }
+
+    fn skill_json(skill_id: &str, default: &str, latest: &str) -> String {
+        json!({
+            "id": skill_id,
+            "object": "skill",
+            "name": "example",
+            "description": "example skill",
+            "created_at": 1,
+            "default_version": default,
+            "latest_version": latest
+        })
+        .to_string()
+    }
+
+    fn version_json(skill_id: &str, version: &str) -> String {
+        json!({
+            "id": format!("skillver_{version}"),
+            "skill_id": skill_id,
+            "version": version,
+            "created_at": 1,
+            "name": "example",
+            "description": "example version",
+            "object": "skill.version"
+        })
+        .to_string()
+    }
+
+    fn bytes_source(name: &str, bytes: &'static [u8]) -> ReplayableMultipartSource {
+        ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(bytes))
+            .try_with_file_name(name)
+            .expect("safe Skill filename")
+    }
+
+    #[tokio::test]
+    async fn create_skill_sends_single_zip_multipart() {
+        let (client, captures) =
+            serve_script(vec![StubResponse::json(skill_json("skill_1", "1", "1"))]).await;
+        let response = Skills::new(client)
+            .create(CreateSkillRequest::new(bytes_source("skill.zip", b"ZIP")))
+            .await
+            .expect("create Skill");
+        assert_eq!(response.id.as_str(), "skill_1");
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures[0].method, Method::POST);
+        assert_eq!(captures[0].path_and_query, "/v1/skills");
+        assert_eq!(
+            captures[0].authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        assert!(
+            captures[0]
+                .content_type
+                .as_deref()
+                .is_some_and(|value| value.starts_with("multipart/form-data; boundary="))
+        );
+        let body = String::from_utf8_lossy(&captures[0].body);
+        assert!(body.contains("name=\"files\""));
+        assert!(body.contains("filename=\"skill.zip\""));
+        assert!(body.contains("ZIP"));
+    }
+
+    #[tokio::test]
+    async fn skill_list_retrieve_update_and_delete_match_routes() {
+        let (client, captures) = serve_script(vec![
+            StubResponse::json(
+                json!({
+                    "object":"list","data":[],"first_id":null,
+                    "last_id":null,"has_more":false
+                })
+                .to_string(),
+            ),
+            StubResponse::json(skill_json("skill/a b", "1", "2")),
+            StubResponse::json(skill_json("skill/a b", "2", "2")),
+            StubResponse::json(
+                json!({
+                    "object":"skill.deleted","deleted":true,"id":"skill/a b"
+                })
+                .to_string(),
+            ),
+        ])
+        .await;
+        let skills = Skills::new(client);
+        skills
+            .list(SkillListParams {
+                limit: Omittable::Value(SkillListLimit::new(2).expect("limit")),
+                order: Omittable::Value(SkillListOrder::Ascending),
+                after: Omittable::Value("skill cursor".into()),
+            })
+            .await
+            .expect("list Skills");
+        let id = SkillId::new("skill/a b");
+        skills.retrieve(&id).await.expect("retrieve Skill");
+        skills
+            .set_default_version(&id, SetDefaultSkillVersionBody::new("2"))
+            .await
+            .expect("update Skill");
+        skills.delete(&id).await.expect("delete Skill");
+
+        let captures = captures.lock().expect("capture lock");
+        assert!(captures[0].path_and_query.contains("limit=2"));
+        assert!(captures[0].path_and_query.contains("order=asc"));
+        assert_eq!(captures[1].path_and_query, "/v1/skills/skill%2Fa%20b");
+        assert_eq!(captures[2].method, Method::POST);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captures[2].body).expect("update JSON"),
+            json!({"default_version":"2"})
+        );
+        assert_eq!(captures[3].method, Method::DELETE);
+    }
+
+    #[tokio::test]
+    async fn skill_version_create_list_retrieve_delete_match_contract() {
+        let (client, captures) = serve_script(vec![
+            StubResponse::json(version_json("skill/a b", "3")),
+            StubResponse::json(
+                json!({
+                    "object":"list","data":[],"first_id":null,
+                    "last_id":null,"has_more":false
+                })
+                .to_string(),
+            ),
+            StubResponse::json(version_json("skill/a b", "3/x")),
+            StubResponse::json(
+                json!({
+                    "object":"skill.version.deleted","deleted":true,
+                    "id":"skillver_3/x","version":"3/x"
+                })
+                .to_string(),
+            ),
+        ])
+        .await;
+        let versions = SkillVersions::new(client);
+        let skill_id = SkillId::new("skill/a b");
+        let request = CreateSkillVersionRequest::from_files([
+            bytes_source("SKILL.md", b"DOC"),
+            bytes_source("tool.rs", b"CODE"),
+        ])
+        .expect("version request")
+        .set_default(true);
+        versions
+            .create(&skill_id, request)
+            .await
+            .expect("create version");
+        versions
+            .list(&skill_id, SkillListParams::default())
+            .await
+            .expect("list versions");
+        let version = SkillVersionNumber::new("3/x");
+        versions
+            .retrieve(&skill_id, &version)
+            .await
+            .expect("retrieve version");
+        versions
+            .delete(&skill_id, &version)
+            .await
+            .expect("delete version");
+
+        let captures = captures.lock().expect("capture lock");
+        let multipart = String::from_utf8_lossy(&captures[0].body);
+        assert_eq!(multipart.matches("name=\"files[]\"").count(), 2);
+        assert!(multipart.contains("name=\"default\""));
+        assert!(multipart.contains("true"));
+        assert_eq!(
+            captures[2].path_and_query,
+            "/v1/skills/skill%2Fa%20b/versions/3%2Fx"
+        );
+        assert_eq!(captures[3].method, Method::DELETE);
+    }
+
+    #[tokio::test]
+    async fn skill_and_version_content_stream_and_bound_collection() {
+        let (client, captures) = serve_script(vec![
+            StubResponse::binary(b"ZIP-DEFAULT"),
+            StubResponse::binary(b"ZIP-VERSION"),
+            StubResponse::binary(b"TOO-LARGE"),
+        ])
+        .await;
+        let skills = Skills::new(client);
+        let skill_id = SkillId::new("skill/a b");
+        let content = skills
+            .content(&skill_id)
+            .await
+            .expect("Skill content")
+            .collect(64)
+            .await
+            .expect("bounded collect");
+        assert_eq!(content.body().as_bytes(), b"ZIP-DEFAULT");
+
+        let versions = skills.versions();
+        let version = SkillVersionNumber::new("2/x");
+        let content = versions
+            .content(&skill_id, &version)
+            .await
+            .expect("version content")
+            .collect(64)
+            .await
+            .expect("bounded version collect");
+        assert_eq!(content.body().as_bytes(), b"ZIP-VERSION");
+        let too_large = versions
+            .content(&skill_id, &version)
+            .await
+            .expect("large stream")
+            .collect(3)
+            .await;
+        assert!(too_large.is_err());
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures[0].accept.as_deref(), Some(BINARY_MIME));
+        assert_eq!(
+            captures[0].path_and_query,
+            "/v1/skills/skill%2Fa%20b/content"
+        );
+        assert_eq!(
+            captures[1].path_and_query,
+            "/v1/skills/skill%2Fa%20b/versions/2%2Fx/content"
+        );
+        assert!(captures.iter().all(|request| {
+            request.authorization.as_deref() == Some("Bearer test-placeholder-key")
+        }));
+    }
+}
