@@ -355,6 +355,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn encoded_embeddings_force_matching_wire_discriminator() {
+        let (client, captured) = serve_once(
+            r#"{"object":"list","data":[{"object":"embedding","index":0,"embedding":"AAAAAA=="}],"model":"text-embedding-3-small","usage":{"prompt_tokens":2,"total_tokens":2}}"#,
+        )
+        .await;
+        let request = CreateEmbeddingRequest::new("text-embedding-3-small", "hello")
+            .with_encoding_format(EmbeddingEncodingFormat::Float);
+
+        let response = client
+            .embeddings()
+            .create_encoded(request)
+            .await
+            .expect("encoded embedding response");
+        assert_eq!(response.data.len(), 1);
+
+        let captured = captured.await.expect("captured request");
+        let body: Value = serde_json::from_slice(&captured.body).expect("embedding request JSON");
+        assert_eq!(body["encoding_format"], "base64");
+    }
+
+    #[tokio::test]
     async fn moderations_create_sends_typed_body() {
         let (client, captured) = serve_once(
             r#"{"id":"modr_1","model":"omni-moderation-latest","results":[{"flagged":false,"categories":{},"category_scores":{}}]}"#,

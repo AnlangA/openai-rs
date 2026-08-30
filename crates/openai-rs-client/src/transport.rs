@@ -287,9 +287,10 @@ impl Transport {
 
 impl fmt::Debug for Transport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let base_origin = self.base_url.origin().ascii_serialization();
         formatter
             .debug_struct("Transport")
-            .field("base_url", &self.base_url.as_str())
+            .field("base_origin", &base_origin)
             .field("authorization", &"[REDACTED]")
             .field(
                 "organization",

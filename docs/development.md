@@ -33,11 +33,12 @@ stability level of experimental features.
 
 ## `xtask check`
 
-`cargo run -p xtask -- check` is the repository consistency entry point. It is
-expected to validate checked-in provenance, hashes, generated artifacts, and
-operation/schema inventories without updating them. The command must return a
-failure if it would change a tracked artifact or if a pinned input no longer
-matches its recorded hash.
+`cargo run -p xtask -- check` is the repository consistency entry point. It
+validates checked-in provenance, hashes, operation/schema inventories, and any
+registered generated artifacts without updating them. The command must return
+a failure if it would change a tracked artifact or if a pinned input no longer
+matches its recorded hash. M0 currently has no registered code generators, so a
+zero-generator codegen check is expected.
 
 Refresh commands, when added, must be separate and explicit. Normal builds,
 tests, and `xtask check` must not fetch a moving specification.

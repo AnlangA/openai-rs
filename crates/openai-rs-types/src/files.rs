@@ -59,7 +59,12 @@ impl FilePurpose {
     pub const fn is_create_upload_purpose(&self) -> bool {
         matches!(
             self,
-            Self::Assistants | Self::Batch | Self::FineTune | Self::Vision
+            Self::Assistants
+                | Self::Batch
+                | Self::FineTune
+                | Self::Vision
+                | Self::UserData
+                | Self::Evals
         )
     }
 }
@@ -636,6 +641,198 @@ impl fmt::Debug for FileContent {
     }
 }
 
+/// A multipart filename validated against header and path injection.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct MultipartFileName(String);
+
+impl MultipartFileName {
+    /// Validates a non-empty basename suitable for multipart metadata.
+    pub fn new(value: impl Into<String>) -> Result<Self, MultipartFileNameError> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err(MultipartFileNameError::Empty);
+        }
+        if value
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '/' | '\\' | '"'))
+        {
+            return Err(MultipartFileNameError::UnsafeCharacter);
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the validated filename.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consumes the filename.
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl AsRef<str> for MultipartFileName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for MultipartFileName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for MultipartFileName {
+    type Err = MultipartFileNameError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::new(value)
+    }
+}
+
+impl Serialize for MultipartFileName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for MultipartFileName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)
+            .and_then(|value| Self::new(value).map_err(D::Error::custom))
+    }
+}
+
+/// Why a multipart filename was rejected.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MultipartFileNameError {
+    /// Multipart filenames cannot be empty.
+    #[error("multipart filename cannot be empty")]
+    Empty,
+    /// Path separators, quotes, and control characters are unsafe in a
+    /// multipart filename.
+    #[error("multipart filename contains an unsafe character")]
+    UnsafeCharacter,
+}
+
+/// A media type validated for safe use in a multipart header.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct MultipartMediaType(String);
+
+impl MultipartMediaType {
+    /// Validates a MIME type and rejects control/header injection.
+    pub fn new(value: impl Into<String>) -> Result<Self, MultipartMediaTypeError> {
+        let value = value.into();
+        if value.is_empty() || value.trim() != value || value.chars().any(char::is_control) {
+            return Err(MultipartMediaTypeError);
+        }
+
+        let essence = value.split_once(';').map_or(value.as_str(), |(head, _)| head);
+        let Some((top_level, subtype)) = essence.split_once('/') else {
+            return Err(MultipartMediaTypeError);
+        };
+        if top_level.is_empty()
+            || subtype.is_empty()
+            || !top_level.chars().all(is_mime_token_character)
+            || !subtype.chars().all(is_mime_token_character)
+        {
+            return Err(MultipartMediaTypeError);
+        }
+
+        Ok(Self(value))
+    }
+
+    /// Returns the validated media type.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consumes the media type.
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+fn is_mime_token_character(character: char) -> bool {
+    character.is_ascii_alphanumeric()
+        || matches!(
+            character,
+            '!' | '#'
+                | '$'
+                | '%'
+                | '&'
+                | '\''
+                | '*'
+                | '+'
+                | '-'
+                | '.'
+                | '^'
+                | '_'
+                | '`'
+                | '|'
+                | '~'
+        )
+}
+
+impl AsRef<str> for MultipartMediaType {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for MultipartMediaType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for MultipartMediaType {
+    type Err = MultipartMediaTypeError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::new(value)
+    }
+}
+
+impl Serialize for MultipartMediaType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for MultipartMediaType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)
+            .and_then(|value| Self::new(value).map_err(D::Error::custom))
+    }
+}
+
+/// A string is not a safe multipart media type.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[error("invalid multipart media type")]
+pub struct MultipartMediaTypeError;
+
 /// Replayable data used for one multipart field.
 ///
 /// `Bytes` is immutable shared memory. `Path` is a descriptor that the
@@ -647,14 +844,14 @@ pub enum ReplayableMultipartSource {
     /// Immutable bytes that can be cloned cheaply for retries.
     Bytes {
         data: Arc<[u8]>,
-        file_name: Omittable<String>,
-        media_type: Omittable<String>,
+        file_name: Omittable<MultipartFileName>,
+        media_type: Omittable<MultipartMediaType>,
     },
     /// A filesystem path that can be reopened for each attempt.
     Path {
         path: PathBuf,
-        file_name: Omittable<String>,
-        media_type: Omittable<String>,
+        file_name: Omittable<MultipartFileName>,
+        media_type: Omittable<MultipartMediaType>,
     },
 }
 
@@ -683,16 +880,32 @@ impl ReplayableMultipartSource {
 
     /// Sets the multipart filename.
     #[must_use]
-    pub fn with_file_name(mut self, file_name: impl Into<String>) -> Self {
-        *self.file_name_mut() = Omittable::Value(file_name.into());
+    pub fn with_file_name(mut self, file_name: MultipartFileName) -> Self {
+        *self.file_name_mut() = Omittable::Value(file_name);
         self
+    }
+
+    /// Validates and sets the multipart filename.
+    pub fn try_with_file_name(
+        self,
+        file_name: impl Into<String>,
+    ) -> Result<Self, MultipartFileNameError> {
+        MultipartFileName::new(file_name).map(|file_name| self.with_file_name(file_name))
     }
 
     /// Sets the multipart media type.
     #[must_use]
-    pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
-        *self.media_type_mut() = Omittable::Value(media_type.into());
+    pub fn with_media_type(mut self, media_type: MultipartMediaType) -> Self {
+        *self.media_type_mut() = Omittable::Value(media_type);
         self
+    }
+
+    /// Validates and sets the multipart media type.
+    pub fn try_with_media_type(
+        self,
+        media_type: impl Into<String>,
+    ) -> Result<Self, MultipartMediaTypeError> {
+        MultipartMediaType::new(media_type).map(|media_type| self.with_media_type(media_type))
     }
 
     /// Clears an explicit multipart filename.
@@ -732,7 +945,7 @@ impl ReplayableMultipartSource {
     pub fn file_name(&self) -> Option<&str> {
         match self.file_name_field() {
             Omittable::Omitted => None,
-            Omittable::Value(value) => Some(value),
+            Omittable::Value(value) => Some(value.as_str()),
         }
     }
 
@@ -741,29 +954,29 @@ impl ReplayableMultipartSource {
     pub fn media_type(&self) -> Option<&str> {
         match self.media_type_field() {
             Omittable::Omitted => None,
-            Omittable::Value(value) => Some(value),
+            Omittable::Value(value) => Some(value.as_str()),
         }
     }
 
-    fn file_name_field(&self) -> &Omittable<String> {
+    fn file_name_field(&self) -> &Omittable<MultipartFileName> {
         match self {
             Self::Bytes { file_name, .. } | Self::Path { file_name, .. } => file_name,
         }
     }
 
-    fn file_name_mut(&mut self) -> &mut Omittable<String> {
+    fn file_name_mut(&mut self) -> &mut Omittable<MultipartFileName> {
         match self {
             Self::Bytes { file_name, .. } | Self::Path { file_name, .. } => file_name,
         }
     }
 
-    fn media_type_field(&self) -> &Omittable<String> {
+    fn media_type_field(&self) -> &Omittable<MultipartMediaType> {
         match self {
             Self::Bytes { media_type, .. } | Self::Path { media_type, .. } => media_type,
         }
     }
 
-    fn media_type_mut(&mut self) -> &mut Omittable<String> {
+    fn media_type_mut(&mut self) -> &mut Omittable<MultipartMediaType> {
         match self {
             Self::Bytes { media_type, .. } | Self::Path { media_type, .. } => media_type,
         }
@@ -784,12 +997,12 @@ impl fmt::Debug for ReplayableMultipartSource {
                 .field("media_type", media_type)
                 .finish(),
             Self::Path {
-                path,
+                path: _,
                 file_name,
                 media_type,
             } => formatter
                 .debug_struct("ReplayableMultipartSource::Path")
-                .field("path", path)
+                .field("path", &"[REDACTED]")
                 .field("file_name", file_name)
                 .field("media_type", media_type)
                 .finish(),
@@ -1142,7 +1355,8 @@ mod tests {
     use super::{
         AddUploadPartRequest, CompleteUploadRequest, CreateFileRequest, CreateUploadRequest,
         DeleteFileResponse, FileContent, FileExpirationAfter, FileListLimit, FileListPage,
-        FileListParams, FileObject, FilePurpose, FileSortOrder, FileStatus,
+        FileListParams, FileObject, FilePurpose, FileSortOrder, FileStatus, MultipartFileName,
+        MultipartMediaType,
         MAX_FILE_EXPIRATION_SECONDS, MAX_FILE_LIST_LIMIT, MIN_FILE_EXPIRATION_SECONDS,
         ReplayableMultipartSource, Upload, UploadPart, UploadPartId, UploadStatus,
     };
@@ -1157,6 +1371,8 @@ mod tests {
     assert_impl_all!(Upload: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(UploadPart: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(ReplayableMultipartSource: Clone, Send, Sync);
+    assert_impl_all!(MultipartFileName: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(MultipartMediaType: Serialize, DeserializeOwned, Send, Sync);
     assert_not_impl_any!(ReplayableMultipartSource: Serialize);
     assert_not_impl_any!(CreateFileRequest: Serialize);
     assert_not_impl_any!(AddUploadPartRequest: Serialize);
@@ -1320,8 +1536,10 @@ mod tests {
     fn multipart_source_is_replayable_and_hides_byte_contents_in_debug() {
         let secret_bytes = b"do-not-print-this-payload".to_vec();
         let source = ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(secret_bytes))
-            .with_file_name("training.jsonl")
-            .with_media_type("application/jsonl");
+            .try_with_file_name("training.jsonl")
+            .expect("safe filename")
+            .try_with_media_type("application/jsonl")
+            .expect("safe media type");
         let cloned = source.clone();
         let debug = format!("{source:?}");
 
@@ -1337,13 +1555,31 @@ mod tests {
         let path = ReplayableMultipartSource::from_path("fixtures/training.jsonl");
         assert_eq!(path.path(), Some(Path::new("fixtures/training.jsonl")));
         assert_eq!(path.as_bytes(), None);
+        assert!(!format!("{path:?}").contains("fixtures/training.jsonl"));
+    }
+
+    #[test]
+    fn multipart_metadata_rejects_header_and_path_injection() {
+        for invalid in ["", "../secret", r#"subdir\secret"#, "quoted\"name", "line\r\nbreak"] {
+            assert!(MultipartFileName::new(invalid).is_err());
+            assert!(serde_json::from_value::<MultipartFileName>(json!(invalid)).is_err());
+        }
+
+        for invalid in ["", "text", " text/plain", "text/plain\r\nX-Evil: yes"] {
+            assert!(MultipartMediaType::new(invalid).is_err());
+            assert!(serde_json::from_value::<MultipartMediaType>(json!(invalid)).is_err());
+        }
+
+        assert!(MultipartFileName::new("训练集.jsonl").is_ok());
+        assert!(MultipartMediaType::new("application/vnd.openai+json").is_ok());
     }
 
     #[test]
     fn multipart_requests_keep_binary_out_of_json() {
         let expiration = FileExpirationAfter::new(3_600).expect("valid expiration");
         let file = ReplayableMultipartSource::from_path("training.jsonl")
-            .with_media_type("application/jsonl");
+            .try_with_media_type("application/jsonl")
+            .expect("safe media type");
         let request = CreateFileRequest::new(file.clone(), FilePurpose::FineTune)
             .with_expires_after(expiration);
         let part = AddUploadPartRequest::new(file);

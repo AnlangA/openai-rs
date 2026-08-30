@@ -84,9 +84,10 @@ impl Client {
 
 impl fmt::Debug for Client {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let base_origin = self.base_url().origin().ascii_serialization();
         formatter
             .debug_struct("Client")
-            .field("base_url", &self.base_url().as_str())
+            .field("base_origin", &base_origin)
             .finish_non_exhaustive()
     }
 }
@@ -233,7 +234,7 @@ impl ClientBuilder {
             None => http,
         }
         .build()
-            .map_err(Error::from_reqwest)?;
+        .map_err(Error::from_reqwest)?;
 
         Ok(Client {
             inner: Arc::new(Inner {
@@ -253,10 +254,14 @@ impl ClientBuilder {
 
 impl fmt::Debug for ClientBuilder {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let base_origin = self
+            .base_url
+            .as_ref()
+            .map(|url| url.origin().ascii_serialization());
         formatter
             .debug_struct("ClientBuilder")
             .field("api_key", &"[REDACTED]")
-            .field("base_url", &self.base_url)
+            .field("base_origin", &base_origin)
             .field("allow_insecure_loopback", &self.allow_insecure_loopback)
             .field(
                 "organization",
@@ -334,11 +339,11 @@ fn invalid_configuration(message: impl Into<Box<str>>) -> Error {
 const fn default_tls_backend() -> Option<TlsBackend> {
     #[cfg(feature = "rustls-tls")]
     {
-        return Some(TlsBackend::Rustls);
+        Some(TlsBackend::Rustls)
     }
     #[cfg(all(not(feature = "rustls-tls"), feature = "native-tls"))]
     {
-        return Some(TlsBackend::Native);
+        Some(TlsBackend::Native)
     }
     #[cfg(all(not(feature = "rustls-tls"), not(feature = "native-tls")))]
     {

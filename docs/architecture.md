@@ -71,10 +71,12 @@ types and a local RMCP client/server adapter remain separate concerns.
 
 ## Provenance and generation
 
-Generated API artifacts are derived from pinned, hashed upstream inputs. Normal
-builds and tests consume checked-in artifacts; they do not download a moving
-schema or execute an unknown generator. A refresh is an explicit maintainer
-operation whose source revision, hash, and generated diff are reviewed.
+The M0 OpenAPI input is vendored and hash-verified, while code generation has no
+registered generators yet. Future generated API artifacts must be derived from
+pinned, hashed upstream inputs. Normal builds and tests consume checked-in
+artifacts; they do not download a moving schema or execute an unknown generator.
+A refresh is an explicit maintainer operation whose source revision, hash, and
+generated diff are reviewed.
 
 ## Excluded dependency and design source
 

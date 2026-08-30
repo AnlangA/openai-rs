@@ -1,5 +1,6 @@
 //! Lossless wire types and Serde primitives for the OpenAI API.
 
+pub mod chat;
 pub mod core;
 pub mod files;
 pub mod kernel;

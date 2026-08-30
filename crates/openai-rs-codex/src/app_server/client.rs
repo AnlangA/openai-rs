@@ -1122,7 +1122,7 @@ mod tests {
         let executable = executable.canonicalize()?;
         let executable_sha256 = sha256_file(&executable)?;
         let identity = RuntimeIdentity::new(
-            "test-shell-1.0.0",
+            "1.0.0",
             executable_sha256,
             crate::COMPILED_APP_SERVER_SCHEMA_SHA256,
         )?;
@@ -1173,10 +1173,7 @@ mod tests {
             .with_limits(limits);
         let client = AppServerClient::spawn(config, ClientInfo::new("test", "0.0.0")).await?;
         assert_eq!(client.initialize_response().user_agent, "fake/1");
-        assert_eq!(
-            client.runtime_identity().released_version(),
-            "test-shell-1.0.0"
-        );
+        assert_eq!(client.runtime_identity().released_version(), "1.0.0");
 
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
@@ -1214,7 +1211,7 @@ mod tests {
     {
         let profile = tempfile::tempdir()?;
         let wrong_identity = RuntimeIdentity::new(
-            "test-shell-1.0.0",
+            "1.0.0",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             crate::COMPILED_APP_SERVER_SCHEMA_SHA256,
         )?;

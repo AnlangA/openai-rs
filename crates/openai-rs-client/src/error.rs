@@ -404,6 +404,13 @@ pub enum Error {
     #[error(transparent)]
     Stream(Box<StreamError>),
 
+    #[error("invalid Responses stream protocol: {message}")]
+    StreamProtocol {
+        message: &'static str,
+        request_id: Option<Box<str>>,
+        body: BodyPreview,
+    },
+
     #[error("unexpected response content type; expected {expected}, received {actual:?}")]
     UnexpectedContentType {
         expected: &'static str,
@@ -486,6 +493,7 @@ impl Error {
             | Self::EncodeQuery(_)
             | Self::Sse { .. }
             | Self::Stream(_)
+            | Self::StreamProtocol { .. }
             | Self::InvalidConfiguration(_)
             | Self::InvalidPathParameter { .. } => None,
         }
@@ -501,6 +509,7 @@ impl Error {
             | Self::UnexpectedContentType { request_id, .. } => request_id.as_deref(),
             Self::Sse { request_id, .. } => request_id.as_deref(),
             Self::Stream(error) => error.request_id(),
+            Self::StreamProtocol { request_id, .. } => request_id.as_deref(),
             Self::Transport(_)
             | Self::Timeout(_)
             | Self::Encode(_)
@@ -528,6 +537,14 @@ mod tests {
     }
 
     #[test]
+    fn non_json_preview_is_bounded_before_utf8_conversion() {
+        let input = vec![b'x'; MAX_BODY_PREVIEW_BYTES * 4];
+        let preview = BodyPreview::from_bytes(&input, false);
+        assert!(preview.is_truncated());
+        assert_eq!(preview.as_str().len(), MAX_BODY_PREVIEW_BYTES);
+    }
+
+    #[test]
     fn typed_api_error_preserves_metadata() {
         let meta = ResponseMeta::new(
             StatusCode::UNAUTHORIZED,
@@ -541,5 +558,7 @@ mod tests {
         );
         assert_eq!(error.request_id(), Some("req_test"));
         assert_eq!(error.code(), Some("invalid_api_key"));
+        assert!(!format!("{error:?}").contains("invalid key"));
+        assert!(!error.to_string().contains("invalid key"));
     }
 }

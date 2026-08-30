@@ -15,3 +15,17 @@ impl DirectCodexResponsesClient {
         Err(Error::UnsupportedDirectTransport)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DirectCodexResponsesClient;
+    use crate::Error;
+
+    #[test]
+    fn direct_transport_fails_closed() {
+        assert!(matches!(
+            DirectCodexResponsesClient::new(),
+            Err(Error::UnsupportedDirectTransport)
+        ));
+    }
+}

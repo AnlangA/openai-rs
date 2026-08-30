@@ -1025,7 +1025,21 @@ tagged_union! {
     /// A tool definition accepted by Responses create.
     pub enum ResponseTool {
         Function(FunctionTool) => "function",
-        Mcp(McpTool) => "mcp"
+        FileSearch(FileSearchTool) => "file_search",
+        Computer(ComputerTool) => "computer",
+        ComputerUsePreview(ComputerUsePreviewTool) => "computer_use_preview",
+        WebSearch(WebSearchTool) => "web_search",
+        Mcp(McpTool) => "mcp",
+        CodeInterpreter(CodeInterpreterTool) => "code_interpreter",
+        Programmatic(ProgrammaticTool) => "programmatic_tool_calling",
+        ImageGeneration(ImageGenerationTool) => "image_generation",
+        LocalShell(LocalShellTool) => "local_shell",
+        FunctionShell(FunctionShellTool) => "shell",
+        Custom(CustomTool) => "custom",
+        Namespace(NamespaceTool) => "namespace",
+        ToolSearch(ToolSearchTool) => "tool_search",
+        WebSearchPreview(WebSearchPreviewTool) => "web_search_preview",
+        ApplyPatch(ApplyPatchTool) => "apply_patch"
     }
 }
 
@@ -1678,13 +1692,20 @@ impl<'de> Deserialize<'de> for ResponseInputItem {
         let tag = match object.get("type") {
             Some(Value::String(tag)) => Some(tag.as_str()),
             Some(_) => return Err(D::Error::custom("input item `type` must be a string")),
-            None if object.contains_key("role") => None,
-            None => return Err(D::Error::custom("input item is missing `type` or `role`")),
+            None if object.contains_key("role") || object.contains_key("id") => None,
+            None => {
+                return Err(D::Error::custom(
+                    "input item is missing `type`, `role`, or `id`",
+                ));
+            }
         };
 
         match tag {
-            None => serde_json::from_value(value)
+            None if object.contains_key("role") => serde_json::from_value(value)
                 .map(Self::Message)
+                .map_err(D::Error::custom),
+            None => serde_json::from_value(value)
+                .map(Self::ItemReference)
                 .map_err(D::Error::custom),
             Some("message") if object.contains_key("id") || object.contains_key("status") => {
                 serde_json::from_value(value)
@@ -1711,6 +1732,72 @@ impl<'de> Deserialize<'de> for ResponseInputItem {
                 .map_err(D::Error::custom),
             Some("mcp_approval_response") => serde_json::from_value(value)
                 .map(Self::McpApprovalResponse)
+                .map_err(D::Error::custom),
+            Some("compaction_trigger") => serde_json::from_value(value)
+                .map(Self::CompactionTrigger)
+                .map_err(D::Error::custom),
+            Some("program") => serde_json::from_value(value)
+                .map(Self::Program)
+                .map_err(D::Error::custom),
+            Some("program_output") => serde_json::from_value(value)
+                .map(Self::ProgramOutput)
+                .map_err(D::Error::custom),
+            Some("file_search_call") => serde_json::from_value(value)
+                .map(Self::FileSearchCall)
+                .map_err(D::Error::custom),
+            Some("computer_call") => serde_json::from_value(value)
+                .map(Self::ComputerCall)
+                .map_err(D::Error::custom),
+            Some("computer_call_output") => serde_json::from_value(value)
+                .map(Self::ComputerCallOutput)
+                .map_err(D::Error::custom),
+            Some("web_search_call") => serde_json::from_value(value)
+                .map(Self::WebSearchCall)
+                .map_err(D::Error::custom),
+            Some("tool_search_call") => serde_json::from_value(value)
+                .map(Self::ToolSearchCall)
+                .map_err(D::Error::custom),
+            Some("tool_search_output") => serde_json::from_value(value)
+                .map(Self::ToolSearchOutput)
+                .map_err(D::Error::custom),
+            Some("additional_tools") => serde_json::from_value(value)
+                .map(Self::AdditionalTools)
+                .map_err(D::Error::custom),
+            Some("reasoning") => serde_json::from_value(value)
+                .map(Self::Reasoning)
+                .map_err(D::Error::custom),
+            Some("compaction") => serde_json::from_value(value)
+                .map(Self::Compaction)
+                .map_err(D::Error::custom),
+            Some("image_generation_call") => serde_json::from_value(value)
+                .map(Self::ImageGenerationCall)
+                .map_err(D::Error::custom),
+            Some("code_interpreter_call") => serde_json::from_value(value)
+                .map(Self::CodeInterpreterCall)
+                .map_err(D::Error::custom),
+            Some("local_shell_call") => serde_json::from_value(value)
+                .map(Self::LocalShellCall)
+                .map_err(D::Error::custom),
+            Some("local_shell_call_output") => serde_json::from_value(value)
+                .map(Self::LocalShellCallOutput)
+                .map_err(D::Error::custom),
+            Some("shell_call") => serde_json::from_value(value)
+                .map(Self::FunctionShellCall)
+                .map_err(D::Error::custom),
+            Some("shell_call_output") => serde_json::from_value(value)
+                .map(Self::FunctionShellCallOutput)
+                .map_err(D::Error::custom),
+            Some("apply_patch_call") => serde_json::from_value(value)
+                .map(Self::ApplyPatchCall)
+                .map_err(D::Error::custom),
+            Some("apply_patch_call_output") => serde_json::from_value(value)
+                .map(Self::ApplyPatchCallOutput)
+                .map_err(D::Error::custom),
+            Some("custom_tool_call_output") => serde_json::from_value(value)
+                .map(Self::CustomToolCallOutput)
+                .map_err(D::Error::custom),
+            Some("custom_tool_call") => serde_json::from_value(value)
+                .map(Self::CustomToolCall)
                 .map_err(D::Error::custom),
             Some(_) => UnknownTaggedObject::from_value(value)
                 .map(Self::Unknown)
@@ -1753,10 +1840,33 @@ tagged_union! {
     /// One typed item generated by a response.
     pub enum ResponseOutputItem {
         Message(OutputMessage) => "message",
+        FileSearchCall(FileSearchCall) => "file_search_call",
         FunctionCall(FunctionCall) => "function_call",
+        FunctionCallOutput(FunctionCallOutputResource) => "function_call_output",
+        WebSearchCall(WebSearchCall) => "web_search_call",
+        ComputerCall(ComputerCall) => "computer_call",
+        ComputerCallOutput(ComputerCallOutputResource) => "computer_call_output",
+        Reasoning(ReasoningItem) => "reasoning",
+        Program(ProgramItem) => "program",
+        ProgramOutput(ProgramOutputItem) => "program_output",
+        ToolSearchCall(ToolSearchCall) => "tool_search_call",
+        ToolSearchOutput(ToolSearchOutput) => "tool_search_output",
+        AdditionalTools(AdditionalTools) => "additional_tools",
+        Compaction(CompactionItem) => "compaction",
+        ImageGenerationCall(ImageGenerationCall) => "image_generation_call",
+        CodeInterpreterCall(CodeInterpreterCall) => "code_interpreter_call",
+        LocalShellCall(LocalShellCall) => "local_shell_call",
+        LocalShellCallOutput(LocalShellCallOutput) => "local_shell_call_output",
+        FunctionShellCall(FunctionShellCall) => "shell_call",
+        FunctionShellCallOutput(FunctionShellCallOutput) => "shell_call_output",
+        ApplyPatchCall(ApplyPatchCall) => "apply_patch_call",
+        ApplyPatchCallOutput(ApplyPatchCallOutput) => "apply_patch_call_output",
         McpListTools(McpListTools) => "mcp_list_tools",
         McpCall(McpCall) => "mcp_call",
-        McpApprovalRequest(McpApprovalRequest) => "mcp_approval_request"
+        McpApprovalRequest(McpApprovalRequest) => "mcp_approval_request",
+        McpApprovalResponse(McpApprovalResponseResource) => "mcp_approval_response",
+        CustomToolCall(CustomToolCall) => "custom_tool_call",
+        CustomToolCallOutput(CustomToolCallOutputResource) => "custom_tool_call_output"
     }
 }
 
@@ -1843,6 +1953,18 @@ pub enum ToolChoice {
     Function(FunctionToolChoice),
     /// Force a native MCP server or tool.
     Mcp(McpToolChoice),
+    /// Restrict calls to an allowed set.
+    AllowedTools(AllowedToolsChoice),
+    /// Force one hosted tool type.
+    Hosted(HostedToolChoice),
+    /// Force one named custom tool.
+    Custom(CustomToolChoice),
+    /// Force programmatic tool calling.
+    Programmatic(ProgrammaticToolChoice),
+    /// Force apply-patch.
+    ApplyPatch(ApplyPatchToolChoice),
+    /// Force function-shell.
+    FunctionShell(FunctionShellToolChoice),
     /// A future string mode retained verbatim.
     UnknownString(Box<str>),
     /// A future object choice retained verbatim.
@@ -1861,6 +1983,12 @@ impl Serialize for ToolChoice {
             Self::UnknownString(value) => serializer.serialize_str(value),
             Self::Function(value) => value.serialize(serializer),
             Self::Mcp(value) => value.serialize(serializer),
+            Self::AllowedTools(value) => value.serialize(serializer),
+            Self::Hosted(value) => value.serialize(serializer),
+            Self::Custom(value) => value.serialize(serializer),
+            Self::Programmatic(value) => value.serialize(serializer),
+            Self::ApplyPatch(value) => value.serialize(serializer),
+            Self::FunctionShell(value) => value.serialize(serializer),
             Self::Unknown(value) => value.serialize(serializer),
         }
     }
@@ -1888,6 +2016,31 @@ impl<'de> Deserialize<'de> for ToolChoice {
                 .map_err(D::Error::custom),
             "mcp" => serde_json::from_value(value)
                 .map(Self::Mcp)
+                .map_err(D::Error::custom),
+            "allowed_tools" => serde_json::from_value(value)
+                .map(Self::AllowedTools)
+                .map_err(D::Error::custom),
+            "file_search"
+            | "web_search_preview"
+            | "computer"
+            | "computer_use_preview"
+            | "computer_use"
+            | "web_search_preview_2025_03_11"
+            | "image_generation"
+            | "code_interpreter" => serde_json::from_value(value)
+                .map(Self::Hosted)
+                .map_err(D::Error::custom),
+            "custom" => serde_json::from_value(value)
+                .map(Self::Custom)
+                .map_err(D::Error::custom),
+            "programmatic_tool_calling" => serde_json::from_value(value)
+                .map(Self::Programmatic)
+                .map_err(D::Error::custom),
+            "apply_patch" => serde_json::from_value(value)
+                .map(Self::ApplyPatch)
+                .map_err(D::Error::custom),
+            "shell" => serde_json::from_value(value)
+                .map(Self::FunctionShell)
                 .map_err(D::Error::custom),
             _ => UnknownTaggedObject::from_value(value)
                 .map(Self::Unknown)
@@ -2773,6 +2926,36 @@ impl Response {
                 ResponseOutputItem::FunctionCall(value) => {
                     Some(ResponseInputItem::FunctionCall(value.clone()))
                 }
+                ResponseOutputItem::FileSearchCall(value) => {
+                    Some(ResponseInputItem::FileSearchCall(value.clone()))
+                }
+                ResponseOutputItem::WebSearchCall(value) => {
+                    Some(ResponseInputItem::WebSearchCall(value.clone()))
+                }
+                ResponseOutputItem::ComputerCall(value) => {
+                    Some(ResponseInputItem::ComputerCall(value.clone()))
+                }
+                ResponseOutputItem::Reasoning(value) => {
+                    Some(ResponseInputItem::Reasoning(value.clone()))
+                }
+                ResponseOutputItem::Program(value) => {
+                    Some(ResponseInputItem::Program(value.clone()))
+                }
+                ResponseOutputItem::ProgramOutput(value) => {
+                    Some(ResponseInputItem::ProgramOutput(value.clone()))
+                }
+                ResponseOutputItem::ImageGenerationCall(value) => {
+                    Some(ResponseInputItem::ImageGenerationCall(value.clone()))
+                }
+                ResponseOutputItem::CodeInterpreterCall(value) => {
+                    Some(ResponseInputItem::CodeInterpreterCall(value.clone()))
+                }
+                ResponseOutputItem::LocalShellCall(value) => {
+                    Some(ResponseInputItem::LocalShellCall(value.clone()))
+                }
+                ResponseOutputItem::LocalShellCallOutput(value) => {
+                    Some(ResponseInputItem::LocalShellCallOutput(value.clone()))
+                }
                 ResponseOutputItem::McpListTools(value) => {
                     Some(ResponseInputItem::McpListTools(value.clone()))
                 }
@@ -2782,7 +2965,22 @@ impl Response {
                 ResponseOutputItem::McpApprovalRequest(value) => {
                     Some(ResponseInputItem::McpApprovalRequest(value.clone()))
                 }
-                ResponseOutputItem::Unknown(_) => None,
+                ResponseOutputItem::CustomToolCall(value) => {
+                    Some(ResponseInputItem::CustomToolCall(value.clone()))
+                }
+                ResponseOutputItem::FunctionCallOutput(_)
+                | ResponseOutputItem::ComputerCallOutput(_)
+                | ResponseOutputItem::ToolSearchCall(_)
+                | ResponseOutputItem::ToolSearchOutput(_)
+                | ResponseOutputItem::AdditionalTools(_)
+                | ResponseOutputItem::Compaction(_)
+                | ResponseOutputItem::FunctionShellCall(_)
+                | ResponseOutputItem::FunctionShellCallOutput(_)
+                | ResponseOutputItem::ApplyPatchCall(_)
+                | ResponseOutputItem::ApplyPatchCallOutput(_)
+                | ResponseOutputItem::McpApprovalResponse(_)
+                | ResponseOutputItem::CustomToolCallOutput(_)
+                | ResponseOutputItem::Unknown(_) => None,
             })
             .collect()
     }
@@ -4245,6 +4443,396 @@ pub const STABLE_RESPONSE_OUTPUT_SCHEMAS: [&str; 28] = [
     "MCPApprovalResponseResource",
     "CustomToolCall",
     "CustomToolCallOutputResource",
+];
+
+macro_rules! tag_only_tool {
+    ($name:ident, $tag_name:ident, $tag_variant:ident, $wire:literal) => {
+        literal_tag!($tag_name, $tag_variant, $wire);
+
+        #[doc = concat!("Responses `", $wire, "` tool definition.")]
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        pub struct $name {
+            #[serde(rename = "type")]
+            kind: $tag_name,
+            #[serde(flatten)]
+            extra: ExtraFields,
+        }
+
+        impl $name {
+            /// Creates the minimal valid tool definition.
+            #[must_use]
+            pub fn new() -> Self {
+                Self {
+                    kind: $tag_name::$tag_variant,
+                    extra: ExtraFields::new(),
+                }
+            }
+
+            /// Returns future optional fields retained while decoding.
+            #[must_use]
+            pub const fn extra_fields(&self) -> &ExtraFields {
+                &self.extra
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    };
+}
+
+literal_tag!(FileSearchToolTag, FileSearch, "file_search");
+
+/// File-search tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileSearchTool {
+    #[serde(rename = "type")]
+    kind: FileSearchToolTag,
+    vector_store_ids: Vec<String>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl FileSearchTool {
+    /// Creates a file-search tool over one or more vector stores.
+    #[must_use]
+    pub fn new(vector_store_ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            kind: FileSearchToolTag::FileSearch,
+            vector_store_ids: vector_store_ids.into_iter().map(Into::into).collect(),
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Returns selected vector-store ids.
+    #[must_use]
+    pub fn vector_store_ids(&self) -> &[String] {
+        &self.vector_store_ids
+    }
+}
+
+tag_only_tool!(ComputerTool, ComputerToolTag, Computer, "computer");
+tag_only_tool!(WebSearchTool, WebSearchToolTag, WebSearch, "web_search");
+tag_only_tool!(
+    ProgrammaticTool,
+    ProgrammaticToolTag,
+    ProgrammaticToolCalling,
+    "programmatic_tool_calling"
+);
+tag_only_tool!(
+    ImageGenerationTool,
+    ImageGenerationToolTag,
+    ImageGeneration,
+    "image_generation"
+);
+tag_only_tool!(LocalShellTool, LocalShellToolTag, LocalShell, "local_shell");
+tag_only_tool!(FunctionShellTool, FunctionShellToolTag, Shell, "shell");
+tag_only_tool!(ToolSearchTool, ToolSearchToolTag, ToolSearch, "tool_search");
+tag_only_tool!(
+    WebSearchPreviewTool,
+    WebSearchPreviewToolTag,
+    WebSearchPreview,
+    "web_search_preview"
+);
+tag_only_tool!(ApplyPatchTool, ApplyPatchToolTag, ApplyPatch, "apply_patch");
+
+literal_tag!(ComputerUsePreviewToolTag, ComputerUsePreview, "computer_use_preview");
+
+/// Preview computer-use tool with an explicit virtual display.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComputerUsePreviewTool {
+    #[serde(rename = "type")]
+    kind: ComputerUsePreviewToolTag,
+    environment: String,
+    display_width: u32,
+    display_height: u32,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ComputerUsePreviewTool {
+    /// Creates a computer-use preview display.
+    #[must_use]
+    pub fn new(environment: impl Into<String>, display_width: u32, display_height: u32) -> Self {
+        Self {
+            kind: ComputerUsePreviewToolTag::ComputerUsePreview,
+            environment: environment.into(),
+            display_width,
+            display_height,
+            extra: ExtraFields::new(),
+        }
+    }
+}
+
+literal_tag!(CodeInterpreterToolTag, CodeInterpreter, "code_interpreter");
+
+/// Code-interpreter tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CodeInterpreterTool {
+    #[serde(rename = "type")]
+    kind: CodeInterpreterToolTag,
+    container: Value,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl CodeInterpreterTool {
+    /// Selects an existing container by id.
+    #[must_use]
+    pub fn container_id(container_id: impl Into<String>) -> Self {
+        Self {
+            kind: CodeInterpreterToolTag::CodeInterpreter,
+            container: Value::String(container_id.into()),
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Serializes an automatic-container configuration.
+    pub fn automatic<T: Serialize>(container: &T) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            kind: CodeInterpreterToolTag::CodeInterpreter,
+            container: serde_json::to_value(container)?,
+            extra: ExtraFields::new(),
+        })
+    }
+}
+
+literal_tag!(CustomToolTag, Custom, "custom");
+
+/// A named custom free-form tool.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomTool {
+    #[serde(rename = "type")]
+    kind: CustomToolTag,
+    name: String,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl CustomTool {
+    /// Creates a named custom tool.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            kind: CustomToolTag::Custom,
+            name: name.into(),
+            extra: ExtraFields::new(),
+        }
+    }
+}
+
+literal_tag!(NamespaceToolTag, Namespace, "namespace");
+
+/// A namespace that groups tools for deferred discovery.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamespaceTool {
+    #[serde(rename = "type")]
+    kind: NamespaceToolTag,
+    name: String,
+    description: String,
+    tools: Vec<ResponseTool>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl NamespaceTool {
+    /// Creates a namespace and its nested tools.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        tools: impl IntoIterator<Item = impl Into<ResponseTool>>,
+    ) -> Self {
+        Self {
+            kind: NamespaceToolTag::Namespace,
+            name: name.into(),
+            description: description.into(),
+            tools: tools.into_iter().map(Into::into).collect(),
+            extra: ExtraFields::new(),
+        }
+    }
+}
+
+/// Frozen schema-name inventory for the 16 stable tool branches.
+pub const STABLE_RESPONSE_TOOL_SCHEMAS: [&str; 16] = [
+    "FunctionTool",
+    "FileSearchTool",
+    "ComputerTool",
+    "ComputerUsePreviewTool",
+    "WebSearchTool",
+    "MCPTool",
+    "CodeInterpreterTool",
+    "ProgrammaticToolCallingParam",
+    "ImageGenTool",
+    "LocalShellToolParam",
+    "FunctionShellToolParam",
+    "CustomToolParam",
+    "NamespaceToolParam",
+    "ToolSearchToolParam",
+    "WebSearchPreviewTool",
+    "ApplyPatchToolParam",
+];
+
+open_string_enum! {
+    /// Whether an allowed-tool set is optional or mandatory.
+    pub enum AllowedToolsMode {
+        Auto => "auto",
+        Required => "required"
+    }
+}
+
+literal_tag!(AllowedToolsChoiceTag, AllowedTools, "allowed_tools");
+
+/// Restricts the model to a serialized set of tool selectors.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AllowedToolsChoice {
+    #[serde(rename = "type")]
+    kind: AllowedToolsChoiceTag,
+    mode: AllowedToolsMode,
+    tools: Vec<Value>,
+}
+
+impl AllowedToolsChoice {
+    /// Creates an empty allowed-tool set.
+    #[must_use]
+    pub fn new(mode: AllowedToolsMode) -> Self {
+        Self {
+            kind: AllowedToolsChoiceTag::AllowedTools,
+            mode,
+            tools: Vec::new(),
+        }
+    }
+
+    /// Serializes and adds a typed tool selector.
+    pub fn tool<T: Serialize>(mut self, tool: &T) -> Result<Self, serde_json::Error> {
+        self.tools.push(serde_json::to_value(tool)?);
+        Ok(self)
+    }
+
+    /// Returns serialized selectors in wire order.
+    #[must_use]
+    pub fn tools(&self) -> &[Value] {
+        &self.tools
+    }
+}
+
+open_string_enum! {
+    /// Hosted tool types accepted by the tool-choice object branch.
+    pub enum HostedToolType {
+        FileSearch => "file_search",
+        WebSearchPreview => "web_search_preview",
+        Computer => "computer",
+        ComputerUsePreview => "computer_use_preview",
+        ComputerUse => "computer_use",
+        WebSearchPreview20250311 => "web_search_preview_2025_03_11",
+        ImageGeneration => "image_generation",
+        CodeInterpreter => "code_interpreter"
+    }
+}
+
+/// Forces one hosted tool type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostedToolChoice {
+    #[serde(rename = "type")]
+    kind: HostedToolType,
+}
+
+impl HostedToolChoice {
+    /// Creates a hosted-tool selector.
+    #[must_use]
+    pub fn new(kind: HostedToolType) -> Self {
+        Self { kind }
+    }
+
+    /// Returns the hosted tool type.
+    #[must_use]
+    pub const fn kind(&self) -> &HostedToolType {
+        &self.kind
+    }
+}
+
+literal_tag!(CustomToolChoiceTag, Custom, "custom");
+
+/// Forces one named custom tool.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomToolChoice {
+    #[serde(rename = "type")]
+    kind: CustomToolChoiceTag,
+    name: String,
+}
+
+impl CustomToolChoice {
+    /// Creates a custom-tool selector.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            kind: CustomToolChoiceTag::Custom,
+            name: name.into(),
+        }
+    }
+}
+
+macro_rules! tag_only_choice {
+    ($name:ident, $tag_name:ident, $tag_variant:ident, $wire:literal) => {
+        literal_tag!($tag_name, $tag_variant, $wire);
+
+        #[doc = concat!("Forces the Responses `", $wire, "` tool.")]
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        pub struct $name {
+            #[serde(rename = "type")]
+            kind: $tag_name,
+        }
+
+        impl $name {
+            /// Creates this exact tool choice.
+            #[must_use]
+            pub const fn new() -> Self {
+                Self {
+                    kind: $tag_name::$tag_variant,
+                }
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    };
+}
+
+tag_only_choice!(
+    ProgrammaticToolChoice,
+    ProgrammaticToolChoiceTag,
+    ProgrammaticToolCalling,
+    "programmatic_tool_calling"
+);
+tag_only_choice!(
+    ApplyPatchToolChoice,
+    ApplyPatchToolChoiceTag,
+    ApplyPatch,
+    "apply_patch"
+);
+tag_only_choice!(
+    FunctionShellToolChoice,
+    FunctionShellToolChoiceTag,
+    Shell,
+    "shell"
+);
+
+/// Frozen schema-name inventory for the nine stable tool-choice branches.
+pub const STABLE_RESPONSE_TOOL_CHOICE_SCHEMAS: [&str; 9] = [
+    "ToolChoiceOptions",
+    "ToolChoiceAllowed",
+    "ToolChoiceTypes",
+    "ToolChoiceFunction",
+    "ToolChoiceMCP",
+    "ToolChoiceCustom",
+    "SpecificProgrammaticToolCallingParam",
+    "SpecificApplyPatchParam",
+    "SpecificFunctionShellParam",
 ];
 
 #[cfg(test)]

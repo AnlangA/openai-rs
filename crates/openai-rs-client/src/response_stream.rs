@@ -11,7 +11,7 @@ use openai_rs_types::responses::ResponseStreamEvent;
 
 use crate::{
     BodyPreview, Error, ResponseMeta, StreamError,
-    sse::{SseDispatch, SseEndpointPolicy, SseStreamDecoder, SseStreamState},
+    sse::{SseDispatch, SseEndpointPolicy, SseFrame, SseStreamDecoder, SseStreamState},
 };
 
 type EventStream = Pin<Box<dyn Stream<Item = Result<ResponseStreamEvent, Error>> + Send + 'static>>;
@@ -67,7 +67,18 @@ impl ResponseEventStream {
                 for dispatch in dispatches {
                     match dispatch {
                         SseDispatch::Event(frame) => {
-                            match decode_event(&frame.data, &stream_meta) {
+                            match decode_event(&frame, &stream_meta) {
+                                Ok(ResponseStreamEvent::Error(_)) => {
+                                    yield Err(StreamError::from_body(
+                                        stream_meta.request_id(),
+                                        frame.data.as_bytes(),
+                                    ).into());
+                                    return;
+                                }
+                                Ok(event) if event.is_terminal() => {
+                                    yield Ok(event);
+                                    return;
+                                }
                                 Ok(event) => yield Ok(event),
                                 Err(error) => {
                                     yield Err(error);
@@ -76,7 +87,7 @@ impl ResponseEventStream {
                             }
                         }
                         SseDispatch::Terminal(frame) => {
-                            yield decode_event(&frame.data, &stream_meta);
+                            yield decode_event(&frame, &stream_meta);
                             return;
                         }
                         SseDispatch::RemoteError(frame) => {
@@ -103,7 +114,7 @@ impl ResponseEventStream {
             for dispatch in dispatches {
                 match dispatch {
                     SseDispatch::Event(frame) | SseDispatch::Terminal(frame) => {
-                        match decode_event(&frame.data, &stream_meta) {
+                        match decode_event(&frame, &stream_meta) {
                             Ok(event) => yield Ok(event),
                             Err(error) => {
                                 yield Err(error);
@@ -156,12 +167,28 @@ impl fmt::Debug for ResponseEventStream {
     }
 }
 
-fn decode_event(data: &str, meta: &ResponseMeta) -> Result<ResponseStreamEvent, Error> {
-    serde_json::from_str(data).map_err(|source| Error::Decode {
+fn decode_event(frame: &SseFrame, meta: &ResponseMeta) -> Result<ResponseStreamEvent, Error> {
+    let value =
+        serde_json::from_str::<serde_json::Value>(&frame.data).map_err(|source| Error::Decode {
+            source,
+            meta_status: StatusCode::OK,
+            request_id: meta.request_id().map(Box::<str>::from),
+            body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
+        })?;
+    if let Some(event_name) = frame.event.as_deref()
+        && value.get("type").and_then(serde_json::Value::as_str) != Some(event_name)
+    {
+        return Err(Error::StreamProtocol {
+            message: "the SSE event field and JSON type discriminator differ",
+            request_id: meta.request_id().map(Box::<str>::from),
+            body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
+        });
+    }
+    serde_json::from_value(value).map_err(|source| Error::Decode {
         source,
         meta_status: StatusCode::OK,
         request_id: meta.request_id().map(Box::<str>::from),
-        body: BodyPreview::from_bytes(data.as_bytes(), false),
+        body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
     })
 }
 

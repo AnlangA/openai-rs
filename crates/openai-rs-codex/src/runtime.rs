@@ -112,6 +112,33 @@ impl RuntimeCompatibility {
         &self.identities
     }
 
+    /// Return the exact runtime identity vendored for this compilation target.
+    /// Unsupported targets fail explicitly instead of reusing another
+    /// platform's same-version identity.
+    pub fn for_current_target() -> Result<Self, Error> {
+        #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+        {
+            let identity = RuntimeIdentity::new(
+                BUNDLED_CODEX_VERSION,
+                BUNDLED_CODEX_EXECUTABLE_SHA256,
+                COMPILED_APP_SERVER_SCHEMA_SHA256,
+            )?;
+            Self::new([identity])
+        }
+
+        #[cfg(not(all(target_arch = "aarch64", target_os = "macos")))]
+        {
+            Err(Error::UnsupportedRuntimeTarget {
+                target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+            })
+        }
+    }
+
+    /// Alias for [`Self::for_current_target`].
+    pub fn bundled() -> Result<Self, Error> {
+        Self::for_current_target()
+    }
+
     #[cfg(feature = "app-server")]
     pub(crate) fn resolve(&self, executable_sha256: &str) -> Option<&RuntimeIdentity> {
         self.identities
@@ -131,9 +158,26 @@ fn normalize_sha256(value: &str) -> Option<String> {
     Some(trimmed.to_ascii_lowercase())
 }
 
+fn is_released_version(version: &str) -> bool {
+    let mut parts = version.split('.');
+    let valid_part = |part: &str| {
+        !part.is_empty()
+            && part.bytes().all(|byte| byte.is_ascii_digit())
+            && (part == "0" || !part.starts_with('0'))
+    };
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(major), Some(minor), Some(patch), None)
+            if valid_part(major) && valid_part(minor) && valid_part(patch)
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{COMPILED_APP_SERVER_SCHEMA_SHA256, RuntimeCompatibility, RuntimeIdentity};
+    use super::{
+        BUNDLED_CODEX_EXECUTABLE_SHA256, BUNDLED_CODEX_TARGET, BUNDLED_CODEX_VERSION,
+        COMPILED_APP_SERVER_SCHEMA_SHA256, RuntimeCompatibility, RuntimeIdentity,
+    };
 
     const HASH_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const HASH_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -141,6 +185,7 @@ mod tests {
     #[test]
     fn rejects_unknown_or_placeholder_identity() {
         assert!(RuntimeIdentity::new("0.0.0", HASH_A, COMPILED_APP_SERVER_SCHEMA_SHA256).is_err());
+        assert!(RuntimeIdentity::new("dev", HASH_A, COMPILED_APP_SERVER_SCHEMA_SHA256).is_err());
         assert!(RuntimeIdentity::new("1.2.3", "", COMPILED_APP_SERVER_SCHEMA_SHA256).is_err());
         assert!(
             RuntimeIdentity::new("1.2.3", "0".repeat(64), COMPILED_APP_SERVER_SCHEMA_SHA256)
@@ -159,6 +204,34 @@ mod tests {
         let first = RuntimeIdentity::new("1.2.3", HASH_A, COMPILED_APP_SERVER_SCHEMA_SHA256)?;
         let second = RuntimeIdentity::new("1.2.4", HASH_A, COMPILED_APP_SERVER_SCHEMA_SHA256)?;
         assert!(RuntimeCompatibility::new([first, second]).is_err());
+        Ok(())
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+    #[test]
+    fn bundled_identity_matches_spec_manifest() -> Result<(), crate::Error> {
+        let compatibility = RuntimeCompatibility::bundled()?;
+        let identity = compatibility
+            .identities()
+            .first()
+            .ok_or_else(|| crate::Error::InvalidConfiguration("missing bundled identity".into()))?;
+        assert_eq!(identity.released_version(), BUNDLED_CODEX_VERSION);
+        assert_eq!(
+            identity.executable_sha256(),
+            BUNDLED_CODEX_EXECUTABLE_SHA256
+        );
+        assert_eq!(identity.schema_sha256(), COMPILED_APP_SERVER_SCHEMA_SHA256);
+
+        let manifest = include_str!("../../../spec/contracts/codex-compatibility.toml");
+        let expected = [
+            format!("version = \"{BUNDLED_CODEX_VERSION}\""),
+            format!("target = \"{BUNDLED_CODEX_TARGET}\""),
+            format!("executable_sha256 = \"{BUNDLED_CODEX_EXECUTABLE_SHA256}\""),
+            format!("app_server_schema_sha256 = \"{COMPILED_APP_SERVER_SCHEMA_SHA256}\""),
+        ];
+        for field in expected {
+            assert!(manifest.lines().any(|line| line.trim() == field));
+        }
         Ok(())
     }
 }
