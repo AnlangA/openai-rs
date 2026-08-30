@@ -10,6 +10,10 @@ use std::{fmt, marker::PhantomData, sync::Arc, time::Duration};
 use futures_util::StreamExt;
 use http::{HeaderValue, Method, StatusCode, header};
 use openai_rs_types::admin::*;
+use openai_rs_types::fine_tuning::{
+    CreateFineTuningCheckpointPermissionRequest, DeleteFineTuningCheckpointPermissionResponse,
+    ListFineTuningCheckpointPermissionResponse, ListFineTuningCheckpointPermissionsParams,
+};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -138,7 +142,12 @@ macro_rules! admin_query {
     };
 }
 
-admin_query!(AdminListParams, AuditLogListParams, UsageQueryParams);
+admin_query!(
+    AdminListParams,
+    AuditLogListParams,
+    UsageQueryParams,
+    ListFineTuningCheckpointPermissionsParams,
+);
 
 macro_rules! admin_operation {
     ($name:ident, $id:literal, $method:ident, $route:literal, $request:ty, $response:ty, $encoding:ident, $mode:ident, $request_refs:expr, $response_refs:expr) => {
@@ -237,6 +246,10 @@ pub struct AdminClientOperationContract {
 pub mod operations {
     use http::{Method, StatusCode};
     use openai_rs_types::admin::*;
+    use openai_rs_types::fine_tuning::{
+        CreateFineTuningCheckpointPermissionRequest, DeleteFineTuningCheckpointPermissionResponse,
+        ListFineTuningCheckpointPermissionResponse,
+    };
 
     use super::{
         AdminClientOperationContract, AdminOperation, AdminRequestEncoding, AdminResponseMode,
@@ -1671,6 +1684,42 @@ pub mod operations {
         &[],
         &["#/components/schemas/UsageResponse"]
     );
+    admin_operation!(
+        OpListFineTuningCheckpointPermissions,
+        "listFineTuningCheckpointPermissions",
+        Get,
+        "/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions",
+        (),
+        ListFineTuningCheckpointPermissionResponse,
+        None,
+        Json,
+        &[],
+        &["#/components/schemas/ListFineTuningCheckpointPermissionResponse"]
+    );
+    admin_operation!(
+        OpCreateFineTuningCheckpointPermission,
+        "createFineTuningCheckpointPermission",
+        Post,
+        "/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions",
+        CreateFineTuningCheckpointPermissionRequest,
+        ListFineTuningCheckpointPermissionResponse,
+        Json,
+        Json,
+        &["#/components/schemas/CreateFineTuningCheckpointPermissionRequest"],
+        &["#/components/schemas/ListFineTuningCheckpointPermissionResponse"]
+    );
+    admin_operation!(
+        OpDeleteFineTuningCheckpointPermission,
+        "deleteFineTuningCheckpointPermission",
+        Delete,
+        "/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions/{permission_id}",
+        (),
+        DeleteFineTuningCheckpointPermissionResponse,
+        None,
+        Json,
+        &[],
+        &["#/components/schemas/DeleteFineTuningCheckpointPermissionResponse"]
+    );
 }
 
 /// Effective 119-entry client binding manifest generated from sealed markers.
@@ -1796,6 +1845,14 @@ pub const ADMIN_CLIENT_OPERATION_MANIFEST: &[AdminClientOperationContract] = &[
     operations::OpUsageWebSearchCalls::CONTRACT,
 ];
 
+/// Effective client binding manifest for the three Administration-only
+/// fine-tuning checkpoint-permission operations.
+pub const ADMIN_CHECKPOINT_PERMISSION_OPERATION_MANIFEST: &[AdminClientOperationContract] = &[
+    operations::OpListFineTuningCheckpointPermissions::CONTRACT,
+    operations::OpCreateFineTuningCheckpointPermission::CONTRACT,
+    operations::OpDeleteFineTuningCheckpointPermission::CONTRACT,
+];
+
 /// Cheap-to-clone, Administration-only client.
 #[derive(Clone)]
 pub struct AdminClient {
@@ -1889,6 +1946,12 @@ impl AdminClient {
     #[must_use]
     pub fn usage(&self) -> AdminUsage {
         AdminUsage(self.clone())
+    }
+
+    /// Administration-only fine-tuning checkpoint permissions.
+    #[must_use]
+    pub fn checkpoint_permissions(&self) -> AdminCheckpointPermissions {
+        AdminCheckpointPermissions(self.clone())
     }
 }
 
@@ -2259,7 +2322,10 @@ fn validate_path_parameter(value: &str) -> Result<(), Error> {
 }
 
 fn render_route(base_url: &Url, route: &str, parameters: &[String]) -> Result<Url, Error> {
-    if !(route.starts_with("/organization/") || route.starts_with("/projects/")) {
+    if !(route.starts_with("/organization/")
+        || route.starts_with("/projects/")
+        || route.starts_with("/fine_tuning/checkpoints/"))
+    {
         return Err(invalid_configuration(
             "Administration route is outside its sealed prefixes",
         ));
@@ -2860,6 +2926,54 @@ impl AdminProjects {
     }
 }
 
+/// Administration-only access management for fine-tuned model checkpoints.
+#[derive(Clone, Debug)]
+pub struct AdminCheckpointPermissions(AdminClient);
+
+impl AdminCheckpointPermissions {
+    /// List project permissions for a fine-tuned model checkpoint.
+    pub async fn list(
+        &self,
+        fine_tuned_model_checkpoint: &str,
+        params: &ListFineTuningCheckpointPermissionsParams,
+    ) -> Result<ApiResponse<ListFineTuningCheckpointPermissionResponse>, Error> {
+        self.0
+            .request::<operations::OpListFineTuningCheckpointPermissions>()
+            .path_parameter(fine_tuned_model_checkpoint)?
+            .query(params)?
+            .send()
+            .await
+    }
+
+    /// Grant projects access to a fine-tuned model checkpoint.
+    pub async fn create(
+        &self,
+        fine_tuned_model_checkpoint: &str,
+        request: CreateFineTuningCheckpointPermissionRequest,
+    ) -> Result<ApiResponse<ListFineTuningCheckpointPermissionResponse>, Error> {
+        self.0
+            .request::<operations::OpCreateFineTuningCheckpointPermission>()
+            .path_parameter(fine_tuned_model_checkpoint)?
+            .body(request)
+            .send()
+            .await
+    }
+
+    /// Delete one project permission from a fine-tuned model checkpoint.
+    pub async fn delete(
+        &self,
+        fine_tuned_model_checkpoint: &str,
+        permission_id: &str,
+    ) -> Result<ApiResponse<DeleteFineTuningCheckpointPermissionResponse>, Error> {
+        self.0
+            .request::<operations::OpDeleteFineTuningCheckpointPermission>()
+            .path_parameter(fine_tuned_model_checkpoint)?
+            .path_parameter(permission_id)?
+            .send()
+            .await
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AdminUsage(AdminClient);
 
@@ -2960,15 +3074,37 @@ mod tests {
                                 .lock()
                                 .expect("capture lock")
                                 .push(CapturedRequest {
-                                    method,
+                                    method: method.clone(),
                                     path_and_query: path_and_query.clone(),
                                     authorization,
                                     body,
                                 });
 
-                            let (status, response_body) = if path_and_query
-                                .starts_with("/v1/organization/users")
+                            let checkpoint_permissions_path =
+                                "/v1/fine_tuning/checkpoints/ft%3Amodel%2Fcheckpoint/permissions";
+                            let (status, response_body) = if method == Method::GET
+                                && path_and_query.starts_with(checkpoint_permissions_path)
                             {
+                                (
+                                    StatusCode::OK,
+                                    r#"{"object":"list","data":[{"id":"perm_1","created_at":1,"project_id":"proj_1","object":"checkpoint.permission"}],"has_more":false}"#,
+                                )
+                            } else if method == Method::POST
+                                && path_and_query == checkpoint_permissions_path
+                            {
+                                (
+                                    StatusCode::OK,
+                                    r#"{"object":"list","data":[{"id":"perm_1","created_at":1,"project_id":"proj_1","object":"checkpoint.permission"}],"has_more":false}"#,
+                                )
+                            } else if method == Method::DELETE
+                                && path_and_query
+                                    == format!("{checkpoint_permissions_path}/perm%2F1")
+                            {
+                                (
+                                    StatusCode::OK,
+                                    r#"{"id":"perm/1","object":"checkpoint.permission","deleted":true}"#,
+                                )
+                            } else if path_and_query.starts_with("/v1/organization/users") {
                                 (
                                     StatusCode::OK,
                                     r#"{"object":"list","data":[],"has_more":false}"#,

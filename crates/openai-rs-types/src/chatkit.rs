@@ -1471,6 +1471,53 @@ impl ChatKitThreadItemList {
     }
 }
 
+macro_rules! extra_accessor {
+    ($($type:ty),+ $(,)?) => {
+        $(
+            impl $type {
+                /// Response properties not known by this crate version.
+                #[must_use]
+                pub const fn extra(&self) -> &ExtraFields {
+                    &self.extra
+                }
+            }
+        )+
+    };
+}
+
+extra_accessor!(
+    ChatKitWorkflowTracing,
+    ChatKitWorkflow,
+    ChatKitRateLimits,
+    ChatKitAutomaticThreadTitling,
+    ChatKitFileUpload,
+    ChatKitHistory,
+    ChatKitConfiguration,
+    ChatKitActiveThreadStatus,
+    ChatKitLockedThreadStatus,
+    ChatKitClosedThreadStatus,
+    DeletedChatKitThread,
+    ChatKitThreadList,
+    ChatKitAttachment,
+    ChatKitToolChoice,
+    ChatKitInferenceOptions,
+    ChatKitUserInputText,
+    ChatKitUserQuotedText,
+    ChatKitFileAnnotationSource,
+    ChatKitUrlAnnotationSource,
+    ChatKitFileAnnotation,
+    ChatKitUrlAnnotation,
+    ChatKitResponseOutputText,
+    ChatKitUserMessageItem,
+    ChatKitAssistantMessageItem,
+    ChatKitWidgetItem,
+    ChatKitClientToolCallItem,
+    ChatKitTaskItem,
+    ChatKitTaskGroupTask,
+    ChatKitTaskGroupItem,
+    ChatKitThreadItemList,
+);
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;

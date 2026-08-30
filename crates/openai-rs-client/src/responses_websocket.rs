@@ -1,30 +1,44 @@
+#[cfg(feature = "realtime")]
 use std::{fmt, time::Duration};
 
 #[cfg(feature = "rustls-tls")]
 use std::sync::Arc;
 
+#[cfg(feature = "realtime")]
 use futures_util::{SinkExt, StreamExt};
 use http::{HeaderValue, header};
+#[cfg(feature = "realtime")]
 use openai_rs_types::responses::{
     CreateResponseRequest, ResponseAccumulator, ResponsesClientEvent, ResponsesServerEvent,
 };
 use tokio::net::TcpStream;
+#[cfg(feature = "realtime")]
+use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{
     Connector, MaybeTlsStream, WebSocketStream,
     tungstenite::{
-        self, Message, client::IntoClientRequest, protocol::WebSocketConfig as TungsteniteConfig,
+        self, client::IntoClientRequest, protocol::WebSocketConfig as TungsteniteConfig,
     },
 };
 use url::Url;
 
-use crate::{Client, Error, ResponseMeta, TlsBackend, transport::deserialize_json};
+#[cfg(feature = "realtime")]
+use crate::{Client, ResponseMeta, transport::deserialize_json};
+use crate::{Error, TlsBackend};
 
+#[cfg(feature = "realtime")]
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
+#[cfg(feature = "realtime")]
 const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+#[cfg(feature = "realtime")]
 const DEFAULT_WRITE_BUFFER_BYTES: usize = 64 * 1024;
+#[cfg(feature = "realtime")]
 const DEFAULT_MAX_QUEUED_WRITE_BYTES: usize = 1024 * 1024;
+#[cfg(feature = "realtime")]
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(feature = "realtime")]
 const MAX_INITIAL_RECONNECTS: u32 = 10;
+#[cfg(feature = "realtime")]
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(60);
 
 pub(crate) type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -35,6 +49,7 @@ pub(crate) type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// replaying a `response.create` event could duplicate model work.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
+#[cfg(feature = "realtime")]
 pub enum WebSocketReconnectPolicy {
     #[default]
     Never,
@@ -46,6 +61,7 @@ pub enum WebSocketReconnectPolicy {
 
 /// Resource and reconnect limits for a Responses WebSocket.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(feature = "realtime")]
 pub struct ResponsesWebSocketConfig {
     max_message_bytes: usize,
     max_frame_bytes: usize,
@@ -55,6 +71,7 @@ pub struct ResponsesWebSocketConfig {
     reconnect: WebSocketReconnectPolicy,
 }
 
+#[cfg(feature = "realtime")]
 impl ResponsesWebSocketConfig {
     #[must_use]
     pub const fn new() -> Self {
@@ -146,6 +163,7 @@ impl ResponsesWebSocketConfig {
     }
 }
 
+#[cfg(feature = "realtime")]
 impl Default for ResponsesWebSocketConfig {
     fn default() -> Self {
         Self::new()
@@ -153,6 +171,7 @@ impl Default for ResponsesWebSocketConfig {
 }
 
 /// A bounded, typed persistent connection to the Responses API.
+#[cfg(feature = "realtime")]
 pub struct ResponsesWebSocket {
     socket: Socket,
     meta: ResponseMeta,
@@ -160,6 +179,7 @@ pub struct ResponsesWebSocket {
     closed: bool,
 }
 
+#[cfg(feature = "realtime")]
 impl ResponsesWebSocket {
     pub(crate) async fn connect(
         client: &Client,
@@ -350,6 +370,7 @@ impl ResponsesWebSocket {
     }
 }
 
+#[cfg(feature = "realtime")]
 impl fmt::Debug for ResponsesWebSocket {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -361,6 +382,7 @@ impl fmt::Debug for ResponsesWebSocket {
     }
 }
 
+#[cfg(feature = "realtime")]
 fn websocket_url(base_url: &Url) -> Result<Url, Error> {
     let mut url = base_url.clone();
     let websocket_scheme = match url.scheme() {
@@ -413,6 +435,7 @@ pub(crate) fn websocket_request(
     Ok(request)
 }
 
+#[cfg(feature = "realtime")]
 fn validate_stream_id(encoded: &str) -> Result<(), Error> {
     let value = serde_json::from_str::<serde_json::Value>(encoded).map_err(Error::Encode)?;
     let Some(stream_id) = value.get("stream_id") else {
@@ -524,7 +547,7 @@ fn invalid_configuration(message: impl Into<Box<str>>) -> Error {
     Error::InvalidConfiguration(message.into())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "realtime"))]
 mod tests {
     use std::sync::{Arc, Mutex};
 

@@ -1013,3 +1013,489 @@ operation!(
     retry = RetryClass::Replayable,
     success = OK
 );
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        sync::{Arc, Mutex},
+    };
+
+    use bytes::Bytes;
+    use futures_util::{SinkExt, StreamExt};
+    use http::HeaderValue;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use openai_rs_types::beta_responses::{
+        BetaAgentInputText, BetaAgentMessage, BetaMultiAgentAction, BetaMultiAgentCallOutput,
+        BetaMultiAgentConfig, BetaMultiAgentOutputText, BetaResponseIncludable,
+        BetaResponseInputItem, BetaResponseItemOrder,
+    };
+    use serde_json::{Value, json};
+    use tokio::{net::TcpListener, sync::oneshot};
+    use tokio_tungstenite::{accept_hdr_async, tungstenite::handshake::server};
+
+    use super::*;
+    use crate::ApiKey;
+
+    #[derive(Debug)]
+    struct CapturedRequest {
+        method: Method,
+        path_and_query: String,
+        authorization: Option<String>,
+        beta_header: Option<String>,
+        body: Vec<u8>,
+    }
+
+    fn response_json(status: &str) -> String {
+        json!({
+            "id": "resp_beta_1",
+            "created_at": 1,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-test",
+            "object": "response",
+            "output": [],
+            "parallel_tool_calls": true,
+            "temperature": null,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": null,
+            "status": status
+        })
+        .to_string()
+    }
+
+    async fn serve_once(
+        status: StatusCode,
+        content_type: &'static str,
+        body: String,
+    ) -> (Url, oneshot::Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta loopback server");
+        let address = listener.local_addr().expect("loopback address");
+        let (sender, receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept beta request");
+            let sender = Arc::new(Mutex::new(Some(sender)));
+            let service = service_fn(move |request: Request<Incoming>| {
+                let sender = Arc::clone(&sender);
+                let body = body.clone();
+                async move {
+                    let method = request.method().clone();
+                    let path_and_query = request
+                        .uri()
+                        .path_and_query()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    let authorization = header_string(request.headers(), header::AUTHORIZATION);
+                    let beta_header = header_string(request.headers(), "openai-beta");
+                    let request_body = request
+                        .into_body()
+                        .collect()
+                        .await
+                        .expect("read beta request body")
+                        .to_bytes()
+                        .to_vec();
+                    if let Some(sender) = sender.lock().expect("capture lock").take() {
+                        let _ = sender.send(CapturedRequest {
+                            method,
+                            path_and_query,
+                            authorization,
+                            beta_header,
+                            body: request_body,
+                        });
+                    }
+                    let response = hyper::Response::builder()
+                        .status(status)
+                        .header(header::CONTENT_TYPE, content_type)
+                        .header("x-request-id", "req_beta")
+                        .body(Full::new(Bytes::from(body)))
+                        .expect("build beta response");
+                    Ok::<_, Infallible>(response)
+                }
+            });
+            http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await
+                .expect("serve beta request");
+        });
+        (
+            Url::parse(&format!("http://{address}/v1/")).expect("beta base URL"),
+            receiver,
+        )
+    }
+
+    fn client(base_url: Url) -> Client {
+        let key = ApiKey::new("test-placeholder-key").expect("valid test key");
+        Client::builder(key)
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("beta loopback client")
+    }
+
+    fn header_string(
+        headers: &http::HeaderMap,
+        name: impl http::header::AsHeaderName,
+    ) -> Option<String> {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned)
+    }
+
+    #[tokio::test]
+    async fn create_uses_beta_query_and_typed_multi_agent_body_without_beta_header() {
+        let (base_url, captured) = serve_once(
+            StatusCode::OK,
+            "application/json",
+            response_json("completed"),
+        )
+        .await;
+        let routed = BetaAgentMessage::new(
+            "root",
+            "root/research",
+            [BetaAgentInputText::new("inspect")],
+        );
+        let request =
+            BetaCreateResponseRequest::new("gpt-test", vec![BetaResponseInputItem::from(routed)])
+                .multi_agent(BetaMultiAgentConfig::new(true).max_concurrent_subagents(3));
+        let response = client(base_url)
+            .beta_responses()
+            .create(request)
+            .await
+            .expect("create beta response");
+        assert_eq!(response.request_id(), Some("req_beta"));
+        assert_eq!(response.id(), "resp_beta_1");
+
+        let captured = captured.await.expect("captured create");
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/responses?beta=true");
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        assert_eq!(captured.beta_header, None);
+        let body: Value = serde_json::from_slice(&captured.body).expect("create JSON");
+        assert_eq!(body["multi_agent"]["enabled"], true);
+        assert_eq!(body["input"][0]["type"], "agent_message");
+    }
+
+    #[tokio::test]
+    async fn retrieve_delete_cancel_and_compact_use_pinned_routes() {
+        let response_id = ResponseId::new("resp/a b");
+
+        let (base_url, captured) = serve_once(
+            StatusCode::OK,
+            "application/json",
+            response_json("completed"),
+        )
+        .await;
+        client(base_url)
+            .beta_responses()
+            .retrieve_with(
+                &response_id,
+                BetaRetrieveResponseParams::new()
+                    .include(BetaResponseIncludable::FileSearchResults),
+            )
+            .await
+            .expect("retrieve beta response");
+        let request = captured.await.expect("captured retrieve");
+        assert_eq!(request.method, Method::GET);
+        assert_eq!(
+            request.path_and_query,
+            "/v1/responses/resp%2Fa%20b?beta=true&include=file_search_call.results"
+        );
+
+        let (base_url, captured) =
+            serve_once(StatusCode::NO_CONTENT, "application/json", String::new()).await;
+        let deleted = client(base_url)
+            .beta_responses()
+            .delete(&response_id)
+            .await
+            .expect("delete beta response");
+        assert!(matches!(deleted.body(), DeleteResponseResult::Empty));
+        let request = captured.await.expect("captured delete");
+        assert_eq!(request.method, Method::DELETE);
+        assert_eq!(
+            request.path_and_query,
+            "/v1/responses/resp%2Fa%20b?beta=true"
+        );
+
+        let (base_url, captured) = serve_once(
+            StatusCode::OK,
+            "application/json",
+            response_json("cancelled"),
+        )
+        .await;
+        client(base_url)
+            .beta_responses()
+            .cancel(&response_id)
+            .await
+            .expect("cancel beta response");
+        let request = captured.await.expect("captured cancel");
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(
+            request.path_and_query,
+            "/v1/responses/resp%2Fa%20b/cancel?beta=true"
+        );
+
+        let compacted = json!({
+            "id": "resp_compact_1",
+            "created_at": 2,
+            "object": "response.compaction",
+            "output": [],
+            "usage": {
+                "input_tokens": 3,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 1,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 4
+            }
+        })
+        .to_string();
+        let (base_url, captured) = serve_once(StatusCode::OK, "application/json", compacted).await;
+        client(base_url)
+            .beta_responses()
+            .compact(BetaCompactResponseRequest::new("gpt-test").input("hello"))
+            .await
+            .expect("compact beta response");
+        let request = captured.await.expect("captured compact");
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(request.path_and_query, "/v1/responses/compact?beta=true");
+        let body: Value = serde_json::from_slice(&request.body).expect("compact JSON");
+        assert_eq!(body["model"], "gpt-test");
+        assert_eq!(body["input"], "hello");
+    }
+
+    #[tokio::test]
+    async fn input_items_and_input_tokens_use_operation_specific_contracts() {
+        let item_page = json!({
+            "object": "list",
+            "data": [{
+                "type": "multi_agent_call",
+                "action": "wait_agent",
+                "arguments": "{}",
+                "call_id": "call_1"
+            }],
+            "first_id": "item_1",
+            "last_id": "item_1",
+            "has_more": false
+        })
+        .to_string();
+        let (base_url, captured) = serve_once(StatusCode::OK, "application/json", item_page).await;
+        let page = client(base_url)
+            .beta_responses()
+            .input_items()
+            .list(
+                &ResponseId::new("resp_1"),
+                BetaListInputItemsParams::new()
+                    .after("item_0")
+                    .include(BetaResponseIncludable::EncryptedReasoning)
+                    .limit(20)
+                    .order(BetaResponseItemOrder::Asc),
+            )
+            .await
+            .expect("list beta input items");
+        assert!(matches!(
+            page.data(),
+            [BetaResponseInputItem::MultiAgentCall(_)]
+        ));
+        let request = captured.await.expect("captured input-items list");
+        assert_eq!(request.method, Method::GET);
+        assert_eq!(
+            request.path_and_query,
+            "/v1/responses/resp_1/input_items?beta=true&after=item_0&include=reasoning.encrypted_content&limit=20&order=asc"
+        );
+
+        let (base_url, captured) = serve_once(
+            StatusCode::OK,
+            "application/json",
+            r#"{"object":"response.input_tokens","input_tokens":11}"#.to_owned(),
+        )
+        .await;
+        let count = client(base_url)
+            .beta_responses()
+            .input_tokens()
+            .count(BetaCountInputTokensRequest::new("gpt-test", "hello").personality("friendly"))
+            .await
+            .expect("count beta input tokens");
+        assert_eq!(count.input_tokens(), 11);
+        let request = captured.await.expect("captured token count");
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(
+            request.path_and_query,
+            "/v1/responses/input_tokens?beta=true"
+        );
+        let body: Value = serde_json::from_slice(&request.body).expect("count JSON");
+        assert_eq!(body["personality"], "friendly");
+    }
+
+    #[tokio::test]
+    async fn beta_sse_decodes_agent_metadata_and_terminal_snapshot() {
+        let created = json!({
+            "type": "response.created",
+            "sequence_number": 1,
+            "agent": {"agent_name": "root"},
+            "response": serde_json::from_str::<Value>(&response_json("in_progress"))
+                .expect("created response JSON")
+        });
+        let completed = json!({
+            "type": "response.completed",
+            "sequence_number": 2,
+            "agent": {"agent_name": "root"},
+            "response": serde_json::from_str::<Value>(&response_json("completed"))
+                .expect("completed response JSON")
+        });
+        let body = format!(
+            "event: response.created\ndata: {created}\n\nevent: response.completed\ndata: {completed}\n\n"
+        );
+        let (base_url, captured) = serve_once(StatusCode::OK, "text/event-stream", body).await;
+        let mut stream = client(base_url)
+            .beta_responses()
+            .create_stream(BetaCreateStreamingResponseRequest::new("gpt-test", "hello"))
+            .await
+            .expect("open beta SSE stream");
+        let first = stream
+            .next()
+            .await
+            .expect("created event")
+            .expect("valid created event");
+        assert_eq!(first.agent().map(|agent| agent.agent_name()), Some("root"));
+        let second = stream
+            .next()
+            .await
+            .expect("completed event")
+            .expect("valid completed event");
+        assert!(second.is_terminal());
+        assert_eq!(second.response().map(BetaResponse::id), Some("resp_beta_1"));
+        assert!(stream.next().await.is_none());
+
+        let request = captured.await.expect("captured SSE create");
+        assert_eq!(request.path_and_query, "/v1/responses?beta=true");
+        let body: Value = serde_json::from_slice(&request.body).expect("stream JSON");
+        assert_eq!(body["stream"], true);
+    }
+
+    #[derive(Debug)]
+    struct WebSocketHandshake {
+        path_and_query: String,
+        authorization: Option<String>,
+        beta_header: Option<String>,
+    }
+
+    async fn websocket_server() -> (
+        Client,
+        oneshot::Receiver<WebSocketHandshake>,
+        oneshot::Receiver<Value>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta WebSocket");
+        let address = listener.local_addr().expect("WebSocket address");
+        let (handshake_sender, handshake_receiver) = oneshot::channel();
+        let (event_sender, event_receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept beta WebSocket");
+            let handshake_sender = Arc::new(Mutex::new(Some(handshake_sender)));
+            let callback = move |request: &server::Request, mut response: server::Response| {
+                if let Some(sender) = handshake_sender.lock().expect("handshake lock").take() {
+                    let _ = sender.send(WebSocketHandshake {
+                        path_and_query: request.uri().to_string(),
+                        authorization: header_string(request.headers(), header::AUTHORIZATION),
+                        beta_header: header_string(request.headers(), "openai-beta"),
+                    });
+                }
+                response
+                    .headers_mut()
+                    .insert("x-request-id", HeaderValue::from_static("req_beta_ws"));
+                Ok::<_, server::ErrorResponse>(response)
+            };
+            let mut socket = accept_hdr_async(stream, callback)
+                .await
+                .expect("beta WebSocket handshake");
+            let message = socket
+                .next()
+                .await
+                .expect("beta client event")
+                .expect("valid beta client event");
+            let value = match message {
+                Message::Text(text) => {
+                    serde_json::from_slice(text.as_bytes()).expect("beta event JSON")
+                }
+                other => panic!("unexpected beta client message: {other:?}"),
+            };
+            let _ = event_sender.send(value);
+            socket
+                .send(Message::text(
+                    json!({
+                        "type": "response.inject.created",
+                        "response_id": "resp_beta_1",
+                        "sequence_number": 7,
+                        "stream_id": "lane_1"
+                    })
+                    .to_string(),
+                ))
+                .await
+                .expect("send inject confirmation");
+            let _ = socket.next().await;
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("beta WebSocket base URL");
+        (client(base_url), handshake_receiver, event_receiver)
+    }
+
+    #[tokio::test]
+    async fn beta_websocket_uses_pinned_path_without_query_and_supports_inject() {
+        let (client, handshake, sent_event) = websocket_server().await;
+        let mut socket = client
+            .beta_responses()
+            .connect()
+            .await
+            .expect("connect beta WebSocket");
+        assert_eq!(socket.request_id(), Some("req_beta_ws"));
+        socket
+            .send_inject(BetaResponseInjectEvent::new(
+                "resp_beta_1",
+                [BetaResponseInputItem::from(BetaMultiAgentCallOutput::new(
+                    BetaMultiAgentAction::WaitAgent,
+                    "call_1",
+                    [BetaMultiAgentOutputText::new("done")],
+                ))],
+            ))
+            .await
+            .expect("send inject event");
+        let event = socket
+            .recv()
+            .await
+            .expect("receive inject confirmation")
+            .expect("one server event");
+        assert!(matches!(event, BetaResponsesServerEvent::InjectCreated(_)));
+        assert_eq!(event.stream_id(), Some("lane_1"));
+
+        let handshake = handshake.await.expect("captured beta handshake");
+        assert_eq!(handshake.path_and_query, "/v1/responses");
+        assert_eq!(
+            handshake.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        assert_eq!(handshake.beta_header, None);
+        let sent = sent_event.await.expect("captured inject event");
+        assert_eq!(sent["type"], "response.inject");
+        assert_eq!(sent["input"][0]["type"], "multi_agent_call_output");
+
+        socket.close().await.expect("close beta WebSocket");
+    }
+
+    #[test]
+    fn websocket_url_matches_pinned_node_oracle_without_beta_query() {
+        let base = Url::parse("https://api.openai.com/v1/").expect("official base URL");
+        let url = beta_websocket_url(&base).expect("derived beta WebSocket URL");
+        assert_eq!(url.as_str(), "wss://api.openai.com/v1/responses");
+    }
+}

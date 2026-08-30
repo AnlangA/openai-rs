@@ -4,13 +4,14 @@ use openai_rs_codex::{ManagedAppServerCredential, RuntimeCompatibility};
 use openai_rs_rmcp::{CatalogPolicy, ToolCatalog};
 use openai_rs_types::{
     CreateEmbeddingRequest, CreateEmbeddingResponse, CreateModerationRequest,
-    CreateModerationResponse, ExtraFields, FileObject, Model, ModelId, Nullable, Omittable,
-    Upload,
-    chat::{ChatCompletion, ChatCompletionChunk, ChatCompletionRequest, ChatCompletionStreamRequest},
+    CreateModerationResponse, ExtraFields, FileObject, Model, ModelId, Nullable, Omittable, Upload,
+    chat::{
+        ChatCompletion, ChatCompletionChunk, ChatCompletionRequest, ChatCompletionStreamRequest,
+    },
     responses::{
-        CompactResponseRequest, CompactedResponse, CountInputTokensRequest,
-        CreateResponseRequest, CreateStreamingResponseRequest, DeletedResponse,
-        InputTokenCountResponse, Response, ResponseInputItemList, ResponseStreamEvent,
+        CompactResponseRequest, CompactedResponse, CountInputTokensRequest, CreateResponseRequest,
+        CreateStreamingResponseRequest, DeletedResponse, InputTokenCountResponse, Response,
+        ResponseInputItemList, ResponseStreamEvent,
     },
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -68,8 +69,7 @@ fn optional_nullable_keeps_all_three_wire_states() {
 
     let missing: Fixture = serde_json::from_value(json!({})).expect("missing is valid");
     let null: Fixture = serde_json::from_value(json!({"field": null})).expect("null is valid");
-    let value: Fixture =
-        serde_json::from_value(json!({"field": "set"})).expect("value is valid");
+    let value: Fixture = serde_json::from_value(json!({"field": "set"})).expect("value is valid");
 
     assert!(matches!(missing.field, Omittable::Omitted));
     assert!(matches!(null.field, Omittable::Value(Nullable::Null)));
@@ -152,4 +152,3 @@ where
 fn semantic_json(value: Value) -> Value {
     value
 }
-

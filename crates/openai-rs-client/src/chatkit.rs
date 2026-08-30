@@ -526,7 +526,7 @@ mod tests {
             session_json("cksess/a b", "cancelled"),
         ])
         .await;
-        let sessions = ChatKitSessions::new(client);
+        let sessions = client.chatkit().sessions();
         let request = CreateChatKitSessionRequest::new(ChatKitWorkflowRequest::new("wf"), "user_1")
             .expect("session request");
         sessions.create(request).await.expect("create session");
@@ -567,7 +567,7 @@ mod tests {
             json!({"id":"cthr/a b","object":"chatkit.thread.deleted","deleted":true}).to_string(),
         ])
         .await;
-        let threads = ChatKitThreads::new(client);
+        let threads = client.chatkit().threads();
         let id = ChatKitThreadId::new("cthr/a b");
         threads.retrieve(&id).await.expect("retrieve thread");
         threads.delete(&id).await.expect("delete thread");
@@ -610,7 +610,9 @@ mod tests {
         }
         .with_user("user_1")
         .expect("user");
-        let pages = ChatKitThreads::new(client)
+        let pages = client
+            .chatkit()
+            .threads()
             .list_pages(params)
             .collect::<Vec<_>>()
             .await;
@@ -652,7 +654,9 @@ mod tests {
             after: openai_rs_types::Omittable::Value(ChatKitThreadItemId::new("item cursor")),
             before: openai_rs_types::Omittable::Omitted,
         };
-        let page = ChatKitThreads::new(client)
+        let page = client
+            .chatkit()
+            .threads()
             .list_items(&ChatKitThreadId::new("cthr/a b"), params)
             .await
             .expect("item page");

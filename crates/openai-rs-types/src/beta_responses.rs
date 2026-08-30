@@ -852,7 +852,7 @@ impl<'de> Deserialize<'de> for BetaStableInputItem {
 #[non_exhaustive]
 pub enum BetaResponseInputItem {
     /// A branch shared with stable Responses plus typed beta metadata.
-    Stable(BetaStableInputItem),
+    Stable(Box<BetaStableInputItem>),
     /// A message routed between named agents.
     AgentMessage(BetaAgentMessage),
     /// A request to the server-hosted agent runtime.
@@ -892,6 +892,7 @@ impl<'de> Deserialize<'de> for BetaResponseInputItem {
                 .map(Self::MultiAgentCallOutput)
                 .map_err(D::Error::custom),
             _ => serde_json::from_value(value)
+                .map(Box::new)
                 .map(Self::Stable)
                 .map_err(D::Error::custom),
         }
@@ -900,7 +901,7 @@ impl<'de> Deserialize<'de> for BetaResponseInputItem {
 
 impl From<ResponseInputItem> for BetaResponseInputItem {
     fn from(value: ResponseInputItem) -> Self {
-        Self::Stable(BetaStableInputItem::new(value))
+        Self::Stable(Box::new(BetaStableInputItem::new(value)))
     }
 }
 
@@ -980,7 +981,7 @@ impl<'de> Deserialize<'de> for BetaStableOutputItem {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum BetaResponseOutputItem {
-    Stable(BetaStableOutputItem),
+    Stable(Box<BetaStableOutputItem>),
     AgentMessage(BetaAgentMessage),
     MultiAgentCall(BetaMultiAgentCall),
     MultiAgentCallOutput(BetaMultiAgentCallOutput),
@@ -1017,6 +1018,7 @@ impl<'de> Deserialize<'de> for BetaResponseOutputItem {
                 .map(Self::MultiAgentCallOutput)
                 .map_err(D::Error::custom),
             _ => serde_json::from_value(value)
+                .map(Box::new)
                 .map(Self::Stable)
                 .map_err(D::Error::custom),
         }
@@ -1025,7 +1027,7 @@ impl<'de> Deserialize<'de> for BetaResponseOutputItem {
 
 impl From<ResponseOutputItem> for BetaResponseOutputItem {
     fn from(value: ResponseOutputItem) -> Self {
-        Self::Stable(BetaStableOutputItem::new(value))
+        Self::Stable(Box::new(BetaStableOutputItem::new(value)))
     }
 }
 
@@ -2597,7 +2599,7 @@ impl BetaWebSocketErrorEvent {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum BetaResponsesServerEvent {
-    Response(BetaResponseStreamEvent),
+    Response(Box<BetaResponseStreamEvent>),
     InjectCreated(BetaResponseInjectCreatedEvent),
     InjectFailed(BetaResponseInjectFailedEvent),
     WebSocketError(BetaWebSocketErrorEvent),
@@ -2664,6 +2666,7 @@ impl<'de> Deserialize<'de> for BetaResponsesServerEvent {
                 .map(Self::WebSocketError)
                 .map_err(D::Error::custom),
             _ => serde_json::from_value(value)
+                .map(Box::new)
                 .map(Self::Response)
                 .map_err(D::Error::custom),
         }

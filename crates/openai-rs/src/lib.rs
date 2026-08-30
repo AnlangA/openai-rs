@@ -14,27 +14,27 @@ pub use openai_rs_types::{StructuredError, StructuredOutput, TypedFunction};
 
 #[cfg(feature = "client")]
 pub use openai_rs_client::{
-    ApiError, ApiKey, ApiKeyError, ApiResponse, Client, ClientBuilder, DeleteResponseResult,
-    AddUploadPartOneShotRequest, ChatCompletionEventStream, ChatCompletionMessages,
-    ChatCompletionMessagePageStream, ChatCompletionPageStream, ChatCompletions,
+    AddUploadPartOneShotRequest, ApiError, ApiKey, ApiKeyError, ApiResponse, Audio,
     BatchPageStream, BatchSubmission, BatchSubmissionError, BatchSubmissionOptions, Batches,
-    Audio, CreateFileOneShotRequest, Embeddings, Error, FileContentStream, Files,
+    C2paProvenanceResult, ChatCompletionEventStream, ChatCompletionMessagePageStream,
+    ChatCompletionMessages, ChatCompletionPageStream, ChatCompletions, Client, ClientBuilder,
+    ContainerFileContentStream, ContainerFilePageStream, ContainerFiles, ContainerPageStream,
+    Containers, ContentProvenanceCheck, ContentProvenanceChecks, ContentProvenanceResult,
+    ConversationItemPageStream, ConversationItems, Conversations,
+    CreateContentProvenanceCheckRequest, CreateFileOneShotRequest, DeleteResponseResult,
+    Embeddings, Error, EvalPageStream, EvalRunOutputItemPageStream, EvalRunOutputItems,
+    EvalRunPageStream, EvalRunPollError, EvalRunPollOptions, EvalRuns, Evals, FileContentStream,
+    Files, FineTuning, FineTuningCheckpointPageStream, FineTuningEventPageStream,
+    FineTuningJobCheckpoints, FineTuningJobEvents, FineTuningJobPageStream, FineTuningJobs,
+    FineTuningPollCancellationToken, FineTuningPollError, FineTuningPollOptions,
     ImageEditEventStream, ImageGenerationEventStream, Images, InputItems, InputTokens,
-    MediaByteStream, MediaEventStream, MediaTextBody, Models, Moderations,
-    OneShotMultipartSource, PollCancellationToken, PollError, PollOptions, ResponseEventStream,
-    ResponseMeta, Responses, RetryPolicy, SpeechEventStream, StreamError, TlsBackend,
+    MediaByteStream, MediaEventStream, MediaTextBody, Models, Moderations, OneShotMultipartSource,
+    PollCancellationToken, PollError, PollOptions, ResponseEventStream, ResponseMeta, Responses,
+    RetryPolicy, SkillContentStream, SkillPageStream, SkillVersionPageStream, SkillVersions,
+    Skills, SpeechEventStream, StreamError, SynthIdProvenanceResult, TlsBackend,
     TranscriptionEventStream, TranscriptionOutput, TranslationOutput, Uploads,
     VectorStoreFileBatches, VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream,
-    VectorStores, ContainerFileContentStream, ContainerFilePageStream, ContainerFiles,
-    ContainerPageStream, Containers, SkillContentStream, SkillPageStream, SkillVersionPageStream,
-    SkillVersions, Skills, ConversationItemPageStream, ConversationItems, Conversations,
-    ContentProvenanceChecks, ContentProvenanceCheck, ContentProvenanceResult,
-    CreateContentProvenanceCheckRequest, C2paProvenanceResult, SynthIdProvenanceResult,
-    EvalPageStream, EvalRunOutputItemPageStream, EvalRunOutputItems, EvalRunPageStream,
-    EvalRunPollError, EvalRunPollOptions, EvalRuns, Evals, FineTuning,
-    FineTuningCheckpointPageStream, FineTuningEventPageStream, FineTuningJobCheckpoints,
-    FineTuningJobEvents, FineTuningJobPageStream, FineTuningJobs,
-    FineTuningPollCancellationToken, FineTuningPollError, FineTuningPollOptions,
+    VectorStores,
 };
 
 #[cfg(all(feature = "client", feature = "x509"))]
@@ -62,8 +62,7 @@ pub mod experimental {
 
 #[cfg(all(feature = "client", feature = "beta-chatkit"))]
 pub use openai_rs_client::{
-    ChatKit, ChatKitSessions, ChatKitThreadItemPageStream, ChatKitThreadPageStream,
-    ChatKitThreads,
+    ChatKit, ChatKitSessions, ChatKitThreadItemPageStream, ChatKitThreadPageStream, ChatKitThreads,
 };
 
 #[cfg(all(feature = "client", feature = "beta-responses-multi-agent"))]
@@ -74,8 +73,8 @@ pub use openai_rs_client::{
 
 #[cfg(all(feature = "client", feature = "realtime"))]
 pub use openai_rs_client::{
-    Realtime, RealtimeCallCreated, RealtimeWebSocket, RealtimeWebSocketConfig,
-    ResponsesWebSocket, ResponsesWebSocketConfig, WebSocketReconnectPolicy,
+    Realtime, RealtimeCallCreated, RealtimeWebSocket, RealtimeWebSocketConfig, ResponsesWebSocket,
+    ResponsesWebSocketConfig, WebSocketReconnectPolicy,
 };
 
 #[cfg(all(feature = "client", feature = "webhook-verification"))]
