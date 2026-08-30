@@ -1,10 +1,15 @@
 //! Client resources for the preview Responses multi-agent API.
 
-use std::{fmt, pin::Pin, sync::Arc, task::{Context, Poll}, time::Duration};
+use std::{
+    fmt,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use futures_core::Stream;
 use futures_util::{SinkExt, StreamExt};
-use http::{HeaderValue, Method, StatusCode, header};
+use http::{Method, StatusCode, header};
 use openai_rs_types::{
     ResponseId,
     beta_responses::{
@@ -19,7 +24,7 @@ use openai_rs_types::{
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
-    Connector, MaybeTlsStream, WebSocketStream,
+    MaybeTlsStream, WebSocketStream,
     tungstenite::{Message, protocol::WebSocketConfig as TungsteniteConfig},
 };
 use url::Url;
@@ -193,11 +198,7 @@ impl BetaResponses {
         ];
         self.client
             .transport()
-            .execute_json::<CancelBetaResponse, _>(
-                &path,
-                Some(&BetaOnlyQuery::VALUE),
-                None,
-            )
+            .execute_json::<CancelBetaResponse, _>(&path, Some(&BetaOnlyQuery::VALUE), None)
             .await
     }
 
@@ -354,13 +355,6 @@ impl BetaResponseEventStream {
                 };
                 for dispatch in dispatches {
                     match decode_beta_dispatch(dispatch, &stream_meta) {
-                        Ok(Some(event)) if matches!(event.core(), openai_rs_types::responses::ResponseStreamEvent::Error(_)) => {
-                            yield Err(StreamError::from_body(
-                                stream_meta.request_id(),
-                                serde_json::to_string(&event).unwrap_or_default().as_bytes(),
-                            ).into());
-                            return;
-                        }
                         Ok(Some(event)) if event.is_terminal() => {
                             yield Ok(event);
                             return;
@@ -454,7 +448,10 @@ impl fmt::Debug for BetaResponseEventStream {
 pub enum BetaWebSocketReconnectPolicy {
     #[default]
     Never,
-    InitialConnect { max_retries: u32, delay: Duration },
+    InitialConnect {
+        max_retries: u32,
+        delay: Duration,
+    },
 }
 
 /// Bounded resource configuration for a beta Responses WebSocket.
@@ -648,7 +645,8 @@ impl BetaResponsesWebSocket {
 
     /// Sends a typed beta `response.create` event.
     pub async fn send_create(&mut self, request: BetaCreateResponseRequest) -> Result<(), Error> {
-        self.send_event(BetaResponsesClientEvent::create(request)).await
+        self.send_event(BetaResponsesClientEvent::create(request))
+            .await
     }
 
     /// Sends a lane-routed beta `response.create` event.
@@ -706,13 +704,14 @@ impl BetaResponsesWebSocket {
                             "incoming beta Responses event exceeds the configured message limit",
                         ));
                     }
-                    let event = deserialize_json(text.as_bytes()).map_err(|error| Error::Decode {
-                        source: error.source,
-                        path: error.path,
-                        meta_status: self.meta.status(),
-                        request_id: self.meta.request_id().map(Box::<str>::from),
-                        body: BodyPreview::from_bytes(text.as_bytes(), false),
-                    })?;
+                    let event =
+                        deserialize_json(text.as_bytes()).map_err(|error| Error::Decode {
+                            source: error.source,
+                            path: error.path,
+                            meta_status: self.meta.status(),
+                            request_id: self.meta.request_id().map(Box::<str>::from),
+                            body: BodyPreview::from_bytes(text.as_bytes(), false),
+                        })?;
                     return Ok(Some(event));
                 }
                 Message::Ping(payload) => {
@@ -768,11 +767,9 @@ fn decode_beta_dispatch(
     match dispatch {
         SseDispatch::Event(frame) => decode_beta_event(&frame, meta).map(Some),
         SseDispatch::Terminal(frame) => decode_beta_event(&frame, meta).map(Some),
-        SseDispatch::RemoteError(frame) => Err(StreamError::from_body(
-            meta.request_id(),
-            frame.data.as_bytes(),
-        )
-        .into()),
+        SseDispatch::RemoteError(frame) => {
+            Err(StreamError::from_body(meta.request_id(), frame.data.as_bytes()).into())
+        }
     }
 }
 
@@ -803,13 +800,21 @@ fn decode_beta_event(
             body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
         });
     }
-    deserialize_json(frame.data.as_bytes()).map_err(|error| Error::Decode {
-        source: error.source,
-        path: error.path,
-        meta_status: StatusCode::OK,
-        request_id: meta.request_id().map(Box::<str>::from),
-        body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
-    })
+    let event: BetaResponseStreamEvent =
+        deserialize_json(frame.data.as_bytes()).map_err(|error| Error::Decode {
+            source: error.source,
+            path: error.path,
+            meta_status: StatusCode::OK,
+            request_id: meta.request_id().map(Box::<str>::from),
+            body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
+        })?;
+    if matches!(
+        event.core(),
+        openai_rs_types::responses::ResponseStreamEvent::Error(_)
+    ) {
+        return Err(StreamError::from_body(meta.request_id(), frame.data.as_bytes()).into());
+    }
+    Ok(event)
 }
 
 fn beta_websocket_url(base_url: &Url) -> Result<Url, Error> {
@@ -909,30 +914,102 @@ macro_rules! operation {
     };
 }
 
-operation!(CreateBetaResponse, request = BetaCreateResponseRequest, response = BetaResponse,
-    method = Method::POST, route = "/responses", request_encoding = RequestEncoding::Json,
-    response_mode = ResponseMode::Json, retry = RetryClass::Replayable, success = OK);
-operation!(CreateStreamingBetaResponse, request = BetaCreateStreamingResponseRequest, response = BetaResponseStreamEvent,
-    method = Method::POST, route = "/responses", request_encoding = RequestEncoding::Json,
-    response_mode = ResponseMode::Sse, retry = RetryClass::Replayable, success = OK);
-operation!(RetrieveBetaResponse, request = (), response = BetaResponse,
-    method = Method::GET, route = "/responses/{response_id}", request_encoding = RequestEncoding::None,
-    response_mode = ResponseMode::Json, retry = RetryClass::Safe, success = OK);
-operation!(RetrieveStreamingBetaResponse, request = (), response = BetaResponseStreamEvent,
-    method = Method::GET, route = "/responses/{response_id}", request_encoding = RequestEncoding::None,
-    response_mode = ResponseMode::Sse, retry = RetryClass::Safe, success = OK);
-operation!(DeleteBetaResponse, request = (), response = DeletedResponse,
-    method = Method::DELETE, route = "/responses/{response_id}", request_encoding = RequestEncoding::None,
-    response_mode = ResponseMode::EmptyOrJson, retry = RetryClass::Replayable, success = OK_OR_NO_CONTENT);
-operation!(CancelBetaResponse, request = (), response = BetaResponse,
-    method = Method::POST, route = "/responses/{response_id}/cancel", request_encoding = RequestEncoding::None,
-    response_mode = ResponseMode::Json, retry = RetryClass::Replayable, success = OK);
-operation!(CompactBetaResponse, request = BetaCompactResponseRequest, response = BetaCompactedResponse,
-    method = Method::POST, route = "/responses/compact", request_encoding = RequestEncoding::Json,
-    response_mode = ResponseMode::Json, retry = RetryClass::Replayable, success = OK);
-operation!(ListBetaResponseInputItems, request = (), response = BetaResponseItemList,
-    method = Method::GET, route = "/responses/{response_id}/input_items", request_encoding = RequestEncoding::None,
-    response_mode = ResponseMode::Json, retry = RetryClass::Safe, success = OK);
-operation!(CountBetaResponseInputTokens, request = BetaCountInputTokensRequest, response = BetaInputTokenCountResponse,
-    method = Method::POST, route = "/responses/input_tokens", request_encoding = RequestEncoding::Json,
-    response_mode = ResponseMode::Json, retry = RetryClass::Replayable, success = OK);
+operation!(
+    CreateBetaResponse,
+    request = BetaCreateResponseRequest,
+    response = BetaResponse,
+    method = Method::POST,
+    route = "/responses",
+    request_encoding = RequestEncoding::Json,
+    response_mode = ResponseMode::Json,
+    retry = RetryClass::Replayable,
+    success = OK
+);
+operation!(
+    CreateStreamingBetaResponse,
+    request = BetaCreateStreamingResponseRequest,
+    response = BetaResponseStreamEvent,
+    method = Method::POST,
+    route = "/responses",
+    request_encoding = RequestEncoding::Json,
+    response_mode = ResponseMode::Sse,
+    retry = RetryClass::Replayable,
+    success = OK
+);
+operation!(
+    RetrieveBetaResponse,
+    request = (),
+    response = BetaResponse,
+    method = Method::GET,
+    route = "/responses/{response_id}",
+    request_encoding = RequestEncoding::None,
+    response_mode = ResponseMode::Json,
+    retry = RetryClass::Safe,
+    success = OK
+);
+operation!(
+    RetrieveStreamingBetaResponse,
+    request = (),
+    response = BetaResponseStreamEvent,
+    method = Method::GET,
+    route = "/responses/{response_id}",
+    request_encoding = RequestEncoding::None,
+    response_mode = ResponseMode::Sse,
+    retry = RetryClass::Safe,
+    success = OK
+);
+operation!(
+    DeleteBetaResponse,
+    request = (),
+    response = DeletedResponse,
+    method = Method::DELETE,
+    route = "/responses/{response_id}",
+    request_encoding = RequestEncoding::None,
+    response_mode = ResponseMode::EmptyOrJson,
+    retry = RetryClass::Replayable,
+    success = OK_OR_NO_CONTENT
+);
+operation!(
+    CancelBetaResponse,
+    request = (),
+    response = BetaResponse,
+    method = Method::POST,
+    route = "/responses/{response_id}/cancel",
+    request_encoding = RequestEncoding::None,
+    response_mode = ResponseMode::Json,
+    retry = RetryClass::Replayable,
+    success = OK
+);
+operation!(
+    CompactBetaResponse,
+    request = BetaCompactResponseRequest,
+    response = BetaCompactedResponse,
+    method = Method::POST,
+    route = "/responses/compact",
+    request_encoding = RequestEncoding::Json,
+    response_mode = ResponseMode::Json,
+    retry = RetryClass::Replayable,
+    success = OK
+);
+operation!(
+    ListBetaResponseInputItems,
+    request = (),
+    response = BetaResponseItemList,
+    method = Method::GET,
+    route = "/responses/{response_id}/input_items",
+    request_encoding = RequestEncoding::None,
+    response_mode = ResponseMode::Json,
+    retry = RetryClass::Safe,
+    success = OK
+);
+operation!(
+    CountBetaResponseInputTokens,
+    request = BetaCountInputTokensRequest,
+    response = BetaInputTokenCountResponse,
+    method = Method::POST,
+    route = "/responses/input_tokens",
+    request_encoding = RequestEncoding::Json,
+    response_mode = ResponseMode::Json,
+    retry = RetryClass::Replayable,
+    success = OK
+);
