@@ -31,7 +31,7 @@ pub(crate) enum ResponseMode {
 pub(crate) enum RetryClass {
     Safe,
     Replayable,
-    #[cfg(feature = "realtime")]
+    #[cfg(any(feature = "realtime", feature = "legacy-realtime"))]
     Never,
 }
 

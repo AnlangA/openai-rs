@@ -395,9 +395,8 @@ impl BetaAgentInputText {
     /// Marks the end of an explicitly reusable prefix.
     #[must_use]
     pub fn prompt_cache_breakpoint(mut self) -> Self {
-        self.prompt_cache_breakpoint = Omittable::Value(Nullable::Value(
-            BetaPromptCacheBreakpoint::explicit(),
-        ));
+        self.prompt_cache_breakpoint =
+            Omittable::Value(Nullable::Value(BetaPromptCacheBreakpoint::explicit()));
         self
     }
 
@@ -458,9 +457,8 @@ impl BetaAgentInputImage {
     /// Marks the end of an explicitly reusable prefix.
     #[must_use]
     pub fn prompt_cache_breakpoint(mut self) -> Self {
-        self.prompt_cache_breakpoint = Omittable::Value(Nullable::Value(
-            BetaPromptCacheBreakpoint::explicit(),
-        ));
+        self.prompt_cache_breakpoint =
+            Omittable::Value(Nullable::Value(BetaPromptCacheBreakpoint::explicit()));
         self
     }
 }
@@ -717,7 +715,11 @@ impl BetaMultiAgentOutputText {
     }
 }
 
-literal_tag!(MultiAgentCallOutputTag, MultiAgentCallOutput, "multi_agent_call_output");
+literal_tag!(
+    MultiAgentCallOutputTag,
+    MultiAgentCallOutput,
+    "multi_agent_call_output"
+);
 
 /// Output correlated with a multi-agent runtime call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1466,16 +1468,19 @@ impl Serialize for BetaCreateResponseRequest {
         S: Serializer,
     {
         let mut object = serialized_object(&self.base).map_err(serde::ser::Error::custom)?;
-        insert_omittable(&mut object, "input", &self.input)
-            .map_err(serde::ser::Error::custom)?;
+        insert_omittable(&mut object, "input", &self.input).map_err(serde::ser::Error::custom)?;
         insert_omittable(&mut object, "context_management", &self.context_management)
             .map_err(serde::ser::Error::custom)?;
         insert_omittable(&mut object, "moderation", &self.moderation)
             .map_err(serde::ser::Error::custom)?;
         insert_omittable(&mut object, "multi_agent", &self.multi_agent)
             .map_err(serde::ser::Error::custom)?;
-        insert_omittable(&mut object, "prompt_cache_options", &self.prompt_cache_options)
-            .map_err(serde::ser::Error::custom)?;
+        insert_omittable(
+            &mut object,
+            "prompt_cache_options",
+            &self.prompt_cache_options,
+        )
+        .map_err(serde::ser::Error::custom)?;
         insert_omittable(&mut object, "reasoning", &self.reasoning)
             .map_err(serde::ser::Error::custom)?;
         Value::Object(object).serialize(serializer)
@@ -1558,7 +1563,11 @@ impl<'de> Deserialize<'de> for BetaCreateStreamingResponseRequest {
         let mut object = deserialize_object(deserializer)?;
         match object.remove("stream") {
             Some(Value::Bool(true)) => {}
-            _ => return Err(D::Error::custom("beta streaming request requires `stream: true`")),
+            _ => {
+                return Err(D::Error::custom(
+                    "beta streaming request requires `stream: true`",
+                ));
+            }
         }
         let stream_options =
             take_omittable(&mut object, "stream_options").map_err(D::Error::custom)?;
@@ -1719,5 +1728,1083 @@ impl BetaResponse {
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
+    }
+}
+
+/// Request body for `POST /responses/compact?beta=true`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaCompactResponseRequest {
+    model: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    input: Omittable<Nullable<BetaResponseInput>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    instructions: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    previous_response_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_key: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_options: Omittable<Nullable<BetaPromptCacheOptions>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_retention: Omittable<Nullable<BetaPromptCacheRetention>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    service_tier: Omittable<Nullable<BetaServiceTier>>,
+}
+
+impl BetaCompactResponseRequest {
+    /// Creates the required model-only compact request.
+    #[must_use]
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            input: Omittable::Omitted,
+            instructions: Omittable::Omitted,
+            previous_response_id: Omittable::Omitted,
+            prompt_cache_key: Omittable::Omitted,
+            prompt_cache_options: Omittable::Omitted,
+            prompt_cache_retention: Omittable::Omitted,
+            service_tier: Omittable::Omitted,
+        }
+    }
+
+    /// Sets input to compact.
+    #[must_use]
+    pub fn input(mut self, input: impl Into<BetaResponseInput>) -> Self {
+        self.input = Omittable::Value(Nullable::Value(input.into()));
+        self
+    }
+
+    /// Sets compacting instructions.
+    #[must_use]
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Omittable::Value(Nullable::Value(instructions.into()));
+        self
+    }
+
+    /// Continues from one stored response.
+    #[must_use]
+    pub fn previous_response_id(mut self, id: impl Into<String>) -> Self {
+        self.previous_response_id = Omittable::Value(Nullable::Value(id.into()));
+        self
+    }
+
+    /// Sets a prompt-cache key.
+    #[must_use]
+    pub fn prompt_cache_key(mut self, key: impl Into<String>) -> Self {
+        self.prompt_cache_key = Omittable::Value(Nullable::Value(key.into()));
+        self
+    }
+
+    /// Sets prompt-cache options.
+    #[must_use]
+    pub fn prompt_cache_options(mut self, options: BetaPromptCacheOptions) -> Self {
+        self.prompt_cache_options = Omittable::Value(Nullable::Value(options));
+        self
+    }
+
+    /// Sets the deprecated prompt-cache retention policy.
+    #[must_use]
+    pub fn prompt_cache_retention(mut self, retention: BetaPromptCacheRetention) -> Self {
+        self.prompt_cache_retention = Omittable::Value(Nullable::Value(retention));
+        self
+    }
+
+    /// Sets the requested service tier.
+    #[must_use]
+    pub fn service_tier(mut self, tier: BetaServiceTier) -> Self {
+        self.service_tier = Omittable::Value(Nullable::Value(tier));
+        self
+    }
+}
+
+literal_tag!(BetaCompactedResponseTag, Compaction, "response.compaction");
+
+/// Compacted beta response resource.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaCompactedResponse {
+    id: String,
+    created_at: i64,
+    #[serde(rename = "object")]
+    object: BetaCompactedResponseTag,
+    output: Vec<BetaResponseOutputItem>,
+    usage: ResponseUsage,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl BetaCompactedResponse {
+    /// Returns the compacted response id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns compacted items in wire order.
+    #[must_use]
+    pub fn output(&self) -> &[BetaResponseOutputItem] {
+        &self.output
+    }
+
+    /// Returns token usage for the compaction pass.
+    #[must_use]
+    pub const fn usage(&self) -> &ResponseUsage {
+        &self.usage
+    }
+}
+
+/// Query for `GET /responses/{id}?beta=true`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BetaRetrieveResponseParams {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    include: Vec<BetaResponseIncludable>,
+}
+
+impl BetaRetrieveResponseParams {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Requests one optional expanded response field.
+    #[must_use]
+    pub fn include(mut self, include: BetaResponseIncludable) -> Self {
+        self.include.push(include);
+        self
+    }
+}
+
+/// Query for resuming a beta response SSE stream.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaRetrieveResponseStreamParams {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    include: Vec<BetaResponseIncludable>,
+    stream: bool,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    include_obfuscation: Omittable<bool>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    starting_after: Omittable<u64>,
+}
+
+impl BetaRetrieveResponseStreamParams {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            include: Vec::new(),
+            stream: true,
+            include_obfuscation: Omittable::Omitted,
+            starting_after: Omittable::Omitted,
+        }
+    }
+
+    /// Requests one optional expanded response field.
+    #[must_use]
+    pub fn include(mut self, include: BetaResponseIncludable) -> Self {
+        self.include.push(include);
+        self
+    }
+
+    /// Controls streaming obfuscation fields.
+    #[must_use]
+    pub const fn include_obfuscation(mut self, include: bool) -> Self {
+        self.include_obfuscation = Omittable::Value(include);
+        self
+    }
+
+    /// Starts after a previously observed sequence number.
+    #[must_use]
+    pub const fn starting_after(mut self, sequence_number: u64) -> Self {
+        self.starting_after = Omittable::Value(sequence_number);
+        self
+    }
+}
+
+impl Default for BetaRetrieveResponseStreamParams {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Query for one beta input-item page.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BetaListInputItemsParams {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    after: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    include: Vec<BetaResponseIncludable>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    limit: Omittable<u32>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    order: Omittable<BetaResponseItemOrder>,
+}
+
+impl BetaListInputItemsParams {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn after(mut self, after: impl Into<String>) -> Self {
+        self.after = Omittable::Value(after.into());
+        self
+    }
+
+    #[must_use]
+    pub fn include(mut self, include: BetaResponseIncludable) -> Self {
+        self.include.push(include);
+        self
+    }
+
+    #[must_use]
+    pub const fn limit(mut self, limit: u32) -> Self {
+        self.limit = Omittable::Value(limit);
+        self
+    }
+
+    #[must_use]
+    pub fn order(mut self, order: BetaResponseItemOrder) -> Self {
+        self.order = Omittable::Value(order);
+        self
+    }
+}
+
+literal_tag!(ListObjectTag, List, "list");
+
+/// One page of beta response input items.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaResponseItemList {
+    data: Vec<BetaResponseInputItem>,
+    first_id: String,
+    has_more: bool,
+    last_id: String,
+    #[serde(rename = "object")]
+    object: ListObjectTag,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl BetaResponseItemList {
+    #[must_use]
+    pub fn data(&self) -> &[BetaResponseInputItem] {
+        &self.data
+    }
+
+    #[must_use]
+    pub const fn has_more(&self) -> bool {
+        self.has_more
+    }
+
+    #[must_use]
+    pub fn first_id(&self) -> &str {
+        &self.first_id
+    }
+
+    #[must_use]
+    pub fn last_id(&self) -> &str {
+        &self.last_id
+    }
+}
+
+/// Body for `POST /responses/input_tokens?beta=true`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BetaCountInputTokensRequest {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    conversation: Omittable<Nullable<ConversationReference>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    input: Omittable<Nullable<BetaResponseInput>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    instructions: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    model: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    parallel_tool_calls: Omittable<Nullable<bool>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    personality: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    previous_response_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    reasoning: Omittable<Nullable<BetaReasoningConfig>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    text: Omittable<Nullable<ResponseTextConfig>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    tool_choice: Omittable<Nullable<ToolChoice>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    tools: Omittable<Nullable<Vec<ResponseTool>>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    truncation: Omittable<TruncationStrategy>,
+}
+
+impl BetaCountInputTokensRequest {
+    #[must_use]
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn new(model: impl Into<String>, input: impl Into<BetaResponseInput>) -> Self {
+        Self::empty().model(model).input(input)
+    }
+
+    #[must_use]
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Omittable::Value(Nullable::Value(model.into()));
+        self
+    }
+
+    #[must_use]
+    pub fn input(mut self, input: impl Into<BetaResponseInput>) -> Self {
+        self.input = Omittable::Value(Nullable::Value(input.into()));
+        self
+    }
+
+    #[must_use]
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Omittable::Value(Nullable::Value(instructions.into()));
+        self
+    }
+
+    #[must_use]
+    pub fn conversation(mut self, conversation: impl Into<ConversationReference>) -> Self {
+        self.conversation = Omittable::Value(Nullable::Value(conversation.into()));
+        self
+    }
+
+    #[must_use]
+    pub fn parallel_tool_calls(mut self, enabled: bool) -> Self {
+        self.parallel_tool_calls = Omittable::Value(Nullable::Value(enabled));
+        self
+    }
+
+    #[must_use]
+    pub fn personality(mut self, personality: impl Into<String>) -> Self {
+        self.personality = Omittable::Value(personality.into());
+        self
+    }
+
+    #[must_use]
+    pub fn previous_response_id(mut self, id: impl Into<String>) -> Self {
+        self.previous_response_id = Omittable::Value(Nullable::Value(id.into()));
+        self
+    }
+
+    #[must_use]
+    pub fn reasoning(mut self, reasoning: BetaReasoningConfig) -> Self {
+        self.reasoning = Omittable::Value(Nullable::Value(reasoning));
+        self
+    }
+
+    #[must_use]
+    pub fn text(mut self, text: ResponseTextConfig) -> Self {
+        self.text = Omittable::Value(Nullable::Value(text));
+        self
+    }
+
+    #[must_use]
+    pub fn tool_choice(mut self, choice: ToolChoice) -> Self {
+        self.tool_choice = Omittable::Value(Nullable::Value(choice));
+        self
+    }
+
+    #[must_use]
+    pub fn tool(mut self, tool: impl Into<ResponseTool>) -> Self {
+        let tools = match &mut self.tools {
+            Omittable::Value(Nullable::Value(tools)) => tools,
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => {
+                self.tools = Omittable::Value(Nullable::Value(Vec::new()));
+                match &mut self.tools {
+                    Omittable::Value(Nullable::Value(tools)) => tools,
+                    _ => unreachable!(),
+                }
+            }
+        };
+        tools.push(tool.into());
+        self
+    }
+
+    #[must_use]
+    pub fn truncation(mut self, truncation: TruncationStrategy) -> Self {
+        self.truncation = Omittable::Value(truncation);
+        self
+    }
+}
+
+/// The token-count response is identical to the stable Responses codec.
+pub type BetaInputTokenCountResponse = crate::responses::InputTokenCountResponse;
+
+/// One beta SSE event. The stable discriminator codec remains directly
+/// accessible while beta-only ownership and nested item/resource views are
+/// decoded explicitly.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BetaResponseStreamEvent {
+    core: ResponseStreamEvent,
+    agent: Omittable<Nullable<BetaAgent>>,
+    stream_id: Omittable<String>,
+    response: Option<BetaResponse>,
+    item: Option<BetaResponseOutputItem>,
+}
+
+impl BetaResponseStreamEvent {
+    /// Borrows the stable event discriminator and payload codec.
+    #[must_use]
+    pub const fn core(&self) -> &ResponseStreamEvent {
+        &self.core
+    }
+
+    /// Returns the agent that owns this event.
+    #[must_use]
+    pub fn agent(&self) -> Option<&BetaAgent> {
+        non_null(&self.agent)
+    }
+
+    /// Returns the WebSocket lane when the event came from a multiplexed socket.
+    #[must_use]
+    pub fn stream_id(&self) -> Option<&str> {
+        omitted_ref(&self.stream_id).map(String::as_str)
+    }
+
+    /// Returns a typed beta response snapshot for lifecycle events.
+    #[must_use]
+    pub const fn response(&self) -> Option<&BetaResponse> {
+        self.response.as_ref()
+    }
+
+    /// Returns a typed beta item for output-item events.
+    #[must_use]
+    pub const fn item(&self) -> Option<&BetaResponseOutputItem> {
+        self.item.as_ref()
+    }
+
+    /// Returns the event sequence number.
+    #[must_use]
+    pub fn sequence_number(&self) -> Option<u64> {
+        self.core.sequence_number()
+    }
+
+    /// Returns whether this event ends one response lifecycle.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        self.core.is_terminal()
+    }
+}
+
+impl Serialize for BetaResponseStreamEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut object = serialized_object(&self.core).map_err(serde::ser::Error::custom)?;
+        insert_omittable(&mut object, "agent", &self.agent).map_err(serde::ser::Error::custom)?;
+        insert_omittable(&mut object, "stream_id", &self.stream_id)
+            .map_err(serde::ser::Error::custom)?;
+        if let Some(response) = &self.response {
+            object.insert(
+                "response".to_owned(),
+                serde_json::to_value(response).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        if let Some(item) = &self.item {
+            object.insert(
+                "item".to_owned(),
+                serde_json::to_value(item).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        Value::Object(object).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BetaResponseStreamEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| D::Error::custom("beta response event must be an object"))?;
+        let agent = decode_omittable(object.get("agent")).map_err(D::Error::custom)?;
+        let stream_id = decode_omittable(object.get("stream_id")).map_err(D::Error::custom)?;
+        let response = object
+            .get("response")
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(D::Error::custom)?;
+        let item = object
+            .get("item")
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(D::Error::custom)?;
+
+        let mut stable_value = value;
+        if let Some(response) = &response {
+            let mut stable_response = serialized_object(response).map_err(D::Error::custom)?;
+            for nullable_in_beta_only in ["background", "service_tier"] {
+                if stable_response.get(nullable_in_beta_only) == Some(&Value::Null) {
+                    stable_response.remove(nullable_in_beta_only);
+                }
+            }
+            stable_value
+                .as_object_mut()
+                .ok_or_else(|| D::Error::custom("beta response event must be an object"))?
+                .insert("response".to_owned(), Value::Object(stable_response));
+        }
+        let core = serde_json::from_value(stable_value).map_err(D::Error::custom)?;
+        Ok(Self {
+            core,
+            agent,
+            stream_id,
+            response,
+            item,
+        })
+    }
+}
+
+literal_tag!(ResponsesCreateEventTag, ResponseCreate, "response.create");
+
+/// Client event that starts one beta response over a WebSocket.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BetaResponsesCreateEvent {
+    request: BetaCreateResponseRequest,
+    stream_id: Omittable<String>,
+}
+
+impl BetaResponsesCreateEvent {
+    /// Converts a beta HTTP create body to a WebSocket create event.
+    #[must_use]
+    pub fn from_request(request: BetaCreateResponseRequest) -> Self {
+        Self {
+            request,
+            stream_id: Omittable::Omitted,
+        }
+    }
+
+    /// Routes the response through one FIFO WebSocket lane.
+    #[must_use]
+    pub fn stream_id(mut self, stream_id: impl Into<String>) -> Self {
+        self.stream_id = Omittable::Value(stream_id.into());
+        self
+    }
+
+    /// Returns the lane id when configured.
+    #[must_use]
+    pub fn stream_id_ref(&self) -> Option<&str> {
+        omitted_ref(&self.stream_id).map(String::as_str)
+    }
+}
+
+impl Serialize for BetaResponsesCreateEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut object = serialized_object(&self.request).map_err(serde::ser::Error::custom)?;
+        object.remove("stream");
+        object.remove("stream_options");
+        object.insert(
+            "type".to_owned(),
+            serde_json::to_value(ResponsesCreateEventTag::ResponseCreate)
+                .map_err(serde::ser::Error::custom)?,
+        );
+        insert_omittable(&mut object, "stream_id", &self.stream_id)
+            .map_err(serde::ser::Error::custom)?;
+        Value::Object(object).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BetaResponsesCreateEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut object = deserialize_object(deserializer)?;
+        match object.remove("type") {
+            Some(Value::String(value)) if value == "response.create" => {}
+            _ => return Err(D::Error::custom("expected `response.create` client event")),
+        }
+        if object.contains_key("stream") {
+            return Err(D::Error::custom(
+                "WebSocket response.create must not include HTTP `stream`",
+            ));
+        }
+        let stream_id = take_omittable(&mut object, "stream_id").map_err(D::Error::custom)?;
+        let request = serde_json::from_value(Value::Object(object)).map_err(D::Error::custom)?;
+        Ok(Self { request, stream_id })
+    }
+}
+
+literal_tag!(ResponseInjectTag, ResponseInject, "response.inject");
+
+/// Atomically injects client-owned tool outputs into an active response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaResponseInjectEvent {
+    input: Vec<BetaResponseInputItem>,
+    response_id: String,
+    #[serde(rename = "type")]
+    kind: ResponseInjectTag,
+}
+
+impl BetaResponseInjectEvent {
+    /// Creates an injection event.
+    #[must_use]
+    pub fn new(
+        response_id: impl Into<String>,
+        input: impl IntoIterator<Item = impl Into<BetaResponseInputItem>>,
+    ) -> Self {
+        Self {
+            input: input.into_iter().map(Into::into).collect(),
+            response_id: response_id.into(),
+            kind: ResponseInjectTag::ResponseInject,
+        }
+    }
+
+    /// Returns the target active response id.
+    #[must_use]
+    pub fn response_id(&self) -> &str {
+        &self.response_id
+    }
+
+    /// Returns the atomically committed item set.
+    #[must_use]
+    pub fn input(&self) -> &[BetaResponseInputItem] {
+        &self.input
+    }
+}
+
+/// Client events accepted by the beta Responses WebSocket.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum BetaResponsesClientEvent {
+    Create(Box<BetaResponsesCreateEvent>),
+    Inject(BetaResponseInjectEvent),
+    Unknown(UnknownTaggedObject),
+}
+
+impl BetaResponsesClientEvent {
+    /// Creates a `response.create` event.
+    #[must_use]
+    pub fn create(request: BetaCreateResponseRequest) -> Self {
+        Self::Create(Box::new(BetaResponsesCreateEvent::from_request(request)))
+    }
+
+    /// Creates a lane-routed `response.create` event.
+    #[must_use]
+    pub fn create_on_stream(
+        stream_id: impl Into<String>,
+        request: BetaCreateResponseRequest,
+    ) -> Self {
+        Self::Create(Box::new(
+            BetaResponsesCreateEvent::from_request(request).stream_id(stream_id),
+        ))
+    }
+
+    /// Creates an atomic `response.inject` event.
+    #[must_use]
+    pub fn inject(event: BetaResponseInjectEvent) -> Self {
+        Self::Inject(event)
+    }
+}
+
+impl Serialize for BetaResponsesClientEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Create(value) => value.serialize(serializer),
+            Self::Inject(value) => value.serialize(serializer),
+            Self::Unknown(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BetaResponsesClientEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        match discriminator(&value).map_err(D::Error::custom)? {
+            "response.create" => serde_json::from_value(value)
+                .map(Box::new)
+                .map(Self::Create)
+                .map_err(D::Error::custom),
+            "response.inject" => serde_json::from_value(value)
+                .map(Self::Inject)
+                .map_err(D::Error::custom),
+            _ => UnknownTaggedObject::from_value(value)
+                .map(Self::Unknown)
+                .map_err(D::Error::custom),
+        }
+    }
+}
+
+literal_tag!(
+    ResponseInjectCreatedTag,
+    ResponseInjectCreated,
+    "response.inject.created"
+);
+
+/// Confirmation that an injected item set was committed atomically.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaResponseInjectCreatedEvent {
+    response_id: String,
+    sequence_number: u64,
+    #[serde(rename = "type")]
+    kind: ResponseInjectCreatedTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    stream_id: Omittable<String>,
+}
+
+impl BetaResponseInjectCreatedEvent {
+    #[must_use]
+    pub fn response_id(&self) -> &str {
+        &self.response_id
+    }
+
+    #[must_use]
+    pub const fn sequence_number(&self) -> u64 {
+        self.sequence_number
+    }
+
+    #[must_use]
+    pub fn stream_id(&self) -> Option<&str> {
+        omitted_ref(&self.stream_id).map(String::as_str)
+    }
+}
+
+crate::open_string_enum! {
+    /// Machine-readable rejection reason for `response.inject`.
+    pub enum BetaResponseInjectErrorCode {
+        ResponseAlreadyCompleted = "response_already_completed",
+        ResponseNotFound = "response_not_found",
+    }
+}
+
+/// Error returned when an injection could not be committed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaResponseInjectError {
+    code: BetaResponseInjectErrorCode,
+    message: String,
+}
+
+impl BetaResponseInjectError {
+    #[must_use]
+    pub const fn code(&self) -> &BetaResponseInjectErrorCode {
+        &self.code
+    }
+
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+literal_tag!(
+    ResponseInjectFailedTag,
+    ResponseInjectFailed,
+    "response.inject.failed"
+);
+
+/// Event returning the uncommitted item set after injection failed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaResponseInjectFailedEvent {
+    error: BetaResponseInjectError,
+    input: Vec<BetaResponseInputItem>,
+    response_id: String,
+    sequence_number: u64,
+    #[serde(rename = "type")]
+    kind: ResponseInjectFailedTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    stream_id: Omittable<String>,
+}
+
+impl BetaResponseInjectFailedEvent {
+    #[must_use]
+    pub const fn error(&self) -> &BetaResponseInjectError {
+        &self.error
+    }
+
+    #[must_use]
+    pub fn input(&self) -> &[BetaResponseInputItem] {
+        &self.input
+    }
+
+    #[must_use]
+    pub fn response_id(&self) -> &str {
+        &self.response_id
+    }
+
+    #[must_use]
+    pub const fn sequence_number(&self) -> u64 {
+        self.sequence_number
+    }
+
+    #[must_use]
+    pub fn stream_id(&self) -> Option<&str> {
+        omitted_ref(&self.stream_id).map(String::as_str)
+    }
+}
+
+/// Nested protocol error details used only by the beta WebSocket envelope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaWebSocketErrorDetails {
+    code: Nullable<String>,
+    message: String,
+    param: Nullable<String>,
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    headers: Omittable<BTreeMap<String, String>>,
+}
+
+impl BetaWebSocketErrorDetails {
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    #[must_use]
+    pub fn error_type(&self) -> &str {
+        &self.kind
+    }
+}
+
+literal_tag!(WebSocketErrorTag, Error, "error");
+
+/// WebSocket-level error shape whose `error` discriminator collides with the
+/// SSE streaming error and therefore requires structural routing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaWebSocketErrorEvent {
+    error: BetaWebSocketErrorDetails,
+    #[serde(rename = "type")]
+    kind: WebSocketErrorTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    agent: Omittable<Nullable<BetaAgent>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    sequence_number: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    status: Omittable<u16>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    stream_id: Omittable<String>,
+}
+
+impl BetaWebSocketErrorEvent {
+    #[must_use]
+    pub const fn error(&self) -> &BetaWebSocketErrorDetails {
+        &self.error
+    }
+}
+
+/// Server events emitted by the beta Responses WebSocket.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum BetaResponsesServerEvent {
+    Response(BetaResponseStreamEvent),
+    InjectCreated(BetaResponseInjectCreatedEvent),
+    InjectFailed(BetaResponseInjectFailedEvent),
+    WebSocketError(BetaWebSocketErrorEvent),
+}
+
+impl BetaResponsesServerEvent {
+    /// Returns the multiplexed lane id when present.
+    #[must_use]
+    pub fn stream_id(&self) -> Option<&str> {
+        match self {
+            Self::Response(event) => event.stream_id(),
+            Self::InjectCreated(event) => event.stream_id(),
+            Self::InjectFailed(event) => event.stream_id(),
+            Self::WebSocketError(event) => omitted_ref(&event.stream_id).map(String::as_str),
+        }
+    }
+
+    /// Returns a sequence number when this event carries one.
+    #[must_use]
+    pub fn sequence_number(&self) -> Option<u64> {
+        match self {
+            Self::Response(event) => event.sequence_number(),
+            Self::InjectCreated(event) => Some(event.sequence_number()),
+            Self::InjectFailed(event) => Some(event.sequence_number()),
+            Self::WebSocketError(event) => omitted_ref(&event.sequence_number).copied(),
+        }
+    }
+
+    /// Returns whether this event ends a model response lifecycle.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        matches!(self, Self::Response(event) if event.is_terminal())
+    }
+}
+
+impl Serialize for BetaResponsesServerEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Response(value) => value.serialize(serializer),
+            Self::InjectCreated(value) => value.serialize(serializer),
+            Self::InjectFailed(value) => value.serialize(serializer),
+            Self::WebSocketError(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BetaResponsesServerEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        match discriminator(&value).map_err(D::Error::custom)? {
+            "response.inject.created" => serde_json::from_value(value)
+                .map(Self::InjectCreated)
+                .map_err(D::Error::custom),
+            "response.inject.failed" => serde_json::from_value(value)
+                .map(Self::InjectFailed)
+                .map_err(D::Error::custom),
+            "error" if value.get("error").is_some() => serde_json::from_value(value)
+                .map(Self::WebSocketError)
+                .map_err(D::Error::custom),
+            _ => serde_json::from_value(value)
+                .map(Self::Response)
+                .map_err(D::Error::custom),
+        }
+    }
+}
+
+/// Frozen schema manifest showing stable reuse and beta-only additions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BetaSchemaManifest {
+    /// Stable schema names reused without weakening their validation.
+    pub stable: &'static [&'static str],
+    /// Preview-only schema names implemented in this module.
+    pub beta_only: &'static [&'static str],
+}
+
+impl BetaSchemaManifest {
+    /// Returns the total frozen branch count.
+    #[must_use]
+    pub const fn len(self) -> usize {
+        self.stable.len() + self.beta_only.len()
+    }
+
+    /// Returns whether the manifest contains no schemas.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Frozen 35-branch beta input union.
+pub const BETA_RESPONSE_INPUT_MANIFEST: BetaSchemaManifest = BetaSchemaManifest {
+    stable: &crate::responses::STABLE_RESPONSE_INPUT_SCHEMAS,
+    beta_only: &["AgentMessage", "MultiAgentCall", "MultiAgentCallOutput"],
+};
+
+/// Frozen 31-branch beta output union.
+pub const BETA_RESPONSE_OUTPUT_MANIFEST: BetaSchemaManifest = BetaSchemaManifest {
+    stable: &crate::responses::STABLE_RESPONSE_OUTPUT_SCHEMAS,
+    beta_only: &["AgentMessage", "MultiAgentCall", "MultiAgentCallOutput"],
+};
+
+/// Frozen 58-branch beta SSE union. Every discriminator is shared with the
+/// stable stream, while the payload wrapper adds typed agent metadata.
+pub const BETA_RESPONSE_STREAM_EVENT_MANIFEST: BetaSchemaManifest = BetaSchemaManifest {
+    stable: &crate::responses::STABLE_RESPONSE_STREAM_EVENT_SCHEMAS,
+    beta_only: &[],
+};
+
+/// Preview-only WebSocket server envelopes layered on the 58 SSE branches.
+pub const BETA_RESPONSES_WEBSOCKET_ADDITIONAL_SCHEMAS: [&str; 3] = [
+    "BetaResponseInjectCreatedEvent",
+    "BetaResponseInjectFailedEvent",
+    "BetaResponseWsError",
+];
+
+fn discriminator(value: &Value) -> Result<&str, &'static str> {
+    optional_discriminator(value)?.ok_or("tagged object is missing string field `type`")
+}
+
+fn optional_discriminator(value: &Value) -> Result<Option<&str>, &'static str> {
+    let object = value
+        .as_object()
+        .ok_or("tagged value must be a JSON object")?;
+    match object.get("type") {
+        Some(Value::String(value)) => Ok(Some(value)),
+        Some(_) => Err("tagged object field `type` must be a string"),
+        None => Ok(None),
+    }
+}
+
+fn serialized_object<T: Serialize>(value: &T) -> serde_json::Result<Map<String, Value>> {
+    match serde_json::to_value(value)? {
+        Value::Object(object) => Ok(object),
+        _ => Err(<serde_json::Error as serde::ser::Error>::custom(
+            "wire value must serialize as an object",
+        )),
+    }
+}
+
+fn merge_serialized<A: Serialize, B: Serialize>(
+    base: &A,
+    overlay: &B,
+) -> serde_json::Result<Value> {
+    let mut object = serialized_object(base)?;
+    object.extend(serialized_object(overlay)?);
+    Ok(Value::Object(object))
+}
+
+fn insert_omittable<T: Serialize>(
+    object: &mut Map<String, Value>,
+    key: &str,
+    value: &Omittable<T>,
+) -> serde_json::Result<()> {
+    if let Omittable::Value(value) = value {
+        object.insert(key.to_owned(), serde_json::to_value(value)?);
+    }
+    Ok(())
+}
+
+fn take_omittable<T: for<'de> Deserialize<'de>>(
+    object: &mut Map<String, Value>,
+    key: &str,
+) -> serde_json::Result<Omittable<T>> {
+    object
+        .remove(key)
+        .map(serde_json::from_value)
+        .transpose()
+        .map(|value| value.map_or(Omittable::Omitted, Omittable::Value))
+}
+
+fn decode_omittable<T: for<'de> Deserialize<'de>>(
+    value: Option<&Value>,
+) -> serde_json::Result<Omittable<T>> {
+    value
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map(|value| value.map_or(Omittable::Omitted, Omittable::Value))
+}
+
+fn deserialize_object<'de, D>(deserializer: D) -> Result<Map<String, Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::Object(object) => Ok(object),
+        _ => Err(D::Error::custom("wire value must be a JSON object")),
+    }
+}
+
+fn omitted_ref<T>(value: &Omittable<T>) -> Option<&T> {
+    match value {
+        Omittable::Value(value) => Some(value),
+        Omittable::Omitted => None,
+    }
+}
+
+fn non_null<T>(value: &Omittable<Nullable<T>>) -> Option<&T> {
+    match value {
+        Omittable::Value(Nullable::Value(value)) => Some(value),
+        Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
     }
 }

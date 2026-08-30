@@ -43,6 +43,10 @@ pub use openai_rs_client::{
 #[cfg(all(feature = "client", feature = "legacy-completions"))]
 pub use openai_rs_client::{CompletionEventStream, Completions};
 
+#[cfg(all(feature = "client", feature = "legacy-realtime"))]
+#[allow(deprecated)]
+pub use openai_rs_client::LegacyRealtimeSessions;
+
 #[cfg(all(feature = "client", feature = "custom-voice"))]
 pub use openai_rs_client::{VoiceConsentPageStream, VoiceConsents, Voices};
 

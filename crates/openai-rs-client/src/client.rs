@@ -7,6 +7,9 @@ use url::{Host, Url};
 use crate::Realtime;
 #[cfg(feature = "legacy-completions")]
 use crate::Completions;
+#[cfg(feature = "legacy-realtime")]
+#[allow(deprecated)]
+use crate::LegacyRealtimeSessions;
 #[cfg(feature = "custom-voice")]
 use crate::Voices;
 #[cfg(feature = "alpha-graders")]
@@ -89,6 +92,18 @@ impl Client {
     #[must_use]
     pub fn completions(&self) -> Completions {
         Completions::new(self.clone())
+    }
+
+    /// Returns deprecated pre-GA Realtime session-token operations.
+    #[cfg(feature = "legacy-realtime")]
+    #[allow(deprecated)]
+    #[deprecated(
+        since = "0.1.0",
+        note = "use GA Realtime client_secrets and calls APIs instead"
+    )]
+    #[must_use]
+    pub fn legacy_realtime_sessions(&self) -> LegacyRealtimeSessions {
+        LegacyRealtimeSessions::new(self.clone())
     }
 
     /// Returns access-controlled custom voice operations.

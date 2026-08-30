@@ -673,7 +673,7 @@ fn retryable_operation(class: RetryClass, policy: RetryPolicy) -> bool {
     match class {
         RetryClass::Safe => true,
         RetryClass::Replayable => policy.retry_replayable_mutations,
-        #[cfg(feature = "realtime")]
+        #[cfg(any(feature = "realtime", feature = "legacy-realtime"))]
         RetryClass::Never => false,
     }
 }

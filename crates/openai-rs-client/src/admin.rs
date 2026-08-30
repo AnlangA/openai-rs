@@ -101,7 +101,6 @@ pub enum AdminRequestEncoding {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdminResponseMode {
     Json,
-    Empty,
 }
 
 /// Sealed static contract for one Administration operation.
@@ -215,9 +214,6 @@ macro_rules! admin_encoding_name {
 macro_rules! admin_response_name {
     (Json) => {
         "json"
-    };
-    (Empty) => {
-        "empty"
     };
 }
 
@@ -2183,36 +2179,18 @@ impl AdminClient {
             }
         }
         let body = read_limited(response, self.inner.max_json_body_bytes, &meta).await?;
-        match O::RESPONSE_MODE {
-            AdminResponseMode::Empty => {
-                let decoded =
-                    serde_json::from_value::<O::Response>(Value::Null).map_err(|source| {
-                        Error::Decode {
-                            source,
-                            path: None,
-                            meta_status: meta.status(),
-                            request_id: meta.request_id().map(Box::<str>::from),
-                            body: BodyPreview::from_bytes(&body, false),
-                        }
-                    })?;
-                Ok(ApiResponse::new(decoded, meta))
-            }
-            AdminResponseMode::Json => {
-                let decoded = serde_json::from_slice::<O::Response>(&body).map_err(|source| {
-                    Error::Decode {
-                        source,
-                        path: None,
-                        meta_status: meta.status(),
-                        request_id: meta.request_id().map(Box::<str>::from),
-                        body: BodyPreview::from_bytes(
-                            &body[..body.len().min(DECODE_PREVIEW_BYTES)],
-                            body.len() > DECODE_PREVIEW_BYTES,
-                        ),
-                    }
-                })?;
-                Ok(ApiResponse::new(decoded, meta))
-            }
-        }
+        let decoded =
+            serde_json::from_slice::<O::Response>(&body).map_err(|source| Error::Decode {
+                source,
+                path: None,
+                meta_status: meta.status(),
+                request_id: meta.request_id().map(Box::<str>::from),
+                body: BodyPreview::from_bytes(
+                    &body[..body.len().min(DECODE_PREVIEW_BYTES)],
+                    body.len() > DECODE_PREVIEW_BYTES,
+                ),
+            })?;
+        Ok(ApiResponse::new(decoded, meta))
     }
 
     async fn error_from_response(&self, response: reqwest::Response) -> Error {

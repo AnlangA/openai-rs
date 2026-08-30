@@ -594,7 +594,7 @@ pub struct CreateChatKitSessionRequest {
     /// Hosted workflow reference.
     pub workflow: ChatKitWorkflowRequest,
     /// End-user scope. This must be unique per end user.
-    pub user: String,
+    pub user: ChatKitUserId,
     /// Optional expiration override.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub expires_after: Omittable<ChatKitExpiresAfterRequest>,
@@ -879,7 +879,7 @@ pub struct ChatKitThread {
     /// Current thread status.
     pub status: ChatKitThreadStatus,
     /// Owning end user.
-    pub user: ChatKitUserId,
+    pub user: String,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }

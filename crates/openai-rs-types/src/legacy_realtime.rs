@@ -4,18 +4,16 @@
 //! do not alias the GA nested `audio` session types. Only leaf values whose
 //! JSON representation is identical are shared with [`crate::realtime`].
 
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
 use crate::{
     ExtraFields, ModelId, Nullable, Omittable, WireSecret, open_string_enum,
     realtime::{
-        RealtimeAudioTranscription, RealtimeClientSecretExpirationAnchor, RealtimeFunctionTool,
-        RealtimeNoiseReduction, RealtimeOutputModality, RealtimeTracing, RealtimeTruncation,
-        RealtimeTurnDetection, RealtimeVoice,
+        RealtimeAudioTranscription, RealtimeClientSecretExpirationAnchor, RealtimeNoiseReduction,
+        RealtimeOutputModality, RealtimeTracing, RealtimeTruncation, RealtimeVadEagerness,
     },
-    responses::PromptReference,
 };
 
 open_string_enum! {
@@ -47,6 +45,248 @@ open_string_enum! {
     /// Object discriminator returned for a legacy transcription session.
     pub enum LegacyRealtimeTranscriptionSessionObjectType {
         TranscriptionSession = "realtime.transcription_session",
+    }
+}
+
+open_string_enum! {
+    /// Optional discriminator in the permissive legacy VAD object.
+    pub enum LegacyRealtimeTurnDetectionType {
+        ServerVad = "server_vad",
+        SemanticVad = "semantic_vad",
+    }
+}
+
+open_string_enum! {
+    /// Built-in voice names accepted by the legacy flat session shape.
+    pub enum LegacyRealtimeVoiceName {
+        Alloy = "alloy",
+        Ash = "ash",
+        Ballad = "ballad",
+        Coral = "coral",
+        Echo = "echo",
+        Sage = "sage",
+        Shimmer = "shimmer",
+        Verse = "verse",
+        Marin = "marin",
+        Cedar = "cedar",
+    }
+}
+
+open_string_enum! {
+    /// Optional function-tool discriminator in the legacy schema.
+    pub enum LegacyRealtimeFunctionToolType {
+        Function = "function",
+    }
+}
+
+/// Strict custom-voice reference accepted by the pinned legacy schema.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyRealtimeCustomVoice {
+    id: String,
+}
+
+impl LegacyRealtimeCustomVoice {
+    /// Creates a custom-voice reference.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self { id: id.into() }
+    }
+
+    /// Returns the custom voice id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// Built-in or custom voice in the historical flat field.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum LegacyRealtimeVoice {
+    /// A built-in or future string voice name.
+    BuiltIn(LegacyRealtimeVoiceName),
+    /// A strict `{ "id": ... }` custom voice reference.
+    Custom(LegacyRealtimeCustomVoice),
+}
+
+impl From<LegacyRealtimeVoiceName> for LegacyRealtimeVoice {
+    fn from(value: LegacyRealtimeVoiceName) -> Self {
+        Self::BuiltIn(value)
+    }
+}
+
+impl From<LegacyRealtimeCustomVoice> for LegacyRealtimeVoice {
+    fn from(value: LegacyRealtimeCustomVoice) -> Self {
+        Self::Custom(value)
+    }
+}
+
+/// Permissive legacy VAD object whose discriminator is optional.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LegacyRealtimeTurnDetection {
+    #[serde(
+        rename = "type",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    kind: Omittable<LegacyRealtimeTurnDetectionType>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    threshold: Omittable<f64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prefix_padding_ms: Omittable<i64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    silence_duration_ms: Omittable<i64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    create_response: Omittable<bool>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    interrupt_response: Omittable<bool>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    eagerness: Omittable<RealtimeVadEagerness>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl LegacyRealtimeTurnDetection {
+    /// Creates a server-VAD object.
+    #[must_use]
+    pub fn server_vad() -> Self {
+        Self {
+            kind: Omittable::Value(LegacyRealtimeTurnDetectionType::ServerVad),
+            ..Self::default()
+        }
+    }
+
+    /// Creates a semantic-VAD object.
+    #[must_use]
+    pub fn semantic_vad() -> Self {
+        Self {
+            kind: Omittable::Value(LegacyRealtimeTurnDetectionType::SemanticVad),
+            ..Self::default()
+        }
+    }
+
+    /// Sets the activation threshold.
+    #[must_use]
+    pub fn with_threshold(mut self, threshold: f64) -> Self {
+        self.threshold = Omittable::Value(threshold);
+        self
+    }
+
+    /// Sets prefix padding in milliseconds.
+    #[must_use]
+    pub fn with_prefix_padding_ms(mut self, milliseconds: i64) -> Self {
+        self.prefix_padding_ms = Omittable::Value(milliseconds);
+        self
+    }
+
+    /// Sets silence duration in milliseconds.
+    #[must_use]
+    pub fn with_silence_duration_ms(mut self, milliseconds: i64) -> Self {
+        self.silence_duration_ms = Omittable::Value(milliseconds);
+        self
+    }
+
+    /// Returns future fields retained from a response.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Legacy function-tool object; every pinned property is optional.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LegacyRealtimeFunctionTool {
+    #[serde(
+        rename = "type",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    kind: Omittable<LegacyRealtimeFunctionToolType>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    name: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    description: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    parameters: Omittable<serde_json::Value>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl LegacyRealtimeFunctionTool {
+    /// Creates a named function tool with the historical optional shape.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            kind: Omittable::Value(LegacyRealtimeFunctionToolType::Function),
+            name: Omittable::Value(name.into()),
+            ..Self::default()
+        }
+    }
+
+    /// Sets a description.
+    #[must_use]
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Omittable::Value(description.into());
+        self
+    }
+
+    /// Sets a JSON Schema object.
+    #[must_use]
+    pub fn with_parameters(mut self, parameters: serde_json::Value) -> Self {
+        self.parameters = Omittable::Value(parameters);
+        self
+    }
+
+    /// Returns future fields retained from a response.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Legacy prompt reference preserving nullable version and variables.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LegacyRealtimePromptReference {
+    id: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    version: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    variables: Omittable<Nullable<BTreeMap<String, serde_json::Value>>>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl LegacyRealtimePromptReference {
+    /// Creates a prompt reference.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            version: Omittable::Omitted,
+            variables: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Pins a prompt version.
+    #[must_use]
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.version = Omittable::Value(Nullable::Value(version.into()));
+        self
+    }
+
+    /// Sends an explicit null version.
+    #[must_use]
+    pub fn with_version_null(mut self) -> Self {
+        self.version = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Returns future fields retained from a response.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -329,7 +569,7 @@ pub struct LegacyRealtimeSessionCreateRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     instructions: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    voice: Omittable<RealtimeVoice>,
+    voice: Omittable<LegacyRealtimeVoice>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input_audio_format: Omittable<LegacyRealtimeAudioFormat>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -343,9 +583,9 @@ pub struct LegacyRealtimeSessionCreateRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     tracing: Omittable<Nullable<RealtimeTracing>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    turn_detection: Omittable<Nullable<RealtimeTurnDetection>>,
+    turn_detection: Omittable<Nullable<LegacyRealtimeTurnDetection>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    tools: Omittable<Vec<RealtimeFunctionTool>>,
+    tools: Omittable<Vec<LegacyRealtimeFunctionTool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     tool_choice: Omittable<LegacyRealtimeToolChoice>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -355,7 +595,7 @@ pub struct LegacyRealtimeSessionCreateRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     truncation: Omittable<RealtimeTruncation>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    prompt: Omittable<Nullable<PromptReference>>,
+    prompt: Omittable<Nullable<LegacyRealtimePromptReference>>,
 }
 
 impl LegacyRealtimeSessionCreateRequest {
@@ -409,7 +649,7 @@ impl LegacyRealtimeSessionCreateRequest {
 
     /// Sets the voice.
     #[must_use]
-    pub fn with_voice(mut self, voice: impl Into<RealtimeVoice>) -> Self {
+    pub fn with_voice(mut self, voice: impl Into<LegacyRealtimeVoice>) -> Self {
         self.voice = Omittable::Value(voice.into());
         self
     }
@@ -465,7 +705,7 @@ impl LegacyRealtimeSessionCreateRequest {
 
     /// Sets turn detection.
     #[must_use]
-    pub fn with_turn_detection(mut self, turn_detection: RealtimeTurnDetection) -> Self {
+    pub fn with_turn_detection(mut self, turn_detection: LegacyRealtimeTurnDetection) -> Self {
         self.turn_detection = Omittable::Value(Nullable::Value(turn_detection));
         self
     }
@@ -479,7 +719,7 @@ impl LegacyRealtimeSessionCreateRequest {
 
     /// Sets available function tools.
     #[must_use]
-    pub fn with_tools(mut self, tools: Vec<RealtimeFunctionTool>) -> Self {
+    pub fn with_tools(mut self, tools: Vec<LegacyRealtimeFunctionTool>) -> Self {
         self.tools = Omittable::Value(tools);
         self
     }
@@ -517,7 +757,7 @@ impl LegacyRealtimeSessionCreateRequest {
 
     /// Sets a prompt reference.
     #[must_use]
-    pub fn with_prompt(mut self, prompt: PromptReference) -> Self {
+    pub fn with_prompt(mut self, prompt: LegacyRealtimePromptReference) -> Self {
         self.prompt = Omittable::Value(Nullable::Value(prompt));
         self
     }
@@ -553,7 +793,7 @@ pub struct LegacyRealtimeTranscriptionSessionCreateRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     modalities: Omittable<Vec<RealtimeOutputModality>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    turn_detection: Omittable<Nullable<RealtimeTurnDetection>>,
+    turn_detection: Omittable<Nullable<LegacyRealtimeTurnDetection>>,
 }
 
 impl LegacyRealtimeTranscriptionSessionCreateRequest {
@@ -622,7 +862,7 @@ impl LegacyRealtimeTranscriptionSessionCreateRequest {
 
     /// Sets turn detection.
     #[must_use]
-    pub fn with_turn_detection(mut self, turn_detection: RealtimeTurnDetection) -> Self {
+    pub fn with_turn_detection(mut self, turn_detection: LegacyRealtimeTurnDetection) -> Self {
         self.turn_detection = Omittable::Value(Nullable::Value(turn_detection));
         self
     }
@@ -689,7 +929,7 @@ pub struct LegacyRealtimeSessionCreateResponse {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     instructions: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    voice: Omittable<RealtimeVoice>,
+    voice: Omittable<LegacyRealtimeVoice>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input_audio_format: Omittable<LegacyRealtimeAudioFormat>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -697,9 +937,9 @@ pub struct LegacyRealtimeSessionCreateResponse {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input_audio_transcription: Omittable<Nullable<RealtimeAudioTranscription>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    turn_detection: Omittable<Nullable<RealtimeTurnDetection>>,
+    turn_detection: Omittable<Nullable<LegacyRealtimeTurnDetection>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    tools: Omittable<Vec<RealtimeFunctionTool>>,
+    tools: Omittable<Vec<LegacyRealtimeFunctionTool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     tool_choice: Omittable<LegacyRealtimeToolChoice>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -713,7 +953,7 @@ pub struct LegacyRealtimeSessionCreateResponse {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     truncation: Omittable<RealtimeTruncation>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    prompt: Omittable<Nullable<PromptReference>>,
+    prompt: Omittable<Nullable<LegacyRealtimePromptReference>>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
@@ -779,7 +1019,7 @@ pub struct LegacyRealtimeTranscriptionSessionCreateResponse {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input_audio_transcription: Omittable<RealtimeAudioTranscription>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    turn_detection: Omittable<Nullable<RealtimeTurnDetection>>,
+    turn_detection: Omittable<Nullable<LegacyRealtimeTurnDetection>>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }

@@ -16,6 +16,8 @@ mod chatkit;
 mod client;
 #[cfg(feature = "legacy-completions")]
 mod completions;
+#[cfg(feature = "legacy-realtime")]
+mod legacy_realtime;
 mod containers;
 mod content_provenance;
 mod conversations;
@@ -68,6 +70,9 @@ pub use chatkit::{
 pub use client::{Client, ClientBuilder, TlsBackend};
 #[cfg(feature = "legacy-completions")]
 pub use completions::{CompletionEventStream, Completions};
+#[cfg(feature = "legacy-realtime")]
+#[allow(deprecated)]
+pub use legacy_realtime::LegacyRealtimeSessions;
 pub use containers::{
     ContainerFileContentStream, ContainerFilePageStream, ContainerFiles, ContainerPageStream,
     Containers,
