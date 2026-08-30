@@ -10,6 +10,8 @@ mod batches;
 mod chat_completions;
 mod chat_stream;
 mod client;
+#[cfg(feature = "legacy-completions")]
+mod completions;
 mod containers;
 mod content_provenance;
 mod conversations;
@@ -51,6 +53,8 @@ pub use chat_completions::{
 };
 pub use chat_stream::ChatCompletionEventStream;
 pub use client::{Client, ClientBuilder, TlsBackend};
+#[cfg(feature = "legacy-completions")]
+pub use completions::{CompletionEventStream, Completions};
 pub use containers::{
     ContainerFileContentStream, ContainerFilePageStream, ContainerFiles, ContainerPageStream,
     Containers,

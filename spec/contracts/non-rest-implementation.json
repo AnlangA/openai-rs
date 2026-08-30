@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "source": {
+    "revision": "690521b1753dce0c6d6b275f583d22537679cff9",
+    "sha256": "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899"
+  },
+  "count": 6,
+  "implementation_statuses": {
+    "verified": 6
+  },
+  "verified_units": 22,
+  "units": [
+    {
+      "id": "codex-app-server",
+      "status": "verified",
+      "milestone": "M4a-codex-app-server",
+      "units": [
+        "CodexAppServerClient",
+        "AppServerClient",
+        "bounded JSONL codec",
+        "typed account/thread/turn protocol"
+      ],
+      "tests": [
+        "openai-rs-codex::app_server::client::tests::fake_child_handshake_correlation_and_unknown_notification",
+        "openai-rs-codex::app_server::client::tests::fake_child_typed_account_thread_and_turn_contracts",
+        "openai-rs-codex::app_server::client::tests::refuses_runtime_hash_mismatch_before_spawn",
+        "openai-rs-codex::app_server::codec::tests::rejects_oversize_line_before_growth"
+      ]
+    },
+    {
+      "id": "codex-direct-responses",
+      "status": "verified",
+      "milestone": "M4a-experimental-codex-direct",
+      "units": [
+        "DirectCodexResponsesClient",
+        "DirectResponseStream",
+        "DirectAuthClient",
+        "TokenManager"
+      ],
+      "tests": [
+        "openai-rs-codex::direct::transport::tests::sealed_transport_sets_headers_and_rejects_redirects",
+        "openai-rs-codex::direct::transport::tests::typed_create_decodes_response",
+        "openai-rs-codex::direct::transport::tests::typed_stream_decodes_sse",
+        "openai-rs-codex::direct::auth::tests::concurrent_expiry_refreshes_once",
+        "openai-rs-codex::direct::auth::tests::device_poll_is_bounded_and_cancellable"
+      ]
+    },
+    {
+      "id": "realtime-websocket",
+      "status": "verified",
+      "milestone": "M8-realtime-client",
+      "units": [
+        "RealtimeWebSocket",
+        "RealtimeWebSocketConfig",
+        "typed RealtimeClientEvent/RealtimeServerEvent"
+      ],
+      "tests": [
+        "openai-rs-client::realtime::tests::websocket_preserves_unknown_events_and_base64_audio"
+      ]
+    },
+    {
+      "id": "responses-websocket",
+      "status": "verified",
+      "milestone": "M3-responses-websocket",
+      "units": [
+        "ResponsesWebSocket",
+        "ResponsesWebSocketConfig",
+        "response.create/inject/close typed frames"
+      ],
+      "tests": [
+        "openai-rs-client::responses_websocket::tests::persistent_connection_sends_and_receives_typed_events",
+        "openai-rs-client::responses_websocket::tests::websocket_url_is_derived_without_raw_input",
+        "openai-rs-client::responses_websocket::tests::websocket_limits_reject_unbounded_or_panicking_config"
+      ]
+    },
+    {
+      "id": "rmcp-tool-bridge",
+      "status": "verified",
+      "milestone": "M5-rmcp-bridge",
+      "units": [
+        "ResponsesToolBridge",
+        "RmcpExecutor",
+        "ToolCatalog",
+        "ExecutionControl",
+        "ToolResultEnvelope"
+      ],
+      "tests": [
+        "openai-rs-rmcp::e2e_tests::in_process_full_typed_round_trip_preserves_all_content_order",
+        "openai-rs-rmcp::e2e_tests::invalid_arguments_never_reach_the_real_server",
+        "openai-rs-rmcp::e2e_tests::timeout_and_cancellation_reach_the_server_request_context",
+        "openai-rs-rmcp::e2e_tests::tool_errors_stay_in_band_while_protocol_and_transport_errors_do_not"
+      ]
+    },
+    {
+      "id": "webhook-receiver",
+      "status": "verified",
+      "milestone": "M6-webhooks",
+      "units": [
+        "WebhookVerifier",
+        "VerifiedWebhook<WebhookEvent>",
+        "WebhookEvent[18]"
+      ],
+      "tests": [
+        "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+        "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+        "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+        "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+      ]
+    }
+  ]
+}

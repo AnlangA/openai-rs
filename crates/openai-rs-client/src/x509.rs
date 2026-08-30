@@ -730,7 +730,7 @@ fn validate_exchange_response(
 ) -> Result<ExchangedToken, X509Error> {
     let response: TokenExchangeResponse =
         serde_json::from_slice(bytes).map_err(|_| X509Error::InvalidExchangeResponse)?;
-    if response.token_type.to_ascii_lowercase() != "bearer"
+    if !response.token_type.eq_ignore_ascii_case("bearer")
         || response.issued_token_type != ACCESS_TOKEN_TYPE
     {
         return Err(X509Error::InvalidTokenType);
@@ -1050,6 +1050,12 @@ mod tests {
             )
             .is_err()
         );
+
+        let structurally_valid_but_fake =
+            X509IdentityPem::new(structural_pem()).expect("structural fake PEM");
+        let builder = X509ClientBuilder::new(structurally_valid_but_fake, "idp_test", "svc_test")
+            .expect("safe selectors");
+        assert!(matches!(builder.build(), Err(X509Error::InvalidIdentity)));
     }
 
     #[test]

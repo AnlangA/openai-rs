@@ -245,3 +245,178 @@ impl Operation for CreateCompletionStream {
         success_statuses: OK,
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        sync::{Arc, Mutex},
+    };
+
+    use bytes::Bytes;
+    use futures_util::StreamExt;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use serde_json::{Value, json};
+    use tokio::{net::TcpListener, sync::oneshot};
+    use url::Url;
+
+    use super::*;
+    use crate::ApiKey;
+
+    #[derive(Debug)]
+    struct CapturedRequest {
+        method: Method,
+        path: String,
+        body: Vec<u8>,
+    }
+
+    async fn serve_once(
+        content_type: &'static str,
+        body: String,
+    ) -> (Client, oneshot::Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback server");
+        let address = listener.local_addr().expect("loopback address");
+        let (sender, receiver) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept request");
+            let sender = Arc::new(Mutex::new(Some(sender)));
+            let service = service_fn(move |request: Request<Incoming>| {
+                let sender = Arc::clone(&sender);
+                let body = body.clone();
+                async move {
+                    let method = request.method().clone();
+                    let path = request.uri().path().to_owned();
+                    let request_body = request
+                        .into_body()
+                        .collect()
+                        .await
+                        .expect("read body")
+                        .to_bytes()
+                        .to_vec();
+                    if let Some(sender) = sender.lock().expect("sender lock").take() {
+                        let _ = sender.send(CapturedRequest {
+                            method,
+                            path,
+                            body: request_body,
+                        });
+                    }
+                    Ok::<_, Infallible>(
+                        hyper::Response::builder()
+                            .status(StatusCode::OK)
+                            .header(header::CONTENT_TYPE, content_type)
+                            .header("x-request-id", "req_legacy")
+                            .body(Full::new(Bytes::from(body)))
+                            .expect("build response"),
+                    )
+                }
+            });
+            http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await
+                .expect("serve request");
+        });
+
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("loopback URL");
+        let key = ApiKey::new("test-placeholder-key").expect("valid key");
+        let client = Client::builder(key)
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(crate::RetryPolicy::disabled())
+            .build()
+            .expect("build client");
+        (client, receiver)
+    }
+
+    fn completion_json(text: &str, finish_reason: Value) -> Value {
+        json!({
+            "id": "cmpl_1",
+            "object": "text_completion",
+            "created": 1,
+            "model": "gpt-3.5-turbo-instruct",
+            "choices": [{
+                "text": text,
+                "index": 0,
+                "logprobs": null,
+                "finish_reason": finish_reason
+            }]
+        })
+    }
+
+    #[test]
+    fn operation_contract_is_one_fixed_legacy_route() {
+        assert_eq!(CreateCompletion::META.method, Method::POST);
+        assert_eq!(CreateCompletion::META.route, "/completions");
+        assert_eq!(CreateCompletion::META.response_mode, ResponseMode::Json);
+        assert_eq!(CreateCompletionStream::META.route, "/completions");
+        assert_eq!(
+            CreateCompletionStream::META.response_mode,
+            ResponseMode::Sse
+        );
+        assert_eq!(CreateCompletionStream::META.success_statuses, OK);
+    }
+
+    #[tokio::test]
+    async fn non_streaming_create_sends_typed_body() {
+        let (client, captured) = serve_once(
+            "application/json",
+            completion_json(" hello", json!("stop")).to_string(),
+        )
+        .await;
+        let response = client
+            .completions()
+            .create(
+                CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "Say hello")
+                    .echo(true)
+                    .suffix("!")
+                    .best_of(2),
+            )
+            .await
+            .expect("create completion");
+        assert_eq!(response.choices()[0].text(), " hello");
+        assert_eq!(response.request_id(), Some("req_legacy"));
+
+        let request = captured.await.expect("captured request");
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(request.path, "/v1/completions");
+        let body: Value = serde_json::from_slice(&request.body).expect("typed body");
+        assert_eq!(body["prompt"], "Say hello");
+        assert_eq!(body["echo"], true);
+        assert_eq!(body["suffix"], "!");
+        assert_eq!(body["best_of"], 2);
+        assert!(body.get("stream").is_none());
+    }
+
+    #[tokio::test]
+    async fn streaming_create_requires_done_and_ignores_later_bytes() {
+        let first = completion_json("This", Value::Null);
+        let ignored = completion_json(" ignored", Value::Null);
+        let body = format!("data: {first}\n\ndata: [DONE]\n\ndata: {ignored}\n\n");
+        let (client, captured) = serve_once("text/event-stream; charset=utf-8", body).await;
+        let mut stream = client
+            .completions()
+            .create_stream(CreateStreamingCompletionRequest::new(
+                "gpt-3.5-turbo-instruct",
+                vec![1212_i64, 318, 257],
+            ))
+            .await
+            .expect("stream handshake");
+        assert_eq!(stream.request_id(), Some("req_legacy"));
+        let chunk = stream
+            .next()
+            .await
+            .expect("one chunk")
+            .expect("typed chunk");
+        assert_eq!(chunk.choices()[0].text(), "This");
+        assert!(stream.next().await.is_none());
+
+        let request = captured.await.expect("captured request");
+        let body: Value = serde_json::from_slice(&request.body).expect("stream body");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["prompt"], json!([1212, 318, 257]));
+    }
+}

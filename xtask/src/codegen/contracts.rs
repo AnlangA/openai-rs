@@ -441,26 +441,37 @@ fn planned_implementation() -> ImplementationStatus {
     }
 }
 
-fn load_implementation_registry(
-    repository_root: &Path,
-) -> Result<BTreeMap<String, ImplementationStatus>> {
+#[derive(Clone, Copy)]
+enum RegistrySection {
+    Operation,
+    Group,
+    NonRest,
+}
+
+fn load_implementation_registry(repository_root: &Path) -> Result<ImplementationRegistry> {
     let path = repository_root.join(IMPLEMENTATION_PATH);
     let input = fs::read_to_string(&path)
         .map_err(|source| Error::io("read implementation registry", &path, source))?;
     let mut schema_version = None;
-    let mut current: Option<BTreeMap<String, String>> = None;
-    let mut entries = Vec::new();
+    let mut current: Option<(RegistrySection, BTreeMap<String, String>)> = None;
+    let mut sections = Vec::new();
 
     for (line_index, raw_line) in input.lines().enumerate() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if line == "[[operations]]" {
+        let section = match line {
+            "[[operations]]" => Some(RegistrySection::Operation),
+            "[[groups]]" => Some(RegistrySection::Group),
+            "[[non_rest]]" => Some(RegistrySection::NonRest),
+            _ => None,
+        };
+        if let Some(section) = section {
             if let Some(entry) = current.take() {
-                entries.push(entry);
+                sections.push(entry);
             }
-            current = Some(BTreeMap::new());
+            current = Some((section, BTreeMap::new()));
             continue;
         }
         let (key, value) = line.split_once('=').ok_or_else(|| {
@@ -472,7 +483,7 @@ fn load_implementation_registry(
         })?;
         let key = key.trim();
         let value = value.trim();
-        if let Some(entry) = current.as_mut() {
+        if let Some((_, entry)) = current.as_mut() {
             if entry.insert(key.to_owned(), value.to_owned()).is_some() {
                 return Err(Error::message(format!(
                     "duplicate implementation key `{key}` in {}",
@@ -494,7 +505,7 @@ fn load_implementation_registry(
         }
     }
     if let Some(entry) = current {
-        entries.push(entry);
+        sections.push(entry);
     }
     if schema_version != Some(1) {
         return Err(Error::message(format!(
@@ -503,42 +514,123 @@ fn load_implementation_registry(
         )));
     }
 
-    let mut registry = BTreeMap::new();
-    for mut entry in entries {
-        let operation_id = take_registry_string(&mut entry, "operation_id", &path)?;
-        let status = take_registry_string(&mut entry, "status", &path)?;
-        let milestone = take_registry_string(&mut entry, "milestone", &path)?;
-        let units = take_registry_array(&mut entry, "units", &path)?;
-        let tests = take_registry_array(&mut entry, "tests", &path)?;
-        if !matches!(status.as_str(), "planned" | "partial" | "verified") {
-            return Err(Error::message(format!(
-                "implementation status for {operation_id} must be planned, partial, or verified"
-            )));
-        }
-        if milestone.is_empty() || units.is_empty() || tests.is_empty() {
-            return Err(Error::message(format!(
-                "implementation registry entry {operation_id} requires non-empty milestone, units, and tests"
-            )));
-        }
-        if !entry.is_empty() {
-            return Err(Error::message(format!(
-                "unknown implementation keys for {operation_id}: {}",
-                entry.keys().cloned().collect::<Vec<_>>().join(", ")
-            )));
-        }
-        let status = ImplementationStatus {
-            status,
-            milestone,
-            units,
-            tests,
-        };
-        if registry.insert(operation_id.clone(), status).is_some() {
-            return Err(Error::message(format!(
-                "duplicate implementation registry operation `{operation_id}`"
-            )));
+    let mut operations = BTreeMap::new();
+    let mut non_rest = Vec::new();
+    let mut non_rest_ids = BTreeSet::new();
+    for (section, mut entry) in sections {
+        match section {
+            RegistrySection::Operation => {
+                let operation_id = take_registry_string(&mut entry, "operation_id", &path)?;
+                let status = parse_implementation_fields(
+                    &mut entry,
+                    &format!("operation {operation_id}"),
+                    None,
+                    &path,
+                )?;
+                insert_operation(&mut operations, operation_id, status)?;
+            }
+            RegistrySection::Group => {
+                let name = take_registry_string(&mut entry, "name", &path)?;
+                let operation_ids = take_registry_array(&mut entry, "operation_ids", &path)?;
+                if operation_ids.is_empty() {
+                    return Err(Error::message(format!(
+                        "implementation group `{name}` must list at least one operation id"
+                    )));
+                }
+                let status = parse_implementation_fields(
+                    &mut entry,
+                    &format!("group {name}"),
+                    Some(name.clone()),
+                    &path,
+                )?;
+                for operation_id in operation_ids {
+                    let mut expanded = status.clone();
+                    expanded.units = expanded
+                        .units
+                        .iter()
+                        .map(|unit| unit.replace("{operation_id}", &operation_id))
+                        .collect();
+                    insert_operation(&mut operations, operation_id, expanded)?;
+                }
+            }
+            RegistrySection::NonRest => {
+                let id = take_registry_string(&mut entry, "id", &path)?;
+                let status = parse_implementation_fields(
+                    &mut entry,
+                    &format!("non-REST unit {id}"),
+                    None,
+                    &path,
+                )?;
+                if !non_rest_ids.insert(id.clone()) {
+                    return Err(Error::message(format!(
+                        "duplicate non-REST implementation id `{id}`"
+                    )));
+                }
+                non_rest.push(NonRestImplementation {
+                    id,
+                    implementation: status,
+                });
+            }
         }
     }
-    Ok(registry)
+    non_rest.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(ImplementationRegistry {
+        operations,
+        non_rest,
+    })
+}
+
+fn parse_implementation_fields(
+    entry: &mut BTreeMap<String, String>,
+    label: &str,
+    registry_group: Option<String>,
+    path: &Path,
+) -> Result<ImplementationStatus> {
+    let status = take_registry_string(entry, "status", path)?;
+    let milestone = take_registry_string(entry, "milestone", path)?;
+    let units = take_registry_array(entry, "units", path)?;
+    let tests = take_registry_array(entry, "tests", path)?;
+    if !matches!(status.as_str(), "planned" | "partial" | "verified") {
+        return Err(Error::message(format!(
+            "implementation status for {label} must be planned, partial, or verified"
+        )));
+    }
+    if milestone.is_empty() || units.is_empty() || tests.is_empty() {
+        return Err(Error::message(format!(
+            "implementation registry {label} requires non-empty milestone, units, and tests"
+        )));
+    }
+    if !entry.is_empty() {
+        return Err(Error::message(format!(
+            "unknown implementation keys for {label}: {}",
+            entry.keys().cloned().collect::<Vec<_>>().join(", ")
+        )));
+    }
+    Ok(ImplementationStatus {
+        status,
+        milestone,
+        units,
+        tests,
+        registry_group,
+    })
+}
+
+fn insert_operation(
+    registry: &mut BTreeMap<String, ImplementationStatus>,
+    operation_id: String,
+    status: ImplementationStatus,
+) -> Result<()> {
+    if operation_id.is_empty() {
+        return Err(Error::message(
+            "implementation registry operation id must not be empty",
+        ));
+    }
+    if registry.insert(operation_id.clone(), status).is_some() {
+        return Err(Error::message(format!(
+            "duplicate implementation registry operation `{operation_id}`"
+        )));
+    }
+    Ok(())
 }
 
 fn take_registry_string(
@@ -754,8 +846,11 @@ fn initial_feature(path: &str, webhook: bool, lifecycle: &str) -> &'static str {
     } else if path == "/organization"
         || path.starts_with("/organization/")
         || path.starts_with("/projects/")
+        || (path.starts_with("/fine_tuning/checkpoints/") && path.contains("/permissions"))
     {
         "admin"
+    } else if path.starts_with("/fine_tuning/alpha/") {
+        "alpha"
     } else if path.starts_with("/realtime") {
         "realtime"
     } else {

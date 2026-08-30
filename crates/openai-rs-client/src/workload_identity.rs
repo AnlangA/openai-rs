@@ -311,6 +311,7 @@ struct CachedToken {
 struct RefreshInFlight {
     id: u64,
     generation: u64,
+    token_generation: u64,
 }
 
 #[derive(Default)]
@@ -318,6 +319,7 @@ struct TokenState {
     cached: Option<CachedToken>,
     generation: u64,
     next_refresh_id: u64,
+    next_token_generation: u64,
     refreshing: Option<RefreshInFlight>,
     completed_failure: Option<(u64, Arc<WorkloadIdentityError>)>,
 }
@@ -336,6 +338,11 @@ impl WorkloadIdentityAuth {
         connect_timeout: Duration,
         request_timeout: Duration,
     ) -> Result<Arc<Self>, Error> {
+        if config.exchange_url().starts_with("https://") && tls_backend.is_none() {
+            return Err(Error::InvalidConfiguration(
+                "workload token exchange requires a compiled TLS backend".into(),
+            ));
+        }
         let http = reqwest::Client::builder()
             .connect_timeout(connect_timeout)
             .timeout(request_timeout)
@@ -369,7 +376,7 @@ impl WorkloadIdentityAuth {
                     let refresh = begin_refresh(&mut state);
                     let auth = Arc::clone(self);
                     tokio::spawn(async move {
-                        let result = auth.exchange(refresh.generation).await;
+                        let result = auth.exchange(refresh.token_generation).await;
                         auth.finish_refresh(refresh, result).await;
                     });
                 }
@@ -395,7 +402,7 @@ impl WorkloadIdentityAuth {
 
             let refresh = begin_refresh(&mut state);
             drop(state);
-            let result = self.exchange(refresh.generation).await;
+            let result = self.exchange(refresh.token_generation).await;
             let caller_result = result.clone();
             self.finish_refresh(refresh, result).await;
             return match caller_result {
@@ -407,15 +414,16 @@ impl WorkloadIdentityAuth {
 
     pub(crate) async fn invalidate_if_generation(&self, generation: u64) -> bool {
         let mut state = self.state.lock().await;
-        if state.generation != generation {
+        if state.cached.as_ref().map(|token| token.generation) != Some(generation) {
             return false;
         }
+        let invalidated_epoch = state.generation;
         state.generation = state.generation.wrapping_add(1);
         state.cached = None;
         if state
             .refreshing
             .as_ref()
-            .is_some_and(|refresh| refresh.generation == generation)
+            .is_some_and(|refresh| refresh.generation == invalidated_epoch)
         {
             state.refreshing = None;
         }
@@ -449,7 +457,10 @@ impl WorkloadIdentityAuth {
         self.notify.notify_waiters();
     }
 
-    async fn exchange(&self, generation: u64) -> Result<CachedToken, Arc<WorkloadIdentityError>> {
+    async fn exchange(
+        &self,
+        token_generation: u64,
+    ) -> Result<CachedToken, Arc<WorkloadIdentityError>> {
         let subject = self
             .config
             .provider
@@ -530,20 +541,23 @@ impl WorkloadIdentityAuth {
             token: SecretString::from(token),
             expires_at,
             refresh_at,
-            generation,
+            generation: token_generation,
         })
     }
 }
 
 fn begin_refresh(state: &mut TokenState) -> RefreshInFlight {
     state.next_refresh_id = state.next_refresh_id.wrapping_add(1);
+    state.next_token_generation = state.next_token_generation.wrapping_add(1);
     let refresh = RefreshInFlight {
         id: state.next_refresh_id,
         generation: state.generation,
+        token_generation: state.next_token_generation,
     };
     state.refreshing = Some(RefreshInFlight {
         id: refresh.id,
         generation: refresh.generation,
+        token_generation: refresh.token_generation,
     });
     state.completed_failure = None;
     refresh
@@ -867,8 +881,11 @@ mod tests {
                 Err(SubjectTokenProviderError::new())
             }
         });
-        let config =
-            WorkloadIdentityConfig::new("idp_test", "svc_test", provider).expect("workload config");
+        let config = WorkloadIdentityConfig::new("idp_test", "svc_test", provider)
+            .expect("workload config")
+            .with_token_exchange_url(
+                Url::parse("http://127.0.0.1:9/oauth/token").expect("unused test exchange URL"),
+            );
         let auth =
             WorkloadIdentityAuth::new(config, None, Duration::from_secs(1), Duration::from_secs(1))
                 .expect("workload auth");
@@ -1053,6 +1070,14 @@ mod tests {
         }
         assert!(saw_refreshed);
         assert_eq!(exchanges.load(Ordering::SeqCst), 2);
+        assert!(
+            !auth
+                .invalidate_if_generation(first.generation.expect("old token generation"))
+                .await,
+            "a late 401 for the stale token must not evict its proactive replacement"
+        );
+        let retained = auth.token().await.expect("retained refreshed token");
+        assert_eq!(retained.header.to_str().ok(), Some("Bearer access_two"));
     }
 
     #[tokio::test]

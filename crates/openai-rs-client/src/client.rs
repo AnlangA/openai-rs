@@ -5,6 +5,8 @@ use url::{Host, Url};
 
 #[cfg(feature = "realtime")]
 use crate::Realtime;
+#[cfg(feature = "legacy-completions")]
+use crate::Completions;
 use crate::{
     ApiKey, Audio, Batches, ChatCompletions, Containers, ContentProvenanceChecks, Conversations,
     Embeddings, Error, Evals, Files, FineTuning, Images, Models, Moderations, Responses,
@@ -74,6 +76,13 @@ impl Client {
     #[must_use]
     pub fn responses(&self) -> Responses {
         Responses::new(self.clone())
+    }
+
+    /// Returns the legacy Completions resource facade.
+    #[cfg(feature = "legacy-completions")]
+    #[must_use]
+    pub fn completions(&self) -> Completions {
+        Completions::new(self.clone())
     }
 
     /// Returns the GA Realtime API facade.

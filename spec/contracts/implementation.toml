@@ -26,17 +26,17 @@ tests = ["openai-rs-client::responses::tests::delete_encodes_id_as_one_segment_a
 
 [[operations]]
 operation_id = "cancelResponse"
-status = "verified"
+status = "partial"
 milestone = "M1-responses-client"
 units = ["CancelResponse"]
-tests = ["openai-rs-client::responses contract and loopback suite"]
+tests = ["pending: direct cancelResponse loopback contract test"]
 
 [[operations]]
 operation_id = "Compactconversation"
-status = "verified"
+status = "partial"
 milestone = "M1-responses-client"
 units = ["CompactResponse"]
-tests = ["openai-rs-client::responses contract and loopback suite"]
+tests = ["pending: direct Compactconversation loopback contract test"]
 
 [[operations]]
 operation_id = "listInputItems"
@@ -68,10 +68,10 @@ tests = ["openai-rs-client::core_resources::tests::models_retrieve_percent_encod
 
 [[operations]]
 operation_id = "deleteModel"
-status = "verified"
+status = "partial"
 milestone = "M1-core-resources"
 units = ["DeleteModel"]
-tests = ["openai-rs-client::core_resources operation metadata suite"]
+tests = ["pending: direct deleteModel loopback contract test"]
 
 [[operations]]
 operation_id = "createEmbedding"
@@ -103,17 +103,17 @@ tests = ["openai-rs-client::files::tests::list_files_encodes_typed_query_and_pla
 
 [[operations]]
 operation_id = "retrieveFile"
-status = "verified"
+status = "partial"
 milestone = "M5-files-client"
 units = ["RetrieveFile"]
-tests = ["openai-rs-client Files route manifest test", "openai-rs-types::files::tests::file_object_preserves_unknown_enums_and_extra_fields"]
+tests = ["openai-rs-types::files::tests::file_object_preserves_unknown_enums_and_extra_fields", "pending: direct retrieveFile client route test"]
 
 [[operations]]
 operation_id = "deleteFile"
-status = "verified"
+status = "partial"
 milestone = "M5-files-client"
 units = ["DeleteFile"]
-tests = ["openai-rs-client Files route manifest test", "openai-rs-types::files::tests::list_page_and_delete_response_keep_future_fields"]
+tests = ["openai-rs-types::files::tests::list_page_and_delete_response_keep_future_fields", "pending: direct deleteFile client route test"]
 
 [[operations]]
 operation_id = "downloadFile"
@@ -145,10 +145,10 @@ tests = ["openai-rs-client::files::tests::complete_upload_encodes_id_as_one_segm
 
 [[operations]]
 operation_id = "cancelUpload"
-status = "verified"
+status = "partial"
 milestone = "M5-files-client"
 units = ["CancelUpload"]
-tests = ["openai-rs-client Uploads route manifest test", "openai-rs-types::files::tests::upload_and_part_preserve_unknown_values_and_fields"]
+tests = ["openai-rs-types::files::tests::upload_and_part_preserve_unknown_values_and_fields", "pending: direct cancelUpload client route test"]
 
 [[operations]]
 operation_id = "createChatCompletion"
@@ -166,10 +166,10 @@ tests = ["openai-rs-client::chat_completions::tests::stored_list_encodes_deep_ob
 
 [[operations]]
 operation_id = "getChatCompletion"
-status = "verified"
+status = "partial"
 milestone = "M5-chat-client"
 units = ["GetChatCompletion"]
-tests = ["openai-rs-client stored Chat route manifest test"]
+tests = ["pending: direct getChatCompletion client route test"]
 
 [[operations]]
 operation_id = "updateChatCompletion"
@@ -208,10 +208,10 @@ tests = ["openai-rs-client::batches::tests::list_batches_encodes_cursor_query"]
 
 [[operations]]
 operation_id = "retrieveBatch"
-status = "verified"
+status = "partial"
 milestone = "M6-batches-client"
 units = ["RetrieveBatch"]
-tests = ["openai-rs-client Batch route manifest test"]
+tests = ["pending: direct retrieveBatch client route test"]
 
 [[operations]]
 operation_id = "cancelBatch"
@@ -225,109 +225,228 @@ operation_id = "listVectorStores"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["ListVectorStores", "VectorStorePageStream"]
-tests = ["openai-rs-client::vector_stores::tests::vector_store_crud_list_search_contracts"]
+tests = ["openai-rs-client::vector_stores::tests::store_crud_list_and_search_match_pinned_routes"]
+
+# Groups are explicit reviewed operationId sets. They avoid duplicating shared
+# milestone/test evidence while still expanding to each operation in operations.json.
+
+[[groups]]
+name = "audio-images"
+operation_ids = ["createSpeech", "createTranscription", "createTranslation", "createImage", "createImageEdit"]
+status = "verified"
+milestone = "M7-media-client"
+units = ["Audio::speech", "Audio::speech_stream", "Audio::transcribe", "Audio::transcribe_stream", "Audio::translate", "Images::generate", "Images::generate_stream", "Images::edit_json", "Images::edit_json_stream", "Images::edit_multipart", "Images::edit_multipart_stream"]
+tests = ["openai-rs-client::media::tests::speech_raw_uses_json_request_and_streams_audio", "openai-rs-client::media::tests::speech_sse_decodes_delta_and_terminal_event", "openai-rs-client::media::tests::transcription_multipart_uses_bracket_arrays_and_raw_audio", "openai-rs-client::media::tests::transcription_sse_and_translation_text_are_mode_safe", "openai-rs-client::media::tests::image_json_generation_and_edit_use_typed_bodies", "openai-rs-client::media::tests::multipart_image_edit_uses_image_array_mask_and_partial_sse", "openai-rs-client::media::tests::image_generation_partial_sse_decodes_typed_event"]
+
+[[groups]]
+name = "fine-tuning-stable"
+operation_ids = ["cancelFineTuningJob", "createFineTuningJob", "listFineTuningEvents", "listFineTuningJobCheckpoints", "listPaginatedFineTuningJobs", "pauseFineTuningJob", "resumeFineTuningJob", "retrieveFineTuningJob"]
+status = "verified"
+milestone = "M7-fine-tuning-client"
+units = ["CreateFineTuningJob", "ListFineTuningJobs", "RetrieveFineTuningJob", "CancelFineTuningJob", "PauseFineTuningJob", "ResumeFineTuningJob", "ListFineTuningEvents", "ListFineTuningJobCheckpoints", "FineTuningJobPageStream", "FineTuningJobPoller"]
+tests = ["openai-rs-client::fine_tuning::tests::operation_manifest_matches_pinned_routes_and_excludes_admin_and_alpha", "openai-rs-client::fine_tuning::tests::create_job_sends_typed_json_and_preserves_response_metadata", "openai-rs-client::fine_tuning::tests::jobs_list_encodes_deep_object_metadata_and_cursor", "openai-rs-client::fine_tuning::tests::lifecycle_methods_encode_one_id_segment_and_no_body", "openai-rs-client::fine_tuning::tests::events_and_checkpoints_encode_typed_queries", "openai-rs-client::fine_tuning::tests::polling_is_bounded_cancellable_and_stops_on_terminal_status", "openai-rs-client::fine_tuning::tests::repeated_job_cursor_fails_closed"]
+
+[[groups]]
+name = "evals-stable"
+operation_ids = ["listEvals", "createEval", "getEval", "updateEval", "deleteEval", "getEvalRuns", "createEvalRun", "getEvalRun", "deleteEvalRun", "cancelEvalRun", "getEvalRunOutputItems", "getEvalRunOutputItem"]
+status = "verified"
+milestone = "M7-evals-client"
+units = ["ListEvals", "CreateEval", "RetrieveEval", "UpdateEval", "DeleteEval", "ListEvalRuns", "CreateEvalRun", "RetrieveEvalRun", "DeleteEvalRun", "CancelEvalRun", "ListEvalRunOutputItems", "RetrieveEvalRunOutputItem", "EvalPageStream", "EvalRunPoller"]
+tests = ["openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints", "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201", "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query", "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status", "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error", "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments", "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"]
+
+[[groups]]
+name = "conversations-items"
+operation_ids = ["createConversation", "createConversationItems", "deleteConversation", "deleteConversationItem", "getConversation", "getConversationItem", "listConversationItems", "updateConversation"]
+status = "verified"
+milestone = "M7-conversations-client"
+units = ["CreateConversation", "RetrieveConversation", "UpdateConversation", "DeleteConversation", "CreateConversationItems", "RetrieveConversationItem", "DeleteConversationItem", "ListConversationItems", "ConversationItemPageStream"]
+tests = ["openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible", "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor", "openai-rs-client::conversations::tests::rate_limit_errors_remain_typed_and_bounded", "openai-rs-client::conversations::tests::operation_metadata_matches_the_pinned_contract", "openai-rs-client::conversations::tests::item_fixture_uses_the_general_message_role_union"]
+
+[[groups]]
+name = "containers-files"
+operation_ids = ["CreateContainer", "ListContainers", "RetrieveContainer", "DeleteContainer", "CreateContainerFile", "ListContainerFiles", "RetrieveContainerFile", "DeleteContainerFile", "RetrieveContainerFileContent"]
+status = "verified"
+milestone = "M7-containers-client"
+units = ["CreateContainer", "ListContainers", "RetrieveContainer", "DeleteContainer", "CreateContainerFile", "CreateContainerFileUpload", "ListContainerFiles", "RetrieveContainerFile", "DeleteContainerFile", "RetrieveContainerFileContent"]
+tests = ["openai-rs-client::containers::tests::container_create_sends_typed_json_and_auth", "openai-rs-client::containers::tests::container_list_retrieve_and_delete_use_typed_routes", "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor", "openai-rs-client::containers::tests::container_file_attach_list_retrieve_and_delete_match_contract", "openai-rs-client::containers::tests::container_file_upload_reuses_replayable_multipart_transport", "openai-rs-client::containers::tests::container_file_content_streams_and_collects_with_a_bound"]
+
+[[groups]]
+name = "skills-versions"
+operation_ids = ["CreateSkill", "CreateSkillVersion", "DeleteSkill", "DeleteSkillVersion", "GetSkill", "GetSkillContent", "GetSkillVersion", "GetSkillVersionContent", "ListSkillVersions", "ListSkills", "UpdateSkillDefaultVersion"]
+status = "verified"
+milestone = "M7-skills-client"
+units = ["CreateSkill", "ListSkills", "GetSkill", "GetSkillContent", "UpdateSkillDefaultVersion", "DeleteSkill", "CreateSkillVersion", "ListSkillVersions", "GetSkillVersion", "GetSkillVersionContent", "DeleteSkillVersion", "SkillPageStream"]
+tests = ["openai-rs-client::skills::tests::directory_paths_reject_traversal_header_and_platform_ambiguity", "openai-rs-client::skills::tests::create_skill_sends_single_zip_multipart", "openai-rs-client::skills::tests::directory_upload_preserves_nested_relative_filename_on_wire", "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes", "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query", "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract", "openai-rs-client::skills::tests::skill_and_version_content_stream_and_bound_collection"]
+
+[[groups]]
+name = "content-provenance"
+operation_ids = ["Createcontentprovenancecheck"]
+status = "verified"
+milestone = "M7-content-provenance-client"
+units = ["ContentProvenanceChecks::create", "ContentProvenanceCheckRequest"]
+tests = ["openai-rs-client::content_provenance::tests::create_uses_one_fixed_multipart_file_field_and_typed_response", "openai-rs-client::content_provenance::tests::multipart_api_errors_keep_status_code_and_request_id", "openai-rs-client::content_provenance::tests::request_debug_does_not_expose_file_bytes_or_paths"]
+
+[[groups]]
+name = "realtime-http-sip"
+operation_ids = ["create-realtime-client-secret", "create-realtime-call", "accept-realtime-call", "reject-realtime-call", "hangup-realtime-call", "refer-realtime-call"]
+status = "verified"
+milestone = "M8-realtime-client"
+units = ["CreateClientSecret", "CreateCall", "AcceptCall", "RejectCall", "RejectCallDefault", "HangupCall", "ReferCall"]
+tests = ["openai-rs-client::realtime::tests::client_secret_route_is_typed_and_secret_debug_is_redacted", "openai-rs-client::realtime::tests::create_call_sends_multipart_and_returns_sdp_location", "openai-rs-client::realtime::tests::sip_actions_use_typed_routes_and_never_need_response_json"]
+
+[[groups]]
+name = "administration-119"
+operation_ids = ["CreateanAPIkeyforaserviceaccount", "Deleteorganizationspendlimit", "Deleteprojectspendlimit", "Getorganizationspendlimit", "Getprojectspendlimit", "Updateorganizationspendlimit", "Updateprojectspendlimit", "activateOrganizationCertificates", "activateProjectCertificates", "add-group-user", "add-project-group", "admin-api-keys-create", "admin-api-keys-delete", "admin-api-keys-get", "admin-api-keys-list", "archive-project", "assign-group-role", "assign-project-group-role", "assign-project-user-role", "assign-user-role", "create-group", "create-organization-spend-alert", "create-project", "create-project-role", "create-project-service-account", "create-project-spend-alert", "create-project-user", "create-role", "deactivateOrganizationCertificates", "deactivateProjectCertificates", "delete-group", "delete-invite", "delete-organization-spend-alert", "delete-project-api-key", "delete-project-model-permissions", "delete-project-role", "delete-project-service-account", "delete-project-spend-alert", "delete-project-user", "delete-role", "delete-user", "deleteCertificate", "getCertificate", "inviteUser", "list-audit-logs", "list-group-role-assignments", "list-group-users", "list-groups", "list-invites", "list-organization-spend-alerts", "list-project-api-keys", "list-project-group-role-assignments", "list-project-groups", "list-project-rate-limits", "list-project-roles", "list-project-service-accounts", "list-project-spend-alerts", "list-project-user-role-assignments", "list-project-users", "list-projects", "list-roles", "list-user-role-assignments", "list-users", "listOrganizationCertificates", "listProjectCertificates", "modify-project", "modify-project-user", "modify-user", "modifyCertificate", "remove-group-user", "remove-project-group", "retrieve-group", "retrieve-group-role", "retrieve-group-user", "retrieve-invite", "retrieve-organization-data-retention", "retrieve-organization-spend-alert", "retrieve-project", "retrieve-project-api-key", "retrieve-project-data-retention", "retrieve-project-group", "retrieve-project-group-role", "retrieve-project-hosted-tool-permissions", "retrieve-project-model-permissions", "retrieve-project-role", "retrieve-project-service-account", "retrieve-project-spend-alert", "retrieve-project-user", "retrieve-project-user-role", "retrieve-role", "retrieve-user", "retrieve-user-role", "unassign-group-role", "unassign-project-group-role", "unassign-project-user-role", "unassign-user-role", "update-group", "update-organization-data-retention", "update-organization-spend-alert", "update-project-data-retention", "update-project-hosted-tool-permissions", "update-project-model-permissions", "update-project-rate-limits", "update-project-role", "update-project-service-account", "update-project-spend-alert", "update-role", "uploadCertificate", "usage-audio-speeches", "usage-audio-transcriptions", "usage-code-interpreter-sessions", "usage-completions", "usage-costs", "usage-embeddings", "usage-file-search-calls", "usage-images", "usage-moderations", "usage-vector-stores", "usage-web-search-calls"]
+status = "partial"
+milestone = "M9-admin-client"
+units = ["AdminOperation::{operation_id}", "AdminRequest<O>", "ADMIN_OPERATION_MANIFEST[119]"]
+tests = ["openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker", "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth", "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted", "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects", "pending: per-operation method/path/status/DTO manifest zero-diff before verified"]
+
+# Non-REST capabilities are intentionally separate from OpenAPI path operations.
+
+[[non_rest]]
+id = "responses-websocket"
+status = "verified"
+milestone = "M3-responses-websocket"
+units = ["ResponsesWebSocket", "ResponsesWebSocketConfig", "response.create typed client frame", "typed server-event codec"]
+tests = ["openai-rs-client::responses_websocket::tests::persistent_connection_sends_and_receives_typed_events", "openai-rs-client::responses_websocket::tests::websocket_url_is_derived_without_raw_input", "openai-rs-client::responses_websocket::tests::websocket_limits_reject_unbounded_or_panicking_config"]
+
+[[non_rest]]
+id = "realtime-websocket"
+status = "verified"
+milestone = "M8-realtime-client"
+units = ["RealtimeWebSocket", "RealtimeWebSocketConfig", "typed RealtimeClientEvent/RealtimeServerEvent"]
+tests = ["openai-rs-client::realtime::tests::websocket_preserves_unknown_events_and_base64_audio"]
+
+[[non_rest]]
+id = "codex-app-server"
+status = "verified"
+milestone = "M4a-codex-app-server"
+units = ["CodexAppServerClient", "AppServerClient", "bounded JSONL codec", "typed account/thread/turn protocol"]
+tests = ["openai-rs-codex::app_server::client::tests::fake_child_handshake_correlation_and_unknown_notification", "openai-rs-codex::app_server::client::tests::fake_child_typed_account_thread_and_turn_contracts", "openai-rs-codex::app_server::client::tests::refuses_runtime_hash_mismatch_before_spawn", "openai-rs-codex::app_server::codec::tests::rejects_oversize_line_before_growth"]
+
+[[non_rest]]
+id = "codex-direct-responses"
+status = "verified"
+milestone = "M4a-experimental-codex-direct"
+units = ["DirectCodexResponsesClient", "DirectResponseStream", "DirectAuthClient", "TokenManager"]
+tests = ["openai-rs-codex::direct::transport::tests::sealed_transport_sets_headers_and_rejects_redirects", "openai-rs-codex::direct::transport::tests::typed_create_decodes_response", "openai-rs-codex::direct::transport::tests::typed_stream_decodes_sse", "openai-rs-codex::direct::auth::tests::concurrent_expiry_refreshes_once", "openai-rs-codex::direct::auth::tests::device_poll_is_bounded_and_cancellable"]
+
+[[non_rest]]
+id = "rmcp-tool-bridge"
+status = "verified"
+milestone = "M5-rmcp-bridge"
+units = ["ResponsesToolBridge", "RmcpExecutor", "ToolCatalog", "ExecutionControl", "ToolResultEnvelope"]
+tests = ["openai-rs-rmcp::e2e_tests::in_process_full_typed_round_trip_preserves_all_content_order", "openai-rs-rmcp::e2e_tests::invalid_arguments_never_reach_the_real_server", "openai-rs-rmcp::e2e_tests::timeout_and_cancellation_reach_the_server_request_context", "openai-rs-rmcp::e2e_tests::tool_errors_stay_in_band_while_protocol_and_transport_errors_do_not"]
+
+[[non_rest]]
+id = "webhook-receiver"
+status = "verified"
+milestone = "M6-webhooks"
+units = ["WebhookVerifier", "VerifiedWebhook<WebhookEvent>", "WebhookEvent[18]"]
+tests = ["openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature", "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists", "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch", "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"]
 
 [[operations]]
 operation_id = "createVectorStore"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["CreateVectorStore"]
-tests = ["openai-rs-client::vector_stores::tests::vector_store_crud_list_search_contracts"]
+tests = ["openai-rs-client::vector_stores::tests::store_crud_list_and_search_match_pinned_routes"]
 
 [[operations]]
 operation_id = "getVectorStore"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["GetVectorStore"]
-tests = ["openai-rs-client Vector Store 16-operation manifest test"]
+tests = ["openai-rs-client::vector_stores::tests::operation_manifest_covers_every_pinned_vector_store_route"]
 
 [[operations]]
 operation_id = "modifyVectorStore"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["ModifyVectorStore"]
-tests = ["openai-rs-client Vector Store 16-operation manifest test"]
+tests = ["openai-rs-client::vector_stores::tests::operation_manifest_covers_every_pinned_vector_store_route"]
 
 [[operations]]
 operation_id = "deleteVectorStore"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["DeleteVectorStore"]
-tests = ["openai-rs-client Vector Store 16-operation manifest test"]
+tests = ["openai-rs-client::vector_stores::tests::operation_manifest_covers_every_pinned_vector_store_route"]
 
 [[operations]]
 operation_id = "createVectorStoreFileBatch"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["CreateVectorStoreFileBatch"]
-tests = ["openai-rs-client::vector_stores::tests::file_batch_routes_and_polling_are_bounded"]
+tests = ["openai-rs-client::vector_stores::tests::file_batch_routes_match_pinned_contract"]
 
 [[operations]]
 operation_id = "getVectorStoreFileBatch"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["GetVectorStoreFileBatch"]
-tests = ["openai-rs-client::vector_stores::tests::file_batch_routes_and_polling_are_bounded"]
+tests = ["openai-rs-client::vector_stores::tests::file_batch_routes_match_pinned_contract"]
 
 [[operations]]
 operation_id = "cancelVectorStoreFileBatch"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["CancelVectorStoreFileBatch"]
-tests = ["openai-rs-client::vector_stores::tests::file_batch_routes_and_polling_are_bounded"]
+tests = ["openai-rs-client::vector_stores::tests::file_batch_routes_match_pinned_contract"]
 
 [[operations]]
 operation_id = "listFilesInVectorStoreBatch"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["ListFilesInVectorStoreBatch"]
-tests = ["openai-rs-client Vector Store 16-operation manifest test"]
+tests = ["openai-rs-client::vector_stores::tests::operation_manifest_covers_every_pinned_vector_store_route"]
 
 [[operations]]
 operation_id = "listVectorStoreFiles"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["ListVectorStoreFiles"]
-tests = ["openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"]
+tests = ["openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"]
 
 [[operations]]
 operation_id = "createVectorStoreFile"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["CreateVectorStoreFile"]
-tests = ["openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"]
+tests = ["openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"]
 
 [[operations]]
 operation_id = "getVectorStoreFile"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["GetVectorStoreFile"]
-tests = ["openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"]
+tests = ["openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"]
 
 [[operations]]
 operation_id = "updateVectorStoreFileAttributes"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["UpdateVectorStoreFileAttributes"]
-tests = ["openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"]
+tests = ["openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"]
 
 [[operations]]
 operation_id = "deleteVectorStoreFile"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["DeleteVectorStoreFile"]
-tests = ["openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"]
+tests = ["openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"]
 
 [[operations]]
 operation_id = "retrieveVectorStoreFileContent"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["RetrieveVectorStoreFileContent"]
-tests = ["openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"]
+tests = ["openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"]
 
 [[operations]]
 operation_id = "searchVectorStore"
 status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["SearchVectorStore"]
-tests = ["openai-rs-client::vector_stores::tests::vector_store_crud_list_search_contracts"]
+tests = ["openai-rs-client::vector_stores::tests::store_crud_list_and_search_match_pinned_routes"]

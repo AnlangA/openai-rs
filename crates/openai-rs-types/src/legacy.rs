@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use thiserror::Error;
 
 use crate::{ExtraFields, Nullable, Omittable, open_string_enum};
@@ -167,19 +167,17 @@ impl CompletionRequestBody {
     }
 }
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
-fn deserialize_false<'de, D>(deserializer: D) -> Result<bool, D::Error>
+fn deserialize_non_streaming_flag<'de, D>(
+    deserializer: D,
+) -> Result<Omittable<Nullable<bool>>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    match bool::deserialize(deserializer)? {
-        false => Ok(false),
-        true => Err(D::Error::custom(
+    match Nullable::<bool>::deserialize(deserializer)? {
+        Nullable::Value(true) => Err(D::Error::custom(
             "CreateCompletionRequest requires stream to be false",
         )),
+        value => Ok(Omittable::Value(value)),
     }
 }
 
@@ -204,10 +202,10 @@ pub struct CreateCompletionRequest {
     best_of: Omittable<Nullable<u8>>,
     #[serde(
         default,
-        skip_serializing_if = "is_false",
-        deserialize_with = "deserialize_false"
+        skip_serializing_if = "Omittable::is_omitted",
+        deserialize_with = "deserialize_non_streaming_flag"
     )]
-    stream: bool,
+    stream: Omittable<Nullable<bool>>,
 }
 
 /// Streaming legacy completion body.
@@ -340,7 +338,7 @@ impl CreateCompletionRequest {
         Self {
             body: CompletionRequestBody::new(model, prompt),
             best_of: Omittable::Omitted,
-            stream: false,
+            stream: Omittable::Omitted,
         }
     }
 
@@ -400,7 +398,7 @@ impl CreateStreamingCompletionRequest {
         CreateCompletionRequest {
             body: self.body,
             best_of: Omittable::Omitted,
-            stream: false,
+            stream: Omittable::Omitted,
         }
     }
 }
@@ -672,7 +670,8 @@ mod tests {
             "model": "m",
             "prompt": null,
             "echo": null,
-            "suffix": null
+            "suffix": null,
+            "stream": null
         });
         let request: CreateCompletionRequest =
             serde_json::from_value(fixture.clone()).expect("decode explicit nulls");

@@ -3,6 +3,9 @@
 pub use openai_rs_types as types;
 pub use openai_rs_types::responses;
 
+#[cfg(feature = "legacy-completions")]
+pub use openai_rs_types::legacy;
+
 #[cfg(feature = "structured-output")]
 pub use openai_rs_types::{StructuredError, StructuredOutput, TypedFunction};
 
@@ -36,6 +39,9 @@ pub use openai_rs_client::{
     X509Client, X509ClientBuilder, X509Error, X509IdentityPem, X509Models, X509OAuthCode,
     X509Region, X509Responses,
 };
+
+#[cfg(all(feature = "client", feature = "legacy-completions"))]
+pub use openai_rs_client::{CompletionEventStream, Completions};
 
 #[cfg(all(feature = "client", feature = "realtime"))]
 pub use openai_rs_client::{
