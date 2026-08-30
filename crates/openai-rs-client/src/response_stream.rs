@@ -11,7 +11,8 @@ use openai_rs_types::responses::ResponseStreamEvent;
 
 use crate::{
     BodyPreview, Error, ResponseMeta, StreamError,
-    sse::{SseDispatch, SseEndpointPolicy, SseFrame, SseStreamDecoder, SseStreamState},
+    sse::{SseDispatch, SseEndpointPolicy, SseFrame, SseLimits, SseStreamDecoder, SseStreamState},
+    transport::deserialize_json,
 };
 
 type EventStream = Pin<Box<dyn Stream<Item = Result<ResponseStreamEvent, Error>> + Send + 'static>>;
@@ -23,7 +24,10 @@ pub struct ResponseEventStream {
 }
 
 impl ResponseEventStream {
-    pub(crate) fn from_response(response: reqwest::Response) -> Result<Self, Error> {
+    pub(crate) fn from_response(
+        response: reqwest::Response,
+        limits: SseLimits,
+    ) -> Result<Self, Error> {
         let meta = ResponseMeta::from_headers(response.status(), response.headers());
         let content_type = response
             .headers()
@@ -46,8 +50,7 @@ impl ResponseEventStream {
         let stream_meta = meta.clone();
         let inner = async_stream::stream! {
             let mut chunks = Box::pin(response.bytes_stream());
-            let mut decoder =
-                SseStreamDecoder::with_default_limits(SseEndpointPolicy::responses());
+            let mut decoder = SseStreamDecoder::new(limits, SseEndpointPolicy::responses());
 
             while let Some(chunk) = chunks.next().await {
                 let chunk = match chunk {
@@ -175,13 +178,15 @@ fn decode_event(frame: &SseFrame, meta: &ResponseMeta) -> Result<ResponseStreamE
             body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
         });
     }
-    let value =
-        serde_json::from_str::<serde_json::Value>(&frame.data).map_err(|source| Error::Decode {
-            source,
+    let value = deserialize_json::<serde_json::Value>(frame.data.as_bytes()).map_err(|error| {
+        Error::Decode {
+            source: error.source,
+            path: error.path,
             meta_status: StatusCode::OK,
             request_id: meta.request_id().map(Box::<str>::from),
             body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
-        })?;
+        }
+    })?;
     if value.get("type").and_then(serde_json::Value::as_str) != frame.event.as_deref() {
         return Err(Error::StreamProtocol {
             message: "the SSE event field and JSON type discriminator differ",
@@ -189,8 +194,9 @@ fn decode_event(frame: &SseFrame, meta: &ResponseMeta) -> Result<ResponseStreamE
             body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
         });
     }
-    serde_json::from_value(value).map_err(|source| Error::Decode {
-        source,
+    deserialize_json(frame.data.as_bytes()).map_err(|error| Error::Decode {
+        source: error.source,
+        path: error.path,
         meta_status: StatusCode::OK,
         request_id: meta.request_id().map(Box::<str>::from),
         body: BodyPreview::from_bytes(frame.data.as_bytes(), false),

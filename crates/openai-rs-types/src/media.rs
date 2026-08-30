@@ -174,6 +174,52 @@ bounded_u8! {
     ImageCompression, "output_compression", 0, 100
 }
 
+/// Speech playback speed constrained to the API's `0.25..=4.0` range.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct SpeechSpeed(f64);
+
+impl SpeechSpeed {
+    /// Validate and construct a speech speed.
+    pub fn new(value: f64) -> Result<Self, SpeechSpeedError> {
+        if value.is_finite() && (0.25..=4.0).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(SpeechSpeedError { actual: value })
+        }
+    }
+
+    /// Return the validated multiplier.
+    #[must_use]
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for SpeechSpeed {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(f64::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
+/// Invalid speech playback speed.
+#[derive(Clone, Copy, Debug, Error, PartialEq)]
+#[error("speech speed must be finite and between 0.25 and 4.0, got {actual}")]
+pub struct SpeechSpeedError {
+    actual: f64,
+}
+
+impl SpeechSpeedError {
+    /// Rejected speed multiplier.
+    #[must_use]
+    pub const fn actual(self) -> f64 {
+        self.actual
+    }
+}
+
 /// Non-streaming media request typestate.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MediaNonStreaming;
@@ -273,7 +319,7 @@ where
     pub response_format: Omittable<SpeechResponseFormat>,
     /// Playback speed.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub speed: Omittable<f64>,
+    pub speed: Omittable<SpeechSpeed>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     stream_format: Omittable<SpeechStreamFormat>,
     #[serde(skip)]
@@ -290,7 +336,7 @@ struct CreateSpeechRequestWire {
     #[serde(default)]
     response_format: Omittable<SpeechResponseFormat>,
     #[serde(default)]
-    speed: Omittable<f64>,
+    speed: Omittable<SpeechSpeed>,
     #[serde(default)]
     stream_format: Omittable<SpeechStreamFormat>,
 }
@@ -384,9 +430,15 @@ where
 
     /// Set playback speed.
     #[must_use]
-    pub fn with_speed(mut self, speed: f64) -> Self {
+    pub fn with_speed(mut self, speed: SpeechSpeed) -> Self {
         self.speed = Omittable::Value(speed);
         self
+    }
+
+    /// Validate and set playback speed.
+    pub fn try_with_speed(mut self, speed: f64) -> Result<Self, SpeechSpeedError> {
+        self.speed = Omittable::Value(SpeechSpeed::new(speed)?);
+        Ok(self)
     }
 }
 
@@ -469,11 +521,14 @@ impl SpeechAudioDoneEvent {
 
 strict_tagged_union! {
     /// One event from a streaming speech response.
-    pub enum SpeechStreamEvent {
+pub enum SpeechStreamEvent {
         AudioDelta(SpeechAudioDeltaEvent) = "speech.audio.delta",
         AudioDone(SpeechAudioDoneEvent) = "speech.audio.done"
     }
 }
+
+/// Alias matching the frozen OpenAPI stream-event schema name.
+pub type CreateSpeechResponseStreamEvent = SpeechStreamEvent;
 
 impl SpeechStreamEvent {
     /// Whether this event terminates a healthy speech stream.
@@ -566,14 +621,48 @@ impl Default for TranscriptionVadConfig {
 }
 
 /// Automatic or manually configured transcription chunking.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum TranscriptionChunkingStrategy {
     /// `auto` or a future string mode.
     Mode(TranscriptionChunkingMode),
     /// Explicit server VAD settings.
     ServerVad(TranscriptionVadConfig),
+    /// Future object strategy retained verbatim.
+    Unknown(UnknownTaggedObject),
+}
+
+impl Serialize for TranscriptionChunkingStrategy {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Mode(mode) => mode.serialize(serializer),
+            Self::ServerVad(config) => config.serialize(serializer),
+            Self::Unknown(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TranscriptionChunkingStrategy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        if let Value::String(mode) = value {
+            return Ok(Self::Mode(TranscriptionChunkingMode::from_raw(mode)));
+        }
+        match media_discriminator(&value).map_err(D::Error::custom)? {
+            "server_vad" => serde_json::from_value(value)
+                .map(Self::ServerVad)
+                .map_err(D::Error::custom),
+            _ => UnknownTaggedObject::from_value(value)
+                .map(Self::Unknown)
+                .map_err(D::Error::custom),
+        }
+    }
 }
 
 /// Serde metadata encoded as multipart fields for transcription creation.
@@ -915,6 +1004,9 @@ impl Transcription {
     }
 }
 
+/// Alias matching the standard JSON transcription schema name.
+pub type CreateTranscriptionResponseJson = Transcription;
+
 /// Word timestamp in verbose transcription or translation output.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptionWord {
@@ -1004,6 +1096,9 @@ impl VerboseTranscription {
     }
 }
 
+/// Alias matching the verbose JSON transcription schema name.
+pub type CreateTranscriptionResponseVerboseJson = VerboseTranscription;
+
 literal_tag!(DiarizedSegmentTag, Segment, "transcript.text.segment");
 
 /// Speaker-labelled transcription segment.
@@ -1067,6 +1162,9 @@ impl DiarizedTranscription {
         &self.extra
     }
 }
+
+/// Alias matching the diarized JSON transcription schema name.
+pub type CreateTranscriptionResponseDiarizedJson = DiarizedTranscription;
 
 /// Optional logprob entry in transcription stream events.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1184,12 +1282,15 @@ impl TranscriptionTextDoneEvent {
 
 strict_tagged_union! {
     /// One event from a streaming transcription response.
-    pub enum TranscriptionStreamEvent {
+pub enum TranscriptionStreamEvent {
         TextDelta(TranscriptionTextDeltaEvent) = "transcript.text.delta",
         TextSegment(TranscriptionTextSegmentEvent) = "transcript.text.segment",
         TextDone(TranscriptionTextDoneEvent) = "transcript.text.done"
     }
 }
+
+/// Alias matching the frozen transcription stream-event schema name.
+pub type CreateTranscriptionResponseStreamEvent = TranscriptionStreamEvent;
 
 impl TranscriptionStreamEvent {
     /// Whether this event completes the stream.
@@ -1287,6 +1388,9 @@ impl Translation {
     }
 }
 
+/// Alias matching the standard JSON translation schema name.
+pub type CreateTranslationResponseJson = Translation;
+
 /// Verbose JSON translation response.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VerboseTranslation {
@@ -1311,6 +1415,9 @@ impl VerboseTranslation {
         &self.extra
     }
 }
+
+/// Alias matching the verbose JSON translation schema name.
+pub type CreateTranslationResponseVerboseJson = VerboseTranslation;
 
 crate::open_string_enum! {
     /// Requested image quality across supported image model families.
@@ -2079,6 +2186,9 @@ pub type ImageEditMultipartRequest = CreateImageEditMultipartRequest<MediaNonStr
 /// Streaming multipart image edit request.
 pub type ImageEditMultipartStreamRequest = CreateImageEditMultipartRequest<MediaStreaming>;
 
+/// Alias matching the multipart edit request schema name.
+pub type CreateImageEditRequest<M = MediaNonStreaming> = CreateImageEditMultipartRequest<M>;
+
 /// One generated or edited image.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct GeneratedImage {
@@ -2305,11 +2415,20 @@ impl ImageGenerationCompletedEvent {
 
 strict_tagged_union! {
     /// One image-generation SSE event.
-    pub enum ImageGenerationStreamEvent {
-        Partial(ImageGenerationPartialEvent) = "image_generation.partial_image",
-        Completed(ImageGenerationCompletedEvent) = "image_generation.completed"
+pub enum ImageGenerationStreamEvent {
+        Partial(Box<ImageGenerationPartialEvent>) = "image_generation.partial_image",
+        Completed(Box<ImageGenerationCompletedEvent>) = "image_generation.completed"
     }
 }
+
+/// Alias matching the frozen generation stream-event schema name.
+pub type ImageGenStreamEvent = ImageGenerationStreamEvent;
+
+/// Alias matching the partial generation event schema name.
+pub type ImageGenPartialImageEvent = ImageGenerationPartialEvent;
+
+/// Alias matching the completed generation event schema name.
+pub type ImageGenCompletedEvent = ImageGenerationCompletedEvent;
 
 impl ImageGenerationStreamEvent {
     /// Whether this event completes image generation.
@@ -2344,6 +2463,9 @@ pub struct ImageEditPartialEvent {
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
+
+/// Alias matching the partial image-edit event schema name.
+pub type ImageEditPartialImageEvent = ImageEditPartialEvent;
 
 impl ImageEditPartialEvent {
     /// Decode the base64 snapshot.
@@ -2400,8 +2522,8 @@ impl ImageEditCompletedEvent {
 strict_tagged_union! {
     /// One image-edit SSE event.
     pub enum ImageEditStreamEvent {
-        Partial(ImageEditPartialEvent) = "image_edit.partial_image",
-        Completed(ImageEditCompletedEvent) = "image_edit.completed"
+        Partial(Box<ImageEditPartialEvent>) = "image_edit.partial_image",
+        Completed(Box<ImageEditCompletedEvent>) = "image_edit.completed"
     }
 }
 
@@ -2410,5 +2532,529 @@ impl ImageEditStreamEvent {
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
         matches!(self, Self::Completed(_))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use serde::{Serialize, de::DeserializeOwned};
+    use serde_json::json;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::*;
+
+    assert_impl_all!(SpeechRequest: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(SpeechStreamRequest: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(SpeechStreamEvent: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(TranscriptionRequestMetadata: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(Transcription: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(VerboseTranscription: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(DiarizedTranscription: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(TranscriptionStreamEvent: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(TranslationRequestMetadata: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(Translation: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ImageGenerationRequest: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ImageGenerationStreamRequest: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ImageEditJsonRequest: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ImageEditJsonStreamRequest: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ImagesResponse: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ImageGenerationStreamEvent: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ImageEditStreamEvent: Serialize, DeserializeOwned, Send, Sync);
+    assert_not_impl_any!(TranscriptionRequest: Serialize, DeserializeOwned);
+    assert_not_impl_any!(TranscriptionStreamRequest: Serialize, DeserializeOwned);
+    assert_not_impl_any!(CreateTranslationRequest: Serialize, DeserializeOwned);
+    assert_not_impl_any!(ImageEditMultipartRequest: Serialize, DeserializeOwned);
+    assert_not_impl_any!(ImageEditMultipartStreamRequest: Serialize, DeserializeOwned);
+
+    fn ok<T, E: fmt::Display>(result: Result<T, E>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(error) => panic!("unexpected error: {error}"),
+        }
+    }
+
+    fn bytes_source(secret: &[u8]) -> ReplayableMultipartSource {
+        ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(secret))
+    }
+
+    #[test]
+    fn speech_request_typestate_and_stream_events_round_trip() {
+        let request = CreateSpeechRequest::new("gpt-4o-mini-tts", "hello", "coral")
+            .with_instructions("Speak warmly")
+            .with_response_format(SpeechResponseFormat::Wav)
+            .with_speed(ok(SpeechSpeed::new(1.1)));
+        let raw_value = ok(serde_json::to_value(&request));
+        assert!(raw_value.get("stream_format").is_none());
+        assert_eq!(raw_value["voice"], "coral");
+        assert_eq!(
+            ok(serde_json::to_value(ok(serde_json::from_value::<
+                SpeechRequest,
+            >(raw_value.clone())))),
+            raw_value
+        );
+
+        let streaming = request.into_streaming();
+        let stream_value = ok(serde_json::to_value(&streaming));
+        assert_eq!(stream_value["stream_format"], "sse");
+        assert!(serde_json::from_value::<SpeechRequest>(stream_value.clone()).is_err());
+        assert!(serde_json::from_value::<SpeechStreamRequest>(raw_value.clone()).is_err());
+        assert_eq!(
+            ok(serde_json::to_value(ok(serde_json::from_value::<
+                SpeechStreamRequest,
+            >(stream_value.clone())))),
+            stream_value
+        );
+
+        let delta_fixture = json!({
+            "type": "speech.audio.delta",
+            "audio": "UklGRg==",
+            "future": true
+        });
+        let delta = ok(serde_json::from_value::<SpeechStreamEvent>(
+            delta_fixture.clone(),
+        ));
+        match &delta {
+            SpeechStreamEvent::AudioDelta(event) => {
+                assert_eq!(ok(event.decode_audio()), b"RIFF");
+                assert!(event.extra().contains_key("future"));
+            }
+            _ => panic!("expected audio delta"),
+        }
+        assert!(!delta.is_terminal());
+        assert_eq!(ok(serde_json::to_value(delta)), delta_fixture);
+
+        let done = ok(serde_json::from_value::<SpeechStreamEvent>(json!({
+            "type": "speech.audio.done",
+            "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+        })));
+        assert!(done.is_terminal());
+    }
+
+    #[test]
+    fn speech_known_event_is_strict_and_future_event_is_lossless() {
+        assert!(
+            serde_json::from_value::<SpeechStreamEvent>(json!({
+                "type": "speech.audio.delta"
+            }))
+            .is_err()
+        );
+
+        let fixture = json!({"type": "speech.audio.progress", "percent": 50});
+        let event = ok(serde_json::from_value::<SpeechStreamEvent>(fixture.clone()));
+        assert!(matches!(event, SpeechStreamEvent::Unknown(_)));
+        assert_eq!(ok(serde_json::to_value(event)), fixture);
+    }
+
+    #[test]
+    fn transcription_multipart_keeps_binary_out_of_serde_and_debug() {
+        let request = CreateTranscriptionRequest::new(
+            bytes_source(b"super-secret-audio"),
+            "gpt-4o-transcribe-diarize",
+        )
+        .with_language("en")
+        .with_logprobs()
+        .with_chunking_strategy(TranscriptionChunkingStrategy::Mode(
+            TranscriptionChunkingMode::Auto,
+        ))
+        .with_known_speaker("agent", "audio/wav", b"speaker-sample")
+        .into_streaming()
+        .with_response_format(TranscriptionResponseFormat::DiarizedJson);
+
+        assert_eq!(
+            request.file().as_bytes(),
+            Some(b"super-secret-audio".as_slice())
+        );
+        assert!(request.metadata.is_streaming());
+        let metadata = ok(serde_json::to_value(&request.metadata));
+        assert_eq!(metadata["stream"], true);
+        assert_eq!(metadata["response_format"], "diarized_json");
+        assert_eq!(metadata["known_speaker_names"][0], "agent");
+        assert!(
+            metadata["known_speaker_references"][0]
+                .as_str()
+                .is_some_and(|value| value.starts_with("data:audio/wav;base64,"))
+        );
+        assert!(metadata.get("file").is_none());
+
+        let debug = format!("{request:?}");
+        assert!(!debug.contains("super-secret-audio"));
+        assert!(!debug.contains("speaker-sample"));
+    }
+
+    #[test]
+    fn transcription_responses_preserve_usage_unions_and_extra_fields() {
+        let fixture = json!({
+            "text": "hello",
+            "languages": [{"code": "en", "language_future": 1}],
+            "usage": {
+                "type": "tokens",
+                "input_tokens": 4,
+                "input_token_details": {"text_tokens": 1, "audio_tokens": 3},
+                "output_tokens": 2,
+                "total_tokens": 6,
+                "usage_future": true
+            },
+            "response_future": "kept"
+        });
+        let response = ok(serde_json::from_value::<Transcription>(fixture.clone()));
+        assert!(response.extra().contains_key("response_future"));
+        match &response.usage {
+            Omittable::Value(TranscriptionUsage::Tokens(usage)) => {
+                assert!(usage.extra().contains_key("usage_future"));
+            }
+            _ => panic!("expected token usage"),
+        }
+        assert_eq!(ok(serde_json::to_value(response)), fixture);
+
+        let verbose_fixture = json!({
+            "language": "english",
+            "duration": 1.25,
+            "text": "hello",
+            "segments": [],
+            "usage": {"type": "duration", "seconds": 1.25},
+            "verbose_future": 9
+        });
+        let verbose = ok(serde_json::from_value::<VerboseTranscription>(
+            verbose_fixture.clone(),
+        ));
+        assert!(verbose.extra().contains_key("verbose_future"));
+        assert_eq!(ok(serde_json::to_value(verbose)), verbose_fixture);
+
+        let diarized_fixture = json!({
+            "task": "transcribe",
+            "duration": 2.5,
+            "text": "A: hi",
+            "segments": [{
+                "type": "transcript.text.segment",
+                "id": "seg_1",
+                "start": 0.0,
+                "end": 2.5,
+                "text": "hi",
+                "speaker": "A",
+                "segment_future": true
+            }],
+            "usage": {"type": "duration", "seconds": 2.5}
+        });
+        let diarized = ok(serde_json::from_value::<DiarizedTranscription>(
+            diarized_fixture.clone(),
+        ));
+        assert!(diarized.segments[0].extra().contains_key("segment_future"));
+        assert_eq!(ok(serde_json::to_value(diarized)), diarized_fixture);
+    }
+
+    #[test]
+    fn transcription_usage_and_events_are_strict_for_known_tags() {
+        assert!(
+            serde_json::from_value::<TranscriptionChunkingStrategy>(json!({
+                "type": "server_vad",
+                "threshold": "not-a-number"
+            }))
+            .is_err()
+        );
+        let future_chunking = json!({"type": "semantic_vad", "sensitivity": 0.8});
+        let strategy = ok(serde_json::from_value::<TranscriptionChunkingStrategy>(
+            future_chunking.clone(),
+        ));
+        assert!(matches!(
+            strategy,
+            TranscriptionChunkingStrategy::Unknown(_)
+        ));
+        assert_eq!(ok(serde_json::to_value(strategy)), future_chunking);
+
+        assert!(serde_json::from_value::<TranscriptionUsage>(json!({"type": "tokens"})).is_err());
+        assert!(
+            serde_json::from_value::<TranscriptionStreamEvent>(json!({
+                "type": "transcript.text.segment",
+                "id": "seg"
+            }))
+            .is_err()
+        );
+
+        let delta = ok(serde_json::from_value::<TranscriptionStreamEvent>(json!({
+            "type": "transcript.text.delta",
+            "delta": "hel",
+            "logprobs": [{"token": "hel", "bytes": [104, 101, 108]}]
+        })));
+        assert!(!delta.is_terminal());
+        let done = ok(serde_json::from_value::<TranscriptionStreamEvent>(json!({
+            "type": "transcript.text.done",
+            "text": "hello"
+        })));
+        assert!(done.is_terminal());
+
+        let future = json!({"type": "transcript.language.detected", "code": "en"});
+        let event = ok(serde_json::from_value::<TranscriptionStreamEvent>(
+            future.clone(),
+        ));
+        assert!(matches!(event, TranscriptionStreamEvent::Unknown(_)));
+        assert_eq!(ok(serde_json::to_value(event)), future);
+    }
+
+    #[test]
+    fn translation_metadata_and_responses_round_trip() {
+        let request = CreateTranslationRequest::new(bytes_source(b"audio"), "whisper-1")
+            .with_prompt("Technical English")
+            .with_response_format(TranslationResponseFormat::VerboseJson);
+        let metadata = ok(serde_json::to_value(&request.metadata));
+        assert_eq!(metadata["model"], "whisper-1");
+        assert!(metadata.get("file").is_none());
+
+        let response_fixture = json!({"text": "hello", "future": true});
+        let response = ok(serde_json::from_value::<Translation>(
+            response_fixture.clone(),
+        ));
+        assert!(response.extra().contains_key("future"));
+        assert_eq!(ok(serde_json::to_value(response)), response_fixture);
+
+        let verbose_fixture = json!({
+            "language": "english",
+            "duration": 1.0,
+            "text": "hello",
+            "segments": [],
+            "future": 1
+        });
+        let verbose = ok(serde_json::from_value::<VerboseTranslation>(
+            verbose_fixture.clone(),
+        ));
+        assert!(verbose.extra().contains_key("future"));
+        assert_eq!(ok(serde_json::to_value(verbose)), verbose_fixture);
+    }
+
+    #[test]
+    fn bounded_image_values_validate_on_build_and_decode() {
+        assert_eq!(ok(SpeechSpeed::new(0.25)).get(), 0.25);
+        assert_eq!(ok(SpeechSpeed::new(4.0)).get(), 4.0);
+        assert!(SpeechSpeed::new(0.24).is_err());
+        assert!(SpeechSpeed::new(f64::NAN).is_err());
+        assert!(serde_json::from_str::<SpeechSpeed>("4.01").is_err());
+        assert_eq!(ok(ImageCount::new(1)).get(), 1);
+        assert!(ImageCount::new(0).is_err());
+        assert!(ImageCount::new(11).is_err());
+        assert_eq!(ok(PartialImageCount::new(0)).get(), 0);
+        assert_eq!(ok(PartialImageCount::new(3)).get(), 3);
+        assert!(PartialImageCount::new(4).is_err());
+        assert_eq!(ok(ImageCompression::new(100)).get(), 100);
+        assert!(serde_json::from_str::<ImageCompression>("101").is_err());
+    }
+
+    #[test]
+    fn image_generation_typestate_preserves_null_and_open_values() {
+        let request = CreateImageRequest::new("A lighthouse")
+            .with_model("gpt-image-future")
+            .with_quality(ImageQuality::Auto)
+            .with_size(ImageSize::from_raw("1536x864"))
+            .with_output_format(ImageOutputFormat::Png)
+            .with_background(ImageBackground::Transparent);
+        let plain = ok(serde_json::to_value(&request));
+        assert!(plain.get("stream").is_none());
+        assert_eq!(plain["size"], "1536x864");
+
+        let stream = request
+            .into_streaming()
+            .with_partial_images(ok(PartialImageCount::new(2)));
+        let stream_value = ok(serde_json::to_value(&stream));
+        assert_eq!(stream_value["stream"], true);
+        assert_eq!(stream_value["partial_images"], 2);
+        assert!(serde_json::from_value::<ImageGenerationRequest>(stream_value.clone()).is_err());
+        let decoded = ok(serde_json::from_value::<ImageGenerationStreamRequest>(
+            stream_value.clone(),
+        ));
+        assert_eq!(ok(serde_json::to_value(decoded)), stream_value);
+
+        let explicit_null = json!({"prompt": "x", "model": null});
+        let decoded = ok(serde_json::from_value::<ImageGenerationRequest>(
+            explicit_null.clone(),
+        ));
+        assert_eq!(ok(serde_json::to_value(decoded)), explicit_null);
+    }
+
+    #[test]
+    fn image_json_edit_references_are_exact_and_stream_typed() {
+        assert!(
+            serde_json::from_value::<ImageReference>(json!({
+                "image_url": "https://example.test/a.png",
+                "file_id": "file_1"
+            }))
+            .is_err()
+        );
+        assert!(serde_json::from_value::<ImageReference>(json!({})).is_err());
+
+        let request = CreateImageEditJsonRequest::new(
+            ImageReference::url("https://example.test/a.png"),
+            "Add snow",
+        )
+        .with_image(ImageReference::file("file_2"))
+        .with_mask(ImageReference::file("file_mask"))
+        .with_quality(ImageQuality::High)
+        .into_streaming()
+        .with_partial_images(ok(PartialImageCount::new(1)));
+        let value = ok(serde_json::to_value(&request));
+        assert_eq!(
+            value["images"][0]["image_url"],
+            "https://example.test/a.png"
+        );
+        assert_eq!(value["images"][1]["file_id"], "file_2");
+        assert_eq!(value["stream"], true);
+        let decoded = ok(serde_json::from_value::<ImageEditJsonStreamRequest>(
+            value.clone(),
+        ));
+        assert_eq!(ok(serde_json::to_value(decoded)), value);
+
+        assert!(
+            serde_json::from_value::<ImageEditJsonRequest>(json!({
+                "images": [],
+                "prompt": "bad"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn image_multipart_edit_is_replayable_redacted_and_not_json() {
+        assert!(CreateImageEditMultipartRequest::from_images(Vec::new(), "bad").is_err());
+        assert!(
+            CreateImageEditMultipartRequest::from_images(
+                (0..17).map(|_| bytes_source(b"image")),
+                "bad"
+            )
+            .is_err()
+        );
+
+        let request = ok(CreateImageEditMultipartRequest::from_images(
+            [
+                bytes_source(b"secret-image-1"),
+                bytes_source(b"secret-image-2"),
+            ],
+            "Edit",
+        ))
+        .with_mask(bytes_source(b"secret-mask"))
+        .with_quality(ImageQuality::High)
+        .into_streaming()
+        .with_partial_images(ok(PartialImageCount::new(1)));
+        assert_eq!(request.images().len(), 2);
+        assert!(request.mask().is_some());
+        assert!(request.metadata.is_streaming());
+        let metadata = ok(serde_json::to_value(&request.metadata));
+        assert!(metadata.get("image").is_none());
+        assert!(metadata.get("mask").is_none());
+        assert_eq!(metadata["stream"], true);
+
+        let debug = format!("{request:?}");
+        assert!(!debug.contains("secret-image"));
+        assert!(!debug.contains("secret-mask"));
+    }
+
+    #[test]
+    fn image_response_decodes_base64_and_preserves_nested_extras() {
+        let fixture = json!({
+            "created": 1700000000,
+            "data": [{"b64_json": "UE5H", "image_future": true}],
+            "background": "transparent",
+            "output_format": "png",
+            "size": "future-size",
+            "quality": "high",
+            "usage": {
+                "input_tokens": 1,
+                "total_tokens": 3,
+                "output_tokens": 2,
+                "input_tokens_details": {
+                    "text_tokens": 1,
+                    "image_tokens": 0,
+                    "detail_future": 4
+                },
+                "usage_future": true
+            },
+            "response_future": "kept"
+        });
+        let response = ok(serde_json::from_value::<ImagesResponse>(fixture.clone()));
+        let image = match &response.data {
+            Omittable::Value(images) => &images[0],
+            Omittable::Omitted => panic!("fixture must contain image data"),
+        };
+        assert_eq!(ok(image.decode()), Some(b"PNG".to_vec()));
+        assert!(image.extra().contains_key("image_future"));
+        assert!(response.extra().contains_key("response_future"));
+        match &response.usage {
+            Omittable::Value(usage) => {
+                assert!(usage.extra().contains_key("usage_future"));
+                assert!(
+                    usage
+                        .input_tokens_details
+                        .extra()
+                        .contains_key("detail_future")
+                );
+            }
+            Omittable::Omitted => panic!("fixture must contain usage"),
+        }
+        assert_eq!(ok(serde_json::to_value(response)), fixture);
+    }
+
+    #[test]
+    fn image_stream_events_are_strict_terminal_and_lossless() {
+        assert!(std::mem::size_of::<ImageGenerationStreamEvent>() <= 128);
+        assert!(std::mem::size_of::<ImageEditStreamEvent>() <= 128);
+
+        let partial_fixture = json!({
+            "type": "image_generation.partial_image",
+            "b64_json": "UE5H",
+            "created_at": 1,
+            "size": "1024x1024",
+            "quality": "high",
+            "background": "opaque",
+            "output_format": "png",
+            "partial_image_index": 0,
+            "future": true
+        });
+        let partial = ok(serde_json::from_value::<ImageGenerationStreamEvent>(
+            partial_fixture.clone(),
+        ));
+        assert!(!partial.is_terminal());
+        match &partial {
+            ImageGenerationStreamEvent::Partial(event) => {
+                assert_eq!(ok(event.decode()), b"PNG");
+                assert!(event.extra().contains_key("future"));
+            }
+            _ => panic!("expected partial generation event"),
+        }
+        assert_eq!(ok(serde_json::to_value(partial)), partial_fixture);
+
+        assert!(
+            serde_json::from_value::<ImageGenerationStreamEvent>(json!({
+                "type": "image_generation.completed",
+                "b64_json": "UE5H"
+            }))
+            .is_err()
+        );
+
+        let usage = json!({
+            "input_tokens": 1,
+            "total_tokens": 3,
+            "output_tokens": 2,
+            "input_tokens_details": {"text_tokens": 1, "image_tokens": 0}
+        });
+        let completed_fixture = json!({
+            "type": "image_edit.completed",
+            "b64_json": "UE5H",
+            "created_at": 1,
+            "size": "1024x1024",
+            "quality": "high",
+            "background": "opaque",
+            "output_format": "png",
+            "usage": usage
+        });
+        let completed = ok(serde_json::from_value::<ImageEditStreamEvent>(
+            completed_fixture.clone(),
+        ));
+        assert!(completed.is_terminal());
+        assert_eq!(ok(serde_json::to_value(completed)), completed_fixture);
+
+        let future_fixture = json!({"type": "image_generation.preview", "step": 4});
+        let future = ok(serde_json::from_value::<ImageGenerationStreamEvent>(
+            future_fixture.clone(),
+        ));
+        assert!(matches!(future, ImageGenerationStreamEvent::Unknown(_)));
+        assert_eq!(ok(serde_json::to_value(future)), future_fixture);
     }
 }

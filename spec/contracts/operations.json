@@ -3261,7 +3261,8 @@
           "types-only"
         ],
         "tests": [
-          "openai-rs-types::files serde tests; client operation pending"
+          "openai-rs-types::files::tests::file_list_params_build_without_manual_json",
+          "openai-rs-types::files::tests::list_page_and_delete_response_keep_future_fields; client operation pending"
         ]
       },
       "manual_overrides": [
@@ -3306,7 +3307,8 @@
           "types-only"
         ],
         "tests": [
-          "openai-rs-types::files serde tests; client multipart encoder pending"
+          "openai-rs-types::files::tests::expiration_policy_validates_range_and_shape",
+          "openai-rs-types::files::tests::multipart_requests_keep_binary_out_of_json; client multipart encoder pending"
         ]
       },
       "manual_overrides": [
@@ -3354,7 +3356,7 @@
           "types-only"
         ],
         "tests": [
-          "openai-rs-types::files serde tests; client operation pending"
+          "openai-rs-types::files::tests::file_object_preserves_unknown_enums_and_extra_fields; client operation pending"
         ]
       },
       "manual_overrides": []
@@ -3400,7 +3402,7 @@
           "types-only"
         ],
         "tests": [
-          "openai-rs-types::files serde tests; client operation pending"
+          "openai-rs-types::files::tests::list_page_and_delete_response_keep_future_fields; client operation pending"
         ]
       },
       "manual_overrides": []
@@ -3445,6 +3447,7 @@
           "raw-response-contract"
         ],
         "tests": [
+          "openai-rs-types::files::tests::raw_file_content_is_not_mistaken_for_json_or_logged",
           "OVR-0001 contract generated; client raw download pending"
         ]
       },
@@ -14377,7 +14380,8 @@
           "types-only"
         ],
         "tests": [
-          "OVR-0004 type contract recorded; client operation pending"
+          "openai-rs-types::files::tests::upload_create_and_complete_requests_have_strict_json",
+          "openai-rs-types::files::tests::upload_object_is_required_by_the_sdk_contract_override; client operation pending"
         ]
       },
       "manual_overrides": [
@@ -14425,7 +14429,7 @@
           "types-only"
         ],
         "tests": [
-          "openai-rs-types::files serde tests; client operation pending"
+          "openai-rs-types::files::tests::upload_and_part_preserve_unknown_values_and_fields; client operation pending"
         ]
       },
       "manual_overrides": []
@@ -14479,7 +14483,7 @@
           "types-only"
         ],
         "tests": [
-          "openai-rs-types::files serde tests; client operation pending"
+          "openai-rs-types::files::tests::upload_create_and_complete_requests_have_strict_json; client operation pending"
         ]
       },
       "manual_overrides": []
@@ -14533,7 +14537,7 @@
           "types-only"
         ],
         "tests": [
-          "openai-rs-types::files serde tests; client operation pending"
+          "openai-rs-types::files::tests::multipart_requests_keep_binary_out_of_json; client operation pending"
         ]
       },
       "manual_overrides": []

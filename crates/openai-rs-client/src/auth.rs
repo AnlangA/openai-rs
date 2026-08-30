@@ -23,8 +23,14 @@ impl ApiKey {
         if key.trim() != key {
             return Err(ApiKeyError::SurroundingWhitespace);
         }
+        if key.chars().any(char::is_whitespace) {
+            return Err(ApiKeyError::Whitespace);
+        }
         if key.chars().any(char::is_control) {
             return Err(ApiKeyError::ControlCharacter);
+        }
+        if !key.is_ascii() {
+            return Err(ApiKeyError::NonAscii);
         }
         Ok(Self(SecretString::from(key)))
     }
@@ -51,8 +57,12 @@ pub enum ApiKeyError {
     Empty,
     #[error("the API key has leading or trailing whitespace")]
     SurroundingWhitespace,
+    #[error("the API key contains whitespace")]
+    Whitespace,
     #[error("the API key contains a control character")]
     ControlCharacter,
+    #[error("the API key contains non-ASCII characters")]
+    NonAscii,
     #[error("the API key cannot be represented as an HTTP authorization header")]
     InvalidHeaderValue,
 }
@@ -78,7 +88,12 @@ mod tests {
         ));
         assert!(matches!(
             ApiKey::new("key\r\nheader: value"),
-            Err(ApiKeyError::ControlCharacter)
+            Err(ApiKeyError::Whitespace)
         ));
+        assert!(matches!(
+            ApiKey::new("key with-space"),
+            Err(ApiKeyError::Whitespace)
+        ));
+        assert!(matches!(ApiKey::new("密钥"), Err(ApiKeyError::NonAscii)));
     }
 }

@@ -1,10 +1,9 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ring::constant_time;
 use ring::signature::{RSA_PKCS1_2048_8192_SHA256, RsaPublicKeyComponents};
 use serde::Deserialize;
 
-use super::DirectError;
+use super::{DirectError, secure_equal};
 
 const MAX_JWT_BYTES: usize = 64 * 1024;
 
@@ -30,6 +29,11 @@ impl ChatGptAccountId {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(value: &str) -> Result<Self, DirectError> {
+        Self::parse(value.to_owned())
     }
 }
 
@@ -194,17 +198,18 @@ impl OidcVerifier {
         if claims.exp <= now_epoch_seconds {
             return Err(DirectError::Jwt("ID token expired".to_owned()));
         }
-        if claims.nbf.is_some_and(|not_before| not_before > now_epoch_seconds)
+        if claims
+            .nbf
+            .is_some_and(|not_before| not_before > now_epoch_seconds)
             || claims
                 .iat
                 .is_some_and(|issued_at| issued_at > now_epoch_seconds.saturating_add(60))
         {
-            return Err(DirectError::Jwt(
-                "ID token is not yet valid".to_owned(),
-            ));
+            return Err(DirectError::Jwt("ID token is not yet valid".to_owned()));
         }
-        constant_time::verify_slices_are_equal(claims.nonce.as_bytes(), expected_nonce.as_bytes())
-            .map_err(|_| DirectError::Jwt("nonce mismatch".to_owned()))?;
+        if !secure_equal(claims.nonce.as_bytes(), expected_nonce.as_bytes()) {
+            return Err(DirectError::Jwt("nonce mismatch".to_owned()));
+        }
 
         let namespaced = claims
             .namespaced_auth
@@ -295,8 +300,8 @@ mod tests {
     }
 
     #[test]
-    fn verifies_signature_issuer_audience_expiry_and_nonce(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn verifies_signature_issuer_audience_expiry_and_nonce()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (pair, jwks) = fixture()?;
         let verifier = OidcVerifier::new("https://issuer.test", "client-test", jwks)?;
         let claims = json!({

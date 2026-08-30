@@ -31,10 +31,11 @@ pub struct RetrieveResponseParams {
 }
 
 /// Query parameters for retrieving or resuming a Response SSE stream.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetrieveResponseStreamParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     include: Vec<String>,
+    #[serde(default = "true_value", deserialize_with = "deserialize_true")]
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     starting_after: Option<u64>,
@@ -75,6 +76,25 @@ impl RetrieveResponseStreamParams {
 impl Default for RetrieveResponseStreamParams {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+const fn true_value() -> bool {
+    true
+}
+
+fn deserialize_true<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+
+    if bool::deserialize(deserializer)? {
+        Ok(true)
+    } else {
+        Err(D::Error::custom(
+            "RetrieveResponseStreamParams requires stream=true",
+        ))
     }
 }
 
@@ -125,7 +145,7 @@ impl Responses {
             .transport()
             .send::<CreateStreamingResponse, ()>(&path, None, Some(&request))
             .await?;
-        ResponseEventStream::from_response(response)
+        ResponseEventStream::from_response(response, self.client.transport().sse_limits())
     }
 
     /// Retrieves a stored response by its opaque identifier.
@@ -159,7 +179,7 @@ impl Responses {
             .transport()
             .send::<RetrieveResponseStream, _>(&path, Some(&params), None)
             .await?;
-        ResponseEventStream::from_response(response)
+        ResponseEventStream::from_response(response, self.client.transport().sse_limits())
     }
 
     /// Deletes a stored response.

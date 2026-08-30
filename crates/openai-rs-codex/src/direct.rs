@@ -19,8 +19,7 @@ pub use jwt::ChatGptAccountId;
 pub use transport::{DirectCodexResponsesClient, DirectResponseStream};
 
 /// The only model endpoint reachable by the direct backend.
-pub const CODEX_RESPONSES_ENDPOINT: &str =
-    "https://chatgpt.com/backend-api/codex/responses";
+pub const CODEX_RESPONSES_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
 
 /// Errors from the private experimental direct backend.
 #[derive(Debug, thiserror::Error)]
@@ -88,4 +87,13 @@ impl CancellationToken {
         }
         self.inner.notify.notified().await;
     }
+}
+
+pub(crate) fn secure_equal(first: &[u8], second: &[u8]) -> bool {
+    let key = ring::hmac::Key::new(
+        ring::hmac::HMAC_SHA256,
+        b"openai-rs/direct-auth/equality/v1",
+    );
+    let expected = ring::hmac::sign(&key, first);
+    ring::hmac::verify(&key, second, expected.as_ref()).is_ok()
 }

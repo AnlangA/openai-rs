@@ -20,6 +20,9 @@ mod error;
 mod executor;
 mod result;
 
+#[cfg(all(test, feature = "client", feature = "server"))]
+mod e2e_tests;
+
 pub use arguments::parse_function_arguments;
 pub use bridge::{DispatchOutcome, ResponsesToolBridge};
 pub use catalog::{CatalogEntry, CatalogPolicy, SchemaPolicy, ToolCatalog, ToolNamePolicy};

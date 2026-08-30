@@ -4,7 +4,8 @@ use http::HeaderValue;
 use url::{Host, Url};
 
 use crate::{
-    ApiKey, Embeddings, Error, Models, Moderations, Responses, RetryPolicy, transport::Transport,
+    ApiKey, Embeddings, Error, Models, Moderations, Responses, RetryPolicy, sse::SseLimits,
+    transport::Transport,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
@@ -107,6 +108,7 @@ pub struct ClientBuilder {
     max_error_body_bytes: usize,
     tls_backend: Option<TlsBackend>,
     retry_policy: RetryPolicy,
+    sse_limits: SseLimits,
 }
 
 impl ClientBuilder {
@@ -124,6 +126,7 @@ impl ClientBuilder {
             max_error_body_bytes: DEFAULT_MAX_ERROR_BODY_BYTES,
             tls_backend: default_tls_backend(),
             retry_policy: RetryPolicy::default(),
+            sse_limits: SseLimits::default(),
         }
     }
 
@@ -193,6 +196,13 @@ impl ClientBuilder {
         self
     }
 
+    /// Sets parser-owned memory limits for Responses SSE streams.
+    #[must_use]
+    pub const fn sse_limits(mut self, sse_limits: SseLimits) -> Self {
+        self.sse_limits = sse_limits;
+        self
+    }
+
     pub fn build(self) -> Result<Client, Error> {
         if self.connect_timeout.is_zero() {
             return Err(invalid_configuration("connect timeout must be non-zero"));
@@ -218,6 +228,11 @@ impl ClientBuilder {
             })?,
         };
         validate_base_url(&base_url, self.allow_insecure_loopback)?;
+        if base_url.scheme() == "https" && self.tls_backend.is_none() {
+            return Err(invalid_configuration(
+                "HTTPS base URL requires the rustls-tls or native-tls feature",
+            ));
+        }
         if !base_url.path().ends_with('/') {
             let mut path = base_url.path().to_owned();
             path.push('/');
@@ -259,6 +274,8 @@ impl ClientBuilder {
                     self.max_error_body_bytes,
                     self.retry_policy,
                     self.request_timeout,
+                    self.sse_limits,
+                    self.tls_backend,
                 ),
             }),
         })
@@ -287,6 +304,7 @@ impl fmt::Debug for ClientBuilder {
             .field("max_error_body_bytes", &self.max_error_body_bytes)
             .field("tls_backend", &self.tls_backend)
             .field("retry_policy", &self.retry_policy)
+            .field("sse_limits", &self.sse_limits)
             .finish()
     }
 }
@@ -374,9 +392,16 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "rustls-tls", feature = "native-tls"))]
     fn default_base_url_is_official_platform() {
         let client = Client::new(key()).expect("client builds");
         assert_eq!(client.base_url().as_str(), DEFAULT_BASE_URL);
+    }
+
+    #[test]
+    #[cfg(not(any(feature = "rustls-tls", feature = "native-tls")))]
+    fn https_base_fails_without_a_tls_backend() {
+        assert!(Client::new(key()).is_err());
     }
 
     #[test]

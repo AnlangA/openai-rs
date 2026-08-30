@@ -1,0 +1,878 @@
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use async_trait::async_trait;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use futures_util::StreamExt;
+use secrecy::{ExposeSecret, SecretString};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{Mutex, RwLock};
+use url::Url;
+
+use super::jwt::{ChatGptAccountId, JsonWebKeySet, OidcVerifier};
+use super::{CancellationToken, DirectError, secure_equal};
+
+// Compatibility constants derived from anomalyco/opencode codex.ts at
+// d1f597b5b5abfe330aa30ca3c33ca043bf9b9a83 (MIT). These private experimental
+// endpoints are not represented as stable OpenAI Platform API contracts.
+const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const ISSUER: &str = "https://auth.openai.com";
+const AUTHORIZE_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
+const TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
+const JWKS_ENDPOINT: &str = "https://auth.openai.com/.well-known/jwks.json";
+#[cfg(feature = "experimental-direct-device")]
+const DEVICE_CODE_ENDPOINT: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
+#[cfg(feature = "experimental-direct-device")]
+const DEVICE_TOKEN_ENDPOINT: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
+#[cfg(feature = "experimental-direct-device")]
+const DEVICE_VERIFICATION_URL: &str = "https://auth.openai.com/codex/device";
+#[cfg(feature = "experimental-direct-device")]
+const DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
+
+const CALLBACK_PATH: &str = "/auth/callback";
+const MAX_CALLBACK_BYTES: usize = 8 * 1024;
+const MAX_AUTH_BODY_BYTES: usize = 256 * 1024;
+const DEFAULT_EXPIRES_IN: u64 = 3_600;
+const REFRESH_SKEW: u64 = 60;
+const SUCCESS_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Authorization complete</title></head><body><h1>Authorization complete</h1><p>You may close this window.</p></body></html>";
+const ERROR_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Authorization failed</title></head><body><h1>Authorization failed</h1><p>Return to the application and try again.</p></body></html>";
+
+/// A verified subscription session. Secret material is shared in protected
+/// allocations and never implements Serde or Display.
+#[derive(Clone)]
+pub struct StoredCodexSession {
+    access_token: Arc<SecretString>,
+    refresh_token: Arc<SecretString>,
+    expires_at: u64,
+    account_id: ChatGptAccountId,
+    generation: u64,
+}
+
+impl StoredCodexSession {
+    #[must_use]
+    pub fn expires_at(&self) -> u64 {
+        self.expires_at
+    }
+
+    #[must_use]
+    pub fn account_id(&self) -> &ChatGptAccountId {
+        &self.account_id
+    }
+
+    pub(crate) fn access_token(&self) -> &str {
+        self.access_token.expose_secret()
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn refresh_token(&self) -> &str {
+        self.refresh_token.expose_secret()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(
+        access_token: &str,
+        refresh_token: &str,
+        expires_at: u64,
+        account_id: ChatGptAccountId,
+    ) -> Self {
+        Self {
+            access_token: Arc::new(SecretString::from(access_token.to_owned())),
+            refresh_token: Arc::new(SecretString::from(refresh_token.to_owned())),
+            expires_at,
+            account_id,
+            generation: 0,
+        }
+    }
+}
+
+impl std::fmt::Debug for StoredCodexSession {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StoredCodexSession")
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .field("account_id", &"<redacted>")
+            .field("generation", &self.generation)
+            .finish()
+    }
+}
+
+/// Async persistence boundary for one subscription account.
+#[async_trait]
+pub trait CredentialStore: Send + Sync + 'static {
+    async fn load(&self) -> Result<Option<StoredCodexSession>, DirectError>;
+    async fn save(&self, session: &StoredCodexSession) -> Result<(), DirectError>;
+    async fn delete(&self) -> Result<(), DirectError>;
+}
+
+/// Process-local credential store for tests and explicit non-persistent use.
+#[derive(Debug, Default)]
+pub struct EphemeralStore {
+    session: RwLock<Option<StoredCodexSession>>,
+}
+
+#[async_trait]
+impl CredentialStore for EphemeralStore {
+    async fn load(&self) -> Result<Option<StoredCodexSession>, DirectError> {
+        Ok(self.session.read().await.clone())
+    }
+
+    async fn save(&self, session: &StoredCodexSession) -> Result<(), DirectError> {
+        *self.session.write().await = Some(session.clone());
+        Ok(())
+    }
+
+    async fn delete(&self) -> Result<(), DirectError> {
+        self.session.write().await.take();
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct AuthEndpoints {
+    issuer: String,
+    authorize: Url,
+    token: Url,
+    jwks: Url,
+    #[cfg(feature = "experimental-direct-device")]
+    device_code: Url,
+    #[cfg(feature = "experimental-direct-device")]
+    device_token: Url,
+    #[cfg(feature = "experimental-direct-device")]
+    device_verification: Url,
+    #[cfg(feature = "experimental-direct-device")]
+    device_redirect: Url,
+}
+
+impl AuthEndpoints {
+    fn production() -> Result<Self, DirectError> {
+        Ok(Self {
+            issuer: ISSUER.to_owned(),
+            authorize: parse_fixed_url(AUTHORIZE_ENDPOINT)?,
+            token: parse_fixed_url(TOKEN_ENDPOINT)?,
+            jwks: parse_fixed_url(JWKS_ENDPOINT)?,
+            #[cfg(feature = "experimental-direct-device")]
+            device_code: parse_fixed_url(DEVICE_CODE_ENDPOINT)?,
+            #[cfg(feature = "experimental-direct-device")]
+            device_token: parse_fixed_url(DEVICE_TOKEN_ENDPOINT)?,
+            #[cfg(feature = "experimental-direct-device")]
+            device_verification: parse_fixed_url(DEVICE_VERIFICATION_URL)?,
+            #[cfg(feature = "experimental-direct-device")]
+            device_redirect: parse_fixed_url(DEVICE_REDIRECT_URI)?,
+        })
+    }
+}
+
+/// OAuth client for the private experimental subscription backend.
+#[derive(Clone)]
+pub struct DirectAuthClient {
+    http: reqwest::Client,
+    endpoints: AuthEndpoints,
+    callback_timeout: Duration,
+    #[cfg(feature = "experimental-direct-device")]
+    device_deadline: Duration,
+}
+
+impl std::fmt::Debug for DirectAuthClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DirectAuthClient")
+            .field("issuer", &self.endpoints.issuer)
+            .field("callback_timeout", &self.callback_timeout)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DirectAuthClient {
+    pub fn new() -> Result<Self, DirectError> {
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(20))
+            .user_agent(concat!("openai-rs/", env!("CARGO_PKG_VERSION")))
+            .build()?;
+        Ok(Self {
+            http,
+            endpoints: AuthEndpoints::production()?,
+            callback_timeout: Duration::from_secs(5 * 60),
+            #[cfg(feature = "experimental-direct-device")]
+            device_deadline: Duration::from_secs(15 * 60),
+        })
+    }
+
+    /// Bind an ephemeral IPv4 loopback port and build a PKCE+state+nonce URL.
+    pub async fn begin_browser_login(&self) -> Result<BrowserLogin, DirectError> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .map_err(|error| DirectError::OAuth(format!("loopback bind failed: {error}")))?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| DirectError::OAuth(format!("loopback address failed: {error}")))?
+            .port();
+        let redirect_uri = Url::parse(&format!("http://127.0.0.1:{port}{CALLBACK_PATH}"))
+            .map_err(|error| DirectError::Configuration(error.to_string()))?;
+        let verifier = random_base64url(32)?;
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let state = random_base64url(32)?;
+        let nonce = random_base64url(32)?;
+        let mut authorize_url = self.endpoints.authorize.clone();
+        authorize_url
+            .query_pairs_mut()
+            .append_pair("response_type", "code")
+            .append_pair("client_id", CLIENT_ID)
+            .append_pair("redirect_uri", redirect_uri.as_str())
+            .append_pair("scope", "openid profile email offline_access")
+            .append_pair("code_challenge", &challenge)
+            .append_pair("code_challenge_method", "S256")
+            .append_pair("state", &state)
+            .append_pair("nonce", &nonce)
+            .append_pair("id_token_add_organizations", "true")
+            .append_pair("codex_cli_simplified_flow", "true")
+            .append_pair("originator", "openai-rs");
+        Ok(BrowserLogin {
+            authorize_url,
+            redirect_uri,
+            listener,
+            verifier: SecretString::from(verifier),
+            state: SecretString::from(state),
+            nonce: SecretString::from(nonce),
+            auth: self.clone(),
+        })
+    }
+
+    async fn exchange_code(
+        &self,
+        code: &str,
+        redirect_uri: &Url,
+        verifier: &str,
+    ) -> Result<TokenResponse, DirectError> {
+        let response = self
+            .http
+            .post(self.endpoints.token.clone())
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("code", code),
+                ("redirect_uri", redirect_uri.as_str()),
+                ("client_id", CLIENT_ID),
+                ("code_verifier", verifier),
+            ])
+            .send()
+            .await?;
+        decode_auth_response(response).await
+    }
+
+    async fn refresh(
+        &self,
+        session: &StoredCodexSession,
+    ) -> Result<StoredCodexSession, DirectError> {
+        let response = self
+            .http
+            .post(self.endpoints.token.clone())
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .form(&[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", session.refresh_token()),
+                ("client_id", CLIENT_ID),
+            ])
+            .send()
+            .await?;
+        let tokens: RefreshResponse = decode_auth_response(response).await?;
+        let refresh_token = tokens
+            .refresh_token
+            .map(|token| Arc::new(SecretString::from(token)))
+            .unwrap_or_else(|| Arc::clone(&session.refresh_token));
+        Ok(StoredCodexSession {
+            access_token: Arc::new(SecretString::from(tokens.access_token)),
+            refresh_token,
+            expires_at: now_epoch()?
+                .saturating_add(tokens.expires_in.unwrap_or(DEFAULT_EXPIRES_IN)),
+            account_id: session.account_id.clone(),
+            generation: session.generation.saturating_add(1),
+        })
+    }
+
+    async fn verifier(&self) -> Result<OidcVerifier, DirectError> {
+        let response = self.http.get(self.endpoints.jwks.clone()).send().await?;
+        let jwks: JsonWebKeySet = decode_auth_response(response).await?;
+        OidcVerifier::new(self.endpoints.issuer.clone(), CLIENT_ID, jwks)
+    }
+
+    #[cfg(feature = "experimental-direct-device")]
+    pub async fn begin_device_login(&self) -> Result<DeviceCodeLogin, DirectError> {
+        let nonce = random_base64url(32)?;
+        let response = self
+            .http
+            .post(self.endpoints.device_code.clone())
+            .json(&DeviceCodeRequest {
+                client_id: CLIENT_ID,
+                nonce: &nonce,
+            })
+            .send()
+            .await?;
+        let response: DeviceCodeResponse = decode_auth_response(response).await?;
+        let interval = response.interval.seconds().clamp(1, 30);
+        Ok(DeviceCodeLogin {
+            verification_url: self.endpoints.device_verification.clone(),
+            user_code: response.user_code,
+            device_auth_id: SecretString::from(response.device_auth_id),
+            nonce: SecretString::from(nonce),
+            interval: Duration::from_secs(interval),
+            auth: self.clone(),
+        })
+    }
+}
+
+/// In-progress browser flow. Debug never includes state, nonce, or verifier.
+pub struct BrowserLogin {
+    pub authorize_url: Url,
+    pub redirect_uri: Url,
+    listener: TcpListener,
+    verifier: SecretString,
+    state: SecretString,
+    nonce: SecretString,
+    auth: DirectAuthClient,
+}
+
+impl std::fmt::Debug for BrowserLogin {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BrowserLogin")
+            .field("authorize_url", &self.authorize_url)
+            .field("redirect_uri", &self.redirect_uri)
+            .field("oauth_secrets", &"<redacted>")
+            .finish()
+    }
+}
+
+impl BrowserLogin {
+    pub async fn complete<S: CredentialStore>(
+        self,
+        store: &S,
+        cancellation: &CancellationToken,
+    ) -> Result<StoredCodexSession, DirectError> {
+        let timeout = self.auth.callback_timeout;
+        tokio::select! {
+            () = cancellation.cancelled() => Err(DirectError::Cancelled),
+            result = tokio::time::timeout(timeout, self.complete_inner(store)) => {
+                result.map_err(|_| DirectError::Timeout)?
+            }
+        }
+    }
+
+    async fn complete_inner<S: CredentialStore>(
+        self,
+        store: &S,
+    ) -> Result<StoredCodexSession, DirectError> {
+        let (mut stream, peer) = self
+            .listener
+            .accept()
+            .await
+            .map_err(|error| DirectError::OAuth(format!("callback accept failed: {error}")))?;
+        if !peer.ip().is_loopback() {
+            return Err(DirectError::OAuth(
+                "callback peer was not loopback".to_owned(),
+            ));
+        }
+        let callback = match read_callback(&mut stream).await {
+            Ok(callback) => callback,
+            Err(error) => {
+                let _ = write_html(&mut stream, false).await;
+                return Err(error);
+            }
+        };
+        if !secure_equal(
+            callback.state.as_bytes(),
+            self.state.expose_secret().as_bytes(),
+        ) {
+            let _ = write_html(&mut stream, false).await;
+            return Err(DirectError::OAuth("callback state mismatch".to_owned()));
+        }
+        if callback.error || callback.code.is_empty() {
+            let _ = write_html(&mut stream, false).await;
+            return Err(DirectError::OAuth(
+                "authorization was not granted".to_owned(),
+            ));
+        }
+
+        let tokens = self
+            .auth
+            .exchange_code(
+                &callback.code,
+                &self.redirect_uri,
+                self.verifier.expose_secret(),
+            )
+            .await;
+        let tokens = match tokens {
+            Ok(tokens) => tokens,
+            Err(error) => {
+                let _ = write_html(&mut stream, false).await;
+                return Err(error);
+            }
+        };
+        let verifier = self.auth.verifier().await?;
+        let account_id =
+            verifier.verify(&tokens.id_token, self.nonce.expose_secret(), now_epoch()?)?;
+        let refresh_token = tokens.refresh_token.ok_or_else(|| {
+            DirectError::OAuth("initial token response omitted refresh token".to_owned())
+        })?;
+        let session = StoredCodexSession {
+            access_token: Arc::new(SecretString::from(tokens.access_token)),
+            refresh_token: Arc::new(SecretString::from(refresh_token)),
+            expires_at: now_epoch()?
+                .saturating_add(tokens.expires_in.unwrap_or(DEFAULT_EXPIRES_IN)),
+            account_id,
+            generation: 0,
+        };
+        store.save(&session).await?;
+        write_html(&mut stream, true).await?;
+        Ok(session)
+    }
+}
+
+/// In-progress device-code flow.
+#[cfg(feature = "experimental-direct-device")]
+pub struct DeviceCodeLogin {
+    pub verification_url: Url,
+    pub user_code: String,
+    device_auth_id: SecretString,
+    nonce: SecretString,
+    interval: Duration,
+    auth: DirectAuthClient,
+}
+
+#[cfg(not(feature = "experimental-direct-device"))]
+#[derive(Debug)]
+pub struct DeviceCodeLogin {
+    _private: (),
+}
+
+#[cfg(feature = "experimental-direct-device")]
+impl std::fmt::Debug for DeviceCodeLogin {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeviceCodeLogin")
+            .field("verification_url", &self.verification_url)
+            .field("user_code", &"<redacted>")
+            .finish()
+    }
+}
+
+#[cfg(feature = "experimental-direct-device")]
+impl DeviceCodeLogin {
+    pub async fn complete<S: CredentialStore>(
+        self,
+        store: &S,
+        cancellation: &CancellationToken,
+    ) -> Result<StoredCodexSession, DirectError> {
+        let deadline = tokio::time::Instant::now() + self.auth.device_deadline;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(DirectError::Timeout);
+            }
+            let response = tokio::select! {
+                () = cancellation.cancelled() => return Err(DirectError::Cancelled),
+                result = self.auth.http.post(self.auth.endpoints.device_token.clone()).json(
+                    &DevicePollRequest {
+                        device_auth_id: self.device_auth_id.expose_secret(),
+                        user_code: &self.user_code,
+                    }
+                ).send() => result?,
+            };
+            let status = response.status();
+            if status.is_success() {
+                let code: DeviceCodeSuccess = decode_auth_response(response).await?;
+                let tokens = self
+                    .auth
+                    .exchange_code(
+                        &code.authorization_code,
+                        &self.auth.endpoints.device_redirect,
+                        &code.code_verifier,
+                    )
+                    .await?;
+                let verifier = self.auth.verifier().await?;
+                let account_id =
+                    verifier.verify(&tokens.id_token, self.nonce.expose_secret(), now_epoch()?)?;
+                let refresh_token = tokens.refresh_token.ok_or_else(|| {
+                    DirectError::OAuth("initial token response omitted refresh token".to_owned())
+                })?;
+                let session = StoredCodexSession {
+                    access_token: Arc::new(SecretString::from(tokens.access_token)),
+                    refresh_token: Arc::new(SecretString::from(refresh_token)),
+                    expires_at: now_epoch()?
+                        .saturating_add(tokens.expires_in.unwrap_or(DEFAULT_EXPIRES_IN)),
+                    account_id,
+                    generation: 0,
+                };
+                store.save(&session).await?;
+                return Ok(session);
+            }
+            let wait = if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                retry_after(response.headers()).unwrap_or(self.interval)
+            } else if matches!(
+                status,
+                reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND
+            ) {
+                self.interval.saturating_add(Duration::from_secs(3))
+            } else {
+                return Err(http_status_error(response).await);
+            };
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            tokio::select! {
+                () = cancellation.cancelled() => return Err(DirectError::Cancelled),
+                () = tokio::time::sleep(wait.min(remaining)) => {}
+            }
+        }
+    }
+}
+
+/// Single-account, refresh-skewed, singleflight token manager.
+pub struct TokenManager<S: CredentialStore> {
+    store: Arc<S>,
+    auth: DirectAuthClient,
+    cached: RwLock<Option<StoredCodexSession>>,
+    refresh_gate: Mutex<()>,
+}
+
+impl<S: CredentialStore> std::fmt::Debug for TokenManager<S> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TokenManager(<credentials redacted>)")
+    }
+}
+
+impl<S: CredentialStore> TokenManager<S> {
+    #[must_use]
+    pub fn new(store: Arc<S>, auth: DirectAuthClient) -> Self {
+        Self {
+            store,
+            auth,
+            cached: RwLock::new(None),
+            refresh_gate: Mutex::new(()),
+        }
+    }
+
+    pub async fn session(&self) -> Result<StoredCodexSession, DirectError> {
+        let now = now_epoch()?;
+        if let Some(session) = self.cached.read().await.clone()
+            && session.expires_at > now.saturating_add(REFRESH_SKEW)
+        {
+            return Ok(session);
+        }
+        let _guard = self.refresh_gate.lock().await;
+        let now = now_epoch()?;
+        let current = match self.cached.read().await.clone() {
+            Some(session) => session,
+            None => self
+                .store
+                .load()
+                .await?
+                .ok_or(DirectError::ReauthenticationRequired)?,
+        };
+        if current.expires_at > now.saturating_add(REFRESH_SKEW) {
+            *self.cached.write().await = Some(current.clone());
+            return Ok(current);
+        }
+        let refreshed = self.auth.refresh(&current).await?;
+        self.store.save(&refreshed).await?;
+        *self.cached.write().await = Some(refreshed.clone());
+        Ok(refreshed)
+    }
+
+    pub(crate) async fn refresh_after_unauthorized(
+        &self,
+        failed_generation: u64,
+    ) -> Result<StoredCodexSession, DirectError> {
+        let _guard = self.refresh_gate.lock().await;
+        if let Some(current) = self.cached.read().await.clone()
+            && current.generation != failed_generation
+        {
+            return Ok(current);
+        }
+        let current = self
+            .store
+            .load()
+            .await?
+            .ok_or(DirectError::ReauthenticationRequired)?;
+        if current.generation != failed_generation {
+            *self.cached.write().await = Some(current.clone());
+            return Ok(current);
+        }
+        let refreshed = self.auth.refresh(&current).await?;
+        self.store.save(&refreshed).await?;
+        *self.cached.write().await = Some(refreshed.clone());
+        Ok(refreshed)
+    }
+}
+
+#[derive(Deserialize)]
+struct TokenResponse {
+    id_token: String,
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct RefreshResponse {
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<u64>,
+}
+
+struct CallbackParams {
+    code: String,
+    state: String,
+    error: bool,
+}
+
+async fn read_callback(stream: &mut TcpStream) -> Result<CallbackParams, DirectError> {
+    let mut request = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|error| DirectError::OAuth(format!("callback read failed: {error}")))?;
+        if read == 0 {
+            return Err(DirectError::OAuth("callback closed early".to_owned()));
+        }
+        if request.len().saturating_add(read) > MAX_CALLBACK_BYTES {
+            return Err(DirectError::OAuth("callback request too large".to_owned()));
+        }
+        request.extend_from_slice(&chunk[..read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    let request = std::str::from_utf8(&request)
+        .map_err(|_| DirectError::OAuth("callback was not UTF-8".to_owned()))?;
+    let request_line = request
+        .lines()
+        .next()
+        .ok_or_else(|| DirectError::OAuth("callback request line missing".to_owned()))?;
+    let mut parts = request_line.split_ascii_whitespace();
+    if parts.next() != Some("GET") {
+        return Err(DirectError::OAuth("callback method was not GET".to_owned()));
+    }
+    let target = parts
+        .next()
+        .ok_or_else(|| DirectError::OAuth("callback target missing".to_owned()))?;
+    if parts.next() != Some("HTTP/1.1") || parts.next().is_some() {
+        return Err(DirectError::OAuth(
+            "invalid callback HTTP version".to_owned(),
+        ));
+    }
+    let url = Url::parse(&format!("http://127.0.0.1{target}"))
+        .map_err(|_| DirectError::OAuth("invalid callback URL".to_owned()))?;
+    if url.path() != CALLBACK_PATH {
+        return Err(DirectError::OAuth("invalid callback path".to_owned()));
+    }
+    let mut code = None;
+    let mut state = None;
+    let mut error = false;
+    for (key, value) in url.query_pairs() {
+        match key.as_ref() {
+            "code" if code.is_none() => code = Some(value.into_owned()),
+            "state" if state.is_none() => state = Some(value.into_owned()),
+            "error" => error = true,
+            _ => {}
+        }
+    }
+    let state = state.ok_or_else(|| DirectError::OAuth("callback state missing".to_owned()))?;
+    Ok(CallbackParams {
+        code: code.unwrap_or_default(),
+        state,
+        error,
+    })
+}
+
+async fn write_html(stream: &mut TcpStream, success: bool) -> Result<(), DirectError> {
+    let (status, body) = if success {
+        ("200 OK", SUCCESS_HTML)
+    } else {
+        ("400 Bad Request", ERROR_HTML)
+    };
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .map_err(|error| DirectError::OAuth(format!("callback response failed: {error}")))?;
+    stream
+        .shutdown()
+        .await
+        .map_err(|error| DirectError::OAuth(format!("callback shutdown failed: {error}")))
+}
+
+async fn decode_auth_response<T: serde::de::DeserializeOwned>(
+    response: reqwest::Response,
+) -> Result<T, DirectError> {
+    if response.status().is_redirection() {
+        return Err(DirectError::RedirectRejected);
+    }
+    if !response.status().is_success() {
+        return Err(http_status_error(response).await);
+    }
+    let body = read_limited(response, MAX_AUTH_BODY_BYTES).await?;
+    serde_json::from_slice(&body).map_err(DirectError::Json)
+}
+
+async fn http_status_error(response: reqwest::Response) -> DirectError {
+    let status = response.status().as_u16();
+    let message = match read_limited(response, 8 * 1024).await {
+        Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+        Err(_) => "response body unavailable".to_owned(),
+    };
+    DirectError::HttpStatus { status, message }
+}
+
+async fn read_limited(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, DirectError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(DirectError::BodyTooLarge);
+    }
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if body.len().saturating_add(chunk.len()) > limit {
+            return Err(DirectError::BodyTooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+fn parse_fixed_url(value: &str) -> Result<Url, DirectError> {
+    Url::parse(value).map_err(|error| DirectError::Configuration(error.to_string()))
+}
+
+fn random_base64url(bytes: usize) -> Result<String, DirectError> {
+    let mut value = vec![0_u8; bytes];
+    getrandom::fill(&mut value).map_err(|_| DirectError::Random)?;
+    Ok(URL_SAFE_NO_PAD.encode(value))
+}
+
+fn now_epoch() -> Result<u64, DirectError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| DirectError::Configuration("system clock is before Unix epoch".to_owned()))
+}
+
+#[cfg(feature = "experimental-direct-device")]
+#[derive(Serialize)]
+struct DeviceCodeRequest<'a> {
+    client_id: &'a str,
+    nonce: &'a str,
+}
+
+#[cfg(feature = "experimental-direct-device")]
+#[derive(Deserialize)]
+struct DeviceCodeResponse {
+    device_auth_id: String,
+    #[serde(alias = "usercode")]
+    user_code: String,
+    interval: StringOrNumber,
+}
+
+#[cfg(feature = "experimental-direct-device")]
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StringOrNumber {
+    String(String),
+    Number(u64),
+}
+
+#[cfg(feature = "experimental-direct-device")]
+impl StringOrNumber {
+    fn seconds(&self) -> u64 {
+        match self {
+            Self::String(value) => value.parse().unwrap_or(5),
+            Self::Number(value) => *value,
+        }
+    }
+}
+
+#[cfg(feature = "experimental-direct-device")]
+#[derive(Serialize)]
+struct DevicePollRequest<'a> {
+    device_auth_id: &'a str,
+    user_code: &'a str,
+}
+
+#[cfg(feature = "experimental-direct-device")]
+#[derive(Deserialize)]
+struct DeviceCodeSuccess {
+    authorization_code: String,
+    code_verifier: String,
+}
+
+#[cfg(feature = "experimental-direct-device")]
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let seconds = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .parse::<u64>()
+        .ok()?;
+    Some(Duration::from_secs(seconds.clamp(1, 60)))
+}
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::assert_not_impl_any;
+
+    use super::{DirectAuthClient, EphemeralStore, StoredCodexSession};
+
+    assert_not_impl_any!(StoredCodexSession: serde::Serialize, std::fmt::Display);
+
+    #[tokio::test]
+    async fn browser_url_uses_ephemeral_ipv4_loopback_and_security_parameters()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let login = DirectAuthClient::new()?.begin_browser_login().await?;
+        assert_eq!(login.redirect_uri.host_str(), Some("127.0.0.1"));
+        assert_ne!(login.redirect_uri.port(), Some(1455));
+        let params: std::collections::HashMap<_, _> =
+            login.authorize_url.query_pairs().into_owned().collect();
+        assert_eq!(
+            params.get("code_challenge_method").map(String::as_str),
+            Some("S256")
+        );
+        assert!(params.get("state").is_some_and(|value| !value.is_empty()));
+        assert!(params.get("nonce").is_some_and(|value| !value.is_empty()));
+        assert_eq!(
+            params.get("originator").map(String::as_str),
+            Some("openai-rs")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ephemeral_store_round_trip_empty() -> Result<(), super::DirectError> {
+        let store = EphemeralStore::default();
+        assert!(super::CredentialStore::load(&store).await?.is_none());
+        Ok(())
+    }
+}

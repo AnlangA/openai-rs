@@ -27,7 +27,13 @@ pub use app_server::{
 pub use credentials::CodexAccessTokenCredential;
 pub use credentials::{CodexCredentialMarker, ManagedAppServerCredential};
 #[cfg(feature = "experimental-direct")]
-pub use direct::DirectCodexResponsesClient;
+pub use direct::{
+    BrowserLogin as DirectBrowserLogin, CODEX_RESPONSES_ENDPOINT, CancellationToken,
+    ChatGptAccountId, CredentialStore as DirectCredentialStore,
+    DeviceCodeLogin as DirectDeviceCodeLogin, DirectAuthClient, DirectCodexResponsesClient,
+    DirectError, DirectResponseStream, EphemeralStore as DirectEphemeralStore, StoredCodexSession,
+    TokenManager,
+};
 pub use error::{ConnectionFailure, ConnectionFailureKind, Error, RpcError, RpcId};
 pub use protocol::*;
 pub use runtime::{

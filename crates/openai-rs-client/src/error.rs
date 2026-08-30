@@ -19,8 +19,8 @@ pub struct BodyPreview {
 impl BodyPreview {
     pub(crate) fn from_bytes(bytes: &[u8], truncated: bool) -> Self {
         let preview_bytes = &bytes[..bytes.len().min(MAX_BODY_PREVIEW_BYTES)];
-        let truncated = truncated || preview_bytes.len() < bytes.len();
-        let text = match serde_json::from_slice::<Value>(preview_bytes) {
+        let mut truncated = truncated || preview_bytes.len() < bytes.len();
+        let mut text = match serde_json::from_slice::<Value>(preview_bytes) {
             Ok(mut value) => {
                 redact_json(&mut value, None);
                 serde_json::to_string(&value)
@@ -28,6 +28,14 @@ impl BodyPreview {
             }
             Err(_) => redact_inline(&String::from_utf8_lossy(preview_bytes)),
         };
+        if text.len() > MAX_BODY_PREVIEW_BYTES {
+            let mut boundary = MAX_BODY_PREVIEW_BYTES;
+            while !text.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            text.truncate(boundary);
+            truncated = true;
+        }
         Self {
             text: text.into_boxed_str(),
             truncated,
@@ -436,6 +444,7 @@ pub enum Error {
     Decode {
         #[source]
         source: serde_json::Error,
+        path: Option<Box<str>>,
         meta_status: StatusCode,
         request_id: Option<Box<str>>,
         body: BodyPreview,
@@ -456,6 +465,21 @@ pub enum Error {
         name: &'static str,
         reason: &'static str,
     },
+
+    #[cfg(feature = "realtime")]
+    #[error("WebSocket handshake failed with HTTP {status}")]
+    WebSocketHandshake {
+        status: StatusCode,
+        request_id: Option<Box<str>>,
+    },
+
+    #[cfg(feature = "realtime")]
+    #[error("WebSocket transport failed: {0}")]
+    WebSocketTransport(Box<str>),
+
+    #[cfg(feature = "realtime")]
+    #[error("invalid WebSocket protocol state: {0}")]
+    WebSocketProtocol(&'static str),
 }
 
 impl From<ApiError> for Error {
@@ -500,6 +524,8 @@ impl Error {
             Self::BodyTooLarge { status, .. } => Some(*status),
             Self::ResponseBody { status, .. } => Some(*status),
             Self::UnexpectedContentType { status, .. } => Some(*status),
+            #[cfg(feature = "realtime")]
+            Self::WebSocketHandshake { status, .. } => Some(*status),
             Self::Transport(_)
             | Self::Timeout(_)
             | Self::DeadlineExceeded
@@ -509,7 +535,10 @@ impl Error {
             | Self::Stream(_)
             | Self::StreamProtocol { .. }
             | Self::InvalidConfiguration(_)
-            | Self::InvalidPathParameter { .. } => None,
+            | Self::InvalidPathParameter { .. }
+            #[cfg(feature = "realtime")]
+            | Self::WebSocketTransport(_)
+            | Self::WebSocketProtocol(_) => None,
         }
     }
 
@@ -524,13 +553,27 @@ impl Error {
             Self::Sse { request_id, .. } => request_id.as_deref(),
             Self::Stream(error) => error.request_id(),
             Self::StreamProtocol { request_id, .. } => request_id.as_deref(),
+            #[cfg(feature = "realtime")]
+            Self::WebSocketHandshake { request_id, .. } => request_id.as_deref(),
             Self::Transport(_)
             | Self::Timeout(_)
             | Self::DeadlineExceeded
             | Self::Encode(_)
             | Self::EncodeQuery(_)
             | Self::InvalidConfiguration(_)
-            | Self::InvalidPathParameter { .. } => None,
+            | Self::InvalidPathParameter { .. }
+            #[cfg(feature = "realtime")]
+            | Self::WebSocketTransport(_)
+            | Self::WebSocketProtocol(_) => None,
+        }
+    }
+
+    /// JSON Pointer-like Serde path for typed decode failures.
+    #[must_use]
+    pub fn decode_path(&self) -> Option<&str> {
+        match self {
+            Self::Decode { path, .. } => path.as_deref(),
+            _ => None,
         }
     }
 }
@@ -557,6 +600,11 @@ mod tests {
         let preview = BodyPreview::from_bytes(&input, false);
         assert!(preview.is_truncated());
         assert_eq!(preview.as_str().len(), MAX_BODY_PREVIEW_BYTES);
+
+        let invalid_utf8 = vec![0xff; MAX_BODY_PREVIEW_BYTES];
+        let preview = BodyPreview::from_bytes(&invalid_utf8, false);
+        assert!(preview.as_str().len() <= MAX_BODY_PREVIEW_BYTES);
+        assert!(preview.is_truncated());
     }
 
     #[test]

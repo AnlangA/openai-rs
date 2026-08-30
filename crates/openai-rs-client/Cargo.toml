@@ -12,9 +12,18 @@ categories.workspace = true
 
 [features]
 default = ["rustls-tls"]
-rustls-tls = ["reqwest/rustls-tls"]
-native-tls = ["reqwest/native-tls"]
-realtime = ["openai-rs-types/realtime"]
+rustls-tls = [
+    "reqwest/rustls-tls",
+    "tokio-tungstenite?/rustls-tls-webpki-roots",
+    "dep:rustls",
+    "dep:webpki-roots",
+]
+native-tls = [
+    "reqwest/native-tls",
+    "tokio-tungstenite?/native-tls",
+    "dep:native-tls",
+]
+realtime = ["openai-rs-types/realtime", "dep:tokio-tungstenite"]
 webhook-verification = ["openai-rs-types/webhooks", "dep:sha2"]
 admin = ["openai-rs-types/admin"]
 workload-identity = []
@@ -27,9 +36,11 @@ futures-core.workspace = true
 futures-util.workspace = true
 http.workspace = true
 httpdate = "1.0.3"
+native-tls = { version = "0.2.14", optional = true }
 openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0", default-features = false }
 pin-project-lite.workspace = true
 reqwest.workspace = true
+rustls = { version = "0.23.43", optional = true }
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -37,7 +48,9 @@ serde_path_to_error.workspace = true
 sha2 = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect", "handshake"], optional = true }
 url.workspace = true
+webpki-roots = { version = "0.26.11", optional = true }
 zeroize.workspace = true
 
 [dev-dependencies]

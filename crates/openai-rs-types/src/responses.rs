@@ -2969,6 +2969,177 @@ impl CreateStreamingResponseRequest {
 
 impl_create_response_builders!(CreateStreamingResponseRequest);
 
+literal_tag!(ResponsesCreateEventTag, ResponseCreate, "response.create");
+
+/// Client event that starts inference on a Responses WebSocket connection.
+///
+/// The create parameters are flattened exactly as required by the wire
+/// schema; the HTTP-only `stream` flag is not emitted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResponsesCreateEvent {
+    #[serde(rename = "type")]
+    kind: ResponsesCreateEventTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    stream_id: Omittable<String>,
+    #[serde(flatten)]
+    body: CreateResponseBody,
+}
+
+impl ResponsesCreateEvent {
+    /// Converts an HTTP create request into a WebSocket create event.
+    #[must_use]
+    pub fn from_request(request: CreateResponseRequest) -> Self {
+        Self {
+            kind: ResponsesCreateEventTag::ResponseCreate,
+            stream_id: Omittable::Omitted,
+            body: request.body,
+        }
+    }
+
+    /// Creates a WebSocket event with the ergonomic model-and-input pair.
+    #[must_use]
+    pub fn new(model: impl Into<String>, input: impl Into<ResponseInput>) -> Self {
+        Self::from_request(CreateResponseRequest::new(model, input))
+    }
+
+    /// Routes the response through a named FIFO WebSocket lane.
+    #[must_use]
+    pub fn stream_id(mut self, stream_id: impl Into<String>) -> Self {
+        self.stream_id = Omittable::Value(stream_id.into());
+        self
+    }
+
+    /// Returns the lane id when supplied.
+    #[must_use]
+    pub fn stream_id_ref(&self) -> Option<&str> {
+        match &self.stream_id {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
+    }
+
+    /// Converts this event back to a non-streaming HTTP create request.
+    #[must_use]
+    pub fn into_request(self) -> CreateResponseRequest {
+        CreateResponseRequest {
+            body: self.body,
+            stream: false,
+        }
+    }
+}
+
+/// Event sent by a client over a Responses WebSocket connection.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ResponsesClientEvent {
+    /// Starts one response; boxed to keep future/unknown variants compact.
+    Create(Box<ResponsesCreateEvent>),
+    /// A future client event retained verbatim.
+    Unknown(UnknownTaggedObject),
+}
+
+impl Serialize for ResponsesClientEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Create(value) => value.serialize(serializer),
+            Self::Unknown(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ResponsesClientEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        match object_discriminator(&value)
+            .map_err(D::Error::custom)?
+            .as_str()
+        {
+            "response.create" => serde_json::from_value(value)
+                .map(Box::new)
+                .map(Self::Create)
+                .map_err(D::Error::custom),
+            _ => UnknownTaggedObject::from_value(value)
+                .map(Self::Unknown)
+                .map_err(D::Error::custom),
+        }
+    }
+}
+
+impl ResponsesClientEvent {
+    /// Creates a `response.create` client event.
+    #[must_use]
+    pub fn create(request: CreateResponseRequest) -> Self {
+        Self::Create(Box::new(ResponsesCreateEvent::from_request(request)))
+    }
+
+    /// Creates a `response.create` event on a named lane.
+    #[must_use]
+    pub fn create_on_stream(stream_id: impl Into<String>, request: CreateResponseRequest) -> Self {
+        Self::Create(Box::new(
+            ResponsesCreateEvent::from_request(request).stream_id(stream_id),
+        ))
+    }
+}
+
+/// Event received from a Responses WebSocket connection.
+///
+/// WebSocket-only fields such as `stream_id` are retained by the inner
+/// event's [`ExtraFields`], while the stable discriminator set is shared with
+/// [`ResponseStreamEvent`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ResponsesServerEvent(ResponseStreamEvent);
+
+impl ResponsesServerEvent {
+    /// Wraps a stable Responses event.
+    #[must_use]
+    pub const fn new(event: ResponseStreamEvent) -> Self {
+        Self(event)
+    }
+
+    /// Borrows the shared Responses event.
+    #[must_use]
+    pub const fn event(&self) -> &ResponseStreamEvent {
+        &self.0
+    }
+
+    /// Consumes the wrapper.
+    #[must_use]
+    pub fn into_event(self) -> ResponseStreamEvent {
+        self.0
+    }
+
+    /// Returns whether this event terminates its response.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        self.0.is_terminal()
+    }
+
+    /// Returns the shared sequence number when present.
+    #[must_use]
+    pub fn sequence_number(&self) -> Option<u64> {
+        self.0.sequence_number()
+    }
+}
+
+impl From<ResponseStreamEvent> for ResponsesServerEvent {
+    fn from(value: ResponseStreamEvent) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ResponsesServerEvent> for ResponseStreamEvent {
+    fn from(value: ResponsesServerEvent) -> Self {
+        value.into_event()
+    }
+}
+
 literal_tag!(ResponseObjectTag, Response, "response");
 
 /// An error returned when the model could not generate a response.
@@ -4393,6 +4564,562 @@ impl ResponseStreamEvent {
             Self::Unknown(value) => value.raw().get("sequence_number").and_then(Value::as_u64),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct AccumulatedText {
+    item_id: String,
+    text: String,
+}
+
+#[derive(Debug, Clone)]
+struct AccumulatedArguments {
+    item_id: String,
+    arguments: String,
+}
+
+/// Stateful reducer for a single ordered Responses event stream.
+#[derive(Debug, Clone, Default)]
+pub struct ResponseAccumulator {
+    last_sequence_number: Option<u64>,
+    item_ids: BTreeMap<u64, String>,
+    text: BTreeMap<(u64, u64), AccumulatedText>,
+    function_arguments: BTreeMap<u64, AccumulatedArguments>,
+    snapshot: Option<Response>,
+    terminal: bool,
+}
+
+impl ResponseAccumulator {
+    /// Creates an empty accumulator.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Consumes one event, enforcing sequence and item identity invariants.
+    pub fn push(&mut self, event: ResponseStreamEvent) -> Result<(), ResponseAccumulatorError> {
+        if self.terminal {
+            return Err(ResponseAccumulatorError::EventAfterTerminal);
+        }
+
+        if let Some(sequence_number) = event.sequence_number() {
+            match self.last_sequence_number {
+                Some(previous) if sequence_number == previous => {
+                    return Err(ResponseAccumulatorError::DuplicateSequence { sequence_number });
+                }
+                Some(previous) if sequence_number < previous => {
+                    return Err(ResponseAccumulatorError::NonMonotonicSequence {
+                        previous,
+                        received: sequence_number,
+                    });
+                }
+                _ => self.last_sequence_number = Some(sequence_number),
+            }
+        }
+
+        match event {
+            ResponseStreamEvent::Queued(event) => self.accept_response(event.response, false)?,
+            ResponseStreamEvent::Created(event) => self.accept_response(event.response, false)?,
+            ResponseStreamEvent::InProgress(event) => {
+                self.accept_response(event.response, false)?
+            }
+            ResponseStreamEvent::Completed(event) => self.accept_response(event.response, true)?,
+            ResponseStreamEvent::Failed(event) => self.accept_response(event.response, true)?,
+            ResponseStreamEvent::Incomplete(event) => self.accept_response(event.response, true)?,
+            ResponseStreamEvent::OutputItemAdded(event) => {
+                self.observe_output_item(event.output_index, &event.item)?;
+            }
+            ResponseStreamEvent::OutputItemDone(event) => {
+                self.observe_output_item(event.output_index, &event.item)?;
+            }
+            ResponseStreamEvent::ContentPartAdded(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+                if let OutputContent::Text(text) = event.part {
+                    self.set_text(
+                        event.output_index,
+                        event.content_index,
+                        event.item_id,
+                        text.text,
+                    )?;
+                }
+            }
+            ResponseStreamEvent::ContentPartDone(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+                if let OutputContent::Text(text) = event.part {
+                    self.set_text(
+                        event.output_index,
+                        event.content_index,
+                        event.item_id,
+                        text.text,
+                    )?;
+                }
+            }
+            ResponseStreamEvent::OutputTextDelta(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+                self.append_text(
+                    event.output_index,
+                    event.content_index,
+                    event.item_id,
+                    &event.delta,
+                )?;
+            }
+            ResponseStreamEvent::OutputTextDone(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+                self.set_text(
+                    event.output_index,
+                    event.content_index,
+                    event.item_id,
+                    event.text,
+                )?;
+            }
+            ResponseStreamEvent::RefusalDelta(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::RefusalDone(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::FunctionCallArgumentsDelta(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+                self.append_function_arguments(event.output_index, event.item_id, &event.delta)?;
+            }
+            ResponseStreamEvent::FunctionCallArgumentsDone(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+                self.set_function_arguments(
+                    event.output_index,
+                    event.item_id,
+                    event.arguments.into_raw().into(),
+                )?;
+            }
+            ResponseStreamEvent::McpCallArgumentsDelta(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::McpCallArgumentsDone(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::McpCallInProgress(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::McpCallCompleted(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::McpCallFailed(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::McpListToolsInProgress(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::McpListToolsCompleted(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::McpListToolsFailed(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::CodeInterpreterCodeDelta(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::CodeInterpreterCodeDone(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::CodeInterpreterCompleted(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::CodeInterpreterInProgress(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::CodeInterpreterInterpreting(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::FileSearchCompleted(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::FileSearchInProgress(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::FileSearchSearching(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::ShellOutputContentDelta(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::ShellOutputContentDone(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::ReasoningSummaryPartAdded(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::ReasoningSummaryPartDone(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::ReasoningSummaryTextDelta(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::ReasoningSummaryTextDone(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::ReasoningTextDelta(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::ReasoningTextDone(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::WebSearchCompleted(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::WebSearchInProgress(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::WebSearchSearching(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::ImageGenerationCompleted(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::ImageGenerationGenerating(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::ImageGenerationInProgress(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::ImageGenerationPartialImage(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::OutputTextAnnotationAdded(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::CustomToolCallInputDelta(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::CustomToolCallInputDone(event) => {
+                self.bind_item(event.output_index, &event.item_id)?;
+            }
+            ResponseStreamEvent::Error(event) => {
+                return Err(ResponseAccumulatorError::Stream {
+                    code: event.code,
+                    message: event.message,
+                });
+            }
+            ResponseStreamEvent::AudioDelta(_)
+            | ResponseStreamEvent::AudioDone(_)
+            | ResponseStreamEvent::AudioTranscriptDelta(_)
+            | ResponseStreamEvent::AudioTranscriptDone(_)
+            | ResponseStreamEvent::ShellCommandAdded(_)
+            | ResponseStreamEvent::ShellCommandDelta(_)
+            | ResponseStreamEvent::ShellCommandDone(_)
+            | ResponseStreamEvent::Unknown(_) => {}
+        }
+        Ok(())
+    }
+
+    /// Returns the most recent lifecycle response snapshot.
+    #[must_use]
+    pub const fn snapshot(&self) -> Option<&Response> {
+        self.snapshot.as_ref()
+    }
+
+    /// Returns the latest accepted sequence number.
+    #[must_use]
+    pub const fn last_sequence_number(&self) -> Option<u64> {
+        self.last_sequence_number
+    }
+
+    /// Aggregates assistant output text in output/content index order.
+    #[must_use]
+    pub fn output_text(&self) -> String {
+        if self.terminal {
+            if let Some(response) = &self.snapshot {
+                return response.output_text();
+            }
+        }
+        self.text.values().map(|part| part.text.as_str()).collect()
+    }
+
+    /// Returns aggregated function arguments for an output item id.
+    #[must_use]
+    pub fn function_arguments(&self, item_id: &str) -> Option<&str> {
+        self.function_arguments
+            .values()
+            .find(|arguments| arguments.item_id == item_id)
+            .map(|arguments| arguments.arguments.as_str())
+    }
+
+    /// Returns the terminal response, or an error if the stream ended early.
+    pub fn finish(self) -> Result<Response, ResponseAccumulatorError> {
+        if !self.terminal {
+            return Err(ResponseAccumulatorError::MissingTerminal);
+        }
+        self.snapshot
+            .ok_or(ResponseAccumulatorError::MissingTerminal)
+    }
+
+    fn bind_item(
+        &mut self,
+        output_index: u64,
+        item_id: &str,
+    ) -> Result<(), ResponseAccumulatorError> {
+        match self.item_ids.get(&output_index) {
+            Some(expected) if expected != item_id => {
+                Err(ResponseAccumulatorError::ItemIdentityMismatch {
+                    output_index,
+                    expected: expected.clone(),
+                    received: item_id.to_owned(),
+                })
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.item_ids.insert(output_index, item_id.to_owned());
+                Ok(())
+            }
+        }
+    }
+
+    fn append_text(
+        &mut self,
+        output_index: u64,
+        content_index: u64,
+        item_id: String,
+        delta: &str,
+    ) -> Result<(), ResponseAccumulatorError> {
+        let key = (output_index, content_index);
+        match self.text.get_mut(&key) {
+            Some(part) if part.item_id != item_id => {
+                Err(ResponseAccumulatorError::ContentIdentityMismatch {
+                    output_index,
+                    content_index,
+                    expected: part.item_id.clone(),
+                    received: item_id,
+                })
+            }
+            Some(part) => {
+                part.text.push_str(delta);
+                Ok(())
+            }
+            None => {
+                self.text.insert(
+                    key,
+                    AccumulatedText {
+                        item_id,
+                        text: delta.to_owned(),
+                    },
+                );
+                Ok(())
+            }
+        }
+    }
+
+    fn set_text(
+        &mut self,
+        output_index: u64,
+        content_index: u64,
+        item_id: String,
+        text: String,
+    ) -> Result<(), ResponseAccumulatorError> {
+        let key = (output_index, content_index);
+        if let Some(part) = self.text.get(&key) {
+            if part.item_id != item_id {
+                return Err(ResponseAccumulatorError::ContentIdentityMismatch {
+                    output_index,
+                    content_index,
+                    expected: part.item_id.clone(),
+                    received: item_id,
+                });
+            }
+        }
+        self.text.insert(key, AccumulatedText { item_id, text });
+        Ok(())
+    }
+
+    fn append_function_arguments(
+        &mut self,
+        output_index: u64,
+        item_id: String,
+        delta: &str,
+    ) -> Result<(), ResponseAccumulatorError> {
+        match self.function_arguments.get_mut(&output_index) {
+            Some(arguments) if arguments.item_id != item_id => {
+                Err(ResponseAccumulatorError::ItemIdentityMismatch {
+                    output_index,
+                    expected: arguments.item_id.clone(),
+                    received: item_id,
+                })
+            }
+            Some(arguments) => {
+                arguments.arguments.push_str(delta);
+                Ok(())
+            }
+            None => {
+                self.function_arguments.insert(
+                    output_index,
+                    AccumulatedArguments {
+                        item_id,
+                        arguments: delta.to_owned(),
+                    },
+                );
+                Ok(())
+            }
+        }
+    }
+
+    fn set_function_arguments(
+        &mut self,
+        output_index: u64,
+        item_id: String,
+        arguments: String,
+    ) -> Result<(), ResponseAccumulatorError> {
+        if let Some(current) = self.function_arguments.get(&output_index) {
+            if current.item_id != item_id {
+                return Err(ResponseAccumulatorError::ItemIdentityMismatch {
+                    output_index,
+                    expected: current.item_id.clone(),
+                    received: item_id,
+                });
+            }
+        }
+        self.function_arguments
+            .insert(output_index, AccumulatedArguments { item_id, arguments });
+        Ok(())
+    }
+
+    fn observe_output_item(
+        &mut self,
+        output_index: u64,
+        item: &ResponseOutputItem,
+    ) -> Result<(), ResponseAccumulatorError> {
+        if let Some(item_id) = response_output_item_id(item) {
+            self.bind_item(output_index, item_id)?;
+        }
+        match item {
+            ResponseOutputItem::Message(message) => {
+                for (content_index, content) in message.content.iter().enumerate() {
+                    if let OutputContent::Text(text) = content {
+                        self.set_text(
+                            output_index,
+                            content_index as u64,
+                            message.id.clone(),
+                            text.text.clone(),
+                        )?;
+                    }
+                }
+            }
+            ResponseOutputItem::FunctionCall(call) => {
+                if let Some(item_id) = call.id() {
+                    self.set_function_arguments(
+                        output_index,
+                        item_id.to_owned(),
+                        call.arguments.as_raw().to_owned(),
+                    )?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn accept_response(
+        &mut self,
+        response: Response,
+        terminal: bool,
+    ) -> Result<(), ResponseAccumulatorError> {
+        for (output_index, item) in response.output.iter().enumerate() {
+            self.observe_output_item(output_index as u64, item)?;
+        }
+        self.snapshot = Some(response);
+        self.terminal = terminal;
+        Ok(())
+    }
+}
+
+fn response_output_item_id(item: &ResponseOutputItem) -> Option<&str> {
+    match item {
+        ResponseOutputItem::Message(value) => Some(&value.id),
+        ResponseOutputItem::FileSearchCall(value) => Some(&value.id),
+        ResponseOutputItem::FunctionCall(value) => value.id(),
+        ResponseOutputItem::FunctionCallOutput(value) => Some(&value.id),
+        ResponseOutputItem::WebSearchCall(value) => Some(&value.id),
+        ResponseOutputItem::ComputerCall(value) => Some(&value.id),
+        ResponseOutputItem::ComputerCallOutput(value) => Some(&value.id),
+        ResponseOutputItem::Reasoning(value) => Some(&value.id),
+        ResponseOutputItem::Program(value) => Some(&value.id),
+        ResponseOutputItem::ProgramOutput(value) => Some(&value.id),
+        ResponseOutputItem::ToolSearchCall(value) => Some(&value.id),
+        ResponseOutputItem::ToolSearchOutput(value) => Some(&value.id),
+        ResponseOutputItem::AdditionalTools(value) => Some(&value.id),
+        ResponseOutputItem::Compaction(value) => Some(&value.id),
+        ResponseOutputItem::ImageGenerationCall(value) => Some(&value.id),
+        ResponseOutputItem::CodeInterpreterCall(value) => Some(&value.id),
+        ResponseOutputItem::LocalShellCall(value) => Some(&value.id),
+        ResponseOutputItem::LocalShellCallOutput(value) => Some(&value.id),
+        ResponseOutputItem::FunctionShellCall(value) => Some(&value.id),
+        ResponseOutputItem::FunctionShellCallOutput(value) => Some(&value.id),
+        ResponseOutputItem::ApplyPatchCall(value) => Some(&value.id),
+        ResponseOutputItem::ApplyPatchCallOutput(value) => Some(&value.id),
+        ResponseOutputItem::McpCall(value) => Some(&value.id),
+        ResponseOutputItem::McpListTools(value) => Some(&value.id),
+        ResponseOutputItem::McpApprovalRequest(value) => Some(&value.id),
+        ResponseOutputItem::McpApprovalResponse(value) => Some(&value.id),
+        ResponseOutputItem::CustomToolCall(_) => None,
+        ResponseOutputItem::CustomToolCallOutput(value) => Some(&value.id),
+        ResponseOutputItem::Unknown(value) => value.raw().get("id").and_then(Value::as_str),
+    }
+}
+
+/// Error produced while reducing a Responses event stream.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ResponseAccumulatorError {
+    /// The same sequence number was observed twice.
+    #[error("duplicate response event sequence number {sequence_number}")]
+    DuplicateSequence {
+        /// Repeated sequence number.
+        sequence_number: u64,
+    },
+    /// Sequence numbers moved backwards.
+    #[error("response event sequence moved backwards from {previous} to {received}")]
+    NonMonotonicSequence {
+        /// Previously accepted sequence number.
+        previous: u64,
+        /// Newly received sequence number.
+        received: u64,
+    },
+    /// An event was received after a terminal lifecycle event.
+    #[error("received a response event after the terminal response")]
+    EventAfterTerminal,
+    /// An output index was reused for another item id.
+    #[error(
+        "response output index {output_index} changed item id from `{expected}` to `{received}`"
+    )]
+    ItemIdentityMismatch {
+        /// Conflicting output index.
+        output_index: u64,
+        /// Item id first bound to the index.
+        expected: String,
+        /// Later conflicting item id.
+        received: String,
+    },
+    /// A content index was reused for another item id.
+    #[error(
+        "response output/content index {output_index}/{content_index} changed item id from `{expected}` to `{received}`"
+    )]
+    ContentIdentityMismatch {
+        /// Conflicting output index.
+        output_index: u64,
+        /// Conflicting content index.
+        content_index: u64,
+        /// Item id first bound to the index pair.
+        expected: String,
+        /// Later conflicting item id.
+        received: String,
+    },
+    /// The SSE protocol emitted its standalone error event.
+    #[error("Responses stream error `{code}`: {message}")]
+    Stream {
+        /// Machine-readable service error code.
+        code: String,
+        /// Human-readable service message.
+        message: String,
+    },
+    /// The stream ended without completed, failed, or incomplete response.
+    #[error("Responses stream ended before a terminal response")]
+    MissingTerminal,
 }
 
 // The following records complete the frozen stable union inventory. Complex
@@ -5876,6 +6603,9 @@ mod tests {
         assert_json_dto::<ResponseStreamOptions>();
         assert_json_dto::<CreateResponseRequest>();
         assert_json_dto::<CreateStreamingResponseRequest>();
+        assert_json_dto::<ResponsesCreateEvent>();
+        assert_json_dto::<ResponsesClientEvent>();
+        assert_json_dto::<ResponsesServerEvent>();
         assert_json_dto::<ResponseError>();
         assert_json_dto::<IncompleteDetails>();
         assert_json_dto::<InputTokensDetails>();
@@ -6216,6 +6946,62 @@ mod tests {
     }
 
     #[test]
+    fn websocket_events_reuse_create_and_stream_codecs_losslessly() {
+        assert!(std::mem::size_of::<ResponsesClientEvent>() <= 128);
+
+        let client = ResponsesClientEvent::create_on_stream(
+            "agent.1",
+            CreateResponseRequest::new("gpt-test", "hello")
+                .tool(FunctionTool::new("lookup").strict(true)),
+        );
+        let value = serde_json::to_value(&client).expect("encode WS client event");
+        assert_eq!(value["type"], "response.create");
+        assert_eq!(value["stream_id"], "agent.1");
+        assert_eq!(value["model"], "gpt-test");
+        assert_eq!(value["input"], "hello");
+        assert!(value.get("stream").is_none());
+        let decoded: ResponsesClientEvent =
+            serde_json::from_value(value.clone()).expect("decode WS client event");
+        assert_eq!(
+            serde_json::to_value(decoded).expect("round-trip WS client event"),
+            value
+        );
+
+        let server_fixture = json!({
+            "type": "response.output_text.delta",
+            "stream_id": "agent.1",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hi",
+            "sequence_number": 1,
+            "logprobs": []
+        });
+        let server: ResponsesServerEvent =
+            serde_json::from_value(server_fixture.clone()).expect("decode WS server event");
+        assert_eq!(server.sequence_number(), Some(1));
+        assert!(!server.is_terminal());
+        assert_eq!(
+            serde_json::to_value(server).expect("round-trip WS server event"),
+            server_fixture
+        );
+
+        let future_fixture = json!({
+            "type": "response.future_ws_event",
+            "stream_id": "agent.1",
+            "sequence_number": 2,
+            "payload": true
+        });
+        let future: ResponsesServerEvent =
+            serde_json::from_value(future_fixture.clone()).expect("decode future WS server event");
+        assert!(matches!(future.event(), ResponseStreamEvent::Unknown(_)));
+        assert_eq!(
+            serde_json::to_value(future).expect("round-trip future WS event"),
+            future_fixture
+        );
+    }
+
+    #[test]
     fn input_message_accepts_compact_and_explicit_discriminator_forms() {
         let compact: ResponseInputItem = serde_json::from_value(json!({
             "role": "user",
@@ -6360,6 +7146,180 @@ mod tests {
         assert_eq!(
             serde_json::to_value(response).expect("semantic response round trip"),
             original
+        );
+    }
+
+    fn decode_stream_event(value: Value) -> ResponseStreamEvent {
+        serde_json::from_value(value).expect("decode accumulator stream fixture")
+    }
+
+    #[test]
+    fn accumulator_reduces_interleaved_text_and_function_arguments() {
+        let mut accumulator = ResponseAccumulator::new();
+        let fixtures = [
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": []
+                },
+                "sequence_number": 1
+            }),
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 1,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "weather",
+                    "arguments": "",
+                    "status": "in_progress"
+                },
+                "sequence_number": 2
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Hello ",
+                "sequence_number": 3,
+                "logprobs": []
+            }),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "delta": "{\"city\":",
+                "sequence_number": 4
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "world",
+                "sequence_number": 5,
+                "logprobs": []
+            }),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "delta": "\"Paris\"}",
+                "sequence_number": 6
+            }),
+            json!({
+                "type": "response.function_call_arguments.done",
+                "item_id": "fc_1",
+                "name": "weather",
+                "output_index": 1,
+                "arguments": "{\"city\":\"Paris\"}",
+                "sequence_number": 7
+            }),
+            json!({
+                "type": "response.output_text.done",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "text": "Hello world",
+                "sequence_number": 8,
+                "logprobs": []
+            }),
+        ];
+
+        for fixture in fixtures {
+            accumulator
+                .push(decode_stream_event(fixture))
+                .expect("accept interleaved event");
+        }
+        assert_eq!(accumulator.last_sequence_number(), Some(8));
+        assert_eq!(accumulator.output_text(), "Hello world");
+        assert_eq!(
+            accumulator.function_arguments("fc_1"),
+            Some("{\"city\":\"Paris\"}")
+        );
+        assert!(accumulator.snapshot().is_none());
+
+        accumulator
+            .push(decode_stream_event(json!({
+                "type": "response.completed",
+                "response": sample_response_value(),
+                "sequence_number": 9
+            })))
+            .expect("accept terminal response");
+        assert_eq!(accumulator.snapshot().map(Response::id), Some("resp_1"));
+        assert_eq!(accumulator.output_text(), "Hello world");
+
+        let response = accumulator.finish().expect("finish terminal response");
+        assert_eq!(response.id(), "resp_1");
+    }
+
+    #[test]
+    fn accumulator_rejects_duplicate_sequence_and_item_identity_changes() {
+        let first = json!({
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "a",
+            "sequence_number": 1,
+            "logprobs": []
+        });
+        let mut duplicate = ResponseAccumulator::new();
+        duplicate
+            .push(decode_stream_event(first.clone()))
+            .expect("accept first sequence");
+        let error = duplicate
+            .push(decode_stream_event(first))
+            .expect_err("duplicate sequence must fail");
+        assert_eq!(
+            error,
+            ResponseAccumulatorError::DuplicateSequence { sequence_number: 1 }
+        );
+
+        let mut mismatch = ResponseAccumulator::new();
+        mismatch
+            .push(decode_stream_event(json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": []
+                },
+                "sequence_number": 1
+            })))
+            .expect("bind output index");
+        let error = mismatch
+            .push(decode_stream_event(json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg_other",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "x",
+                "sequence_number": 2,
+                "logprobs": []
+            })))
+            .expect_err("item identity mismatch must fail");
+        assert!(matches!(
+            error,
+            ResponseAccumulatorError::ItemIdentityMismatch {
+                output_index: 0,
+                ..
+            }
+        ));
+
+        assert_eq!(
+            ResponseAccumulator::new().finish(),
+            Err(ResponseAccumulatorError::MissingTerminal)
         );
     }
 

@@ -10,8 +10,9 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::{
-    ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy,
+    ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy, TlsBackend,
     operation::{AuthScope, Operation, RequestEncoding, RetryClass},
+    sse::SseLimits,
 };
 
 const JSON_MIME: &str = "application/json";
@@ -64,6 +65,8 @@ pub(crate) struct Transport {
     max_error_body_bytes: usize,
     retry_policy: RetryPolicy,
     overall_timeout: Duration,
+    sse_limits: SseLimits,
+    tls_backend: Option<TlsBackend>,
 }
 
 impl Transport {
@@ -78,6 +81,8 @@ impl Transport {
         max_error_body_bytes: usize,
         retry_policy: RetryPolicy,
         overall_timeout: Duration,
+        sse_limits: SseLimits,
+        tls_backend: Option<TlsBackend>,
     ) -> Self {
         Self {
             http,
@@ -89,11 +94,37 @@ impl Transport {
             max_error_body_bytes,
             retry_policy,
             overall_timeout,
+            sse_limits,
+            tls_backend,
         }
     }
 
     pub(crate) const fn base_url(&self) -> &Url {
         &self.base_url
+    }
+
+    pub(crate) const fn sse_limits(&self) -> SseLimits {
+        self.sse_limits
+    }
+
+    #[cfg(feature = "realtime")]
+    pub(crate) fn authorization(&self) -> HeaderValue {
+        self.authorization.clone()
+    }
+
+    #[cfg(feature = "realtime")]
+    pub(crate) fn organization(&self) -> Option<HeaderValue> {
+        self.organization.clone()
+    }
+
+    #[cfg(feature = "realtime")]
+    pub(crate) fn project(&self) -> Option<HeaderValue> {
+        self.project.clone()
+    }
+
+    #[cfg(feature = "realtime")]
+    pub(crate) const fn tls_backend(&self) -> Option<TlsBackend> {
+        self.tls_backend
     }
 
     pub(crate) async fn execute_json<O, Q>(
@@ -284,8 +315,9 @@ impl Transport {
     {
         let meta = ResponseMeta::from_headers(response.status(), response.headers());
         let body = read_success(response, self.max_json_body_bytes, &meta).await?;
-        let decoded = serde_json::from_slice(&body).map_err(|source| Error::Decode {
-            source,
+        let decoded = deserialize_json(&body).map_err(|error| Error::Decode {
+            source: error.source,
+            path: error.path,
             meta_status: meta.status(),
             request_id: meta.request_id().map(Box::<str>::from),
             body: BodyPreview::from_bytes(
@@ -308,17 +340,16 @@ impl Transport {
         let decoded = if body.iter().all(u8::is_ascii_whitespace) {
             None
         } else {
-            Some(
-                serde_json::from_slice(&body).map_err(|source| Error::Decode {
-                    source,
-                    meta_status: meta.status(),
-                    request_id: meta.request_id().map(Box::<str>::from),
-                    body: BodyPreview::from_bytes(
-                        &body[..body.len().min(DECODE_PREVIEW_BYTES)],
-                        body.len() > DECODE_PREVIEW_BYTES,
-                    ),
-                })?,
-            )
+            Some(deserialize_json(&body).map_err(|error| Error::Decode {
+                source: error.source,
+                path: error.path,
+                meta_status: meta.status(),
+                request_id: meta.request_id().map(Box::<str>::from),
+                body: BodyPreview::from_bytes(
+                    &body[..body.len().min(DECODE_PREVIEW_BYTES)],
+                    body.len() > DECODE_PREVIEW_BYTES,
+                ),
+            })?)
         };
         Ok(ApiResponse::new(decoded, meta))
     }
@@ -362,6 +393,8 @@ impl fmt::Debug for Transport {
             .field("max_error_body_bytes", &self.max_error_body_bytes)
             .field("retry_policy", &self.retry_policy)
             .field("overall_timeout", &self.overall_timeout)
+            .field("sse_limits", &self.sse_limits)
+            .field("tls_backend", &self.tls_backend)
             .finish_non_exhaustive()
     }
 }
@@ -417,6 +450,29 @@ fn same_origin(left: &Url, right: &Url) -> bool {
     left.scheme() == right.scheme()
         && left.host_str() == right.host_str()
         && left.port_or_known_default() == right.port_or_known_default()
+}
+
+pub(crate) struct JsonDecodeFailure {
+    pub source: serde_json::Error,
+    pub path: Option<Box<str>>,
+}
+
+pub(crate) fn deserialize_json<T>(bytes: &[u8]) -> Result<T, JsonDecodeFailure>
+where
+    T: DeserializeOwned,
+{
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let value = serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
+        let path = error.path().to_string();
+        JsonDecodeFailure {
+            source: error.into_inner(),
+            path: (!path.is_empty()).then(|| path.into_boxed_str()),
+        }
+    })?;
+    deserializer
+        .end()
+        .map_err(|source| JsonDecodeFailure { source, path: None })?;
+    Ok(value)
 }
 
 fn retryable_operation(class: RetryClass, policy: RetryPolicy) -> bool {
@@ -621,6 +677,7 @@ mod tests {
             1024,
             RetryPolicy::disabled(),
             Duration::from_secs(1),
+            SseLimits::default(),
         );
         let path = [
             PathSegment::literal("responses"),

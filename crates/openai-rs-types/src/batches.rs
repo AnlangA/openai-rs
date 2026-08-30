@@ -17,8 +17,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwn
 use thiserror::Error;
 
 use crate::{
-    BatchId, ExtraFields, FileId, ModelId, Nullable, Omittable, opaque_string_id,
-    open_string_enum,
+    BatchId, ExtraFields, FileId, ModelId, Nullable, Omittable, opaque_string_id, open_string_enum,
 };
 
 opaque_string_id! {
@@ -184,18 +183,20 @@ impl BatchMetadata {
 
     /// Iterates over metadata in stable key order.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
-        self.0.iter().map(|(key, value)| (key.as_str(), value.as_str()))
+        self.0
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
     }
 
     /// Returns the number of metadata properties.
     #[must_use]
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Returns whether the map is empty.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
@@ -494,7 +495,7 @@ impl BatchError {
 }
 
 /// Request counters grouped by terminal status.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BatchRequestCounts {
     total: i64,
     completed: i64,
@@ -530,7 +531,7 @@ impl BatchRequestCounts {
 }
 
 /// Cached-token breakdown in batch usage.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BatchInputTokenDetails {
     cached_tokens: i64,
     #[serde(default, flatten)]
@@ -546,7 +547,7 @@ impl BatchInputTokenDetails {
 }
 
 /// Reasoning-token breakdown in batch usage.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BatchOutputTokenDetails {
     reasoning_tokens: i64,
     #[serde(default, flatten)]
@@ -562,7 +563,7 @@ impl BatchOutputTokenDetails {
 }
 
 /// Token accounting returned for newer batches.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BatchUsage {
     input_tokens: i64,
     input_tokens_details: BatchInputTokenDetails,
@@ -1257,7 +1258,12 @@ impl<W: Write> BatchJsonlWriter<W> {
 
     /// Overrides limits, primarily for bounded environments and tests.
     #[must_use]
-    pub fn with_limits(mut self, max_lines: usize, max_bytes: usize, max_line_bytes: usize) -> Self {
+    pub fn with_limits(
+        mut self,
+        max_lines: usize,
+        max_bytes: usize,
+        max_line_bytes: usize,
+    ) -> Self {
         self.max_lines = max_lines;
         self.max_bytes = max_bytes;
         self.max_line_bytes = max_line_bytes;
@@ -1397,10 +1403,10 @@ impl<R: BufRead, T> BatchJsonlReader<R, T> {
         self.buffer.clear();
         let line = self.line_count.saturating_add(1);
         loop {
-            let available = self.reader.fill_buf().map_err(|source| BatchJsonlError::Io {
-                line,
-                source,
-            })?;
+            let available = self
+                .reader
+                .fill_buf()
+                .map_err(|source| BatchJsonlError::Io { line, source })?;
             if available.is_empty() {
                 if self.buffer.is_empty() {
                     return Ok(None);
@@ -1456,12 +1462,12 @@ where
             return None;
         }
         let result = match self.read_next_line() {
-            Ok(Some(bytes)) => serde_json::from_slice(bytes).map_err(|source| {
-                BatchJsonlError::Decode {
+            Ok(Some(bytes)) => {
+                serde_json::from_slice(bytes).map_err(|source| BatchJsonlError::Decode {
                     line: self.line_count,
                     source,
-                }
-            }),
+                })
+            }
             Ok(None) => {
                 self.finished = true;
                 return None;
@@ -1527,11 +1533,17 @@ mod tests {
         value["status"] = json!("paused_by_future_service");
         value["future"] = json!({"retained": true});
         let decoded: Batch = serde_json::from_value(value.clone()).expect("decode batch");
-        assert_eq!(decoded.status().unknown_value(), Some("paused_by_future_service"));
+        assert_eq!(
+            decoded.status().unknown_value(),
+            Some("paused_by_future_service")
+        );
         assert_eq!(serde_json::to_value(decoded).expect("encode batch"), value);
 
         let mut missing = minimal_batch();
-        missing.as_object_mut().expect("object").remove("created_at");
+        missing
+            .as_object_mut()
+            .expect("object")
+            .remove("created_at");
         assert!(serde_json::from_value::<Batch>(missing).is_err());
     }
 
@@ -1553,35 +1565,43 @@ mod tests {
         .expect("decode result");
         assert!(matches!(success.outcome(), BatchLineOutcome::Response(_)));
 
-        assert!(serde_json::from_value::<BatchResultLine<serde_json::Value>>(json!({
-            "id": "batch_req_1", "custom_id": "line-1", "response": null, "error": null
-        }))
-        .is_err());
+        assert!(
+            serde_json::from_value::<BatchResultLine<serde_json::Value>>(json!({
+                "id": "batch_req_1", "custom_id": "line-1", "response": null, "error": null
+            }))
+            .is_err()
+        );
     }
 
     #[test]
     fn writer_and_reader_roundtrip_without_manual_jsonl() {
-        let first = BatchLine::new("one", BatchEndpoint::Responses, json!({"model": "gpt-test"}))
-            .expect("line");
-        let second = BatchLine::new("two", BatchEndpoint::Responses, json!({"model": "gpt-test"}))
-            .expect("line");
+        let first = BatchLine::new(
+            "one",
+            BatchEndpoint::Responses,
+            json!({"model": "gpt-test"}),
+        )
+        .expect("line");
+        let second = BatchLine::new(
+            "two",
+            BatchEndpoint::Responses,
+            json!({"model": "gpt-test"}),
+        )
+        .expect("line");
         let mut writer = BatchJsonlWriter::new(Vec::new());
         writer.write_line(&first).expect("write first");
         writer.write_line(&second).expect("write second");
         let bytes = writer.into_inner();
 
-        let decoded = read_batch_jsonl::<_, BatchLine<serde_json::Value>>(BufReader::new(
-            Cursor::new(bytes),
-        ))
-        .collect::<Result<Vec<_>, _>>()
-        .expect("read JSONL");
+        let decoded =
+            read_batch_jsonl::<_, BatchLine<serde_json::Value>>(BufReader::new(Cursor::new(bytes)))
+                .collect::<Result<Vec<_>, _>>()
+                .expect("read JSONL");
         assert_eq!(decoded, vec![first, second]);
     }
 
     #[test]
     fn writer_rejects_duplicate_custom_ids() {
-        let line = BatchLine::new("same", BatchEndpoint::Responses, json!({}))
-            .expect("valid line");
+        let line = BatchLine::new("same", BatchEndpoint::Responses, json!({})).expect("valid line");
         let mut writer = BatchJsonlWriter::new(Vec::new());
         writer.write_line(&line).expect("first line");
         assert!(matches!(
@@ -1593,11 +1613,10 @@ mod tests {
     #[test]
     fn reader_accepts_crlf_and_unterminated_final_line() {
         let bytes = b"{\"custom_id\":\"a\",\"method\":\"POST\",\"url\":\"/v1/responses\",\"body\":{}}\r\n{\"custom_id\":\"b\",\"method\":\"POST\",\"url\":\"/v1/responses\",\"body\":{}}";
-        let values = read_batch_jsonl::<_, BatchLine<serde_json::Value>>(BufReader::new(
-            bytes.as_slice(),
-        ))
-        .collect::<Result<Vec<_>, _>>()
-        .expect("decode both lines");
+        let values =
+            read_batch_jsonl::<_, BatchLine<serde_json::Value>>(BufReader::new(bytes.as_slice()))
+                .collect::<Result<Vec<_>, _>>()
+                .expect("decode both lines");
         assert_eq!(values.len(), 2);
     }
 
