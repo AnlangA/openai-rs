@@ -720,6 +720,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_containers_loopback_checks_method_query_body_and_decode() {
+        let (client, captures) = serve_script(vec![StubResponse::json(
+            json!({
+                "object": "list",
+                "data": [
+                    {
+                        "id": "cntr_listed",
+                        "object": "container",
+                        "name": "sandbox",
+                        "created_at": 1,
+                        "status": "running"
+                    }
+                ],
+                "first_id": "cntr_listed",
+                "last_id": "cntr_listed",
+                "has_more": false
+            })
+            .to_string(),
+        )])
+        .await;
+        let response = Containers::new(client)
+            .list(ContainerListParams {
+                limit: Omittable::Value(2),
+                order: Omittable::Value(ContainerListOrder::Ascending),
+                after: Omittable::Value(ContainerId::new("cntr_cursor")),
+                name: Omittable::Value("sandbox".into()),
+            })
+            .await
+            .expect("list Containers");
+
+        assert_eq!(response.data.len(), 1);
+        assert_eq!(response.data[0].id.as_str(), "cntr_listed");
+        assert_eq!(response.first_id, "cntr_listed");
+        assert_eq!(response.last_id, "cntr_listed");
+        assert!(!response.has_more);
+        assert_eq!(response.request_id(), Some("req_container_0"));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].method, Method::GET);
+        assert_eq!(
+            captures[0].path_and_query,
+            "/v1/containers?limit=2&order=asc&after=cntr_cursor&name=sandbox"
+        );
+        assert_eq!(captures[0].accept.as_deref(), Some(JSON_MIME));
+        assert!(captures[0].content_type.is_none());
+        assert!(captures[0].body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_container_loopback_checks_method_path_body_and_decode() {
+        let (client, captures) = serve_script(vec![StubResponse::empty()]).await;
+        let response = Containers::new(client)
+            .delete(&ContainerId::new("cntr/a b"))
+            .await
+            .expect("delete Container");
+
+        assert_eq!(response.request_id(), Some("req_container_0"));
+        let () = response.into_inner();
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].method, Method::DELETE);
+        assert_eq!(captures[0].path_and_query, "/v1/containers/cntr%2Fa%20b");
+        assert_eq!(captures[0].accept.as_deref(), Some(JSON_MIME));
+        assert!(captures[0].content_type.is_none());
+        assert!(captures[0].body.is_empty());
+    }
+
+    #[tokio::test]
     async fn container_page_stream_advances_the_opaque_cursor() {
         let (client, captures) = serve_script(vec![
             StubResponse::json(
@@ -817,6 +887,87 @@ mod tests {
             "/v1/containers/cntr%2Fa%20b/files/cfile%2Fx%20y"
         );
         assert_eq!(captures[3].method, Method::DELETE);
+    }
+
+    #[tokio::test]
+    async fn list_container_files_loopback_checks_method_query_body_and_decode() {
+        let (client, captures) = serve_script(vec![StubResponse::json(
+            json!({
+                "object": "list",
+                "data": [
+                    {
+                        "id": "cfile_listed",
+                        "object": "container.file",
+                        "container_id": "cntr/a b",
+                        "created_at": 1,
+                        "bytes": 4,
+                        "path": "/mnt/data/file.bin",
+                        "source": "user"
+                    }
+                ],
+                "first_id": "cfile_listed",
+                "last_id": "cfile_listed",
+                "has_more": false
+            })
+            .to_string(),
+        )])
+        .await;
+        let response = ContainerFiles::new(client)
+            .list(
+                &ContainerId::new("cntr/a b"),
+                ContainerFileListParams {
+                    limit: Omittable::Value(3),
+                    order: Omittable::Value(ContainerListOrder::Descending),
+                    after: Omittable::Value(ContainerFileId::new("cfile_cursor")),
+                },
+            )
+            .await
+            .expect("list Container Files");
+
+        assert_eq!(response.data.len(), 1);
+        assert_eq!(response.data[0].id.as_str(), "cfile_listed");
+        assert_eq!(response.data[0].container_id.as_str(), "cntr/a b");
+        assert_eq!(response.first_id, "cfile_listed");
+        assert_eq!(response.last_id, "cfile_listed");
+        assert!(!response.has_more);
+        assert_eq!(response.request_id(), Some("req_container_0"));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].method, Method::GET);
+        assert_eq!(
+            captures[0].path_and_query,
+            "/v1/containers/cntr%2Fa%20b/files?limit=3&order=desc&after=cfile_cursor"
+        );
+        assert_eq!(captures[0].accept.as_deref(), Some(JSON_MIME));
+        assert!(captures[0].content_type.is_none());
+        assert!(captures[0].body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_container_file_loopback_checks_method_path_body_and_decode() {
+        let (client, captures) = serve_script(vec![StubResponse::empty()]).await;
+        let response = ContainerFiles::new(client)
+            .delete(
+                &ContainerId::new("cntr/a b"),
+                &ContainerFileId::new("cfile/x y"),
+            )
+            .await
+            .expect("delete Container File");
+
+        assert_eq!(response.request_id(), Some("req_container_0"));
+        let () = response.into_inner();
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].method, Method::DELETE);
+        assert_eq!(
+            captures[0].path_and_query,
+            "/v1/containers/cntr%2Fa%20b/files/cfile%2Fx%20y"
+        );
+        assert_eq!(captures[0].accept.as_deref(), Some(JSON_MIME));
+        assert!(captures[0].content_type.is_none());
+        assert!(captures[0].body.is_empty());
     }
 
     #[tokio::test]

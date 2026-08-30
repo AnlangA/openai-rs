@@ -56,7 +56,7 @@ reachable through the ordinary Platform `Client`.
 | `rmcp-http-rustls` | Pass-through | Enables the pinned `rmcp` crate's streamable HTTP client with rustls. |
 | `rmcp-http-native-tls` | Pass-through | Enables the pinned `rmcp` crate's streamable HTTP client with native TLS. |
 | `rmcp-server` | Pass-through | Enables the pinned `rmcp` crate's server APIs; `openai-rs-rmcp` does not define an SDK-specific server adapter. |
-| `rmcp-server-stdio` | Pass-through | Enables the pinned `rmcp` crate's server stdio transport. |
+| `rmcp-server-stdio` | Pass-through | Enables the pinned `rmcp` crate's generic I/O transport used for server stdio. |
 | `rmcp-auth` | Pass-through | Enables the pinned `rmcp` crate's authentication support. |
 
 OpenAI's remote MCP tool wire format and the local `rmcp` adapter are separate

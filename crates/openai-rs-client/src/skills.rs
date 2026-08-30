@@ -750,6 +750,235 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_skills_has_exact_bodyless_wire_contract() {
+        let (client, captures) = serve_script(vec![StubResponse::json(
+            json!({
+                "object": "list",
+                "data": [{
+                    "id": "skill_1",
+                    "object": "skill",
+                    "name": "example",
+                    "description": "example skill",
+                    "created_at": 1,
+                    "default_version": "2",
+                    "latest_version": "3"
+                }],
+                "first_id": "skill_1",
+                "last_id": "skill_1",
+                "has_more": false
+            })
+            .to_string(),
+        )])
+        .await;
+
+        let response = Skills::new(client)
+            .list(SkillListParams {
+                limit: Omittable::Value(SkillListLimit::new(2).expect("limit")),
+                order: Omittable::Value(SkillListOrder::Ascending),
+                after: Omittable::Value("skill cursor/x".into()),
+            })
+            .await
+            .expect("list Skills response");
+        assert_eq!(response.data.len(), 1);
+        assert_eq!(response.data[0].id.as_str(), "skill_1");
+        assert_eq!(response.data[0].latest_version.as_str(), "3");
+        assert_eq!(response.request_id(), Some("req_skill_0"));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 1);
+        let captured = &captures[0];
+        assert_eq!(captured.method, Method::GET);
+        assert_eq!(
+            captured.path_and_query,
+            "/v1/skills?limit=2&order=asc&after=skill+cursor%2Fx"
+        );
+        assert_eq!(captured.content_type, None);
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_skill_default_version_has_exact_json_wire_contract() {
+        let (client, captures) = serve_script(vec![StubResponse::json(skill_json(
+            "skill/a b",
+            "7/x",
+            "8",
+        ))])
+        .await;
+        let skill_id = SkillId::new("skill/a b");
+
+        let response = Skills::new(client)
+            .set_default_version(&skill_id, SetDefaultSkillVersionBody::new("7/x"))
+            .await
+            .expect("update Skill default version response");
+        assert_eq!(response.id.as_str(), "skill/a b");
+        assert_eq!(response.default_version.as_str(), "7/x");
+        assert_eq!(response.request_id(), Some("req_skill_0"));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 1);
+        let captured = &captures[0];
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/skills/skill%2Fa%20b");
+        assert_eq!(captured.content_type.as_deref(), Some(JSON_MIME));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captured.body).expect("default-version JSON"),
+            json!({"default_version": "7/x"})
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_skill_has_exact_bodyless_wire_contract() {
+        let (client, captures) = serve_script(vec![StubResponse::json(
+            json!({
+                "object": "skill.deleted",
+                "deleted": true,
+                "id": "skill/a b"
+            })
+            .to_string(),
+        )])
+        .await;
+        let skill_id = SkillId::new("skill/a b");
+
+        let response = Skills::new(client)
+            .delete(&skill_id)
+            .await
+            .expect("delete Skill response");
+        assert_eq!(response.id.as_str(), "skill/a b");
+        assert!(response.deleted);
+        assert_eq!(response.request_id(), Some("req_skill_0"));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 1);
+        let captured = &captures[0];
+        assert_eq!(captured.method, Method::DELETE);
+        assert_eq!(captured.path_and_query, "/v1/skills/skill%2Fa%20b");
+        assert_eq!(captured.content_type, None);
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_skill_version_has_exact_multipart_wire_contract() {
+        let (client, captures) =
+            serve_script(vec![StubResponse::json(version_json("skill/a b", "7/x"))]).await;
+        let skill_id = SkillId::new("skill/a b");
+        let request = CreateSkillVersionRequest::new(bytes_source("version.zip", b"VERSION-ZIP"))
+            .set_default(true);
+
+        let response = SkillVersions::new(client)
+            .create(&skill_id, request)
+            .await
+            .expect("create Skill Version response");
+        assert_eq!(response.skill_id.as_str(), "skill/a b");
+        assert_eq!(response.version.as_str(), "7/x");
+        assert_eq!(response.request_id(), Some("req_skill_0"));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 1);
+        let captured = &captures[0];
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/skills/skill%2Fa%20b/versions");
+        assert!(
+            captured
+                .content_type
+                .as_deref()
+                .is_some_and(|value| value.starts_with("multipart/form-data; boundary="))
+        );
+        let body = String::from_utf8_lossy(&captured.body);
+        assert!(body.contains("name=\"files\""));
+        assert!(body.contains("filename=\"version.zip\""));
+        assert!(body.contains("VERSION-ZIP"));
+        assert!(body.contains("name=\"default\""));
+        assert!(body.contains("true"));
+    }
+
+    #[tokio::test]
+    async fn list_skill_versions_has_exact_bodyless_wire_contract() {
+        let (client, captures) = serve_script(vec![StubResponse::json(
+            json!({
+                "object": "list",
+                "data": [{
+                    "id": "skillver_7",
+                    "skill_id": "skill/a b",
+                    "version": "7",
+                    "created_at": 1,
+                    "name": "example",
+                    "description": "example version",
+                    "object": "skill.version"
+                }],
+                "first_id": "skillver_7",
+                "last_id": "skillver_7",
+                "has_more": false
+            })
+            .to_string(),
+        )])
+        .await;
+        let skill_id = SkillId::new("skill/a b");
+
+        let response = SkillVersions::new(client)
+            .list(
+                &skill_id,
+                SkillListParams {
+                    limit: Omittable::Value(SkillListLimit::new(3).expect("limit")),
+                    order: Omittable::Value(SkillListOrder::Descending),
+                    after: Omittable::Value("version cursor/x".into()),
+                },
+            )
+            .await
+            .expect("list Skill Versions response");
+        assert_eq!(response.data.len(), 1);
+        assert_eq!(response.data[0].id.as_str(), "skillver_7");
+        assert_eq!(response.data[0].version.as_str(), "7");
+        assert_eq!(response.request_id(), Some("req_skill_0"));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 1);
+        let captured = &captures[0];
+        assert_eq!(captured.method, Method::GET);
+        assert_eq!(
+            captured.path_and_query,
+            "/v1/skills/skill%2Fa%20b/versions?limit=3&order=desc&after=version+cursor%2Fx"
+        );
+        assert_eq!(captured.content_type, None);
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_skill_version_has_exact_bodyless_wire_contract() {
+        let (client, captures) = serve_script(vec![StubResponse::json(
+            json!({
+                "object": "skill.version.deleted",
+                "deleted": true,
+                "id": "skillver_7/x",
+                "version": "7/x"
+            })
+            .to_string(),
+        )])
+        .await;
+        let skill_id = SkillId::new("skill/a b");
+        let version = SkillVersionNumber::new("7/x");
+
+        let response = SkillVersions::new(client)
+            .delete(&skill_id, &version)
+            .await
+            .expect("delete Skill Version response");
+        assert_eq!(response.id.as_str(), "skillver_7/x");
+        assert_eq!(response.version.as_str(), "7/x");
+        assert!(response.deleted);
+        assert_eq!(response.request_id(), Some("req_skill_0"));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 1);
+        let captured = &captures[0];
+        assert_eq!(captured.method, Method::DELETE);
+        assert_eq!(
+            captured.path_and_query,
+            "/v1/skills/skill%2Fa%20b/versions/7%2Fx"
+        );
+        assert_eq!(captured.content_type, None);
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
     async fn skill_list_retrieve_update_and_delete_match_routes() {
         let (client, captures) = serve_script(vec![
             StubResponse::json(

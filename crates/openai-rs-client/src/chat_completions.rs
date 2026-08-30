@@ -640,6 +640,7 @@ mod tests {
         assert!(captured.body.is_none());
         let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
             .expect("stored list URL");
+        assert_eq!(url.path(), "/v1/chat/completions");
         let query = url.query_pairs().collect::<Vec<_>>();
         assert!(query.contains(&("metadata[tenant]".into(), "acme".into())));
         assert!(query.contains(&("after".into(), "chat cursor".into())));
@@ -655,6 +656,29 @@ mod tests {
             .list_pages(ChatCompletionListParams::default());
         assert!(pages.next().await.expect("one page").is_ok());
         assert!(pages.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_chat_completion_uses_encoded_id_without_query_or_body() {
+        let (client, captured) = serve_once(
+            "application/json",
+            r#"{"id":"chatcmpl/a b","choices":[{"finish_reason":"stop","index":0,"message":{"content":"hello","refusal":null,"role":"assistant"},"logprobs":null}],"created":1,"model":"test-model","object":"chat.completion"}"#,
+        )
+        .await;
+        let completion = client
+            .chat_completions()
+            .retrieve("chatcmpl/a b")
+            .await
+            .expect("retrieved stored Chat completion");
+        assert_eq!(completion.id, "chatcmpl/a b");
+
+        let captured = captured.await.expect("captured retrieve request");
+        assert_eq!(captured.method, Method::GET);
+        assert_eq!(
+            captured.path_and_query,
+            "/v1/chat/completions/chatcmpl%2Fa%20b"
+        );
+        assert!(captured.body.is_none());
     }
 
     #[tokio::test]

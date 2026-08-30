@@ -417,6 +417,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retrieve_file_has_exact_bodyless_wire_contract() {
+        let (client, captured) = serve_once(
+            r#"{"id":"file/a b","object":"file","bytes":12,"created_at":1,"filename":"input.txt","purpose":"user_data","status":"processed"}"#,
+        )
+        .await;
+        let file_id = FileId::new("file/a b");
+
+        let response = client
+            .files()
+            .retrieve(&file_id)
+            .await
+            .expect("retrieve file response");
+        assert_eq!(response.id().as_str(), "file/a b");
+        assert_eq!(response.bytes(), 12);
+        assert_eq!(response.request_id(), Some("req_files"));
+
+        let captured = captured.await.expect("captured retrieve file request");
+        assert_eq!(captured.method, Method::GET);
+        assert_eq!(captured.path_and_query, "/v1/files/file%2Fa%20b");
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        assert_eq!(captured.content_type, None);
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_file_has_exact_bodyless_wire_contract() {
+        let (client, captured) =
+            serve_once(r#"{"id":"file/a b","object":"file","deleted":true}"#).await;
+        let file_id = FileId::new("file/a b");
+
+        let response = client
+            .files()
+            .delete(&file_id)
+            .await
+            .expect("delete file response");
+        assert_eq!(response.id().as_str(), "file/a b");
+        assert!(response.deleted());
+        assert_eq!(response.request_id(), Some("req_files"));
+
+        let captured = captured.await.expect("captured delete file request");
+        assert_eq!(captured.method, Method::DELETE);
+        assert_eq!(captured.path_and_query, "/v1/files/file%2Fa%20b");
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        assert_eq!(captured.content_type, None);
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
     async fn create_upload_sends_exact_json_contract() {
         let upload_json = r#"{"id":"upload_1","bytes":5000000000,"created_at":1,"expires_at":3601,"filename":"large.jsonl","purpose":"batch","status":"pending","object":"upload"}"#;
         let (client, captured) = serve_once(upload_json).await;
@@ -482,5 +536,31 @@ mod tests {
                 "md5": "opaque-checksum"
             })
         );
+    }
+
+    #[tokio::test]
+    async fn cancel_upload_has_exact_bodyless_wire_contract() {
+        let upload_json = r#"{"id":"upload/a b","bytes":2,"created_at":1,"expires_at":3601,"filename":"x.bin","purpose":"user_data","status":"cancelled","object":"upload"}"#;
+        let (client, captured) = serve_once(upload_json).await;
+        let upload_id = UploadId::new("upload/a b");
+
+        let response = client
+            .uploads()
+            .cancel(&upload_id)
+            .await
+            .expect("cancel upload response");
+        assert_eq!(response.id().as_str(), "upload/a b");
+        assert_eq!(response.status().as_str(), "cancelled");
+        assert_eq!(response.request_id(), Some("req_files"));
+
+        let captured = captured.await.expect("captured cancel upload request");
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/uploads/upload%2Fa%20b/cancel");
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        assert_eq!(captured.content_type, None);
+        assert!(captured.body.is_empty());
     }
 }

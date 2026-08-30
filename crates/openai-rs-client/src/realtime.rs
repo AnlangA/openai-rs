@@ -1068,4 +1068,39 @@ mod tests {
         assert_eq!(captured.path, "/v1/realtime/calls/call_1/hangup");
         assert!(captured.body.is_empty());
     }
+
+    #[tokio::test]
+    async fn reject_call_covers_typed_and_default_wire_modes() {
+        let (client, typed) = http_server(StatusCode::OK, "application/json", "", None).await;
+        let response = client
+            .realtime()
+            .reject_call(
+                "call/a b",
+                RealtimeCallRejectRequest::new().with_status_code(486),
+            )
+            .await
+            .expect("typed reject SIP call");
+        assert_eq!(response.request_id(), Some("req_realtime_http"));
+        let captured = typed.await.expect("captured typed reject");
+        assert_eq!(captured.method, reqwest::Method::POST);
+        assert_eq!(captured.path, "/v1/realtime/calls/call%2Fa%20b/reject");
+        assert_eq!(captured.content_type.as_deref(), Some("application/json"));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captured.body).expect("typed reject JSON"),
+            json!({"status_code": 486})
+        );
+
+        let (client, default) = http_server(StatusCode::OK, "application/json", "", None).await;
+        let response = client
+            .realtime()
+            .reject_call_default("call/a b")
+            .await
+            .expect("default reject SIP call");
+        assert_eq!(response.request_id(), Some("req_realtime_http"));
+        let captured = default.await.expect("captured default reject");
+        assert_eq!(captured.method, reqwest::Method::POST);
+        assert_eq!(captured.path, "/v1/realtime/calls/call%2Fa%20b/reject");
+        assert!(captured.content_type.is_none());
+        assert!(captured.body.is_empty());
+    }
 }

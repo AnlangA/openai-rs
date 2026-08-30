@@ -697,6 +697,158 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_conversation_has_exact_json_wire_contract() {
+        let conversation_id = ConversationId::new("conv/a b");
+        let (client, captures) = serve_script(vec![(
+            StatusCode::OK,
+            conversation_json(conversation_id.as_str(), json!({"topic":"updated"})),
+        )])
+        .await;
+        let mut metadata = ConversationMetadata::new();
+        metadata.insert("topic".to_owned(), "updated".to_owned());
+
+        let response: ApiResponse<Conversation> = client
+            .conversations()
+            .update(
+                &conversation_id,
+                UpdateConversationRequest::new(metadata).expect("valid update metadata"),
+            )
+            .await
+            .expect("update conversation response");
+        assert_eq!(response.id().as_str(), "conv/a b");
+        assert_eq!(response.created_at(), 1);
+        assert_eq!(
+            response
+                .metadata()
+                .and_then(|metadata| metadata.get("topic"))
+                .map(String::as_str),
+            Some("updated")
+        );
+
+        let captures = captures.lock().expect("update capture lock");
+        assert_eq!(captures.len(), 1);
+        let captured = &captures[0];
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/conversations/conv%2Fa%20b");
+        assert_eq!(captured.content_type.as_deref(), Some("application/json"));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captured.body).expect("update request JSON"),
+            json!({"metadata":{"topic":"updated"}})
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_conversation_has_exact_bodyless_wire_contract() {
+        let conversation_id = ConversationId::new("conv/a b");
+        let (client, captures) = serve_script(vec![(
+            StatusCode::OK,
+            json!({
+                "id": conversation_id.as_str(),
+                "object": "conversation.deleted",
+                "deleted": true
+            })
+            .to_string(),
+        )])
+        .await;
+
+        let response: ApiResponse<DeletedConversation> = client
+            .conversations()
+            .delete(&conversation_id)
+            .await
+            .expect("delete conversation response");
+        assert_eq!(response.id().as_str(), "conv/a b");
+        assert!(response.is_deleted());
+
+        let captures = captures.lock().expect("delete capture lock");
+        assert_eq!(captures.len(), 1);
+        let captured = &captures[0];
+        assert_eq!(captured.method, Method::DELETE);
+        assert_eq!(captured.path_and_query, "/v1/conversations/conv%2Fa%20b");
+        assert_eq!(captured.content_type, None);
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_conversation_item_has_exact_bodyless_wire_contract() {
+        let conversation_id = ConversationId::new("conv/a b");
+        let item_id = ConversationItemId::new("msg/x y");
+        let (client, captures) = serve_script(vec![(
+            StatusCode::OK,
+            conversation_json(conversation_id.as_str(), json!(null)),
+        )])
+        .await;
+
+        let response: ApiResponse<Conversation> = client
+            .conversations()
+            .items()
+            .delete(&conversation_id, &item_id)
+            .await
+            .expect("delete conversation item response");
+        assert_eq!(response.id().as_str(), "conv/a b");
+        assert_eq!(response.created_at(), 1);
+        assert!(response.metadata().is_none());
+
+        let captures = captures.lock().expect("delete item capture lock");
+        assert_eq!(captures.len(), 1);
+        let captured = &captures[0];
+        assert_eq!(captured.method, Method::DELETE);
+        assert_eq!(
+            captured.path_and_query,
+            "/v1/conversations/conv%2Fa%20b/items/msg%2Fx%20y"
+        );
+        assert_eq!(captured.content_type, None);
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_conversation_items_has_exact_bodyless_wire_contract() {
+        let conversation_id = ConversationId::new("conv/a b");
+        let (client, captures) = serve_script(vec![(
+            StatusCode::OK,
+            item_page_json("msg_listed", false, json!("msg_listed")),
+        )])
+        .await;
+        let params = ListConversationItemsParams::new()
+            .limit(2)
+            .expect("valid page size")
+            .order(ConversationItemOrder::Ascending)
+            .after("msg cursor")
+            .include(ConversationItemInclude::WebSearchSources);
+
+        let response: ApiResponse<ConversationItemList> = client
+            .conversations()
+            .items()
+            .list(&conversation_id, params)
+            .await
+            .expect("list conversation items response");
+        assert_eq!(response.data().len(), 1);
+        assert!(!response.has_more());
+        assert_eq!(
+            response.first_id().map(ConversationItemId::as_str),
+            Some("msg_listed")
+        );
+        assert_eq!(
+            response.last_id().map(ConversationItemId::as_str),
+            Some("msg_listed")
+        );
+        let ConversationItem::Message(message) = &response.data()[0] else {
+            panic!("expected typed conversation message");
+        };
+        assert_eq!(message.id().as_str(), "msg_listed");
+
+        let captures = captures.lock().expect("list capture lock");
+        assert_eq!(captures.len(), 1);
+        let captured = &captures[0];
+        assert_eq!(captured.method, Method::GET);
+        assert_eq!(
+            captured.path_and_query,
+            "/v1/conversations/conv%2Fa%20b/items?limit=2&order=asc&after=msg+cursor&include=web_search_call.action.sources"
+        );
+        assert_eq!(captured.content_type, None);
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
     async fn page_stream_advances_once_then_rejects_a_repeated_cursor() {
         let responses = vec![
             (

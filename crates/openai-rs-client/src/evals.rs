@@ -660,8 +660,10 @@ mod tests {
     use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
     use hyper_util::rt::TokioIo;
     use openai_rs_types::{
-        CreateCustomDataSourceConfig, CreateEvalDataSourceConfig, EvalSortOrder, StringCheckGrader,
-        StringCheckOperation, TestingCriterion,
+        CreateCustomDataSourceConfig, CreateEvalDataSourceConfig, EvalFileContentSource,
+        EvalJsonlRunDataSource, EvalJsonlSource, EvalOrderBy, EvalOutputItemFilterStatus,
+        EvalRunDataSource, EvalSortOrder, StringCheckGrader, StringCheckOperation,
+        TestingCriterion,
     };
     use serde_json::{Value, json};
     use tokio::{net::TcpListener, sync::mpsc};
@@ -675,6 +677,7 @@ mod tests {
         method: Method,
         path_and_query: String,
         authorization: Option<String>,
+        content_type: Option<String>,
         body: Vec<u8>,
     }
 
@@ -711,6 +714,11 @@ mod tests {
                             .get(http::header::AUTHORIZATION)
                             .and_then(|value| value.to_str().ok())
                             .map(ToOwned::to_owned);
+                        let content_type = request
+                            .headers()
+                            .get(http::header::CONTENT_TYPE)
+                            .and_then(|value| value.to_str().ok())
+                            .map(ToOwned::to_owned);
                         let body = request
                             .into_body()
                             .collect()
@@ -723,6 +731,7 @@ mod tests {
                                 method,
                                 path_and_query,
                                 authorization,
+                                content_type,
                                 body,
                             })
                             .await
@@ -800,6 +809,48 @@ mod tests {
         })
     }
 
+    fn output_item_json() -> Value {
+        json!({
+            "object": "eval.run.output_item",
+            "id": "outputitem_1",
+            "run_id": "evalrun_1",
+            "eval_id": "eval_1",
+            "created_at": 1740110912,
+            "status": "pass",
+            "datasource_item_id": 0,
+            "datasource_item": {"input": "hello", "label": "hi"},
+            "results": [{"name": "exact", "score": 1.0, "passed": true}],
+            "sample": {
+                "input": [{"role": "user", "content": "hello"}],
+                "output": [{"role": "assistant", "content": "hi"}],
+                "finish_reason": "stop",
+                "model": "gpt-test",
+                "usage": {
+                    "total_tokens": 3,
+                    "completion_tokens": 1,
+                    "prompt_tokens": 2,
+                    "cached_tokens": 0
+                },
+                "error": null,
+                "temperature": 0.0,
+                "max_completion_tokens": 16,
+                "top_p": 1.0,
+                "seed": 42
+            }
+        })
+    }
+
+    fn assert_no_body(request: &CapturedRequest) {
+        assert_eq!(request.content_type, None);
+        assert!(request.body.is_empty());
+    }
+
+    fn assert_json_body(request: &CapturedRequest, expected: Value) {
+        assert_eq!(request.content_type.as_deref(), Some("application/json"));
+        let actual: Value = serde_json::from_slice(&request.body).expect("request JSON body");
+        assert_eq!(actual, expected);
+    }
+
     #[test]
     fn operation_manifest_matches_all_twelve_stable_endpoints() {
         let operations = [
@@ -864,6 +915,304 @@ mod tests {
         let body: Value = serde_json::from_slice(&request.body).expect("request JSON");
         assert_eq!(body["data_source_config"]["type"], "custom");
         assert_eq!(body["testing_criteria"][0]["type"], "string_check");
+    }
+
+    #[tokio::test]
+    async fn list_evals_loopback_wire_contract() {
+        let page = json!({
+            "object": "list",
+            "data": [eval_json()],
+            "first_id": "eval_1",
+            "last_id": "eval_1",
+            "has_more": false
+        });
+        let (client, mut captured) = serve_sequence(vec![(StatusCode::OK, page.to_string())]).await;
+
+        let response: ApiResponse<EvalList> = client
+            .evals()
+            .list(
+                ListEvalsParams::new()
+                    .after(EvalId::new("eval_before"))
+                    .limit(7)
+                    .order(EvalSortOrder::Descending)
+                    .order_by(EvalOrderBy::UpdatedAt),
+            )
+            .await
+            .expect("list Evals");
+        assert_eq!(response.data()[0].id().as_str(), "eval_1");
+
+        let request = captured.recv().await.expect("captured list Evals request");
+        assert_eq!(request.method, Method::GET);
+        assert_eq!(
+            request.path_and_query,
+            "/v1/evals?after=eval_before&limit=7&order=desc&order_by=updated_at"
+        );
+        assert_no_body(&request);
+    }
+
+    #[tokio::test]
+    async fn get_eval_loopback_wire_contract() {
+        let (client, mut captured) =
+            serve_sequence(vec![(StatusCode::OK, eval_json().to_string())]).await;
+
+        let response: ApiResponse<Eval> = client
+            .evals()
+            .retrieve(&EvalId::new("eval_1"))
+            .await
+            .expect("retrieve Eval");
+        assert_eq!(response.id().as_str(), "eval_1");
+
+        let request = captured
+            .recv()
+            .await
+            .expect("captured retrieve Eval request");
+        assert_eq!(request.method, Method::GET);
+        assert_eq!(request.path_and_query, "/v1/evals/eval_1");
+        assert_no_body(&request);
+    }
+
+    #[tokio::test]
+    async fn update_eval_loopback_wire_contract() {
+        let (client, mut captured) =
+            serve_sequence(vec![(StatusCode::OK, eval_json().to_string())]).await;
+
+        let response: ApiResponse<Eval> = client
+            .evals()
+            .update(
+                &EvalId::new("eval_1"),
+                UpdateEvalRequest::new().name("quality-v2"),
+            )
+            .await
+            .expect("update Eval");
+        assert_eq!(response.id().as_str(), "eval_1");
+
+        let request = captured.recv().await.expect("captured update Eval request");
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(request.path_and_query, "/v1/evals/eval_1");
+        assert_json_body(&request, json!({"name": "quality-v2"}));
+    }
+
+    #[tokio::test]
+    async fn get_eval_runs_loopback_wire_contract() {
+        let page = json!({
+            "object": "list",
+            "data": [run_json("completed")],
+            "first_id": "evalrun_1",
+            "last_id": "evalrun_1",
+            "has_more": false
+        });
+        let (client, mut captured) = serve_sequence(vec![(StatusCode::OK, page.to_string())]).await;
+
+        let response: ApiResponse<EvalRunList> = client
+            .evals()
+            .runs()
+            .list(
+                &EvalId::new("eval_1"),
+                ListEvalRunsParams::new()
+                    .after(EvalRunId::new("evalrun_before"))
+                    .limit(5)
+                    .order(EvalSortOrder::Ascending)
+                    .status(EvalRunStatus::Completed),
+            )
+            .await
+            .expect("list Eval runs");
+        assert_eq!(response.data()[0].id().as_str(), "evalrun_1");
+        assert_eq!(response.data()[0].status(), &EvalRunStatus::Completed);
+
+        let request = captured
+            .recv()
+            .await
+            .expect("captured list Eval runs request");
+        assert_eq!(request.method, Method::GET);
+        assert_eq!(
+            request.path_and_query,
+            "/v1/evals/eval_1/runs?after=evalrun_before&limit=5&order=asc&status=completed"
+        );
+        assert_no_body(&request);
+    }
+
+    #[tokio::test]
+    async fn create_eval_run_loopback_wire_contract() {
+        let (client, mut captured) =
+            serve_sequence(vec![(StatusCode::CREATED, run_json("queued").to_string())]).await;
+        let data_source = EvalRunDataSource::Jsonl(EvalJsonlRunDataSource::new(
+            EvalJsonlSource::FileContent(EvalFileContentSource::new(Vec::new())),
+        ));
+
+        let response: ApiResponse<EvalRun> = client
+            .evals()
+            .runs()
+            .create(
+                &EvalId::new("eval_1"),
+                CreateEvalRunRequest::new(data_source).name("run-1"),
+            )
+            .await
+            .expect("create Eval run");
+        assert_eq!(response.id().as_str(), "evalrun_1");
+        assert_eq!(response.status(), &EvalRunStatus::Queued);
+
+        let request = captured
+            .recv()
+            .await
+            .expect("captured create Eval run request");
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(request.path_and_query, "/v1/evals/eval_1/runs");
+        assert_json_body(
+            &request,
+            json!({
+                "data_source": {
+                    "type": "jsonl",
+                    "source": {"type": "file_content", "content": []}
+                },
+                "name": "run-1"
+            }),
+        );
+    }
+
+    #[tokio::test]
+    async fn get_eval_run_loopback_wire_contract() {
+        let (client, mut captured) =
+            serve_sequence(vec![(StatusCode::OK, run_json("in_progress").to_string())]).await;
+
+        let response: ApiResponse<EvalRun> = client
+            .evals()
+            .runs()
+            .retrieve(&EvalId::new("eval_1"), &EvalRunId::new("evalrun_1"))
+            .await
+            .expect("retrieve Eval run");
+        assert_eq!(response.id().as_str(), "evalrun_1");
+        assert_eq!(response.status(), &EvalRunStatus::InProgress);
+
+        let request = captured
+            .recv()
+            .await
+            .expect("captured retrieve Eval run request");
+        assert_eq!(request.method, Method::GET);
+        assert_eq!(request.path_and_query, "/v1/evals/eval_1/runs/evalrun_1");
+        assert_no_body(&request);
+    }
+
+    #[tokio::test]
+    async fn delete_eval_run_loopback_wire_contract() {
+        let deleted = json!({
+            "object": "eval.run.deleted",
+            "deleted": true,
+            "run_id": "evalrun_1"
+        });
+        let expected: DeletedEvalRun =
+            serde_json::from_value(deleted.clone()).expect("typed deleted Eval run fixture");
+        let (client, mut captured) =
+            serve_sequence(vec![(StatusCode::OK, deleted.to_string())]).await;
+
+        let response: ApiResponse<DeletedEvalRun> = client
+            .evals()
+            .runs()
+            .delete(&EvalId::new("eval_1"), &EvalRunId::new("evalrun_1"))
+            .await
+            .expect("delete Eval run");
+        assert_eq!(response.body(), &expected);
+
+        let request = captured
+            .recv()
+            .await
+            .expect("captured delete Eval run request");
+        assert_eq!(request.method, Method::DELETE);
+        assert_eq!(request.path_and_query, "/v1/evals/eval_1/runs/evalrun_1");
+        assert_no_body(&request);
+    }
+
+    #[tokio::test]
+    async fn cancel_eval_run_loopback_wire_contract() {
+        let (client, mut captured) =
+            serve_sequence(vec![(StatusCode::OK, run_json("canceled").to_string())]).await;
+
+        let response: ApiResponse<EvalRun> = client
+            .evals()
+            .runs()
+            .cancel(&EvalId::new("eval_1"), &EvalRunId::new("evalrun_1"))
+            .await
+            .expect("cancel Eval run");
+        assert_eq!(response.id().as_str(), "evalrun_1");
+        assert_eq!(response.status(), &EvalRunStatus::Canceled);
+
+        let request = captured
+            .recv()
+            .await
+            .expect("captured cancel Eval run request");
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(request.path_and_query, "/v1/evals/eval_1/runs/evalrun_1");
+        assert_no_body(&request);
+    }
+
+    #[tokio::test]
+    async fn get_eval_run_output_items_loopback_wire_contract() {
+        let page = json!({
+            "object": "list",
+            "data": [output_item_json()],
+            "first_id": "outputitem_1",
+            "last_id": "outputitem_1",
+            "has_more": false
+        });
+        let (client, mut captured) = serve_sequence(vec![(StatusCode::OK, page.to_string())]).await;
+
+        let response: ApiResponse<EvalRunOutputItemList> = client
+            .evals()
+            .runs()
+            .output_items()
+            .list(
+                &EvalId::new("eval_1"),
+                &EvalRunId::new("evalrun_1"),
+                ListEvalRunOutputItemsParams::new()
+                    .after(EvalRunOutputItemId::new("outputitem_before"))
+                    .limit(3)
+                    .status(EvalOutputItemFilterStatus::Pass)
+                    .order(EvalSortOrder::Descending),
+            )
+            .await
+            .expect("list Eval run output items");
+        assert_eq!(response.data()[0].id().as_str(), "outputitem_1");
+
+        let request = captured
+            .recv()
+            .await
+            .expect("captured list Eval run output items request");
+        assert_eq!(request.method, Method::GET);
+        assert_eq!(
+            request.path_and_query,
+            "/v1/evals/eval_1/runs/evalrun_1/output_items?after=outputitem_before&limit=3&status=pass&order=desc"
+        );
+        assert_no_body(&request);
+    }
+
+    #[tokio::test]
+    async fn get_eval_run_output_item_loopback_wire_contract() {
+        let (client, mut captured) =
+            serve_sequence(vec![(StatusCode::OK, output_item_json().to_string())]).await;
+
+        let response: ApiResponse<EvalRunOutputItem> = client
+            .evals()
+            .runs()
+            .output_items()
+            .retrieve(
+                &EvalId::new("eval_1"),
+                &EvalRunId::new("evalrun_1"),
+                &EvalRunOutputItemId::new("outputitem_1"),
+            )
+            .await
+            .expect("retrieve Eval run output item");
+        assert_eq!(response.id().as_str(), "outputitem_1");
+        assert_eq!(response.results()[0].name(), "exact");
+
+        let request = captured
+            .recv()
+            .await
+            .expect("captured retrieve Eval run output item request");
+        assert_eq!(request.method, Method::GET);
+        assert_eq!(
+            request.path_and_query,
+            "/v1/evals/eval_1/runs/evalrun_1/output_items/outputitem_1"
+        );
+        assert_no_body(&request);
     }
 
     #[tokio::test]

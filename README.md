@@ -16,18 +16,18 @@ infrastructure are present. The pre-release implementation includes typed
 Responses REST, SSE, and persistent WebSocket paths; Chat Completions; Files,
 Uploads, Batches, Vector Stores, Models, Embeddings, Moderations, media,
 Fine-tuning, Evals, Conversations, Containers, Skills, and Content Provenance
-resources; and the pinned GA Realtime transport, including its 11-client/
-46-server event unions, WebSocket connection, WebRTC signaling, client-secret
+resources; and the pinned GA Realtime transport, including its 11 client-event
+and 46 server-event unions, WebSocket connection, WebRTC signaling, client-secret
 operations, and SIP call control. Administration, workload identity, and X.509
 are implemented behind separate default-off trust boundaries. The repository
 still does not claim complete OpenAPI coverage or a stable public API.
 
 | Area | Status |
 |---|---|
-| Lossless Serde primitives | Implemented for the MVP; still pre-release |
-| Typed Responses REST slice | Implemented for the MVP; contract coverage is still growing |
-| Responses SSE streaming | Public MVP path and 58-event stable union implemented |
-| Models, Embeddings, Moderations | Typed MVP resource methods implemented |
+| Lossless Serde primitives | Implemented; still pre-release |
+| Typed Responses REST slice | Implemented; contract coverage is still growing |
+| Responses SSE streaming | Public path and 58-event stable union implemented |
+| Models, Embeddings, Moderations | Typed resource methods implemented |
 | Chat Completions | Typed create/SSE, stored resources, messages, and pagination implemented |
 | Files and Uploads | Typed replayable/one-shot multipart, download, and upload lifecycle implemented |
 | Batches and Vector Stores | Typed resource methods, pagination/polling, and workflow helpers implemented |
@@ -40,7 +40,7 @@ still does not claim complete OpenAPI coverage or a stable public API.
 | Default-off gated/compatibility APIs | Custom Voice, alpha Graders, beta ChatKit, beta multi-agent Responses, legacy Completions, and legacy Realtime are implemented only behind explicit features |
 | RMCP bridge | Typed local Responses-function bridge implemented; transport, server, and auth feature flags pass through to the pinned `rmcp` dependency |
 | Codex app-server integration | Experimental JSONL client implemented for one exact audited Codex 0.144.5 macOS arm64 artifact |
-| Direct Codex Responses transport | Private experimental host-locked create/SSE and hardened browser/device auth implemented; off by default |
+| Direct Codex Responses transport | Private experimental host-locked create/SSE and browser auth implemented, with separately gated device auth; off by default |
 
 See [feature status](docs/feature-status.md) for the exact Cargo feature matrix
 and [architecture boundaries](docs/architecture.md) for credential and protocol

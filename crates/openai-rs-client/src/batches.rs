@@ -558,6 +558,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retrieve_batch_has_exact_bodyless_wire_contract() {
+        let body = Box::leak(batch_json("batch/a b", "completed").into_boxed_str());
+        let (client, captured) = serve_once(body).await;
+
+        let response = client
+            .batches()
+            .retrieve(&BatchId::new("batch/a b"))
+            .await
+            .expect("retrieve batch response");
+        assert_eq!(response.id().as_str(), "batch/a b");
+        assert_eq!(response.status().as_str(), "completed");
+        assert_eq!(response.request_id(), Some("req_batch"));
+
+        let captured = captured.await.expect("captured retrieve batch request");
+        assert_eq!(captured.method, Method::GET);
+        assert_eq!(captured.path_and_query, "/v1/batches/batch%2Fa%20b");
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
     async fn list_batches_encodes_cursor_query() {
         let (client, captured) = serve_once(
             r#"{"object":"list","data":[],"first_id":"batch_first","last_id":"batch_last","has_more":false}"#,

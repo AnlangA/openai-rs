@@ -983,6 +983,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retrieve_job_uses_exact_encoded_path_and_no_body() {
+        let (client, captures) = serve_script(vec![job_json("ftjob/a b", "succeeded")]).await;
+        let response = FineTuning::new(client)
+            .jobs()
+            .retrieve(&FineTuningJobId::new("ftjob/a b"))
+            .await
+            .expect("retrieve fine-tuning job");
+        assert_eq!(response.id.as_str(), "ftjob/a b");
+        assert_eq!(response.status.as_str(), "succeeded");
+        assert_eq!(response.request_id(), Some("req_fine_tuning_0"));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].method, Method::GET);
+        assert_eq!(
+            captures[0].path_and_query,
+            "/v1/fine_tuning/jobs/ftjob%2Fa%20b"
+        );
+        assert_eq!(
+            captures[0].authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        assert!(captures[0].body.is_empty());
+    }
+
+    #[tokio::test]
     async fn jobs_list_encodes_deep_object_metadata_and_cursor() {
         let (client, captures) = serve_script(vec![
             r#"{"object":"list","data":[],"has_more":false}"#.to_owned(),

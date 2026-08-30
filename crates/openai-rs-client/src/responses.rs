@@ -510,6 +510,8 @@ mod tests {
     use super::*;
     use crate::{ApiKey, Client};
 
+    const RESPONSE_FIXTURE: &str = r#"{"id":"resp_wire","created_at":1,"error":null,"incomplete_details":null,"instructions":null,"metadata":null,"model":"test-model","object":"response","output":[],"parallel_tool_calls":true,"temperature":1.0,"tool_choice":"auto","tools":[],"top_p":1.0,"status":"completed"}"#;
+
     #[derive(Debug)]
     struct CapturedRequest {
         method: Method,
@@ -599,6 +601,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_response_uses_post_responses_and_typed_json_body() {
+        let (base_url, captured) = serve_once(StatusCode::OK, RESPONSE_FIXTURE).await;
+        let response = client(base_url)
+            .responses()
+            .create(CreateResponseRequest::new("test-model", "hello"))
+            .await
+            .expect("created response");
+        assert_eq!(response.id(), "resp_wire");
+
+        let captured = captured.await.expect("captured create response request");
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/responses");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captured.body).expect("create response JSON"),
+            json!({"model":"test-model","input":"hello"})
+        );
+    }
+
+    #[tokio::test]
+    async fn get_response_uses_encoded_id_without_query_or_body() {
+        let (base_url, captured) = serve_once(StatusCode::OK, RESPONSE_FIXTURE).await;
+        let response = client(base_url)
+            .responses()
+            .retrieve(&ResponseId::new("resp/a b"))
+            .await
+            .expect("retrieved response");
+        assert_eq!(response.id(), "resp_wire");
+
+        let captured = captured.await.expect("captured get response request");
+        assert_eq!(captured.method, Method::GET);
+        assert_eq!(captured.path_and_query, "/v1/responses/resp%2Fa%20b");
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancel_response_uses_post_cancel_with_no_body() {
+        let (base_url, captured) = serve_once(StatusCode::OK, RESPONSE_FIXTURE).await;
+        let response = client(base_url)
+            .responses()
+            .cancel(&ResponseId::new("resp/a b"))
+            .await
+            .expect("cancelled response");
+        assert_eq!(response.id(), "resp_wire");
+
+        let captured = captured.await.expect("captured cancel response request");
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/responses/resp%2Fa%20b/cancel");
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn compact_conversation_uses_fixed_post_and_typed_body() {
+        let (base_url, captured) = serve_once(
+            StatusCode::OK,
+            r#"{"id":"resp_compact","created_at":1,"object":"response.compaction","output":[],"usage":null}"#,
+        )
+        .await;
+        let response = client(base_url)
+            .responses()
+            .compact(CompactResponseRequest::new("test-model", "compact me"))
+            .await
+            .expect("compacted response");
+        assert_eq!(response.id(), "resp_compact");
+
+        let captured = captured.await.expect("captured compact request");
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/responses/compact");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captured.body).expect("compact JSON"),
+            json!({"model":"test-model","input":"compact me"})
+        );
+    }
+
+    #[tokio::test]
     async fn count_input_tokens_sends_typed_json_and_preserves_metadata() {
         let (base_url, captured) = serve_once(
             StatusCode::OK,
@@ -651,7 +727,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn input_items_encodes_cursor_query_without_following_a_url() {
+    async fn list_input_items_uses_fixed_path_and_typed_cursor_query() {
         let (base_url, captured) = serve_once(
             StatusCode::OK,
             r#"{"object":"list","data":[],"first_id":null,"last_id":null,"has_more":false}"#,
@@ -675,11 +751,13 @@ mod tests {
         assert_eq!(captured.method, Method::GET);
         let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
             .expect("captured URL");
+        assert_eq!(url.path(), "/v1/responses/resp_query/input_items");
         let query = url.query_pairs().collect::<Vec<_>>();
         assert!(query.contains(&("after".into(), "item cursor".into())));
         assert!(query.contains(&("include".into(), "reasoning.encrypted_content".into())));
         assert!(query.contains(&("limit".into(), "2".into())));
         assert!(query.contains(&("order".into(), "asc".into())));
+        assert!(captured.body.is_empty());
     }
 
     #[tokio::test]

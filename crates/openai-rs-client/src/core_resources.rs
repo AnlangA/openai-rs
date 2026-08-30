@@ -250,6 +250,7 @@ mod tests {
     struct CapturedRequest {
         method: Method,
         path: String,
+        path_and_query: String,
         authorization: Option<String>,
         body: Vec<u8>,
     }
@@ -269,6 +270,11 @@ mod tests {
                 async move {
                     let method = request.method().clone();
                     let path = request.uri().path().to_owned();
+                    let path_and_query = request
+                        .uri()
+                        .path_and_query()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
                     let authorization = request
                         .headers()
                         .get(http::header::AUTHORIZATION)
@@ -286,6 +292,7 @@ mod tests {
                         let _ = sender.send(CapturedRequest {
                             method,
                             path,
+                            path_and_query,
                             authorization,
                             body: request_body,
                         });
@@ -314,6 +321,53 @@ mod tests {
             .build()
             .expect("loopback client");
         (client, receiver)
+    }
+
+    #[tokio::test]
+    async fn models_list_has_exact_bodyless_wire_contract() {
+        let (client, captured) = serve_once(
+            r#"{"object":"list","data":[{"id":"gpt-test","object":"model","created":1,"owned_by":"openai"}]}"#,
+        )
+        .await;
+
+        let response = client.models().list().await.expect("model list response");
+        assert_eq!(response.data.len(), 1);
+        assert_eq!(response.data[0].id.as_str(), "gpt-test");
+        assert_eq!(response.request_id(), Some("req_core"));
+
+        let captured = captured.await.expect("captured model list request");
+        assert_eq!(captured.method, Method::GET);
+        assert_eq!(captured.path_and_query, "/v1/models");
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn models_delete_has_exact_bodyless_wire_contract() {
+        let (client, captured) =
+            serve_once(r#"{"id":"ft/model a","object":"model","deleted":true}"#).await;
+        let model_id = ModelId::new("ft/model a");
+
+        let response = client
+            .models()
+            .delete(&model_id)
+            .await
+            .expect("deleted model response");
+        assert_eq!(response.id.as_str(), "ft/model a");
+        assert!(response.deleted);
+        assert_eq!(response.request_id(), Some("req_core"));
+
+        let captured = captured.await.expect("captured model delete request");
+        assert_eq!(captured.method, Method::DELETE);
+        assert_eq!(captured.path_and_query, "/v1/models/ft%2Fmodel%20a");
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        assert!(captured.body.is_empty());
     }
 
     async fn serve_retrying_models() -> (Client, Arc<AtomicUsize>) {
