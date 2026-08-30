@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let turn1 = client
         .responses()
         .create(
-            CreateResponseRequest::new("gpt-5.4", "My favorite color is emerald green.")
+            CreateResponseRequest::new("gpt-5.6", "My favorite color is emerald green.")
                 .conversation(conversation.id().as_str()),
         )
         .await?;
@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let turn2 = client
         .responses()
         .create(
-            CreateResponseRequest::new("gpt-5.4", "What is my favorite color?")
+            CreateResponseRequest::new("gpt-5.6", "What is my favorite color?")
                 .conversation(conversation.id().as_str()),
         )
         .await?;

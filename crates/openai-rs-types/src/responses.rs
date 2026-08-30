@@ -76,7 +76,25 @@ open_string_enum! {
         Low = "low",
         Medium = "medium",
         High = "high",
-        XHigh = "xhigh"
+        XHigh = "xhigh",
+        Max = "max"
+    }
+}
+
+open_string_enum! {
+    /// Which prior reasoning items are rendered back to the model.
+    pub enum ReasoningContext {
+        Auto = "auto",
+        CurrentTurn = "current_turn",
+        AllTurns = "all_turns"
+    }
+}
+
+open_string_enum! {
+    /// Reasoning execution mode for GPT-5.6 and later models.
+    pub enum ReasoningMode {
+        Standard = "standard",
+        Pro = "pro"
     }
 }
 
@@ -142,20 +160,27 @@ open_string_enum! {
 }
 
 open_string_enum! {
-    /// Prompt-cache routing mode.
+    /// Prompt-cache breakpoint selection mode.
     pub enum PromptCacheMode {
-        Auto = "auto",
-        Disabled = "disabled",
+        Implicit = "implicit",
         Explicit = "explicit"
+    }
+}
+
+open_string_enum! {
+    /// Minimum lifetime applied to prompt-cache breakpoints.
+    pub enum PromptCacheTtl {
+        ThirtyMinutes = "30m"
     }
 }
 
 literal_tag!(PromptCacheBreakpointTag, Explicit, "explicit");
 
 /// Explicit cache breakpoint attached to an input content part.
+///
+/// The pinned wire object is `{ "mode": "explicit" }`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptCacheBreakpoint {
-    #[serde(rename = "type")]
     mode: PromptCacheBreakpointTag,
 }
 
@@ -180,6 +205,8 @@ impl Default for PromptCacheBreakpoint {
 pub struct PromptCacheOptions {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     mode: Omittable<PromptCacheMode>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    ttl: Omittable<PromptCacheTtl>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -196,6 +223,7 @@ impl PromptCacheOptions {
     pub fn with_mode(mode: PromptCacheMode) -> Self {
         Self {
             mode: Omittable::Value(mode),
+            ttl: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -207,10 +235,33 @@ impl PromptCacheOptions {
         self
     }
 
+    /// Sets the only TTL currently accepted by the pinned schema.
+    #[must_use]
+    pub fn thirty_minutes(mut self) -> Self {
+        self.ttl = Omittable::Value(PromptCacheTtl::ThirtyMinutes);
+        self
+    }
+
+    /// Sets the prompt-cache TTL.
+    #[must_use]
+    pub fn ttl(mut self, ttl: PromptCacheTtl) -> Self {
+        self.ttl = Omittable::Value(ttl);
+        self
+    }
+
     /// Returns the prompt-cache mode when set.
     #[must_use]
     pub fn mode_ref(&self) -> Option<&PromptCacheMode> {
         match &self.mode {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
+    }
+
+    /// Returns the prompt-cache TTL when set.
+    #[must_use]
+    pub fn ttl_ref(&self) -> Option<&PromptCacheTtl> {
+        match &self.ttl {
             Omittable::Value(value) => Some(value),
             Omittable::Omitted => None,
         }
@@ -1618,6 +1669,129 @@ literal_tag!(OutputTextTag, OutputText, "output_text");
 literal_tag!(RefusalTag, Refusal, "refusal");
 literal_tag!(OutputMessageTag, Message, "message");
 literal_tag!(AssistantRoleTag, Assistant, "assistant");
+literal_tag!(FileCitationTag, FileCitation, "file_citation");
+literal_tag!(UrlCitationTag, UrlCitation, "url_citation");
+literal_tag!(
+    ContainerFileCitationTag,
+    ContainerFileCitation,
+    "container_file_citation"
+);
+literal_tag!(FilePathTag, FilePath, "file_path");
+
+/// A citation to an uploaded file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileCitation {
+    #[serde(rename = "type")]
+    kind: FileCitationTag,
+    file_id: String,
+    index: u64,
+    filename: String,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// A citation to a web resource.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UrlCitation {
+    #[serde(rename = "type")]
+    kind: UrlCitationTag,
+    url: String,
+    start_index: u64,
+    end_index: u64,
+    title: String,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// A citation to a file inside a container.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContainerFileCitation {
+    #[serde(rename = "type")]
+    kind: ContainerFileCitationTag,
+    container_id: String,
+    file_id: String,
+    start_index: u64,
+    end_index: u64,
+    filename: String,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// A path to a file referenced in output text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FilePathAnnotation {
+    #[serde(rename = "type")]
+    kind: FilePathTag,
+    file_id: String,
+    index: u64,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+tagged_union! {
+    /// An annotation that applies to a span of output text.
+    pub enum Annotation {
+        FileCitation(FileCitation) => "file_citation",
+        UrlCitation(UrlCitation) => "url_citation",
+        ContainerFileCitation(ContainerFileCitation) => "container_file_citation",
+        FilePath(FilePathAnnotation) => "file_path"
+    }
+}
+
+/// One alternative token at a logprob position.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TopLogProb {
+    token: String,
+    logprob: f64,
+    bytes: Vec<i64>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl TopLogProb {
+    /// Returns the token string.
+    #[must_use]
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    /// Returns the token log probability.
+    #[must_use]
+    pub const fn logprob(&self) -> f64 {
+        self.logprob
+    }
+}
+
+/// The log probability of one output token.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LogProb {
+    token: String,
+    logprob: f64,
+    bytes: Vec<i64>,
+    top_logprobs: Vec<TopLogProb>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl LogProb {
+    /// Returns the token string.
+    #[must_use]
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    /// Returns the token log probability.
+    #[must_use]
+    pub const fn logprob(&self) -> f64 {
+        self.logprob
+    }
+
+    /// Returns alternative tokens at this position.
+    #[must_use]
+    pub fn top_logprobs(&self) -> &[TopLogProb] {
+        &self.top_logprobs
+    }
+}
 
 /// Text generated by the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1625,10 +1799,10 @@ pub struct OutputText {
     #[serde(rename = "type")]
     kind: OutputTextTag,
     text: String,
-    #[serde(default)]
-    annotations: Vec<Value>,
-    #[serde(default)]
-    logprobs: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    annotations: Vec<Annotation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    logprobs: Vec<LogProb>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1654,13 +1828,13 @@ impl OutputText {
 
     /// Returns annotations in service order.
     #[must_use]
-    pub fn annotations(&self) -> &[Value] {
+    pub fn annotations(&self) -> &[Annotation] {
         &self.annotations
     }
 
     /// Returns logprobs if included.
     #[must_use]
-    pub fn logprobs(&self) -> &[Value] {
+    pub fn logprobs(&self) -> &[LogProb] {
         &self.logprobs
     }
 
@@ -2486,7 +2660,13 @@ impl ResponseTextConfig {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ReasoningConfig {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    context: Omittable<Nullable<ReasoningContext>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     effort: Omittable<Nullable<ReasoningEffort>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    generate_summary: Omittable<Nullable<ReasoningSummary>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    mode: Omittable<ReasoningMode>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     summary: Omittable<Nullable<ReasoningSummary>>,
     #[serde(flatten)]
@@ -2500,10 +2680,31 @@ impl ReasoningConfig {
         Self::default()
     }
 
+    /// Sets which prior reasoning items are rendered back on later turns.
+    #[must_use]
+    pub fn context(mut self, context: ReasoningContext) -> Self {
+        self.context = Omittable::Value(Nullable::Value(context));
+        self
+    }
+
     /// Sets the requested effort.
     #[must_use]
     pub fn effort(mut self, effort: ReasoningEffort) -> Self {
         self.effort = Omittable::Value(Nullable::Value(effort));
+        self
+    }
+
+    /// Sets the deprecated `generate_summary` field. Prefer [`Self::summary`].
+    #[must_use]
+    pub fn generate_summary(mut self, summary: ReasoningSummary) -> Self {
+        self.generate_summary = Omittable::Value(Nullable::Value(summary));
+        self
+    }
+
+    /// Sets the reasoning execution mode (`standard` or `pro`).
+    #[must_use]
+    pub fn mode(mut self, mode: ReasoningMode) -> Self {
+        self.mode = Omittable::Value(mode);
         self
     }
 
@@ -2514,6 +2715,15 @@ impl ReasoningConfig {
         self
     }
 
+    /// Returns the non-null reasoning context when supplied.
+    #[must_use]
+    pub fn context_ref(&self) -> Option<&ReasoningContext> {
+        match &self.context {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
     /// Returns the non-null effort when supplied.
     #[must_use]
     pub fn effort_ref(&self) -> Option<&ReasoningEffort> {
@@ -2521,6 +2731,124 @@ impl ReasoningConfig {
             Omittable::Value(Nullable::Value(value)) => Some(value),
             Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
+    }
+
+    /// Returns the reasoning mode when supplied.
+    #[must_use]
+    pub fn mode_ref(&self) -> Option<&ReasoningMode> {
+        match &self.mode {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
+    }
+
+    /// Returns the non-null summary style when supplied.
+    #[must_use]
+    pub fn summary_ref(&self) -> Option<&ReasoningSummary> {
+        match &self.summary {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+}
+
+/// One context-management compaction rule.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContextManagement {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    compact_threshold: Omittable<Nullable<u64>>,
+}
+
+impl ContextManagement {
+    /// Creates the currently supported `compaction` rule.
+    #[must_use]
+    pub fn compaction() -> Self {
+        Self {
+            kind: "compaction".to_owned(),
+            compact_threshold: Omittable::Omitted,
+        }
+    }
+
+    /// Sets the token threshold that triggers compaction.
+    #[must_use]
+    pub fn compact_threshold(mut self, threshold: u64) -> Self {
+        self.compact_threshold = Omittable::Value(Nullable::Value(threshold));
+        self
+    }
+}
+
+open_string_enum! {
+    /// How Responses should treat flagged input or output.
+    pub enum ModerationMode {
+        Score = "score",
+        Block = "block"
+    }
+}
+
+/// Policy for one moderation direction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModerationDirection {
+    mode: ModerationMode,
+}
+
+impl ModerationDirection {
+    /// Creates a direction policy.
+    #[must_use]
+    pub const fn new(mode: ModerationMode) -> Self {
+        Self { mode }
+    }
+}
+
+/// Input/output moderation policy.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModerationPolicy {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    input: Omittable<Nullable<ModerationDirection>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    output: Omittable<Nullable<ModerationDirection>>,
+}
+
+impl ModerationPolicy {
+    /// Sets the input-side policy.
+    #[must_use]
+    pub fn input(mut self, direction: ModerationDirection) -> Self {
+        self.input = Omittable::Value(Nullable::Value(direction));
+        self
+    }
+
+    /// Sets the output-side policy.
+    #[must_use]
+    pub fn output(mut self, direction: ModerationDirection) -> Self {
+        self.output = Omittable::Value(Nullable::Value(direction));
+        self
+    }
+}
+
+/// Moderation configuration on a create request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModerationConfig {
+    model: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    policy: Omittable<Nullable<ModerationPolicy>>,
+}
+
+impl ModerationConfig {
+    /// Creates a moderation config for the given model.
+    #[must_use]
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            policy: Omittable::Omitted,
+        }
+    }
+
+    /// Sets the directional policy.
+    #[must_use]
+    pub fn policy(mut self, policy: ModerationPolicy) -> Self {
+        self.policy = Omittable::Value(Nullable::Value(policy));
+        self
     }
 }
 
@@ -2629,7 +2957,7 @@ struct CreateResponseBody {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     conversation: Omittable<Nullable<ConversationReference>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    context_management: Omittable<Nullable<Vec<Value>>>,
+    context_management: Omittable<Nullable<Vec<ContextManagement>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     include: Omittable<Nullable<Vec<ResponseIncludable>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2639,7 +2967,7 @@ struct CreateResponseBody {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     metadata: Omittable<Nullable<BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    moderation: Omittable<Nullable<Value>>,
+    moderation: Omittable<Nullable<ModerationConfig>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     parallel_tool_calls: Omittable<Nullable<bool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2655,7 +2983,7 @@ struct CreateResponseBody {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     reasoning: Omittable<Nullable<ReasoningConfig>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    safety_identifier: Omittable<String>,
+    safety_identifier: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     service_tier: Omittable<ServiceTier>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2669,7 +2997,7 @@ struct CreateResponseBody {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     tools: Omittable<Vec<ResponseTool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    top_logprobs: Omittable<u32>,
+    top_logprobs: Omittable<Nullable<u32>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     top_p: Omittable<Nullable<f64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2743,11 +3071,36 @@ macro_rules! impl_create_response_builders {
             }
 
             /// Creates a follow-up request referencing a previous response id and model.
+            ///
+            /// `previous_response_id` does not carry the previous request's top-level
+            /// `instructions` or `tools`. Resend those with [`Self::follow_up_from`]
+            /// or the dedicated builders.
             #[must_use]
             pub fn follow_up(response: &Response, input: impl Into<ResponseInput>) -> Self {
                 let mut value = Self::new(response.model(), input);
                 value.body.previous_response_id =
                     Omittable::Value(Nullable::Value(response.id().to_owned()));
+                value
+            }
+
+            /// Continues from `response` while copying stable prefix fields from
+            /// the previous request (`instructions`, `tools`, `tool_choice`,
+            /// `text`, `reasoning`, and prompt-cache settings).
+            #[must_use]
+            pub fn follow_up_from(
+                previous: &Self,
+                response: &Response,
+                input: impl Into<ResponseInput>,
+            ) -> Self {
+                let mut value = Self::follow_up(response, input);
+                value.body.instructions = previous.body.instructions.clone();
+                value.body.tools = previous.body.tools.clone();
+                value.body.tool_choice = previous.body.tool_choice.clone();
+                value.body.text = previous.body.text.clone();
+                value.body.reasoning = previous.body.reasoning.clone();
+                value.body.prompt_cache_key = previous.body.prompt_cache_key.clone();
+                value.body.prompt_cache_options = previous.body.prompt_cache_options.clone();
+                value.body.conversation = previous.body.conversation.clone();
                 value
             }
 
@@ -2793,18 +3146,16 @@ macro_rules! impl_create_response_builders {
                 self
             }
 
-            /// Serializes and adds one context-management rule.
-            pub fn context_management<T: Serialize>(
-                mut self,
-                rule: &T,
-            ) -> Result<Self, serde_json::Error> {
+            /// Adds one context-management rule.
+            #[must_use]
+            pub fn context_management(mut self, rule: ContextManagement) -> Self {
                 let mut rules = match std::mem::take(&mut self.body.context_management) {
                     Omittable::Value(Nullable::Value(rules)) => rules,
                     Omittable::Omitted | Omittable::Value(Nullable::Null) => Vec::new(),
                 };
-                rules.push(serde_json::to_value(rule)?);
+                rules.push(rule);
                 self.body.context_management = Omittable::Value(Nullable::Value(rules));
-                Ok(self)
+                self
             }
 
             /// Adds one optional response field to include.
@@ -2845,14 +3196,11 @@ macro_rules! impl_create_response_builders {
                 self
             }
 
-            /// Serializes moderation configuration without requiring JSON text.
-            pub fn moderation<T: Serialize>(
-                mut self,
-                moderation: &T,
-            ) -> Result<Self, serde_json::Error> {
-                self.body.moderation =
-                    Omittable::Value(Nullable::Value(serde_json::to_value(moderation)?));
-                Ok(self)
+            /// Sets typed moderation configuration.
+            #[must_use]
+            pub fn moderation(mut self, moderation: ModerationConfig) -> Self {
+                self.body.moderation = Omittable::Value(Nullable::Value(moderation));
+                self
             }
 
             /// Controls parallel tool calls.
@@ -2890,7 +3238,11 @@ macro_rules! impl_create_response_builders {
                 self
             }
 
-            /// Sets the prompt-cache retention policy.
+            /// Sets the deprecated prompt-cache retention policy.
+            ///
+            /// Prefer [`Self::prompt_cache_options`] with [`PromptCacheOptions::ttl`].
+            /// The two fields are independent: retention is a maximum keep time,
+            /// while `prompt_cache_options.ttl` is a minimum lifetime.
             #[must_use]
             pub fn prompt_cache_retention(
                 mut self,
@@ -2911,7 +3263,14 @@ macro_rules! impl_create_response_builders {
             /// Sets an abuse-detection safety identifier.
             #[must_use]
             pub fn safety_identifier(mut self, identifier: impl Into<String>) -> Self {
-                self.body.safety_identifier = Omittable::Value(identifier.into());
+                self.body.safety_identifier = Omittable::Value(Nullable::Value(identifier.into()));
+                self
+            }
+
+            /// Sends `safety_identifier: null`.
+            #[must_use]
+            pub fn safety_identifier_null(mut self) -> Self {
+                self.body.safety_identifier = Omittable::Value(Nullable::Null);
                 self
             }
 
@@ -3015,7 +3374,14 @@ macro_rules! impl_create_response_builders {
             /// Requests token log probabilities at each output position.
             #[must_use]
             pub fn top_logprobs(mut self, top_logprobs: u32) -> Self {
-                self.body.top_logprobs = Omittable::Value(top_logprobs);
+                self.body.top_logprobs = Omittable::Value(Nullable::Value(top_logprobs));
+                self
+            }
+
+            /// Sends `top_logprobs: null`.
+            #[must_use]
+            pub fn top_logprobs_null(mut self) -> Self {
+                self.body.top_logprobs = Omittable::Value(Nullable::Null);
                 self
             }
 
@@ -4389,8 +4755,8 @@ pub struct OutputTextDeltaEvent {
     content_index: u64,
     delta: String,
     sequence_number: u64,
-    #[serde(default)]
-    logprobs: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    logprobs: Vec<LogProb>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -4428,7 +4794,7 @@ impl OutputTextDeltaEvent {
 
     /// Returns logprobs if included.
     #[must_use]
-    pub fn logprobs(&self) -> &[Value] {
+    pub fn logprobs(&self) -> &[LogProb] {
         &self.logprobs
     }
 }
@@ -4443,8 +4809,8 @@ pub struct OutputTextDoneEvent {
     content_index: u64,
     text: String,
     sequence_number: u64,
-    #[serde(default)]
-    logprobs: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    logprobs: Vec<LogProb>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -4464,7 +4830,7 @@ impl OutputTextDoneEvent {
 
     /// Returns logprobs if included.
     #[must_use]
-    pub fn logprobs(&self) -> &[Value] {
+    pub fn logprobs(&self) -> &[LogProb] {
         &self.logprobs
     }
 }
@@ -6962,9 +7328,18 @@ mod tests {
         assert_json_dto::<ServiceTier>();
         assert_json_dto::<ResponseTextVerbosity>();
         assert_json_dto::<PromptCacheMode>();
+        assert_json_dto::<PromptCacheTtl>();
         assert_json_dto::<PromptCacheBreakpoint>();
         assert_json_dto::<PromptCacheOptions>();
+        assert_json_dto::<ReasoningEffort>();
+        assert_json_dto::<ReasoningContext>();
+        assert_json_dto::<ReasoningMode>();
         assert_json_dto::<ReasoningConfig>();
+        assert_json_dto::<ContextManagement>();
+        assert_json_dto::<ModerationConfig>();
+        assert_json_dto::<Annotation>();
+        assert_json_dto::<LogProb>();
+        assert_json_dto::<TopLogProb>();
         assert_json_dto::<ConversationObjectReference>();
         assert_json_dto::<ConversationReference>();
         assert_json_dto::<PromptReference>();
@@ -7342,8 +7717,7 @@ mod tests {
             "output_index": 0,
             "content_index": 0,
             "delta": "Hi",
-            "sequence_number": 1,
-            "logprobs": []
+            "sequence_number": 1
         });
         let server: ResponsesServerEvent =
             serde_json::from_value(server_fixture.clone()).expect("decode WS server event");
@@ -7456,15 +7830,11 @@ mod tests {
                         {
                             "type": "output_text",
                             "text": "Hello ",
-                            "annotations": [],
-                            "logprobs": [],
                             "future_part_field": 1
                         },
                         {
                             "type": "output_text",
-                            "text": "world",
-                            "annotations": [],
-                            "logprobs": []
+                            "text": "world"
                         }
                     ],
                     "future_message_field": {"ok": true}
@@ -8152,5 +8522,138 @@ mod tests {
                 .len(),
             29
         );
+    }
+
+    #[test]
+    fn prompt_cache_breakpoint_uses_mode_not_type() {
+        let value = serde_json::to_value(PromptCacheBreakpoint::explicit()).expect("serialize");
+        assert_eq!(value, json!({ "mode": "explicit" }));
+        let decoded: PromptCacheBreakpoint =
+            serde_json::from_value(json!({ "mode": "explicit" })).expect("decode");
+        assert_eq!(decoded, PromptCacheBreakpoint::explicit());
+    }
+
+    #[test]
+    fn prompt_cache_options_match_pinned_mode_and_ttl() {
+        let options = PromptCacheOptions::new()
+            .mode(PromptCacheMode::Implicit)
+            .thirty_minutes();
+        let value = serde_json::to_value(&options).expect("serialize");
+        assert_eq!(
+            value,
+            json!({
+                "mode": "implicit",
+                "ttl": "30m"
+            })
+        );
+        let explicit = PromptCacheOptions::with_mode(PromptCacheMode::Explicit);
+        assert_eq!(
+            serde_json::to_value(&explicit).expect("serialize"),
+            json!({ "mode": "explicit" })
+        );
+        let decoded: PromptCacheOptions = serde_json::from_value(json!({
+            "mode": "implicit",
+            "ttl": "30m"
+        }))
+        .expect("decode");
+        assert_eq!(decoded.mode_ref(), Some(&PromptCacheMode::Implicit));
+        assert_eq!(decoded.ttl_ref(), Some(&PromptCacheTtl::ThirtyMinutes));
+    }
+
+    #[test]
+    fn reasoning_config_serializes_ga_mode_context_and_max_effort() {
+        let reasoning = ReasoningConfig::new()
+            .mode(ReasoningMode::Pro)
+            .context(ReasoningContext::AllTurns)
+            .effort(ReasoningEffort::Max)
+            .summary(ReasoningSummary::Concise);
+        assert_eq!(
+            serde_json::to_value(&reasoning).expect("serialize"),
+            json!({
+                "mode": "pro",
+                "context": "all_turns",
+                "effort": "max",
+                "summary": "concise"
+            })
+        );
+    }
+
+    #[test]
+    fn create_request_sends_typed_context_moderation_and_explicit_nulls() {
+        let request = CreateResponseRequest::new("gpt-5.6", "hello")
+            .context_management(ContextManagement::compaction().compact_threshold(8_000))
+            .moderation(ModerationConfig::new("omni-moderation-latest"))
+            .safety_identifier_null()
+            .top_logprobs_null();
+        let value = serde_json::to_value(&request).expect("serialize");
+        assert_eq!(
+            value["context_management"],
+            json!([{ "type": "compaction", "compact_threshold": 8000 }])
+        );
+        assert_eq!(
+            value["moderation"],
+            json!({ "model": "omni-moderation-latest" })
+        );
+        assert_eq!(value["safety_identifier"], Value::Null);
+        assert_eq!(value["top_logprobs"], Value::Null);
+    }
+
+    #[test]
+    fn follow_up_from_copies_stable_prefix_fields() {
+        let previous = CreateResponseRequest::new("gpt-5.6", "first")
+            .instructions("Stay concise.")
+            .tool(FunctionTool::new("lookup"));
+        let response = Response {
+            id: "resp_1".into(),
+            created_at: 1,
+            error: Nullable::Null,
+            incomplete_details: Nullable::Null,
+            instructions: Nullable::Null,
+            metadata: Nullable::Null,
+            model: "gpt-5.6".into(),
+            object: ResponseObjectTag::Response,
+            output: vec![],
+            parallel_tool_calls: false,
+            temperature: Nullable::Null,
+            tool_choice: ToolChoice::Auto,
+            tools: vec![],
+            top_p: Nullable::Null,
+            status: Omittable::Omitted,
+            background: Omittable::Omitted,
+            completed_at: Omittable::Omitted,
+            conversation: Omittable::Omitted,
+            max_output_tokens: Omittable::Omitted,
+            max_tool_calls: Omittable::Omitted,
+            previous_response_id: Omittable::Omitted,
+            prompt: Omittable::Omitted,
+            reasoning: Omittable::Omitted,
+            safety_identifier: Omittable::Omitted,
+            service_tier: Omittable::Omitted,
+            store: Omittable::Omitted,
+            text: Omittable::Omitted,
+            truncation: Omittable::Omitted,
+            usage: Omittable::Omitted,
+            user: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        };
+        let follow = CreateResponseRequest::follow_up_from(&previous, &response, "next");
+        let value = serde_json::to_value(&follow).expect("serialize");
+        assert_eq!(value["previous_response_id"], "resp_1");
+        assert_eq!(value["instructions"], "Stay concise.");
+        assert_eq!(value["tools"][0]["name"], "lookup");
+    }
+
+    #[test]
+    fn annotation_union_roundtrips_known_tags() {
+        let citation = json!({
+            "type": "url_citation",
+            "url": "https://example.com",
+            "start_index": 0,
+            "end_index": 4,
+            "title": "Example"
+        });
+        let decoded: Annotation = serde_json::from_value(citation.clone()).expect("decode");
+        assert!(matches!(decoded, Annotation::UrlCitation(_)));
+        assert_eq!(serde_json::to_value(&decoded).expect("serialize"), citation);
     }
 }

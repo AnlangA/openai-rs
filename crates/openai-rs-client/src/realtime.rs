@@ -381,6 +381,7 @@ impl RealtimeWebSocket {
                 authorization.header,
                 transport.organization(),
                 transport.project(),
+                transport.client_request_id(),
             )?;
             let connect = connect_socket(request, config.tungstenite(), connector.clone());
             match tokio::time::timeout(config.connect_timeout, connect).await {

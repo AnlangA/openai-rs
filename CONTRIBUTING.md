@@ -34,7 +34,7 @@ Run the local quality checks:
 ```console
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --locked
+cargo test --workspace --all-features --locked
 cargo check -p openai-rs-sdk --all-targets --no-default-features --locked
 cargo check --workspace --all-targets --all-features --locked
 cargo +1.88.0 check --workspace --all-targets --locked
@@ -51,8 +51,8 @@ handling, or authentication:
 
 1. Cite the pinned upstream specification, official documentation, or audited
    source revision that establishes the behavior.
-2. Update the generator or explicit override rather than hand-editing generated
-   output.
+2. Update the handwritten DTO and the contract projection or explicit override.
+   Do not hand-edit generated `spec/contracts/*.json` output.
 3. Add positive and negative fixtures, including required/null/omitted behavior
    and unknown-value handling where applicable.
 4. Verify that known tagged-union variants with malformed payloads fail instead

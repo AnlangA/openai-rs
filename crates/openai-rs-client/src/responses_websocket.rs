@@ -204,6 +204,7 @@ impl ResponsesWebSocket {
                 authorization.header,
                 transport.organization(),
                 transport.project(),
+                transport.client_request_id(),
             )?;
             let connect = connect_socket(request, config.tungstenite(), connector.clone());
             match tokio::time::timeout(config.connect_timeout, connect).await {
@@ -412,6 +413,7 @@ pub(crate) fn websocket_request(
     authorization: HeaderValue,
     organization: Option<HeaderValue>,
     project: Option<HeaderValue>,
+    client_request_id: Option<HeaderValue>,
 ) -> Result<tungstenite::http::Request<()>, Error> {
     let mut request = url
         .as_str()
@@ -431,6 +433,11 @@ pub(crate) fn websocket_request(
     }
     if let Some(project) = project {
         request.headers_mut().insert("OpenAI-Project", project);
+    }
+    if let Some(client_request_id) = client_request_id {
+        request
+            .headers_mut()
+            .insert("X-Client-Request-Id", client_request_id);
     }
     Ok(request)
 }

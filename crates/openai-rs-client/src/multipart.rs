@@ -35,6 +35,10 @@ const DEFAULT_PART_MIME: &str = "application/octet-stream";
 const DEFAULT_PART_FILE_NAME: &str = "file";
 const DECODE_PREVIEW_BYTES: usize = 8 * 1024;
 
+fn is_success_status(status: StatusCode) -> bool {
+    status == StatusCode::OK || status == StatusCode::CREATED
+}
+
 type Reader = Pin<Box<dyn AsyncRead + Send + 'static>>;
 type ByteStream = Pin<Box<dyn Stream<Item = io::Result<Bytes>> + Send + 'static>>;
 type DownloadStream = Pin<Box<dyn Stream<Item = Result<Bytes, Error>> + Send + 'static>>;
@@ -360,6 +364,7 @@ pub(crate) struct MultipartTransport {
     auth: AuthProvider,
     organization: Option<HeaderValue>,
     project: Option<HeaderValue>,
+    client_request_id: Option<HeaderValue>,
     max_json_body_bytes: usize,
     max_error_body_bytes: usize,
     retry_policy: RetryPolicy,
@@ -374,6 +379,7 @@ impl MultipartTransport {
         auth: AuthProvider,
         organization: Option<HeaderValue>,
         project: Option<HeaderValue>,
+        client_request_id: Option<HeaderValue>,
         max_json_body_bytes: usize,
         max_error_body_bytes: usize,
         retry_policy: RetryPolicy,
@@ -385,6 +391,7 @@ impl MultipartTransport {
             auth,
             organization,
             project,
+            client_request_id,
             max_json_body_bytes,
             max_error_body_bytes,
             retry_policy,
@@ -533,7 +540,7 @@ impl MultipartTransport {
                 drop(response);
                 continue;
             }
-            if response.status() == StatusCode::OK {
+            if is_success_status(response.status()) {
                 return Ok(response);
             }
             if self.retry_policy.retry_replayable_mutations
@@ -589,7 +596,7 @@ impl MultipartTransport {
                 .invalidate_if_generation(authorization.generation)
                 .await;
         }
-        if response.status() == StatusCode::OK {
+        if is_success_status(response.status()) {
             Ok(response)
         } else {
             self.api_error(response).await
@@ -657,7 +664,7 @@ impl MultipartTransport {
                 drop(response);
                 continue;
             }
-            if response.status() == StatusCode::OK {
+            if is_success_status(response.status()) {
                 return Ok(response);
             }
             if self.retry_policy.retry_replayable_mutations
@@ -732,7 +739,7 @@ impl MultipartTransport {
                 drop(response);
                 continue;
             }
-            if response.status() == StatusCode::OK {
+            if is_success_status(response.status()) {
                 return Ok(response);
             }
             if retries < self.retry_policy.max_retries && should_retry_response(&response) {
@@ -771,6 +778,9 @@ impl MultipartTransport {
         }
         if let Some(project) = &self.project {
             request = request.header("OpenAI-Project", project.clone());
+        }
+        if let Some(client_request_id) = &self.client_request_id {
+            request = request.header("X-Client-Request-Id", client_request_id.clone());
         }
         request
     }
@@ -1417,6 +1427,7 @@ mod tests {
             AuthProvider::api_key(ApiKey::new("test-placeholder-key").expect("test key")),
             None,
             None,
+            None,
             1024 * 1024,
             64 * 1024,
             retry_policy,
@@ -1465,6 +1476,30 @@ mod tests {
                 .windows(5)
                 .any(|window| window == b"a\0b\xffc")
         );
+    }
+
+    #[tokio::test]
+    async fn create_file_accepts_http_201() {
+        let response = Bytes::from_static(
+            br#"{"id":"file_201","object":"file","bytes":5,"created_at":1,"filename":"blob.bin","purpose":"user_data","status":"processed"}"#,
+        );
+        let (transport, _captured) = serve_once(
+            StatusCode::CREATED,
+            JSON_MIME,
+            response,
+            RetryPolicy::disabled(),
+        )
+        .await;
+        let source = ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(&b"hello"[..]))
+            .try_with_file_name("blob.bin")
+            .expect("safe multipart filename")
+            .try_with_media_type("application/octet-stream")
+            .expect("safe multipart media type");
+        let created = transport
+            .create_file(&CreateFileRequest::new(source, FilePurpose::UserData))
+            .await
+            .expect("201 is a successful multipart create");
+        assert_eq!(created.id().as_str(), "file_201");
     }
 
     #[tokio::test]
@@ -1593,6 +1628,7 @@ mod tests {
             reqwest::Client::new(),
             Url::parse("https://api.openai.com/v1/").expect("test base URL"),
             AuthProvider::api_key(ApiKey::new("test-placeholder-key").expect("test key")),
+            None,
             None,
             None,
             1024,

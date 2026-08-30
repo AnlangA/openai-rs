@@ -1,21 +1,25 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use openai_rs_client::sse::{SseEndpointPolicy, SseLimits, SseStreamDecoder};
 
 fuzz_target!(|data: &[u8]| {
-    if let Ok(text) = std::str::from_utf8(data) {
-        let mut lines = text.lines();
-        let mut event_name = None;
-        let mut event_data = String::new();
-        while let Some(line) = lines.next() {
-            if let Some(rest) = line.strip_prefix("event:") {
-                event_name = Some(rest.trim().to_string());
-            } else if let Some(rest) = line.strip_prefix("data:") {
-                event_data.push_str(rest.trim());
-            } else if line.trim().is_empty() {
-                // Dispatch event frame
-                let _ = (event_name.take(), std::mem::take(&mut event_data));
-            }
+    let Ok(limits) = SseLimits::new(256, 4 * 1024, 32) else {
+        return;
+    };
+    let policies = [
+        SseEndpointPolicy::responses(),
+        SseEndpointPolicy::legacy_done(),
+        SseEndpointPolicy::eof_terminated(),
+    ];
+    let policy = policies[data.first().copied().unwrap_or(0) as usize % policies.len()].clone();
+    let mut decoder = SseStreamDecoder::new(limits, policy);
+    let payload = if data.len() > 1 { &data[1..] } else { data };
+    let chunk_size = 1 + data.first().copied().unwrap_or(1) as usize % 64;
+    for chunk in payload.chunks(chunk_size) {
+        if decoder.push(chunk).is_err() {
+            return;
         }
     }
+    let _ = decoder.finish();
 });

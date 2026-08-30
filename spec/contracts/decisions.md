@@ -208,3 +208,27 @@ until a decision is recorded here and its fixtures pass.
 - Tests: lifecycle/feature classification unit test, implementation-status
   parser unit test, generated operation inventory zero-diff check, and absence
   from all facade feature bundles.
+
+## D0014 — GA Responses shares Chat/Beta prompt-cache and reasoning wire types
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `PromptCacheBreakpoint`, `PromptCacheOptions`, `PromptCacheMode`,
+  `PromptCacheTtl`, `Reasoning`, `ContextManagementParam`, `ModerationParam`,
+  and `Annotation`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Responses create,
+  prompt-caching, and reasoning guides reviewed on the stated date.
+- Decision: GA Responses handwritten DTOs are the single source for these
+  shared schemas. Chat and Beta re-export the same types. Schema-IR now
+  projects the named schemas and asserts IR enum values ⊆ handwritten
+  `open_string_enum` known variants. `prompt_cache_retention` remains as a
+  deprecated sibling of `prompt_cache_options.ttl`.
+- Reason: the previous GA copies serialized `{ "type": "explicit" }` and
+  invented `auto`/`disabled` cache modes that are not in the pin.
+- Impact: request/response JSON for Responses, Chat, and Beta; schema-IR
+  selection; drift no longer treats `/evals` or `/fine_tuning` as omitted
+  families.
+- Overrides: none.
+- Tests: Responses/Chat wire fixtures, xtask schema-IR enum-subset test, and
+  `cargo run --locked -p xtask -- check`.

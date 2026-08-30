@@ -144,7 +144,7 @@ The verified surface includes:
 |---|---|---|
 | Assistants / Threads / Runs | Sunset on 2026-08-26 | Omitted; no `beta-assistants` feature |
 | Videos / Sora 2 | Sunset on 2026-09-24 | Omitted; no `create_and_poll` |
-| Evals platform (`v1/evals`) | Read-only on 2026-10-31, shutdown on 2026-11-30 | Moved out of default `Client` to default-off `legacy-evals` feature |
+| Evals platform (`v1/evals`) | Read-only on 2026-10-31, shutdown on 2026-11-30 | Moved out of default `Client` and `openai-rs-types` to default-off `legacy-evals` feature |
 | Alpha Graders | Follows Evals shutdown on 2026-11-30 | Gated under default-off `alpha-graders` feature |
 | Prompts (`v1/prompts`) | Shutdown on 2026-11-30 | Omitted; no Prompts resource; `prompt` field in Responses retained until next pin disposition |
 | Agent Builder | Shutdown on 2026-11-30 | No binding; ChatKit remains available under `beta-chatkit` |

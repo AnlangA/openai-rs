@@ -1,8 +1,10 @@
-//! Serde primitives used by generated OpenAI wire types.
+//! Serde primitives used by handwritten OpenAI wire types.
 //!
 //! OpenAPI distinguishes an absent property from a property whose value is
 //! `null`. [`Omittable`] and [`Nullable`] deliberately model those two axes
 //! separately so that `Omittable<Nullable<T>>` has all three wire states.
+//! Contract projections in `spec/contracts/` audit these types; they do not
+//! generate Rust.
 
 use std::fmt;
 
@@ -12,7 +14,7 @@ use thiserror::Error;
 
 /// A property that can be absent from its containing JSON object.
 ///
-/// Generated fields use this type together with
+/// Handwritten fields use this type together with
 /// `#[serde(default, skip_serializing_if = "Omittable::is_omitted")]`.
 /// Serializing [`Omittable::Omitted`] directly is an error because only the
 /// containing object can omit a key.
@@ -247,7 +249,7 @@ enum NullableRepr<T> {
 
 /// Additional properties retained from a response object.
 ///
-/// The map is intentionally read-only through the public API. Generated
+/// The map is intentionally read-only through the public API. Handwritten
 /// serializers must call [`ExtraFields::ensure_no_reserved`] with their known
 /// wire keys before flattening it into an object.
 #[derive(Clone, Default, PartialEq)]

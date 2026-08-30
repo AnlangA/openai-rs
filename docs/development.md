@@ -19,7 +19,7 @@ Run these from the workspace root before opening a pull request:
 ```console
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --locked
+cargo test --workspace --all-features --locked
 cargo check -p openai-rs-sdk --all-targets --no-default-features --locked
 cargo check --workspace --all-targets --all-features --locked
 cargo check -p openai-rs-sdk --examples --all-features --locked
@@ -41,16 +41,20 @@ does not define GitHub CI/CD workflows.
 validates checked-in provenance, hashes, operation/schema inventories, and any
 registered generated artifacts without updating them. The command must return
 a failure if it would change a tracked artifact or if a pinned input no longer
-matches its recorded hash. M0 currently checks four registered contract
-projections for zero diff, in addition to the vendored OpenAPI and Codex schema
-provenance.
+matches its recorded hash. M0 currently checks five registered contract
+projections for zero diff (`operations.json`, `discriminators.json`,
+`nullability.json`, `schema-ir.json`, `non-rest-implementation.json`), in
+addition to the vendored OpenAPI and Codex schema provenance.
 
 Refresh commands, when added, must be separate and explicit. Normal builds,
 tests, and `xtask check` must not fetch a moving specification.
 
 ## Generated files
 
-- Do not hand-edit generated wire types or generated schema bundles.
+- Rust wire types are handwritten. Change the DTO and add a contract fixture;
+  do not invent a code generator for OpenAPI → Rust.
+- Do not hand-edit generated contract projections (`spec/contracts/*.json`) or
+  vendored schema bundles.
 - Change the pinned input, lowering rules, or an explicit override instead.
 - Include the source revision, hash, generator version, and generated diff in
   the review.

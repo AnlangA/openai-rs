@@ -5,7 +5,7 @@
     "sha256": "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899"
   },
   "selection": "tagged unions, event streams, and high-complexity proof schemas; references remain local and unresolved",
-  "count": 324,
+  "count": 332,
   "schemas": [
     {
       "name": "Annotation",
@@ -19684,6 +19684,118 @@
       }
     },
     {
+      "name": "ContextManagementParam",
+      "pointer": "#/components/schemas/ContextManagementParam",
+      "metrics": {
+        "node_count": 5,
+        "reference_count": 0,
+        "nullable_node_count": 2,
+        "one_of_branch_count": 0,
+        "any_of_branch_count": 2,
+        "all_of_branch_count": 0,
+        "max_inline_depth": 2
+      },
+      "node": {
+        "kind": "object",
+        "types": [
+          "object"
+        ],
+        "reference": null,
+        "nullable": false,
+        "const_value": null,
+        "enum_values": [],
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "compact_threshold": {
+            "kind": "union",
+            "types": [],
+            "reference": null,
+            "nullable": true,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [
+              {
+                "kind": "scalar",
+                "types": [
+                  "integer"
+                ],
+                "reference": null,
+                "nullable": false,
+                "const_value": null,
+                "enum_values": [],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {
+                  "minimum": 1000
+                },
+                "unmodeled_keywords": []
+              },
+              {
+                "kind": "scalar",
+                "types": [
+                  "null"
+                ],
+                "reference": null,
+                "nullable": true,
+                "const_value": null,
+                "enum_values": [],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {},
+                "unmodeled_keywords": []
+              }
+            ],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          "type": {
+            "kind": "scalar",
+            "types": [
+              "string"
+            ],
+            "reference": null,
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          }
+        },
+        "items": null,
+        "one_of": [],
+        "any_of": [],
+        "all_of": [],
+        "discriminator": null,
+        "constraints": {},
+        "unmodeled_keywords": []
+      }
+    },
+    {
       "name": "ConversationItem",
       "pointer": "#/components/schemas/ConversationItem",
       "metrics": {
@@ -27551,6 +27663,114 @@
       }
     },
     {
+      "name": "ModerationParam",
+      "pointer": "#/components/schemas/ModerationParam",
+      "metrics": {
+        "node_count": 5,
+        "reference_count": 1,
+        "nullable_node_count": 2,
+        "one_of_branch_count": 0,
+        "any_of_branch_count": 2,
+        "all_of_branch_count": 0,
+        "max_inline_depth": 2
+      },
+      "node": {
+        "kind": "object",
+        "types": [
+          "object"
+        ],
+        "reference": null,
+        "nullable": false,
+        "const_value": null,
+        "enum_values": [],
+        "required": [
+          "model"
+        ],
+        "properties": {
+          "model": {
+            "kind": "scalar",
+            "types": [
+              "string"
+            ],
+            "reference": null,
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          "policy": {
+            "kind": "union",
+            "types": [],
+            "reference": null,
+            "nullable": true,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [
+              {
+                "kind": "reference",
+                "types": [],
+                "reference": "#/components/schemas/ModerationPolicyParam",
+                "nullable": false,
+                "const_value": null,
+                "enum_values": [],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {},
+                "unmodeled_keywords": []
+              },
+              {
+                "kind": "scalar",
+                "types": [
+                  "null"
+                ],
+                "reference": null,
+                "nullable": true,
+                "const_value": null,
+                "enum_values": [],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {},
+                "unmodeled_keywords": []
+              }
+            ],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          }
+        },
+        "items": null,
+        "one_of": [],
+        "any_of": [],
+        "all_of": [],
+        "discriminator": null,
+        "constraints": {},
+        "unmodeled_keywords": []
+      }
+    },
+    {
       "name": "NamespaceToolParam",
       "pointer": "#/components/schemas/NamespaceToolParam",
       "metrics": {
@@ -28383,6 +28603,145 @@
           "property_name": "type",
           "mapping": {}
         },
+        "constraints": {},
+        "unmodeled_keywords": []
+      }
+    },
+    {
+      "name": "PromptCacheModeEnum",
+      "pointer": "#/components/schemas/PromptCacheModeEnum",
+      "metrics": {
+        "node_count": 1,
+        "reference_count": 0,
+        "nullable_node_count": 0,
+        "one_of_branch_count": 0,
+        "any_of_branch_count": 0,
+        "all_of_branch_count": 0,
+        "max_inline_depth": 0
+      },
+      "node": {
+        "kind": "scalar",
+        "types": [
+          "string"
+        ],
+        "reference": null,
+        "nullable": false,
+        "const_value": null,
+        "enum_values": [
+          "implicit",
+          "explicit"
+        ],
+        "required": [],
+        "properties": {},
+        "items": null,
+        "one_of": [],
+        "any_of": [],
+        "all_of": [],
+        "discriminator": null,
+        "constraints": {},
+        "unmodeled_keywords": []
+      }
+    },
+    {
+      "name": "PromptCacheOptions",
+      "pointer": "#/components/schemas/PromptCacheOptions",
+      "metrics": {
+        "node_count": 3,
+        "reference_count": 2,
+        "nullable_node_count": 0,
+        "one_of_branch_count": 0,
+        "any_of_branch_count": 0,
+        "all_of_branch_count": 0,
+        "max_inline_depth": 1
+      },
+      "node": {
+        "kind": "object",
+        "types": [
+          "object"
+        ],
+        "reference": null,
+        "nullable": false,
+        "const_value": null,
+        "enum_values": [],
+        "required": [
+          "ttl",
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "kind": "reference",
+            "types": [],
+            "reference": "#/components/schemas/PromptCacheModeEnum",
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          "ttl": {
+            "kind": "reference",
+            "types": [],
+            "reference": "#/components/schemas/PromptCacheTTLEnum",
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          }
+        },
+        "items": null,
+        "one_of": [],
+        "any_of": [],
+        "all_of": [],
+        "discriminator": null,
+        "constraints": {},
+        "unmodeled_keywords": []
+      }
+    },
+    {
+      "name": "PromptCacheTTLEnum",
+      "pointer": "#/components/schemas/PromptCacheTTLEnum",
+      "metrics": {
+        "node_count": 1,
+        "reference_count": 0,
+        "nullable_node_count": 0,
+        "one_of_branch_count": 0,
+        "any_of_branch_count": 0,
+        "all_of_branch_count": 0,
+        "max_inline_depth": 0
+      },
+      "node": {
+        "kind": "scalar",
+        "types": [
+          "string"
+        ],
+        "reference": null,
+        "nullable": false,
+        "const_value": null,
+        "enum_values": [
+          "30m"
+        ],
+        "required": [],
+        "properties": {},
+        "items": null,
+        "one_of": [],
+        "any_of": [],
+        "all_of": [],
+        "discriminator": null,
         "constraints": {},
         "unmodeled_keywords": []
       }
@@ -54630,6 +54989,402 @@
             "nullable": true,
             "const_value": null,
             "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          }
+        ],
+        "all_of": [],
+        "discriminator": null,
+        "constraints": {},
+        "unmodeled_keywords": []
+      }
+    },
+    {
+      "name": "Reasoning",
+      "pointer": "#/components/schemas/Reasoning",
+      "metrics": {
+        "node_count": 12,
+        "reference_count": 2,
+        "nullable_node_count": 6,
+        "one_of_branch_count": 0,
+        "any_of_branch_count": 6,
+        "all_of_branch_count": 0,
+        "max_inline_depth": 2
+      },
+      "node": {
+        "kind": "object",
+        "types": [
+          "object"
+        ],
+        "reference": null,
+        "nullable": false,
+        "const_value": null,
+        "enum_values": [],
+        "required": [],
+        "properties": {
+          "context": {
+            "kind": "union",
+            "types": [],
+            "reference": null,
+            "nullable": true,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [
+              {
+                "kind": "scalar",
+                "types": [
+                  "string"
+                ],
+                "reference": null,
+                "nullable": false,
+                "const_value": null,
+                "enum_values": [
+                  "auto",
+                  "current_turn",
+                  "all_turns"
+                ],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {},
+                "unmodeled_keywords": []
+              },
+              {
+                "kind": "scalar",
+                "types": [
+                  "null"
+                ],
+                "reference": null,
+                "nullable": true,
+                "const_value": null,
+                "enum_values": [],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {},
+                "unmodeled_keywords": []
+              }
+            ],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          "effort": {
+            "kind": "reference",
+            "types": [],
+            "reference": "#/components/schemas/ReasoningEffort",
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          "generate_summary": {
+            "kind": "union",
+            "types": [],
+            "reference": null,
+            "nullable": true,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [
+              {
+                "kind": "scalar",
+                "types": [
+                  "string"
+                ],
+                "reference": null,
+                "nullable": false,
+                "const_value": null,
+                "enum_values": [
+                  "auto",
+                  "concise",
+                  "detailed"
+                ],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {},
+                "unmodeled_keywords": []
+              },
+              {
+                "kind": "scalar",
+                "types": [
+                  "null"
+                ],
+                "reference": null,
+                "nullable": true,
+                "const_value": null,
+                "enum_values": [],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {},
+                "unmodeled_keywords": []
+              }
+            ],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          "mode": {
+            "kind": "reference",
+            "types": [],
+            "reference": "#/components/schemas/ReasoningModeEnum",
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          "summary": {
+            "kind": "union",
+            "types": [],
+            "reference": null,
+            "nullable": true,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [
+              {
+                "kind": "scalar",
+                "types": [
+                  "string"
+                ],
+                "reference": null,
+                "nullable": false,
+                "const_value": null,
+                "enum_values": [
+                  "auto",
+                  "concise",
+                  "detailed"
+                ],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {},
+                "unmodeled_keywords": []
+              },
+              {
+                "kind": "scalar",
+                "types": [
+                  "null"
+                ],
+                "reference": null,
+                "nullable": true,
+                "const_value": null,
+                "enum_values": [],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {},
+                "unmodeled_keywords": []
+              }
+            ],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          }
+        },
+        "items": null,
+        "one_of": [],
+        "any_of": [],
+        "all_of": [],
+        "discriminator": null,
+        "constraints": {},
+        "unmodeled_keywords": []
+      }
+    },
+    {
+      "name": "ReasoningEffort",
+      "pointer": "#/components/schemas/ReasoningEffort",
+      "metrics": {
+        "node_count": 3,
+        "reference_count": 0,
+        "nullable_node_count": 2,
+        "one_of_branch_count": 0,
+        "any_of_branch_count": 2,
+        "all_of_branch_count": 0,
+        "max_inline_depth": 1
+      },
+      "node": {
+        "kind": "union",
+        "types": [],
+        "reference": null,
+        "nullable": true,
+        "const_value": null,
+        "enum_values": [],
+        "required": [],
+        "properties": {},
+        "items": null,
+        "one_of": [],
+        "any_of": [
+          {
+            "kind": "scalar",
+            "types": [
+              "string"
+            ],
+            "reference": null,
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          {
+            "kind": "scalar",
+            "types": [
+              "null"
+            ],
+            "reference": null,
+            "nullable": true,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          }
+        ],
+        "all_of": [],
+        "discriminator": null,
+        "constraints": {},
+        "unmodeled_keywords": []
+      }
+    },
+    {
+      "name": "ReasoningModeEnum",
+      "pointer": "#/components/schemas/ReasoningModeEnum",
+      "metrics": {
+        "node_count": 3,
+        "reference_count": 0,
+        "nullable_node_count": 0,
+        "one_of_branch_count": 0,
+        "any_of_branch_count": 2,
+        "all_of_branch_count": 0,
+        "max_inline_depth": 1
+      },
+      "node": {
+        "kind": "union",
+        "types": [],
+        "reference": null,
+        "nullable": false,
+        "const_value": null,
+        "enum_values": [],
+        "required": [],
+        "properties": {},
+        "items": null,
+        "one_of": [],
+        "any_of": [
+          {
+            "kind": "scalar",
+            "types": [
+              "string"
+            ],
+            "reference": null,
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          {
+            "kind": "scalar",
+            "types": [
+              "string"
+            ],
+            "reference": null,
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [
+              "standard",
+              "pro"
+            ],
             "required": [],
             "properties": {},
             "items": null,

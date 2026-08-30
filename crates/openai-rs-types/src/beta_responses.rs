@@ -116,44 +116,14 @@ crate::open_string_enum! {
     }
 }
 
-crate::open_string_enum! {
-    /// Context policy for reasoning items on later turns.
-    pub enum BetaReasoningContext {
-        Auto = "auto",
-        CurrentTurn = "current_turn",
-        AllTurns = "all_turns",
-    }
-}
-
-crate::open_string_enum! {
-    /// Execution mode for reasoning.
-    pub enum BetaReasoningMode {
-        Standard = "standard",
-        Pro = "pro",
-    }
-}
-
-crate::open_string_enum! {
-    /// Reasoning effort including the beta-only `max` setting.
-    pub enum BetaReasoningEffort {
-        None = "none",
-        Minimal = "minimal",
-        Low = "low",
-        Medium = "medium",
-        High = "high",
-        XHigh = "xhigh",
-        Max = "max",
-    }
-}
-
-crate::open_string_enum! {
-    /// Requested reasoning-summary style.
-    pub enum BetaReasoningSummary {
-        Auto = "auto",
-        Concise = "concise",
-        Detailed = "detailed",
-    }
-}
+/// Shared with GA Responses.
+pub use crate::responses::ReasoningContext as BetaReasoningContext;
+/// Shared with GA Responses, including `max`.
+pub use crate::responses::ReasoningEffort as BetaReasoningEffort;
+/// Shared with GA Responses.
+pub use crate::responses::ReasoningMode as BetaReasoningMode;
+/// Shared with GA Responses.
+pub use crate::responses::ReasoningSummary as BetaReasoningSummary;
 
 /// Canonical identity attached to an item or streaming event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -339,23 +309,8 @@ impl BetaMultiAgentConfig {
     }
 }
 
-literal_tag!(PromptCacheBreakpointMode, Explicit, "explicit");
-
-/// An exact, caller-selected prompt-cache boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BetaPromptCacheBreakpoint {
-    mode: PromptCacheBreakpointMode,
-}
-
-impl BetaPromptCacheBreakpoint {
-    /// Creates the only breakpoint mode supported by the pinned schema.
-    #[must_use]
-    pub const fn explicit() -> Self {
-        Self {
-            mode: PromptCacheBreakpointMode::Explicit,
-        }
-    }
-}
+/// Shared with GA Responses; the pinned wire object is `{ "mode": "explicit" }`.
+pub use crate::responses::PromptCacheBreakpoint as BetaPromptCacheBreakpoint;
 
 /// A stable input-content branch with a typed beta prompt-cache breakpoint.
 #[derive(Debug, Clone, PartialEq)]
@@ -1349,15 +1304,20 @@ impl BetaReasoningConfig {
     }
 }
 
-crate::open_string_enum! {
-    /// Prompt-cache breakpoint selection mode.
-    pub enum BetaPromptCacheMode {
-        Implicit = "implicit",
-        Explicit = "explicit",
-    }
-}
-
-literal_tag!(ThirtyMinuteTtlTag, ThirtyMinutes, "30m");
+/// Shared with GA Responses.
+pub use crate::responses::ContextManagement as BetaContextManagement;
+/// Shared with GA Responses.
+pub use crate::responses::ModerationConfig as BetaModerationConfig;
+/// Shared with GA Responses.
+pub use crate::responses::ModerationDirection as BetaModerationDirection;
+/// Shared with GA Responses.
+pub use crate::responses::ModerationMode as BetaModerationMode;
+/// Shared with GA Responses.
+pub use crate::responses::ModerationPolicy as BetaModerationPolicy;
+/// Shared with GA Responses.
+pub use crate::responses::PromptCacheMode as BetaPromptCacheMode;
+/// Shared with GA Responses.
+pub use crate::responses::PromptCacheTtl as BetaPromptCacheTtl;
 
 /// Prompt-cache options for `gpt-5.6` and later beta models.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -1365,7 +1325,7 @@ pub struct BetaPromptCacheOptions {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     mode: Omittable<BetaPromptCacheMode>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    ttl: Omittable<ThirtyMinuteTtlTag>,
+    ttl: Omittable<BetaPromptCacheTtl>,
 }
 
 impl BetaPromptCacheOptions {
@@ -1383,87 +1343,7 @@ impl BetaPromptCacheOptions {
     /// Selects the only TTL supported by the pinned schema.
     #[must_use]
     pub fn thirty_minutes(mut self) -> Self {
-        self.ttl = Omittable::Value(ThirtyMinuteTtlTag::ThirtyMinutes);
-        self
-    }
-}
-
-crate::open_string_enum! {
-    /// Moderation handling mode.
-    pub enum BetaModerationMode {
-        Score = "score",
-        Block = "block",
-    }
-}
-
-/// Input/output moderation policy.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct BetaModerationPolicy {
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    input: Omittable<Nullable<BetaModerationDirection>>,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    output: Omittable<Nullable<BetaModerationDirection>>,
-}
-
-/// Policy for one moderation direction.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BetaModerationDirection {
-    mode: BetaModerationMode,
-}
-
-impl BetaModerationDirection {
-    #[must_use]
-    pub const fn new(mode: BetaModerationMode) -> Self {
-        Self { mode }
-    }
-}
-
-/// Moderation configuration on a create request.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BetaModerationConfig {
-    model: String,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    policy: Omittable<Nullable<BetaModerationPolicy>>,
-}
-
-impl BetaModerationConfig {
-    #[must_use]
-    pub fn new(model: impl Into<String>) -> Self {
-        Self {
-            model: model.into(),
-            policy: Omittable::Omitted,
-        }
-    }
-
-    #[must_use]
-    pub fn policy(mut self, policy: BetaModerationPolicy) -> Self {
-        self.policy = Omittable::Value(Nullable::Value(policy));
-        self
-    }
-}
-
-/// One context-management compaction rule.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BetaContextManagement {
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    compact_threshold: Omittable<Nullable<u64>>,
-}
-
-impl BetaContextManagement {
-    /// Creates the currently supported `compaction` rule.
-    #[must_use]
-    pub fn compaction() -> Self {
-        Self {
-            kind: "compaction".to_owned(),
-            compact_threshold: Omittable::Omitted,
-        }
-    }
-
-    #[must_use]
-    pub fn compact_threshold(mut self, threshold: u64) -> Self {
-        self.compact_threshold = Omittable::Value(Nullable::Value(threshold));
+        self.ttl = Omittable::Value(BetaPromptCacheTtl::ThirtyMinutes);
         self
     }
 }

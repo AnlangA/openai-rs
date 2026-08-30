@@ -131,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tool = FunctionTool::for_type::<WeatherArgs>("get_weather", "Return current weather")?;
 
-    let request = CreateResponseRequest::new("gpt-5.4", "What is the weather in Shenzhen?")
+    let request = CreateResponseRequest::new("gpt-5.6", "What is the weather in Shenzhen?")
         .with_tool(tool);
 
     let response = client.responses().create(request).await?;
@@ -147,8 +147,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         )?;
 
-        // Official continuation path: send only the tool output with previous_response_id
-        // (Alternatively, use response.to_input_items() for local stateless multi-turn replay)
+        // previous_response_id does not carry top-level instructions or tools.
+        // Resend those with follow_up_from, or send only the tool output here.
         let follow_up = client
             .responses()
             .create(CreateResponseRequest::follow_up(

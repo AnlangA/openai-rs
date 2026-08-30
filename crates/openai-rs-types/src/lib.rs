@@ -14,6 +14,7 @@ pub mod containers;
 pub mod content_provenance;
 pub mod conversations;
 pub mod core;
+#[cfg(feature = "legacy-evals")]
 pub mod evals;
 pub mod files;
 pub mod fine_tuning;
@@ -49,6 +50,7 @@ pub use batches::*;
 pub use content_provenance::*;
 pub use conversations::*;
 pub use core::*;
+#[cfg(feature = "legacy-evals")]
 pub use evals::*;
 pub use files::*;
 pub use kernel::{ExtraFields, ExtraFieldsConflict, Nullable, Omittable};

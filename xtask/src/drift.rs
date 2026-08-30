@@ -255,9 +255,7 @@ fn is_sunset_or_omitted_family(path: &str) -> bool {
     path.starts_with("/assistants")
         || path.starts_with("/threads")
         || path.starts_with("/videos")
-        || path.starts_with("/evals")
         || path.starts_with("/prompts")
-        || path.starts_with("/fine_tuning")
 }
 
 fn is_sunset_schema_family(name: &str) -> bool {
@@ -265,7 +263,6 @@ fn is_sunset_schema_family(name: &str) -> bool {
         || name.starts_with("Thread")
         || name.starts_with("Run")
         || name.starts_with("Video")
-        || name.starts_with("Eval")
         || name.starts_with("Prompt")
 }
 
@@ -349,5 +346,17 @@ mod tests {
         assert!(report.is_empty());
         assert_eq!(report.from_operations_count, report.to_operations_count);
         assert_eq!(report.from_schemas_count, report.to_schemas_count);
+    }
+
+    #[test]
+    fn implemented_eval_and_fine_tuning_families_are_not_lifecycle_only() {
+        assert!(!is_sunset_or_omitted_family("/evals"));
+        assert!(!is_sunset_or_omitted_family("/fine_tuning/jobs"));
+        assert!(is_sunset_or_omitted_family("/assistants"));
+        assert!(is_sunset_or_omitted_family("/videos"));
+        assert!(is_sunset_or_omitted_family("/prompts"));
+        assert!(!is_sunset_schema_family("Eval"));
+        assert!(!is_sunset_schema_family("FineTuningJob"));
+        assert!(is_sunset_schema_family("Assistant"));
     }
 }

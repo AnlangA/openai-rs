@@ -284,8 +284,17 @@ opaque_string_id! {
 pub struct ModelId(Cow<'static, str>);
 
 impl ModelId {
-    /// A known model name retained as a convenience.
+    /// Official GPT-5.6 alias, currently routing to [`Self::GPT_5_6_SOL`].
     pub const GPT_5_6: Self = Self(Cow::Borrowed("gpt-5.6"));
+
+    /// GPT-5.6 snapshot currently aliased by [`Self::GPT_5_6`].
+    pub const GPT_5_6_SOL: Self = Self(Cow::Borrowed("gpt-5.6-sol"));
+
+    /// GPT-5.6 Terra snapshot.
+    pub const GPT_5_6_TERRA: Self = Self(Cow::Borrowed("gpt-5.6-terra"));
+
+    /// GPT-5.6 Luna snapshot.
+    pub const GPT_5_6_LUNA: Self = Self(Cow::Borrowed("gpt-5.6-luna"));
 
     /// Creates an open model ID from a static or owned string.
     #[must_use]
@@ -608,6 +617,9 @@ mod tests {
 
         assert_eq!(decoded, model);
         assert_eq!(ModelId::GPT_5_6.as_str(), "gpt-5.6");
+        assert_eq!(ModelId::GPT_5_6_SOL.as_str(), "gpt-5.6-sol");
+        assert_eq!(ModelId::GPT_5_6_TERRA.as_str(), "gpt-5.6-terra");
+        assert_eq!(ModelId::GPT_5_6_LUNA.as_str(), "gpt-5.6-luna");
     }
 
     #[test]

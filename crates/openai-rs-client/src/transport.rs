@@ -62,6 +62,7 @@ pub(crate) struct Transport {
     auth: AuthProvider,
     organization: Option<HeaderValue>,
     project: Option<HeaderValue>,
+    client_request_id: Option<HeaderValue>,
     max_json_body_bytes: usize,
     max_error_body_bytes: usize,
     retry_policy: RetryPolicy,
@@ -78,6 +79,7 @@ impl Transport {
         auth: AuthProvider,
         organization: Option<HeaderValue>,
         project: Option<HeaderValue>,
+        client_request_id: Option<HeaderValue>,
         max_json_body_bytes: usize,
         max_error_body_bytes: usize,
         retry_policy: RetryPolicy,
@@ -91,6 +93,7 @@ impl Transport {
             auth,
             organization,
             project,
+            client_request_id,
             max_json_body_bytes,
             max_error_body_bytes,
             retry_policy,
@@ -126,6 +129,11 @@ impl Transport {
     #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
     pub(crate) fn project(&self) -> Option<HeaderValue> {
         self.project.clone()
+    }
+
+    #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
+    pub(crate) fn client_request_id(&self) -> Option<HeaderValue> {
+        self.client_request_id.clone()
     }
 
     #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
@@ -314,6 +322,9 @@ impl Transport {
             }
             if let Some(project) = &self.project {
                 request = request.header("OpenAI-Project", project.clone());
+            }
+            if let Some(client_request_id) = &self.client_request_id {
+                request = request.header("X-Client-Request-Id", client_request_id.clone());
             }
             if let Some((name, value)) = &static_header {
                 request = request.header(name.clone(), value.clone());
@@ -512,6 +523,9 @@ impl Transport {
         if let Some(project) = &self.project {
             request = request.header("OpenAI-Project", project.clone());
         }
+        if let Some(client_request_id) = &self.client_request_id {
+            request = request.header("X-Client-Request-Id", client_request_id.clone());
+        }
         request
     }
 
@@ -635,6 +649,7 @@ fn validate_static_operation_header(
         header::AUTHORIZATION | header::ACCEPT | header::CONTENT_TYPE | header::HOST
     ) || name.as_str().eq_ignore_ascii_case("openai-organization")
         || name.as_str().eq_ignore_ascii_case("openai-project")
+        || name.as_str().eq_ignore_ascii_case("x-client-request-id")
     {
         return Err(Error::InvalidConfiguration(
             "operation static header cannot override a protected header".into(),
@@ -869,6 +884,7 @@ mod tests {
             AuthProvider::api_key(crate::ApiKey::new("test-placeholder-key").expect("test key")),
             None,
             None,
+            None,
             1024,
             1024,
             RetryPolicy::disabled(),
@@ -911,6 +927,7 @@ mod tests {
             "Host",
             "OpenAI-Organization",
             "OpenAI-Project",
+            "X-Client-Request-Id",
         ] {
             assert!(validate_static_operation_header((name, "forbidden")).is_err());
         }

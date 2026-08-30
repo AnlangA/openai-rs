@@ -20,7 +20,7 @@ const EXPECTED_WEBHOOK_OPERATIONS: usize = 18;
 const HTTP_METHODS: [&str; 8] = [
     "get", "put", "post", "delete", "options", "head", "patch", "trace",
 ];
-const COMPLEX_SCHEMAS: [&str; 13] = [
+const COMPLEX_SCHEMAS: [&str; 22] = [
     "InputItem",
     "Item",
     "OutputItem",
@@ -34,6 +34,15 @@ const COMPLEX_SCHEMAS: [&str; 13] = [
     "ChatCompletionRequestMessage",
     "CreateFineTuningJobRequest",
     "CreateThreadAndRunRequest",
+    "PromptCacheOptions",
+    "PromptCacheModeEnum",
+    "PromptCacheTTLEnum",
+    "Reasoning",
+    "ReasoningEffort",
+    "ReasoningModeEnum",
+    "ContextManagementParam",
+    "ModerationParam",
+    "Annotation",
 ];
 
 #[derive(Serialize)]
@@ -1465,7 +1474,7 @@ fn escape_json_pointer(segment: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::{
         initial_feature, initial_lifecycle, is_success_status, is_valid_implementation_status,
@@ -1554,5 +1563,69 @@ mod tests {
         }
         assert!(!is_valid_implementation_status("complete"));
         assert!(!is_valid_implementation_status("deprecated"));
+    }
+
+    #[test]
+    fn shared_schema_ir_enum_values_are_subset_of_handwritten_known_values()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .ok_or("repo root")?;
+        let snapshot = std::fs::read(repo_root.join(crate::spec::SNAPSHOT_PATH))?;
+        let document: Value = serde_json::from_slice(&snapshot)?;
+        let ir = super::build_schema_ir(&document)?;
+
+        let known = [
+            ("PromptCacheModeEnum", &["implicit", "explicit"][..]),
+            ("PromptCacheTTLEnum", &["30m"][..]),
+            (
+                "ReasoningEffort",
+                &["none", "minimal", "low", "medium", "high", "xhigh", "max"][..],
+            ),
+            ("ReasoningModeEnum", &["standard", "pro"][..]),
+        ];
+
+        for (name, known_values) in known {
+            let schema = ir
+                .schemas
+                .iter()
+                .find(|schema| schema.name == name)
+                .ok_or_else(|| format!("{name} must be projected into schema-IR"))?;
+            let enum_values = collect_enum_strings(&schema.node);
+            assert!(
+                !enum_values.is_empty(),
+                "{name} must project at least one enum value"
+            );
+            for value in &enum_values {
+                assert!(
+                    known_values.contains(&value.as_str()),
+                    "IR enum value `{value}` for `{name}` is not a handwritten known variant"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_enum_strings(node: &super::LoweredNode) -> Vec<String> {
+        let mut values = Vec::new();
+        collect_enum_strings_into(node, &mut values);
+        values
+    }
+
+    fn collect_enum_strings_into(node: &super::LoweredNode, values: &mut Vec<String>) {
+        for value in &node.enum_values {
+            if let Some(text) = value.as_str() {
+                values.push(text.to_owned());
+            }
+        }
+        for child in node.properties.values() {
+            collect_enum_strings_into(child, values);
+        }
+        if let Some(items) = &node.items {
+            collect_enum_strings_into(items, values);
+        }
+        for child in node.one_of.iter().chain(&node.any_of).chain(&node.all_of) {
+            collect_enum_strings_into(child, values);
+        }
     }
 }

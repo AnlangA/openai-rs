@@ -29,10 +29,10 @@ admin = ["openai-rs-types/admin"]
 workload-identity = []
 x509 = ["workload-identity", "rustls-tls"]
 legacy-completions = ["openai-rs-types/legacy-completions"]
-legacy-evals = []
+legacy-evals = ["openai-rs-types/legacy-evals"]
 evals = ["legacy-evals"]
 custom-voice = ["openai-rs-types/custom-voice"]
-alpha-graders = []
+alpha-graders = ["openai-rs-types/legacy-evals"]
 beta-chatkit = ["openai-rs-types/beta-chatkit"]
 beta-responses-multi-agent = [
     "openai-rs-types/beta-responses-multi-agent",

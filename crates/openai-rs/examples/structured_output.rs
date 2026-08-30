@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let format = StructuredOutput::<MathSolution>::new("math_solution")?
         .with_description("Step-by-step mathematical reasoning and solution");
 
-    let request = CreateResponseRequest::new("gpt-5.4", "Solve the linear equation: 3x + 12 = 27")
+    let request = CreateResponseRequest::new("gpt-5.6", "Solve the linear equation: 3x + 12 = 27")
         .text_format(&format);
 
     let response = client.responses().create(request).await?;

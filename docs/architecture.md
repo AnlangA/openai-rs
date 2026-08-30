@@ -88,8 +88,10 @@ types and a local RMCP client/server adapter remain separate concerns.
 ## Provenance and generation
 
 The M0 OpenAPI input and Codex app-server schema are vendored and hash-verified.
-Four registered contract projections are checked for zero diff. Future generated
-API artifacts must likewise be derived from pinned, hashed upstream inputs.
+Five registered contract projections (`operations.json`, `discriminators.json`,
+`nullability.json`, `schema-ir.json`, `non-rest-implementation.json`) are
+checked for zero diff. Future generated API artifacts must likewise be derived
+from pinned, hashed upstream inputs.
 Normal builds and tests consume checked-in artifacts; they do not download a
 moving schema or execute an unknown generator. A refresh is an explicit
 maintainer operation whose source revision, hash, and generated diff are

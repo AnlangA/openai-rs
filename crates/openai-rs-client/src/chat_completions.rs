@@ -110,6 +110,9 @@ impl ChatCompletions {
         Box::pin(async_stream::try_stream! {
             let mut params = params;
             let mut seen = HashSet::new();
+            if let Omittable::Value(cursor) = &params.after {
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
+            }
             loop {
                 let page = completions.list(params.clone()).await?;
                 let next = crate::pagination::next_cursor(
@@ -222,6 +225,9 @@ impl ChatCompletionMessages {
         Box::pin(async_stream::try_stream! {
             let mut params = params;
             let mut seen = HashSet::new();
+            if let Omittable::Value(cursor) = &params.after {
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
+            }
             loop {
                 let page = messages.list(&completion_id, params.clone()).await?;
                 let next = crate::pagination::next_cursor(

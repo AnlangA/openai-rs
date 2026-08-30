@@ -276,6 +276,7 @@ pub struct ClientBuilder {
     allow_insecure_loopback: bool,
     organization: Option<String>,
     project: Option<String>,
+    client_request_id: Option<String>,
     connect_timeout: Duration,
     request_timeout: Duration,
     max_json_body_bytes: usize,
@@ -300,6 +301,7 @@ impl ClientBuilder {
             allow_insecure_loopback: false,
             organization: None,
             project: None,
+            client_request_id: None,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             max_json_body_bytes: DEFAULT_MAX_JSON_BODY_BYTES,
@@ -319,6 +321,7 @@ impl ClientBuilder {
             allow_insecure_loopback: false,
             organization: None,
             project: None,
+            client_request_id: None,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             max_json_body_bytes: DEFAULT_MAX_JSON_BODY_BYTES,
@@ -354,6 +357,16 @@ impl ClientBuilder {
     #[must_use]
     pub fn project(mut self, project: impl Into<String>) -> Self {
         self.project = Some(project.into());
+        self
+    }
+
+    /// Sets `X-Client-Request-Id` on every request for timeout reconciliation.
+    ///
+    /// The value must be non-empty ASCII with no surrounding whitespace and at
+    /// most 512 bytes.
+    #[must_use]
+    pub fn client_request_id(mut self, request_id: impl Into<String>) -> Self {
+        self.client_request_id = Some(request_id.into());
         self
     }
 
@@ -440,6 +453,7 @@ impl ClientBuilder {
 
         let organization = optional_sensitive_header(self.organization, "organization")?;
         let project = optional_sensitive_header(self.project, "project")?;
+        let client_request_id = optional_client_request_id(self.client_request_id)?;
 
         let http = reqwest::Client::builder()
             .connect_timeout(self.connect_timeout)
@@ -476,6 +490,7 @@ impl ClientBuilder {
             auth.clone(),
             organization.clone(),
             project.clone(),
+            client_request_id.clone(),
             self.max_json_body_bytes,
             self.max_error_body_bytes,
             self.retry_policy,
@@ -489,6 +504,7 @@ impl ClientBuilder {
                     auth,
                     organization,
                     project,
+                    client_request_id,
                     self.max_json_body_bytes,
                     self.max_error_body_bytes,
                     self.retry_policy,
@@ -518,6 +534,7 @@ impl fmt::Debug for ClientBuilder {
                 &self.organization.as_ref().map(|_| "[REDACTED]"),
             )
             .field("project", &self.project.as_ref().map(|_| "[REDACTED]"))
+            .field("client_request_id", &self.client_request_id)
             .field("connect_timeout", &self.connect_timeout)
             .field("request_timeout", &self.request_timeout)
             .field("max_json_body_bytes", &self.max_json_body_bytes)
@@ -580,6 +597,26 @@ fn optional_sensitive_header(
             })?;
             header.set_sensitive(true);
             Ok(header)
+        })
+        .transpose()
+}
+
+fn optional_client_request_id(value: Option<String>) -> Result<Option<HeaderValue>, Error> {
+    value
+        .map(|value| {
+            if value.is_empty() || value.trim() != value {
+                return Err(invalid_configuration(
+                    "X-Client-Request-Id must be non-empty and have no surrounding whitespace",
+                ));
+            }
+            if value.len() > 512 || !value.is_ascii() {
+                return Err(invalid_configuration(
+                    "X-Client-Request-Id must be ASCII and at most 512 bytes",
+                ));
+            }
+            HeaderValue::from_str(&value).map_err(|_| {
+                invalid_configuration("X-Client-Request-Id is not a valid HTTP header value")
+            })
         })
         .transpose()
 }
@@ -660,5 +697,42 @@ mod tests {
         assert!(!debug.contains("test-placeholder-key"));
         assert!(!debug.contains("org-private"));
         assert!(!debug.contains("proj-private"));
+    }
+
+    #[test]
+    fn client_request_id_rejects_non_ascii_and_oversize_values() {
+        let loopback = Url::parse("http://127.0.0.1:1234/v1/").expect("test URL");
+        assert!(
+            Client::builder(key())
+                .base_url(loopback.clone())
+                .allow_insecure_loopback(true)
+                .client_request_id("corr-1")
+                .build()
+                .is_ok()
+        );
+        assert!(
+            Client::builder(key())
+                .base_url(loopback.clone())
+                .allow_insecure_loopback(true)
+                .client_request_id(" corr-1")
+                .build()
+                .is_err()
+        );
+        assert!(
+            Client::builder(key())
+                .base_url(loopback.clone())
+                .allow_insecure_loopback(true)
+                .client_request_id("编号")
+                .build()
+                .is_err()
+        );
+        assert!(
+            Client::builder(key())
+                .base_url(loopback)
+                .allow_insecure_loopback(true)
+                .client_request_id("a".repeat(513))
+                .build()
+                .is_err()
+        );
     }
 }
