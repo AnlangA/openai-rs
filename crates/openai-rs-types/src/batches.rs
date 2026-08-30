@@ -101,8 +101,8 @@ pub const MIN_BATCH_FILE_EXPIRATION_SECONDS: u64 = 3_600;
 pub const MAX_BATCH_FILE_EXPIRATION_SECONDS: u64 = 2_592_000;
 /// Maximum number of request lines documented for one batch input file.
 pub const MAX_BATCH_INPUT_LINES: usize = 50_000;
-/// Maximum documented batch input file size (200 MiB).
-pub const MAX_BATCH_INPUT_BYTES: usize = 200 * 1024 * 1024;
+/// Maximum documented batch input file size (200 decimal megabytes).
+pub const MAX_BATCH_INPUT_BYTES: usize = 200_000_000;
 /// Default maximum accepted size of one JSONL line. A single line may legally
 /// occupy the complete input-file budget.
 pub const DEFAULT_BATCH_JSONL_LINE_LIMIT: usize = MAX_BATCH_INPUT_BYTES;
@@ -1606,6 +1606,10 @@ pub enum BatchJsonlError {
         /// Endpoint found on this line.
         actual: String,
     },
+    /// A previous I/O failure may have left a partial JSONL record in the
+    /// underlying writer, so no further writes or flushes are permitted.
+    #[error("batch JSONL writer is poisoned by an earlier I/O failure")]
+    Poisoned,
 }
 
 /// Incremental writer for typed Batch API input JSONL.
@@ -1618,6 +1622,7 @@ pub struct BatchJsonlWriter<W> {
     max_line_bytes: usize,
     custom_ids: HashSet<String>,
     endpoint: Option<BatchEndpoint>,
+    poisoned: bool,
 }
 
 impl<W> fmt::Debug for BatchJsonlWriter<W> {
@@ -1630,6 +1635,7 @@ impl<W> fmt::Debug for BatchJsonlWriter<W> {
             .field("max_bytes", &self.max_bytes)
             .field("max_line_bytes", &self.max_line_bytes)
             .field("endpoint", &self.endpoint)
+            .field("poisoned", &self.poisoned)
             .finish_non_exhaustive()
     }
 }
@@ -1647,6 +1653,7 @@ impl<W: Write> BatchJsonlWriter<W> {
             max_line_bytes: DEFAULT_BATCH_JSONL_LINE_LIMIT,
             custom_ids: HashSet::new(),
             endpoint: None,
+            poisoned: false,
         }
     }
 
@@ -1669,6 +1676,9 @@ impl<W: Write> BatchJsonlWriter<W> {
     where
         O: Serialize,
     {
+        if self.poisoned {
+            return Err(BatchJsonlError::Poisoned);
+        }
         let next_line = self.line_count.saturating_add(1);
         if next_line > self.max_lines {
             return Err(BatchJsonlError::TooManyLines {
@@ -1708,13 +1718,17 @@ impl<W: Write> BatchJsonlWriter<W> {
             });
         }
 
-        self.writer
+        let write_result = self
+            .writer
             .write_all(&encoded)
-            .and_then(|()| self.writer.write_all(b"\n"))
-            .map_err(|source| BatchJsonlError::Io {
+            .and_then(|()| self.writer.write_all(b"\n"));
+        if let Err(source) = write_result {
+            self.poisoned = true;
+            return Err(BatchJsonlError::Io {
                 line: next_line,
                 source,
-            })?;
+            });
+        }
         self.custom_ids.insert(line.custom_id().as_str().to_owned());
         if self.endpoint.is_none() {
             self.endpoint = Some(line.endpoint().clone());
@@ -1726,10 +1740,17 @@ impl<W: Write> BatchJsonlWriter<W> {
 
     /// Flushes the underlying writer.
     pub fn flush(&mut self) -> Result<(), BatchJsonlError> {
-        self.writer.flush().map_err(|source| BatchJsonlError::Io {
-            line: self.line_count.saturating_add(1),
-            source,
-        })
+        if self.poisoned {
+            return Err(BatchJsonlError::Poisoned);
+        }
+        if let Err(source) = self.writer.flush() {
+            self.poisoned = true;
+            return Err(BatchJsonlError::Io {
+                line: self.line_count.saturating_add(1),
+                source,
+            });
+        }
+        Ok(())
     }
 
     /// Returns the number of successfully written lines.
@@ -1742,6 +1763,13 @@ impl<W: Write> BatchJsonlWriter<W> {
     #[must_use]
     pub const fn byte_count(&self) -> usize {
         self.byte_count
+    }
+
+    /// Returns whether an earlier I/O failure permanently disabled this
+    /// writer.
+    #[must_use]
+    pub const fn is_poisoned(&self) -> bool {
+        self.poisoned
     }
 
     /// Consumes this wrapper without implicitly flushing the writer.
@@ -1917,6 +1945,54 @@ mod tests {
         })
     }
 
+    #[derive(Debug, Default)]
+    struct FaultWriter {
+        bytes: Vec<u8>,
+        fail_after: Option<usize>,
+        fail_flush: bool,
+    }
+
+    impl FaultWriter {
+        fn after_bytes(limit: usize) -> Self {
+            Self {
+                bytes: Vec::new(),
+                fail_after: Some(limit),
+                fail_flush: false,
+            }
+        }
+
+        fn on_flush() -> Self {
+            Self {
+                bytes: Vec::new(),
+                fail_after: None,
+                fail_flush: true,
+            }
+        }
+    }
+
+    impl std::io::Write for FaultWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            if let Some(limit) = self.fail_after {
+                if self.bytes.len() >= limit {
+                    return Err(std::io::Error::other("injected write failure"));
+                }
+                let writable = limit.saturating_sub(self.bytes.len()).min(buffer.len());
+                self.bytes.extend_from_slice(&buffer[..writable]);
+                return Ok(writable);
+            }
+            self.bytes.extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.fail_flush {
+                Err(std::io::Error::other("injected flush failure"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
     #[test]
     fn create_request_preserves_missing_null_and_value_metadata() {
         let base = CreateBatchRequest::new("file-input", BatchEndpoint::Responses);
@@ -2047,6 +2123,109 @@ mod tests {
                 .collect::<Result<Vec<_>, _>>()
                 .expect("read JSONL");
         assert_eq!(decoded, vec![first, second]);
+    }
+
+    #[test]
+    fn decimal_input_budget_and_exact_boundary_are_enforced() {
+        assert_eq!(MAX_BATCH_INPUT_BYTES, 200_000_000);
+        assert_eq!(DEFAULT_BATCH_JSONL_LINE_LIMIT, MAX_BATCH_INPUT_BYTES);
+
+        let line = BatchLine::new("boundary", BatchEndpoint::Responses, json!({"ok": true}))
+            .expect("line");
+        let encoded = serde_json::to_vec(&line).expect("encode line");
+        let exact_budget = encoded.len().saturating_add(1);
+
+        let mut exact = BatchJsonlWriter::new(Vec::new()).with_limits(
+            MAX_BATCH_INPUT_LINES,
+            exact_budget,
+            encoded.len(),
+        );
+        exact.write_line(&line).expect("exact boundary accepted");
+        assert_eq!(exact.byte_count(), exact_budget);
+        assert_eq!(exact.into_inner().len(), exact_budget);
+
+        let mut one_short = BatchJsonlWriter::new(Vec::new()).with_limits(
+            MAX_BATCH_INPUT_LINES,
+            exact_budget.saturating_sub(1),
+            encoded.len(),
+        );
+        assert!(matches!(
+            one_short.write_line(&line),
+            Err(BatchJsonlError::InputTooLarge { limit }) if limit == exact_budget - 1
+        ));
+        assert!(!one_short.is_poisoned());
+        assert!(one_short.into_inner().is_empty());
+    }
+
+    #[test]
+    fn partial_json_write_poisons_writer_permanently() {
+        let first = BatchLine::new(
+            "partial",
+            BatchEndpoint::Responses,
+            json!({"payload": "large enough to split"}),
+        )
+        .expect("line");
+        let encoded = serde_json::to_vec(&first).expect("encode");
+        let failure_offset = encoded.len() / 2;
+        let mut writer = BatchJsonlWriter::new(FaultWriter::after_bytes(failure_offset));
+
+        assert!(matches!(
+            writer.write_line(&first),
+            Err(BatchJsonlError::Io { line: 1, .. })
+        ));
+        assert!(writer.is_poisoned());
+
+        let next = BatchLine::new("next", BatchEndpoint::Responses, json!({})).expect("line");
+        assert!(matches!(
+            writer.write_line(&next),
+            Err(BatchJsonlError::Poisoned)
+        ));
+        assert!(matches!(writer.flush(), Err(BatchJsonlError::Poisoned)));
+        let inner = writer.into_inner();
+        assert_eq!(inner.bytes.len(), failure_offset);
+        assert_eq!(inner.bytes, encoded[..failure_offset]);
+    }
+
+    #[test]
+    fn newline_write_failure_poisons_without_committing_line_state() {
+        let line =
+            BatchLine::new("newline", BatchEndpoint::Responses, json!({"ok": true})).expect("line");
+        let encoded = serde_json::to_vec(&line).expect("encode");
+        let mut writer = BatchJsonlWriter::new(FaultWriter::after_bytes(encoded.len()));
+
+        assert!(matches!(
+            writer.write_line(&line),
+            Err(BatchJsonlError::Io { line: 1, .. })
+        ));
+        assert!(writer.is_poisoned());
+        assert_eq!(writer.line_count(), 0);
+        assert_eq!(writer.byte_count(), 0);
+        assert!(matches!(
+            writer.write_line(&line),
+            Err(BatchJsonlError::Poisoned)
+        ));
+        let inner = writer.into_inner();
+        assert_eq!(inner.bytes, encoded);
+    }
+
+    #[test]
+    fn flush_failure_poisons_writer_and_blocks_later_writes() {
+        let line = BatchLine::new("flush", BatchEndpoint::Responses, json!({})).expect("line");
+        let mut writer = BatchJsonlWriter::new(FaultWriter::on_flush());
+        writer
+            .write_line(&line)
+            .expect("write before flush failure");
+
+        assert!(matches!(
+            writer.flush(),
+            Err(BatchJsonlError::Io { line: 2, .. })
+        ));
+        assert!(writer.is_poisoned());
+        assert!(matches!(writer.flush(), Err(BatchJsonlError::Poisoned)));
+        assert!(matches!(
+            writer.write_line(&line),
+            Err(BatchJsonlError::Poisoned)
+        ));
     }
 
     #[test]

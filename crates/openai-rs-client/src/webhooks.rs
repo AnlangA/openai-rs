@@ -6,7 +6,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hmac::{Hmac, Mac};
 use http::HeaderMap;
-use openai_rs_types::{Secret, VerifiedWebhook, WebhookEvent};
+use openai_rs_types::{
+    Secret,
+    webhooks::{VerifiedWebhook, WebhookEvent},
+};
 use sha2::Sha256;
 use thiserror::Error;
 
@@ -41,10 +44,7 @@ impl WebhookVerifier {
     }
 
     /// Replaces the accepted clock-skew/replay window.
-    pub fn with_tolerance(
-        mut self,
-        tolerance: Duration,
-    ) -> Result<Self, WebhookVerificationError> {
+    pub fn with_tolerance(mut self, tolerance: Duration) -> Result<Self, WebhookVerificationError> {
         if tolerance.is_zero() {
             return Err(WebhookVerificationError::InvalidTolerance);
         }
@@ -106,11 +106,8 @@ impl WebhookVerifier {
         }
 
         let webhook_id = required_header(headers, "webhook-id", MAX_WEBHOOK_ID_BYTES)?;
-        let signature_header = joined_header_values(
-            headers,
-            "webhook-signature",
-            MAX_SIGNATURE_HEADER_BYTES,
-        )?;
+        let signature_header =
+            joined_header_values(headers, "webhook-signature", MAX_SIGNATURE_HEADER_BYTES)?;
         let signatures = decode_signatures(&signature_header)?;
         let signing_key = self.secret.with_exposed(decode_secret)?;
 
@@ -248,7 +245,9 @@ fn joined_header_values(
     }
 }
 
-fn decode_signatures(header: &str) -> Result<Vec<[u8; HMAC_SHA256_BYTES]>, WebhookVerificationError> {
+fn decode_signatures(
+    header: &str,
+) -> Result<Vec<[u8; HMAC_SHA256_BYTES]>, WebhookVerificationError> {
     let mut signatures = Vec::new();
     for candidate in header.split_ascii_whitespace() {
         if signatures.len() == MAX_SIGNATURE_CANDIDATES {
@@ -309,8 +308,7 @@ mod tests {
         );
         headers.insert(
             "webhook-signature",
-            HeaderValue::from_str(&format!("v1,invalid v1,{signature}"))
-                .expect("signature header"),
+            HeaderValue::from_str(&format!("v1,invalid v1,{signature}")).expect("signature header"),
         );
         headers
     }

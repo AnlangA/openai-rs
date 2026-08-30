@@ -8,14 +8,13 @@ use std::{fmt, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
 use http::{Method, StatusCode, header};
-use openai_rs_types::{ModelId, Omittable};
 use openai_rs_types::realtime::{
-    RealtimeCallAcceptRequest, RealtimeCallCreateRequest, RealtimeCallHangupRequest,
-    RealtimeCallReferRequest, RealtimeCallRejectRequest, RealtimeClientEvent,
-    RealtimeClientEventInputAudioBufferAppend, RealtimeClientEventResponseCancel,
-    RealtimeCreateClientSecretRequest, RealtimeCreateClientSecretResponse, RealtimeSdp,
-    RealtimeServerEvent,
+    RealtimeCallAcceptRequest, RealtimeCallCreateRequest, RealtimeCallReferRequest,
+    RealtimeCallRejectRequest, RealtimeClientEvent, RealtimeClientEventInputAudioBufferAppend,
+    RealtimeClientEventResponseCancel, RealtimeCreateClientSecretRequest,
+    RealtimeCreateClientSecretResponse, RealtimeSdp, RealtimeServerEvent,
 };
+use openai_rs_types::{ModelId, Omittable};
 use reqwest::multipart::{Form, Part};
 use tokio_tungstenite::tungstenite::{Message, protocol::WebSocketConfig as TungsteniteConfig};
 use url::Url;
@@ -53,10 +52,7 @@ impl Realtime {
 
     /// Opens a GA Realtime WebSocket for one model. The URL is derived from the
     /// configured Platform base and cannot be supplied by the caller.
-    pub async fn connect(
-        &self,
-        model: impl Into<ModelId>,
-    ) -> Result<RealtimeWebSocket, Error> {
+    pub async fn connect(&self, model: impl Into<ModelId>) -> Result<RealtimeWebSocket, Error> {
         self.connect_with(model, RealtimeWebSocketConfig::default())
             .await
     }
@@ -431,13 +427,14 @@ impl RealtimeWebSocket {
                             "incoming Realtime event exceeds the configured message limit",
                         ));
                     }
-                    let event = deserialize_json(text.as_bytes()).map_err(|error| Error::Decode {
-                        source: error.source,
-                        path: error.path,
-                        meta_status: self.meta.status(),
-                        request_id: self.meta.request_id().map(Box::<str>::from),
-                        body: BodyPreview::from_bytes(text.as_bytes(), false),
-                    })?;
+                    let event =
+                        deserialize_json(text.as_bytes()).map_err(|error| Error::Decode {
+                            source: error.source,
+                            path: error.path,
+                            meta_status: self.meta.status(),
+                            request_id: self.meta.request_id().map(Box::<str>::from),
+                            body: BodyPreview::from_bytes(text.as_bytes(), false),
+                        })?;
                     return Ok(Some(event));
                 }
                 Message::Ping(payload) => self
@@ -537,12 +534,22 @@ fn validate_call_location(base: &Url, location: &str) -> Result<Box<str>, Error>
             "Realtime call Location escaped the configured origin".into(),
         ));
     }
+    if resolved.query().is_some() || resolved.fragment().is_some() {
+        return Err(Error::InvalidConfiguration(
+            "Realtime call Location must not contain query or fragment data".into(),
+        ));
+    }
+    let mut prefix = base.path().to_owned();
+    if !prefix.ends_with('/') {
+        prefix.push('/');
+    }
+    prefix.push_str("realtime/calls/");
     let call_id = resolved
-        .path_segments()
-        .and_then(Iterator::last)
-        .filter(|value| !value.is_empty())
+        .path()
+        .strip_prefix(&prefix)
+        .filter(|value| !value.is_empty() && !value.contains('/'))
         .ok_or_else(|| {
-            Error::InvalidConfiguration("Realtime call Location has no call id".into())
+            Error::InvalidConfiguration("Realtime call Location does not identify one call".into())
         })?;
     Ok(call_id.into())
 }
@@ -568,9 +575,396 @@ macro_rules! operation {
     };
 }
 
-operation!(CreateClientSecret, RealtimeCreateClientSecretRequest, RealtimeCreateClientSecretResponse, "/realtime/client_secrets", RequestEncoding::Json, ResponseMode::Json);
-operation!(AcceptCall, RealtimeCallAcceptRequest, (), "/realtime/calls/{call_id}/accept", RequestEncoding::Json, ResponseMode::Empty);
-operation!(RejectCall, RealtimeCallRejectRequest, (), "/realtime/calls/{call_id}/reject", RequestEncoding::Json, ResponseMode::Empty);
-operation!(RejectCallDefault, (), (), "/realtime/calls/{call_id}/reject", RequestEncoding::None, ResponseMode::Empty);
-operation!(HangupCall, RealtimeCallHangupRequest, (), "/realtime/calls/{call_id}/hangup", RequestEncoding::None, ResponseMode::Empty);
-operation!(ReferCall, RealtimeCallReferRequest, (), "/realtime/calls/{call_id}/refer", RequestEncoding::Json, ResponseMode::Empty);
+operation!(
+    CreateClientSecret,
+    RealtimeCreateClientSecretRequest,
+    RealtimeCreateClientSecretResponse,
+    "/realtime/client_secrets",
+    RequestEncoding::Json,
+    ResponseMode::Json
+);
+operation!(
+    AcceptCall,
+    RealtimeCallAcceptRequest,
+    (),
+    "/realtime/calls/{call_id}/accept",
+    RequestEncoding::Json,
+    ResponseMode::Empty
+);
+operation!(
+    RejectCall,
+    RealtimeCallRejectRequest,
+    (),
+    "/realtime/calls/{call_id}/reject",
+    RequestEncoding::Json,
+    ResponseMode::Empty
+);
+operation!(
+    RejectCallDefault,
+    (),
+    (),
+    "/realtime/calls/{call_id}/reject",
+    RequestEncoding::None,
+    ResponseMode::Empty
+);
+operation!(
+    HangupCall,
+    (),
+    (),
+    "/realtime/calls/{call_id}/hangup",
+    RequestEncoding::None,
+    ResponseMode::Empty
+);
+operation!(
+    ReferCall,
+    RealtimeCallReferRequest,
+    (),
+    "/realtime/calls/{call_id}/refer",
+    RequestEncoding::Json,
+    ResponseMode::Empty
+);
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        sync::{Arc, Mutex},
+    };
+
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use openai_rs_types::realtime::RealtimeSessionCreateRequest;
+    use serde_json::{Value, json};
+    use tokio::{net::TcpListener, sync::oneshot};
+    use tokio_tungstenite::{accept_hdr_async, tungstenite::handshake::server};
+
+    use super::*;
+    use crate::ApiKey;
+
+    #[derive(Debug)]
+    struct WebSocketHandshake {
+        path_and_query: String,
+        authorization: Option<String>,
+    }
+
+    async fn websocket_server() -> (
+        Client,
+        oneshot::Receiver<WebSocketHandshake>,
+        oneshot::Receiver<Vec<Value>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind Realtime WebSocket");
+        let address = listener.local_addr().expect("Realtime WebSocket address");
+        let (handshake_sender, handshake_receiver) = oneshot::channel();
+        let (events_sender, events_receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept Realtime socket");
+            let handshake_sender = Arc::new(Mutex::new(Some(handshake_sender)));
+            let callback = move |request: &server::Request, mut response: server::Response| {
+                let authorization = request
+                    .headers()
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToOwned::to_owned);
+                if let Some(sender) = handshake_sender
+                    .lock()
+                    .expect("Realtime handshake lock")
+                    .take()
+                {
+                    let _ = sender.send(WebSocketHandshake {
+                        path_and_query: request
+                            .uri()
+                            .path_and_query()
+                            .map(ToString::to_string)
+                            .unwrap_or_default(),
+                        authorization,
+                    });
+                }
+                response.headers_mut().insert(
+                    "x-request-id",
+                    http::HeaderValue::from_static("req_realtime_ws"),
+                );
+                Ok::<_, server::ErrorResponse>(response)
+            };
+            let mut socket = accept_hdr_async(stream, callback)
+                .await
+                .expect("Realtime WebSocket handshake");
+            let mut events = Vec::new();
+            let audio = socket
+                .next()
+                .await
+                .expect("audio event")
+                .expect("valid audio event");
+            if let Message::Text(text) = audio {
+                events.push(serde_json::from_slice(text.as_bytes()).expect("audio JSON"));
+            }
+            socket
+                .send(Message::text(
+                    json!({
+                        "type": "future.server.event",
+                        "event_id": "evt_future",
+                        "payload": {"ok": true}
+                    })
+                    .to_string(),
+                ))
+                .await
+                .expect("send unknown Realtime event");
+            let cancel = socket
+                .next()
+                .await
+                .expect("cancel event")
+                .expect("valid cancel event");
+            if let Message::Text(text) = cancel {
+                events.push(serde_json::from_slice(text.as_bytes()).expect("cancel JSON"));
+            }
+            let close = socket
+                .next()
+                .await
+                .expect("close frame")
+                .expect("valid close");
+            events.push(json!({"closed": matches!(close, Message::Close(_))}));
+            let _ = events_sender.send(events);
+        });
+
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("Realtime WebSocket base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("Realtime WebSocket client");
+        (client, handshake_receiver, events_receiver)
+    }
+
+    #[derive(Debug)]
+    struct CapturedHttp {
+        method: reqwest::Method,
+        path: String,
+        content_type: Option<String>,
+        body: Vec<u8>,
+    }
+
+    async fn http_server(
+        status: StatusCode,
+        content_type: &'static str,
+        body: &'static str,
+        location: Option<&'static str>,
+    ) -> (Client, oneshot::Receiver<CapturedHttp>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind Realtime HTTP");
+        let address = listener.local_addr().expect("Realtime HTTP address");
+        let (sender, receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept Realtime HTTP");
+            let sender = Arc::new(Mutex::new(Some(sender)));
+            let service = service_fn(move |request: Request<Incoming>| {
+                let sender = Arc::clone(&sender);
+                async move {
+                    let method = request.method().clone();
+                    let path = request.uri().path().to_owned();
+                    let request_content_type = request
+                        .headers()
+                        .get(header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok())
+                        .map(ToOwned::to_owned);
+                    let request_body = request
+                        .into_body()
+                        .collect()
+                        .await
+                        .expect("read Realtime HTTP body")
+                        .to_bytes()
+                        .to_vec();
+                    if let Some(sender) = sender.lock().expect("Realtime HTTP lock").take() {
+                        let _ = sender.send(CapturedHttp {
+                            method,
+                            path,
+                            content_type: request_content_type,
+                            body: request_body,
+                        });
+                    }
+                    let mut response = hyper::Response::builder()
+                        .status(status)
+                        .header(header::CONTENT_TYPE, content_type)
+                        .header("x-request-id", "req_realtime_http");
+                    if let Some(location) = location {
+                        response = response.header(header::LOCATION, location);
+                    }
+                    Ok::<_, Infallible>(
+                        response
+                            .body(Full::new(Bytes::from_static(body.as_bytes())))
+                            .expect("build Realtime HTTP response"),
+                    )
+                }
+            });
+            http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await
+                .expect("serve Realtime HTTP");
+        });
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("Realtime HTTP base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("Realtime HTTP client");
+        (client, receiver)
+    }
+
+    #[tokio::test]
+    async fn websocket_preserves_unknown_events_and_base64_audio() {
+        let (client, handshake, events) = websocket_server().await;
+        let mut socket = client
+            .realtime()
+            .connect("gpt-realtime/test")
+            .await
+            .expect("connect Realtime WebSocket");
+        assert_eq!(socket.request_id(), Some("req_realtime_ws"));
+        socket
+            .append_audio(vec![0, 1, 2, 255])
+            .await
+            .expect("append typed audio");
+        let unknown = socket
+            .recv()
+            .await
+            .expect("receive future event")
+            .expect("one future event");
+        assert_eq!(unknown.event_type(), "future.server.event");
+        socket
+            .cancel_response(Some("resp_1"))
+            .await
+            .expect("cancel response");
+        socket.close().await.expect("close Realtime socket");
+
+        let handshake = handshake.await.expect("captured Realtime handshake");
+        let url = Url::parse(&format!("http://loopback{}", handshake.path_and_query))
+            .expect("captured Realtime URL");
+        assert_eq!(url.path(), "/v1/realtime");
+        assert_eq!(
+            url.query_pairs()
+                .find(|(key, _)| key == "model")
+                .map(|(_, value)| value),
+            Some("gpt-realtime/test".into())
+        );
+        assert_eq!(
+            handshake.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        let events = events.await.expect("captured Realtime events");
+        assert_eq!(events[0]["type"], "input_audio_buffer.append");
+        assert_eq!(events[0]["audio"], "AAEC/w==");
+        assert_eq!(events[1]["type"], "response.cancel");
+        assert_eq!(events[1]["response_id"], "resp_1");
+        assert_eq!(events[2]["closed"], true);
+    }
+
+    #[tokio::test]
+    async fn client_secret_route_is_typed_and_secret_debug_is_redacted() {
+        let (client, captured) = http_server(
+            StatusCode::OK,
+            "application/json",
+            r#"{"value":"ek_private","expires_at":123,"session":{"type":"realtime","id":"sess_1","object":"realtime.session"}}"#,
+            None,
+        )
+        .await;
+        let response = client
+            .realtime()
+            .create_client_secret(RealtimeCreateClientSecretRequest::default())
+            .await
+            .expect("Realtime client secret");
+        assert!(!format!("{:?}", response.body()).contains("ek_private"));
+        assert_eq!(response.request_id(), Some("req_realtime_http"));
+        let captured = captured.await.expect("captured client-secret request");
+        assert_eq!(captured.method, reqwest::Method::POST);
+        assert_eq!(captured.path, "/v1/realtime/client_secrets");
+        assert_eq!(captured.body, b"{}");
+    }
+
+    #[tokio::test]
+    async fn create_call_sends_multipart_and_returns_sdp_location() {
+        let (client, captured) = http_server(
+            StatusCode::CREATED,
+            "application/sdp",
+            "v=0\r\na=answer\r\n",
+            Some("/v1/realtime/calls/call_123"),
+        )
+        .await;
+        let request: RealtimeCallCreateRequest = serde_json::from_value(json!({
+            "sdp": "v=0\r\na=offer\r\n",
+            "session": {"type": "realtime", "model": "gpt-realtime"}
+        }))
+        .expect("typed call request");
+        let response = client
+            .realtime()
+            .create_call(request)
+            .await
+            .expect("created Realtime call");
+        assert_eq!(response.call_id(), "call_123");
+        assert_eq!(response.sdp().as_str(), "v=0\r\na=answer\r\n");
+        assert_eq!(response.request_id(), Some("req_realtime_http"));
+        assert!(!format!("{:?}", response.body()).contains("a=answer"));
+
+        let captured = captured.await.expect("captured call request");
+        assert_eq!(captured.path, "/v1/realtime/calls");
+        assert!(
+            captured
+                .content_type
+                .as_deref()
+                .is_some_and(|value| value.starts_with("multipart/form-data; boundary="))
+        );
+        let body = String::from_utf8_lossy(&captured.body);
+        assert!(body.contains("application/sdp"));
+        assert!(body.contains("a=offer"));
+        assert!(body.contains("application/json"));
+        assert!(body.contains("gpt-realtime"));
+    }
+
+    #[tokio::test]
+    async fn sip_actions_use_typed_routes_and_never_need_response_json() {
+        let (client, accept) = http_server(StatusCode::OK, "application/json", "", None).await;
+        client
+            .realtime()
+            .accept_call("call/a", RealtimeSessionCreateRequest::default())
+            .await
+            .expect("accept SIP call");
+        let captured = accept.await.expect("captured accept");
+        assert_eq!(captured.path, "/v1/realtime/calls/call%2Fa/accept");
+        assert!(String::from_utf8_lossy(&captured.body).contains("\"type\":\"realtime\""));
+
+        let (client, reject) = http_server(StatusCode::OK, "application/json", "", None).await;
+        client
+            .realtime()
+            .reject_call_default("call_1")
+            .await
+            .expect("reject SIP call");
+        let captured = reject.await.expect("captured reject");
+        assert_eq!(captured.path, "/v1/realtime/calls/call_1/reject");
+        assert!(captured.body.is_empty());
+
+        let (client, refer) = http_server(StatusCode::OK, "application/json", "", None).await;
+        let request: RealtimeCallReferRequest =
+            serde_json::from_value(json!({"target_uri":"tel:+14155550123"}))
+                .expect("typed REFER request");
+        client
+            .realtime()
+            .refer_call("call_1", request)
+            .await
+            .expect("refer SIP call");
+        let captured = refer.await.expect("captured refer");
+        assert_eq!(captured.path, "/v1/realtime/calls/call_1/refer");
+        assert!(String::from_utf8_lossy(&captured.body).contains("tel:+14155550123"));
+
+        let (client, hangup) = http_server(StatusCode::OK, "application/json", "", None).await;
+        client
+            .realtime()
+            .hangup_call("call_1")
+            .await
+            .expect("hang up call");
+        let captured = hangup.await.expect("captured hangup");
+        assert_eq!(captured.path, "/v1/realtime/calls/call_1/hangup");
+        assert!(captured.body.is_empty());
+    }
+}

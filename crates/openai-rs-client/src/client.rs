@@ -3,13 +3,13 @@ use std::{fmt, sync::Arc, time::Duration};
 use http::HeaderValue;
 use url::{Host, Url};
 
-use crate::{
-    ApiKey, Batches, ChatCompletions, Embeddings, Error, Files, Models, Moderations, Responses,
-    RetryPolicy, Uploads, VectorStores, multipart::MultipartTransport, sse::SseLimits,
-    transport::Transport,
-};
 #[cfg(feature = "realtime")]
 use crate::Realtime;
+use crate::{
+    ApiKey, Audio, Batches, ChatCompletions, Embeddings, Error, Files, Images, Models, Moderations,
+    Responses, RetryPolicy, Uploads, VectorStores, multipart::MultipartTransport, sse::SseLimits,
+    transport::Transport,
+};
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -107,6 +107,18 @@ impl Client {
     #[must_use]
     pub fn files(&self) -> Files {
         Files::new(self.clone())
+    }
+
+    /// Returns speech, transcription, and translation operations.
+    #[must_use]
+    pub fn audio(&self) -> Audio {
+        Audio::new(self.clone())
+    }
+
+    /// Returns image generation and editing operations.
+    #[must_use]
+    pub fn images(&self) -> Images {
+        Images::new(self.clone())
     }
 
     /// Returns the multipart Uploads resource facade.

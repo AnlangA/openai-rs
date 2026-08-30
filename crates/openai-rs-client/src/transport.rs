@@ -231,8 +231,9 @@ impl Transport {
             append_query(&mut url, query)?;
         }
         let accept = match meta.response_mode {
-            crate::operation::ResponseMode::Json
-            | crate::operation::ResponseMode::EmptyOrJson => JSON_MIME,
+            crate::operation::ResponseMode::Json | crate::operation::ResponseMode::EmptyOrJson => {
+                JSON_MIME
+            }
             #[cfg(feature = "realtime")]
             crate::operation::ResponseMode::Empty => JSON_MIME,
             crate::operation::ResponseMode::Sse => SSE_MIME,

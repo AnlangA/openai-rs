@@ -38,9 +38,6 @@ pub use scalar::{
 pub use secret::{Secret, WireSecret};
 pub use vector_stores::*;
 
-#[cfg(feature = "webhooks")]
-pub use webhooks::*;
-
 #[cfg(feature = "realtime")]
 pub use realtime::*;
 

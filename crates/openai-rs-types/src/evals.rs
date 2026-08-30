@@ -555,6 +555,20 @@ impl PythonGrader {
             extra: ExtraFields::new(),
         }
     }
+
+    /// Selects a Python grader image.
+    #[must_use]
+    pub fn image_tag(mut self, image_tag: impl Into<String>) -> Self {
+        self.image_tag = Omittable::Value(image_tag.into());
+        self
+    }
+
+    /// Sets an Eval pass threshold.
+    #[must_use]
+    pub fn pass_threshold(mut self, threshold: f64) -> Self {
+        self.pass_threshold = Omittable::Value(threshold);
+        self
+    }
 }
 
 /// Sampling controls for a model grader or run.
@@ -615,6 +629,14 @@ impl EvalSamplingParams {
         self
     }
 
+    /// Sets the alpha grader field spelling used by the grader schema and by
+    /// some pinned run examples.
+    #[must_use]
+    pub fn max_completions_tokens(mut self, value: u64) -> Self {
+        self.max_completions_tokens = Omittable::Value(Nullable::Value(value));
+        self
+    }
+
     /// Sets reasoning effort.
     #[must_use]
     pub fn reasoning_effort(mut self, value: responses::ReasoningEffort) -> Self {
@@ -667,6 +689,27 @@ impl ScoreModelGrader {
             extra: ExtraFields::new(),
         }
     }
+
+    /// Sets model sampling controls.
+    #[must_use]
+    pub fn sampling_params(mut self, params: EvalSamplingParams) -> Self {
+        self.sampling_params = Omittable::Value(params);
+        self
+    }
+
+    /// Sets the score range.
+    #[must_use]
+    pub fn range(mut self, minimum: f64, maximum: f64) -> Self {
+        self.range = Omittable::Value(vec![minimum, maximum]);
+        self
+    }
+
+    /// Sets a stable Eval pass threshold.
+    #[must_use]
+    pub fn pass_threshold(mut self, threshold: f64) -> Self {
+        self.pass_threshold = Omittable::Value(threshold);
+        self
+    }
 }
 
 /// Text-similarity criterion used by stable Evals; unlike the generic alpha
@@ -713,9 +756,13 @@ tagged_union! {
         StringCheck(StringCheckGrader) => "string_check",
         TextSimilarity(EvalTextSimilarityGrader) => "text_similarity",
         Python(PythonGrader) => "python",
-        ScoreModel(ScoreModelGrader) => "score_model"
+        ScoreModel(Box<ScoreModelGrader>) => "score_model"
     }
 }
+
+/// Eval prompt content discriminator manifest (in addition to raw strings).
+pub const EVAL_CONTENT_ITEM_DISCRIMINATORS: [&str; 4] =
+    ["input_text", "output_text", "input_image", "input_audio"];
 
 tagged_union! {
     /// Nested member accepted by `multi.graders` (multi is intentionally not
@@ -724,7 +771,7 @@ tagged_union! {
         StringCheck(StringCheckGrader) => "string_check",
         TextSimilarity(TextSimilarityGrader) => "text_similarity",
         Python(PythonGrader) => "python",
-        ScoreModel(ScoreModelGrader) => "score_model",
+        ScoreModel(Box<ScoreModelGrader>) => "score_model",
         LabelModel(LabelModelGrader) => "label_model"
     }
 }
@@ -768,6 +815,22 @@ impl MultiGrader {
             extra: ExtraFields::new(),
         }
     }
+
+    /// Creates the array shape used by the pinned official example.
+    #[must_use]
+    pub fn many(
+        name: impl Into<String>,
+        graders: Vec<MultiGraderMember>,
+        calculate_output: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: MultiGraderTag::Multi,
+            name: name.into(),
+            graders: MultiGraderMembers::Many(graders),
+            calculate_output: calculate_output.into(),
+            extra: ExtraFields::new(),
+        }
+    }
 }
 
 tagged_union! {
@@ -776,7 +839,7 @@ tagged_union! {
         StringCheck(StringCheckGrader) => "string_check",
         TextSimilarity(TextSimilarityGrader) => "text_similarity",
         Python(PythonGrader) => "python",
-        ScoreModel(ScoreModelGrader) => "score_model",
+        ScoreModel(Box<ScoreModelGrader>) => "score_model",
         Multi(MultiGrader) => "multi"
     }
 }
@@ -790,6 +853,24 @@ pub const TESTING_CRITERION_DISCRIMINATORS: [&str; 5] = [
     "score_model",
 ];
 
+/// Create-Eval criterion schema manifest.
+pub const CREATE_TESTING_CRITERION_SCHEMAS: [&str; 5] = [
+    "CreateEvalLabelModelGrader",
+    "EvalGraderStringCheck",
+    "EvalGraderTextSimilarity",
+    "EvalGraderPython",
+    "EvalGraderScoreModel",
+];
+
+/// Eval-resource criterion schema manifest.
+pub const EVAL_TESTING_CRITERION_SCHEMAS: [&str; 5] = [
+    "EvalGraderLabelModel",
+    "EvalGraderStringCheck",
+    "EvalGraderTextSimilarity",
+    "EvalGraderPython",
+    "EvalGraderScoreModel",
+];
+
 /// Experimental grader discriminator manifest.
 pub const GRADER_DISCRIMINATORS: [&str; 5] = [
     "string_check",
@@ -799,6 +880,15 @@ pub const GRADER_DISCRIMINATORS: [&str; 5] = [
     "multi",
 ];
 
+/// Experimental top-level grader schema manifest.
+pub const GRADER_SCHEMAS: [&str; 5] = [
+    "GraderStringCheck",
+    "GraderTextSimilarity",
+    "GraderPython",
+    "GraderScoreModel",
+    "GraderMulti",
+];
+
 /// Discriminator manifest for nested multi-grader members.
 pub const MULTI_GRADER_MEMBER_DISCRIMINATORS: [&str; 5] = [
     "string_check",
@@ -806,6 +896,15 @@ pub const MULTI_GRADER_MEMBER_DISCRIMINATORS: [&str; 5] = [
     "python",
     "score_model",
     "label_model",
+];
+
+/// Nested multi-grader schema manifest.
+pub const MULTI_GRADER_MEMBER_SCHEMAS: [&str; 5] = [
+    "GraderStringCheck",
+    "GraderTextSimilarity",
+    "GraderPython",
+    "GraderScoreModel",
+    "GraderLabelModel",
 ];
 
 literal_tag!(CreateCustomDataSourceTag, Custom, "custom");
@@ -977,8 +1076,22 @@ tagged_union! {
 pub const CREATE_EVAL_DATA_SOURCE_DISCRIMINATORS: [&str; 3] =
     ["custom", "logs", "stored_completions"];
 
+/// Create-Eval data-source schema manifest.
+pub const CREATE_EVAL_DATA_SOURCE_SCHEMAS: [&str; 3] = [
+    "CreateEvalCustomDataSourceConfig",
+    "CreateEvalLogsDataSourceConfig",
+    "CreateEvalStoredCompletionsDataSourceConfig",
+];
+
 /// Resource-config discriminator manifest.
 pub const EVAL_DATA_SOURCE_DISCRIMINATORS: [&str; 3] = ["custom", "logs", "stored_completions"];
+
+/// Eval-resource data-source schema manifest.
+pub const EVAL_DATA_SOURCE_SCHEMAS: [&str; 3] = [
+    "EvalCustomDataSourceConfig",
+    "EvalLogsDataSourceConfig",
+    "EvalStoredCompletionsDataSourceConfig",
+];
 
 /// Body for `POST /evals`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1168,6 +1281,20 @@ impl ListEvalsParams {
     #[must_use]
     pub fn limit(mut self, limit: u32) -> Self {
         self.limit = Omittable::Value(limit);
+        self
+    }
+
+    /// Sets sort order.
+    #[must_use]
+    pub fn order(mut self, order: EvalSortOrder) -> Self {
+        self.order = Omittable::Value(order);
+        self
+    }
+
+    /// Selects the timestamp used for ordering.
+    #[must_use]
+    pub fn order_by(mut self, order_by: EvalOrderBy) -> Self {
+        self.order_by = Omittable::Value(order_by);
         self
     }
 }
@@ -1418,7 +1545,7 @@ tagged_union! {
     pub enum EvalResponsesRunSource {
         FileContent(EvalFileContentSource) => "file_content",
         FileId(EvalFileIdSource) => "file_id",
-        Responses(EvalResponsesSource) => "responses"
+        Responses(Box<EvalResponsesSource>) => "responses"
     }
 }
 
@@ -1480,13 +1607,44 @@ literal_tag!(EvalCompletionsRunDataSourceTag, Completions, "completions");
 literal_tag!(EvalResponsesRunDataSourceTag, Responses, "responses");
 
 /// JSONL pass-through run data source.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EvalJsonlRunDataSource {
     #[serde(rename = "type")]
     kind: EvalJsonlRunDataSourceTag,
     source: EvalJsonlSource,
     #[serde(flatten)]
     extra: ExtraFields,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+struct EvalJsonlRunDataSourceWire {
+    #[serde(rename = "type")]
+    kind: EvalJsonlRunDataSourceTag,
+    source: EvalJsonlSource,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl<'de> Deserialize<'de> for EvalJsonlRunDataSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = EvalJsonlRunDataSourceWire::deserialize(deserializer)?;
+        if let EvalJsonlSource::Unknown(value) = &wire.source {
+            if matches!(value.discriminator(), "stored_completions" | "responses") {
+                return Err(D::Error::custom(format_args!(
+                    "known source tag `{}` is not valid for a jsonl run",
+                    value.discriminator()
+                )));
+            }
+        }
+        Ok(Self {
+            kind: wire.kind,
+            source: wire.source,
+            extra: wire.extra,
+        })
+    }
 }
 
 impl EvalJsonlRunDataSource {
@@ -1581,9 +1739,30 @@ tagged_union! {
 /// Run data-source discriminator manifest.
 pub const EVAL_RUN_DATA_SOURCE_DISCRIMINATORS: [&str; 3] = ["jsonl", "completions", "responses"];
 
+/// Run data-source schema manifest.
+pub const EVAL_RUN_DATA_SOURCE_SCHEMAS: [&str; 3] = [
+    "CreateEvalJsonlRunDataSource",
+    "CreateEvalCompletionsRunDataSource",
+    "CreateEvalResponsesRunDataSource",
+];
+
 /// Nested run-source discriminator manifest.
 pub const EVAL_RUN_SOURCE_DISCRIMINATORS: [&str; 4] =
     ["file_content", "file_id", "stored_completions", "responses"];
+
+/// JSONL source discriminator manifest.
+pub const EVAL_JSONL_SOURCE_DISCRIMINATORS: [&str; 2] = ["file_content", "file_id"];
+
+/// Completions source discriminator manifest.
+pub const EVAL_COMPLETIONS_SOURCE_DISCRIMINATORS: [&str; 3] =
+    ["file_content", "file_id", "stored_completions"];
+
+/// Responses source discriminator manifest.
+pub const EVAL_RESPONSES_SOURCE_DISCRIMINATORS: [&str; 3] =
+    ["file_content", "file_id", "responses"];
+
+/// Input-message configuration discriminator manifest.
+pub const EVAL_INPUT_MESSAGES_DISCRIMINATORS: [&str; 2] = ["template", "item_reference"];
 
 /// Body for `POST /evals/{eval_id}/runs`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1768,6 +1947,27 @@ impl ListEvalRunsParams {
     #[must_use]
     pub fn status(mut self, status: EvalRunStatus) -> Self {
         self.status = Omittable::Value(status);
+        self
+    }
+
+    /// Sets an opaque run cursor.
+    #[must_use]
+    pub fn after(mut self, after: impl Into<EvalRunId>) -> Self {
+        self.after = Omittable::Value(after.into());
+        self
+    }
+
+    /// Sets page size.
+    #[must_use]
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.limit = Omittable::Value(limit);
+        self
+    }
+
+    /// Sets sort order.
+    #[must_use]
+    pub fn order(mut self, order: EvalSortOrder) -> Self {
+        self.order = Omittable::Value(order);
         self
     }
 }
@@ -1956,6 +2156,27 @@ impl ListEvalRunOutputItemsParams {
     #[must_use]
     pub fn status(mut self, status: EvalOutputItemStatus) -> Self {
         self.status = Omittable::Value(status);
+        self
+    }
+
+    /// Sets an opaque output-item cursor.
+    #[must_use]
+    pub fn after(mut self, after: impl Into<EvalRunOutputItemId>) -> Self {
+        self.after = Omittable::Value(after.into());
+        self
+    }
+
+    /// Sets page size.
+    #[must_use]
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.limit = Omittable::Value(limit);
+        self
+    }
+
+    /// Sets sort order.
+    #[must_use]
+    pub fn order(mut self, order: EvalSortOrder) -> Self {
+        self.order = Omittable::Value(order);
         self
     }
 }
@@ -2208,7 +2429,10 @@ mod tests {
         );
         let request = CreateEvalRequest::new(data_source, vec![string_criterion()])
             .name("quality")
-            .metadata(BTreeMap::from([(String::from("team"), String::from("sdk"))]));
+            .metadata(BTreeMap::from([(
+                String::from("team"),
+                String::from("sdk"),
+            )]));
 
         let value = serde_json::to_value(request).expect("encode create Eval");
         assert_eq!(value["data_source_config"]["type"], "custom");
@@ -2248,15 +2472,25 @@ mod tests {
         let eval: Eval = serde_json::from_value(fixture.clone()).expect("decode Eval");
         assert_eq!(eval.id().as_str(), "eval_1");
         assert_eq!(eval.testing_criteria().len(), 1);
-        assert_eq!(eval.extra_fields().get("future_eval"), Some(&json!({"kept": true})));
-        assert_eq!(serde_json::to_value(eval).expect("round-trip Eval"), fixture);
+        assert_eq!(
+            eval.extra_fields().get("future_eval"),
+            Some(&json!({"kept": true}))
+        );
+        assert_eq!(
+            serde_json::to_value(eval).expect("round-trip Eval"),
+            fixture
+        );
     }
 
     #[test]
     fn stable_and_experimental_grader_unions_are_strict_and_forward_compatible() {
         assert_eq!(TESTING_CRITERION_DISCRIMINATORS.len(), 5);
+        assert_eq!(CREATE_TESTING_CRITERION_SCHEMAS.len(), 5);
+        assert_eq!(EVAL_TESTING_CRITERION_SCHEMAS.len(), 5);
         assert_eq!(GRADER_DISCRIMINATORS.len(), 5);
+        assert_eq!(GRADER_SCHEMAS.len(), 5);
         assert_eq!(MULTI_GRADER_MEMBER_DISCRIMINATORS.len(), 5);
+        assert_eq!(MULTI_GRADER_MEMBER_SCHEMAS.len(), 5);
         for tag in TESTING_CRITERION_DISCRIMINATORS {
             assert!(
                 serde_json::from_value::<TestingCriterion>(json!({"type": tag})).is_err(),
@@ -2289,7 +2523,10 @@ mod tests {
         let future = json!({"type": "future_grader", "payload": {"x": 1}});
         let grader: Grader = serde_json::from_value(future.clone()).expect("decode future grader");
         assert!(matches!(grader, Grader::Unknown(_)));
-        assert_eq!(serde_json::to_value(grader).expect("round-trip future grader"), future);
+        assert_eq!(
+            serde_json::to_value(grader).expect("round-trip future grader"),
+            future
+        );
     }
 
     #[test]
@@ -2315,8 +2552,54 @@ mod tests {
         });
         for fixture in [single, array] {
             let grader: Grader = serde_json::from_value(fixture.clone()).expect("decode multi");
-            assert_eq!(serde_json::to_value(grader).expect("round-trip multi"), fixture);
+            assert_eq!(
+                serde_json::to_value(grader).expect("round-trip multi"),
+                fixture
+            );
         }
+    }
+
+    #[test]
+    fn datasource_and_nested_union_manifests_are_strict_and_lossless() {
+        assert_eq!(CREATE_EVAL_DATA_SOURCE_SCHEMAS.len(), 3);
+        assert_eq!(EVAL_DATA_SOURCE_SCHEMAS.len(), 3);
+        assert_eq!(CREATE_EVAL_DATA_SOURCE_DISCRIMINATORS.len(), 3);
+        assert_eq!(EVAL_DATA_SOURCE_DISCRIMINATORS.len(), 3);
+        assert_eq!(EVAL_RUN_DATA_SOURCE_SCHEMAS.len(), 3);
+        assert_eq!(EVAL_RUN_DATA_SOURCE_DISCRIMINATORS.len(), 3);
+        assert_eq!(EVAL_CONTENT_ITEM_DISCRIMINATORS.len(), 4);
+        assert_eq!(EVAL_INPUT_MESSAGES_DISCRIMINATORS.len(), 2);
+
+        assert!(
+            serde_json::from_value::<CreateEvalDataSourceConfig>(json!({"type": "custom"}))
+                .is_err()
+        );
+        for tag in ["logs", "stored_completions"] {
+            let value: CreateEvalDataSourceConfig =
+                serde_json::from_value(json!({"type": tag})).expect("decode tag-only config");
+            assert!(!matches!(value, CreateEvalDataSourceConfig::Unknown(_)));
+        }
+        for tag in EVAL_DATA_SOURCE_DISCRIMINATORS {
+            assert!(serde_json::from_value::<EvalDataSourceConfig>(json!({"type": tag})).is_err());
+        }
+        for tag in EVAL_RUN_DATA_SOURCE_DISCRIMINATORS {
+            assert!(serde_json::from_value::<EvalRunDataSource>(json!({"type": tag})).is_err());
+        }
+        for tag in EVAL_INPUT_MESSAGES_DISCRIMINATORS {
+            assert!(serde_json::from_value::<EvalInputMessages>(json!({"type": tag})).is_err());
+        }
+        for tag in EVAL_CONTENT_ITEM_DISCRIMINATORS {
+            assert!(serde_json::from_value::<EvalContentItem>(json!({"type": tag})).is_err());
+        }
+
+        let future = json!({"type": "future_eval_source", "payload": [1, 2]});
+        let source: EvalCompletionsSource =
+            serde_json::from_value(future.clone()).expect("decode future source");
+        assert!(matches!(source, EvalCompletionsSource::Unknown(_)));
+        assert_eq!(
+            serde_json::to_value(source).expect("round-trip source"),
+            future
+        );
     }
 
     fn inline_source() -> EvalFileContentSource {
@@ -2329,9 +2612,11 @@ mod tests {
     #[test]
     fn run_data_sources_enforce_nested_tag_sets_and_build_typed_requests() {
         let source = EvalCompletionsSource::FileContent(inline_source());
-        let messages = EvalInputMessages::Template(EvalTemplateMessages::new(vec![
-            EvalMessage::new(EvalMessageRole::User, "{{item.input}}"),
-        ]));
+        let messages =
+            EvalInputMessages::Template(EvalTemplateMessages::new(vec![EvalMessage::new(
+                EvalMessageRole::User,
+                "{{item.input}}",
+            )]));
         let data_source = EvalRunDataSource::Completions(
             EvalCompletionsRunDataSource::new(source)
                 .model("gpt-test")
@@ -2358,6 +2643,18 @@ mod tests {
             }))
             .is_err()
         );
+
+        for fixture in [
+            json!({"max_completion_tokens": 32}),
+            json!({"max_completions_tokens": 32}),
+        ] {
+            let params: EvalSamplingParams =
+                serde_json::from_value(fixture.clone()).expect("decode token spelling");
+            assert_eq!(
+                serde_json::to_value(params).expect("round-trip token spelling"),
+                fixture
+            );
+        }
     }
 
     fn run_fixture() -> Value {
@@ -2391,8 +2688,8 @@ mod tests {
         assert_eq!(run.extra_fields().get("future_run"), Some(&json!(7)));
         assert_eq!(serde_json::to_value(run).expect("round-trip run"), fixture);
 
-        let status: EvalRunStatus = serde_json::from_value(json!("paused"))
-            .expect("decode future run status");
+        let status: EvalRunStatus =
+            serde_json::from_value(json!("paused")).expect("decode future run status");
         assert_eq!(status.as_str(), "paused");
     }
 
@@ -2442,8 +2739,14 @@ mod tests {
             serde_json::from_value(fixture.clone()).expect("decode output item");
         assert_eq!(item.id().as_str(), "outputitem_1");
         assert_eq!(item.results().len(), 1);
-        assert_eq!(item.extra_fields().get("future_output_item"), Some(&json!({"kept": true})));
-        assert_eq!(serde_json::to_value(item).expect("round-trip output item"), fixture);
+        assert_eq!(
+            item.extra_fields().get("future_output_item"),
+            Some(&json!({"kept": true}))
+        );
+        assert_eq!(
+            serde_json::to_value(item).expect("round-trip output item"),
+            fixture
+        );
     }
 
     #[test]
@@ -2459,9 +2762,12 @@ mod tests {
             json!({"status": "completed"})
         );
 
-        let deleted: DeletedEvalRun = serde_json::from_value(json!({}))
-            .expect("delete-run properties are optional");
-        assert_eq!(serde_json::to_value(deleted).expect("encode empty delete"), json!({}));
+        let deleted: DeletedEvalRun =
+            serde_json::from_value(json!({})).expect("delete-run properties are optional");
+        assert_eq!(
+            serde_json::to_value(deleted).expect("encode empty delete"),
+            json!({})
+        );
 
         let page: EvalRunOutputItemList = serde_json::from_value(json!({
             "object": "list",
@@ -2530,6 +2836,9 @@ mod tests {
 
         let validation: experimental::ValidateGraderResponse =
             serde_json::from_value(json!({})).expect("grader omitted by schema");
-        assert_eq!(serde_json::to_value(validation).expect("encode validation"), json!({}));
+        assert_eq!(
+            serde_json::to_value(validation).expect("encode validation"),
+            json!({})
+        );
     }
 }
