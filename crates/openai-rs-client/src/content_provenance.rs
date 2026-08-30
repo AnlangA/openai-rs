@@ -221,7 +221,8 @@ mod tests {
                 .try_with_media_type("image/png")
                 .expect("safe provenance media type");
 
-        let response = ContentProvenanceChecks::new(client)
+        let response = client
+            .content_provenance_checks()
             .create(CreateContentProvenanceCheckRequest::new(source))
             .await
             .expect("content provenance response");
@@ -270,7 +271,8 @@ mod tests {
         .to_string();
         let (client, _captured) = serve_once(StatusCode::TOO_MANY_REQUESTS, response).await;
         let source = ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(&b"bytes"[..]));
-        let error = ContentProvenanceChecks::new(client)
+        let error = client
+            .content_provenance_checks()
             .create(CreateContentProvenanceCheckRequest::new(source))
             .await
             .expect_err("provenance API error");

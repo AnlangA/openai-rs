@@ -273,8 +273,13 @@ mod tests {
 
     use serde::{Serialize, de::DeserializeOwned};
     use serde_json::json;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+
+    assert_impl_all!(ContentProvenanceCheck: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ContentProvenanceResult: Serialize, DeserializeOwned, Send, Sync);
+    assert_not_impl_any!(CreateContentProvenanceCheckRequest: Serialize, DeserializeOwned);
 
     fn assert_json_dto<T>()
     where

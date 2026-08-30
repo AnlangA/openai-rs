@@ -40,6 +40,24 @@ pub use openai_rs_client::{
 #[cfg(all(feature = "client", feature = "webhook-verification"))]
 pub use openai_rs_client::{WebhookVerificationError, WebhookVerifier};
 
+#[cfg(all(feature = "client", feature = "workload-identity"))]
+pub use openai_rs_client::{
+    SubjectToken, SubjectTokenProvider, SubjectTokenProviderError, SubjectTokenProviderFn,
+    SubjectTokenType, SubjectTokenValidationError, WorkloadIdentityConfig,
+    WorkloadIdentityConfigError, WorkloadIdentityError,
+};
+
+/// Administration-only credentials, clients, operation markers, and DTOs.
+#[cfg(feature = "admin")]
+pub mod admin {
+    pub use openai_rs_client::{
+        AdminApiKey, AdminApiKeyError, AdminApiKeys, AdminAuditLogs, AdminCertificates,
+        AdminClient, AdminClientBuilder, AdminDataRetention, AdminGroups, AdminInvites,
+        AdminProjects, AdminRequest, AdminRoles, AdminUsage, AdminUsers, operations,
+    };
+    pub use openai_rs_types::admin::*;
+}
+
 #[cfg(feature = "codex-app-server")]
 pub use openai_rs_codex as codex;
 

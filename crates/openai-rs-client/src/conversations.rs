@@ -562,7 +562,7 @@ mod tests {
             ),
         ];
         let (client, captures) = serve_script(responses).await;
-        let conversations = Conversations::new(client);
+        let conversations = client.conversations();
 
         let create = CreateConversationRequest::new()
             .metadata_entry("topic", "demo")
@@ -709,7 +709,7 @@ mod tests {
             ),
         ];
         let (client, captures) = serve_script(responses).await;
-        let mut pages = ConversationItems::new(client).list_pages(
+        let mut pages = client.conversations().items().list_pages(
             ConversationId::new("conv_1"),
             ListConversationItemsParams::new(),
         );
@@ -750,7 +750,8 @@ mod tests {
             .to_string(),
         )];
         let (client, _) = serve_script(responses).await;
-        let error = Conversations::new(client)
+        let error = client
+            .conversations()
             .retrieve(&ConversationId::new("conv_1"))
             .await
             .expect_err("server returned a rate-limit error");

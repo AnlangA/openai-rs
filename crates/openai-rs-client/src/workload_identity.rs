@@ -232,6 +232,11 @@ pub enum WorkloadIdentityError {
     #[error("workload token exchange transport failed")]
     Transport,
     #[error("workload token exchange was rejected with HTTP {status}")]
+    OAuthRejected {
+        status: StatusCode,
+        body: BodyPreview,
+    },
+    #[error("workload token exchange failed with HTTP {status}")]
     ExchangeRejected {
         status: StatusCode,
         body: BodyPreview,
@@ -248,6 +253,11 @@ impl fmt::Debug for WorkloadIdentityError {
         match self {
             Self::SubjectToken => formatter.write_str("WorkloadIdentityError::SubjectToken"),
             Self::Transport => formatter.write_str("WorkloadIdentityError::Transport"),
+            Self::OAuthRejected { status, .. } => formatter
+                .debug_struct("WorkloadIdentityError::OAuthRejected")
+                .field("status", status)
+                .field("body", &"[REDACTED]")
+                .finish(),
             Self::ExchangeRejected { status, .. } => formatter
                 .debug_struct("WorkloadIdentityError::ExchangeRejected")
                 .field("status", status)
@@ -266,7 +276,9 @@ impl WorkloadIdentityError {
     #[must_use]
     pub const fn status(&self) -> Option<StatusCode> {
         match self {
-            Self::ExchangeRejected { status, .. } => Some(*status),
+            Self::OAuthRejected { status, .. } | Self::ExchangeRejected { status, .. } => {
+                Some(*status)
+            }
             Self::SubjectToken | Self::Transport | Self::InvalidResponse { .. } => None,
         }
     }
@@ -276,6 +288,16 @@ impl WorkloadIdentityError {
 pub(crate) struct TokenLease {
     pub header: HeaderValue,
     pub generation: Option<u64>,
+}
+
+impl fmt::Debug for TokenLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TokenLease")
+            .field("header", &"[REDACTED]")
+            .field("generation", &self.generation)
+            .finish()
+    }
 }
 
 #[derive(Clone)]
@@ -357,6 +379,8 @@ impl WorkloadIdentityAuth {
             if let Some(refreshing) = &state.refreshing {
                 let refresh_id = refreshing.id;
                 let notified = self.notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
                 drop(state);
                 notified.await;
                 let state = self.state.lock().await;
@@ -453,9 +477,11 @@ impl WorkloadIdentityAuth {
             .await
             .map_err(|_| Arc::new(WorkloadIdentityError::Transport))?;
         if !status.is_success() {
-            return Err(Arc::new(WorkloadIdentityError::ExchangeRejected {
-                status,
-                body: BodyPreview::from_bytes(&bytes, truncated),
+            let body = BodyPreview::from_bytes(&bytes, truncated);
+            return Err(Arc::new(if matches!(status.as_u16(), 400 | 401 | 403) {
+                WorkloadIdentityError::OAuthRejected { status, body }
+            } else {
+                WorkloadIdentityError::ExchangeRejected { status, body }
             }));
         }
         if truncated {
@@ -555,6 +581,7 @@ fn validate_identifier(value: String) -> Result<Box<str>, WorkloadIdentityConfig
     if value.is_empty()
         || value.trim() != value
         || !value.is_ascii()
+        || value.chars().any(char::is_whitespace)
         || value.chars().any(char::is_control)
     {
         Err(WorkloadIdentityConfigError)
@@ -614,12 +641,13 @@ mod tests {
     use http_body_util::{BodyExt, Full};
     use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
     use hyper_util::rt::TokioIo;
-    use serde_json::{Value, json};
+    use openai_rs_types::{CreateFileRequest, FilePurpose, ReplayableMultipartSource};
+    use serde_json::Value;
     use tokio::net::TcpListener;
     use url::Url;
 
     use super::*;
-    use crate::Client;
+    use crate::{Client, CreateFileOneShotRequest, OneShotMultipartSource};
 
     #[derive(Clone)]
     struct Reply {
@@ -701,7 +729,10 @@ mod tests {
         )
     }
 
-    async fn api_server(reject_first: bool) -> (Url, Arc<AtomicUsize>, Arc<StdMutex<Vec<String>>>) {
+    async fn api_server(
+        reject_first: bool,
+        success_body: &'static str,
+    ) -> (Url, Arc<AtomicUsize>, Arc<StdMutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind API server");
@@ -739,7 +770,7 @@ mod tests {
                                     r#"{"error":{"message":"expired","type":"auth","code":"invalid_token"}}"#,
                                 )
                             } else {
-                                (StatusCode::OK, r#"{"object":"list","data":[]}"#)
+                                (StatusCode::OK, success_body)
                             };
                             Ok::<_, Infallible>(
                                 hyper::Response::builder()
@@ -786,7 +817,8 @@ mod tests {
             location: None,
         }])
         .await;
-        let (api_url, api_calls, headers) = api_server(false).await;
+        let (api_url, api_calls, headers) =
+            api_server(false, r#"{"object":"list","data":[]}"#).await;
         let providers = Arc::new(AtomicUsize::new(0));
         let client =
             Client::workload_identity_builder(config(exchange_url, Arc::clone(&providers)))
@@ -838,7 +870,8 @@ mod tests {
             },
         ])
         .await;
-        let (api_url, api_calls, headers) = api_server(true).await;
+        let (api_url, api_calls, headers) =
+            api_server(true, r#"{"object":"list","data":[]}"#).await;
         let client =
             Client::workload_identity_builder(config(exchange_url, Arc::new(AtomicUsize::new(0))))
                 .base_url(api_url)
@@ -853,6 +886,104 @@ mod tests {
             headers.lock().expect("headers lock").as_slice(),
             ["Bearer access_one", "Bearer access_two"]
         );
+    }
+
+    #[tokio::test]
+    async fn late_old_generation_cannot_evict_a_new_token() {
+        let (exchange_url, exchanges, _) = exchange_server(vec![
+            Reply {
+                status: StatusCode::OK,
+                body: r#"{"access_token":"access_one","expires_in":3600}"#.to_owned(),
+                location: None,
+            },
+            Reply {
+                status: StatusCode::OK,
+                body: r#"{"access_token":"access_two","expires_in":3600}"#.to_owned(),
+                location: None,
+            },
+        ])
+        .await;
+        let auth = WorkloadIdentityAuth::new(
+            config(exchange_url, Arc::new(AtomicUsize::new(0))),
+            None,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .expect("workload auth");
+        let old = auth.token().await.expect("old token");
+        assert!(
+            auth.invalidate_if_generation(old.generation.expect("workload generation"))
+                .await
+        );
+        let new = auth.token().await.expect("new token");
+        assert_eq!(new.header.to_str().ok(), Some("Bearer access_two"));
+        assert!(
+            !auth
+                .invalidate_if_generation(old.generation.expect("old generation"))
+                .await
+        );
+        let still_new = auth.token().await.expect("still-new token");
+        assert_eq!(still_new.header.to_str().ok(), Some("Bearer access_two"));
+        assert_eq!(exchanges.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn multipart_replayable_refreshes_once_but_one_shot_never_replays() {
+        const FILE_RESPONSE: &str = r#"{"id":"file_1","object":"file","bytes":3,"created_at":1,"filename":"input.jsonl","purpose":"batch","status":"processed"}"#;
+        let (exchange_url, exchanges, _) = exchange_server(vec![
+            Reply {
+                status: StatusCode::OK,
+                body: r#"{"access_token":"access_one","expires_in":3600}"#.to_owned(),
+                location: None,
+            },
+            Reply {
+                status: StatusCode::OK,
+                body: r#"{"access_token":"access_two","expires_in":3600}"#.to_owned(),
+                location: None,
+            },
+        ])
+        .await;
+        let (api_url, api_calls, headers) = api_server(true, FILE_RESPONSE).await;
+        let client =
+            Client::workload_identity_builder(config(exchange_url, Arc::new(AtomicUsize::new(0))))
+                .base_url(api_url)
+                .allow_insecure_loopback(true)
+                .build()
+                .expect("workload client");
+        let source = ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(&b"abc"[..]));
+        client
+            .files()
+            .create(CreateFileRequest::new(source, FilePurpose::Batch))
+            .await
+            .expect("replayable multipart refresh");
+        assert_eq!(exchanges.load(Ordering::SeqCst), 2);
+        assert_eq!(api_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            headers.lock().expect("headers lock").as_slice(),
+            ["Bearer access_one", "Bearer access_two"]
+        );
+
+        let (exchange_url, exchanges, _) = exchange_server(vec![Reply {
+            status: StatusCode::OK,
+            body: r#"{"access_token":"access_one","expires_in":3600}"#.to_owned(),
+            location: None,
+        }])
+        .await;
+        let (api_url, api_calls, _) = api_server(true, FILE_RESPONSE).await;
+        let client =
+            Client::workload_identity_builder(config(exchange_url, Arc::new(AtomicUsize::new(0))))
+                .base_url(api_url)
+                .allow_insecure_loopback(true)
+                .build()
+                .expect("workload client");
+        let source = OneShotMultipartSource::from_reader(tokio::io::empty());
+        let result = client
+            .files()
+            .create_one_shot(CreateFileOneShotRequest::new(source, FilePurpose::Batch))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(exchanges.load(Ordering::SeqCst), 1);
+        assert_eq!(api_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -883,14 +1014,17 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(120)).await;
         let stale = auth.token().await.expect("stale token");
         assert_eq!(stale.header, "Bearer access_one");
-        for _ in 0..20 {
-            if exchanges.load(Ordering::SeqCst) >= 2 {
+        let mut saw_refreshed = false;
+        for _ in 0..40 {
+            let refreshed = auth.token().await.expect("refreshed token");
+            if refreshed.header.to_str().ok() == Some("Bearer access_two") {
+                saw_refreshed = true;
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        let refreshed = auth.token().await.expect("refreshed token");
-        assert_eq!(refreshed.header, "Bearer access_two");
+        assert!(saw_refreshed);
+        assert_eq!(exchanges.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -908,7 +1042,10 @@ mod tests {
             Duration::from_secs(1),
         )
         .expect("workload auth");
-        let error = auth.token().await.expect_err("rejected exchange");
+        let error = match auth.token().await {
+            Err(error) => error,
+            Ok(_) => panic!("rejected exchange unexpectedly succeeded"),
+        };
         assert_eq!(error.status(), Some(StatusCode::BAD_REQUEST));
         let debug = format!("{error:?}");
         assert!(!debug.contains("subject.jwt.token"));

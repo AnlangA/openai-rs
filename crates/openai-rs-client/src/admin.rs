@@ -2452,7 +2452,10 @@ impl AdminUsage {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        collections::HashSet,
+        sync::{Arc, Mutex},
+    };
 
     use bytes::Bytes;
     use http::StatusCode;
@@ -2466,6 +2469,8 @@ mod tests {
 
     assert_impl_all!(AdminApiKey: Clone, Send, Sync);
     assert_not_impl_any!(AdminApiKey: Serialize, DeserializeOwned);
+    assert_not_impl_any!(AdminApiKey: Into<crate::ApiKey>);
+    assert_not_impl_any!(crate::ApiKey: Into<AdminApiKey>);
     assert_impl_all!(AdminClient: Clone, Send, Sync);
 
     #[derive(Clone, Debug)]
@@ -2612,6 +2617,18 @@ mod tests {
         assert!(pairs.contains(&("project_ids".to_owned(), "proj_2".to_owned())));
         assert!(pairs.contains(&("metadata[team]".to_owned(), "sdk".to_owned())));
         assert!(pairs.contains(&("after".to_owned(), String::new())));
+
+        let base = Url::parse("https://api.openai.com/v1/").expect("base URL");
+        let route = render_route(
+            &base,
+            "/organization/projects/{project_id}/api_keys/{api_key_id}",
+            &["proj/a b".to_owned(), "key?1".to_owned()],
+        )
+        .expect("render sealed route");
+        assert_eq!(
+            route.as_str(),
+            "https://api.openai.com/v1/organization/projects/proj%2Fa%20b/api_keys/key%3F1"
+        );
     }
 
     #[tokio::test]
@@ -2696,133 +2713,169 @@ mod tests {
         task.abort();
     }
 
-    fn assert_operation<O: AdminOperation>() {
+    fn assert_operation<O: AdminOperation>() -> &'static str {
         assert_eq!(O::AUTH, AdminAuthScope::Admin);
         assert!(!O::ID.is_empty());
         assert!(O::ROUTE.starts_with('/'));
+        O::ID
     }
 
     #[test]
     fn every_manifest_entry_has_a_unique_compiling_operation_marker() {
         assert_eq!(ADMIN_OPERATION_MANIFEST.len(), 119);
-        assert_operation::<operations::OpCreateanAPIkeyforaserviceaccount>();
-        assert_operation::<operations::OpDeleteorganizationspendlimit>();
-        assert_operation::<operations::OpDeleteprojectspendlimit>();
-        assert_operation::<operations::OpGetorganizationspendlimit>();
-        assert_operation::<operations::OpGetprojectspendlimit>();
-        assert_operation::<operations::OpUpdateorganizationspendlimit>();
-        assert_operation::<operations::OpUpdateprojectspendlimit>();
-        assert_operation::<operations::OpActivateOrganizationCertificates>();
-        assert_operation::<operations::OpActivateProjectCertificates>();
-        assert_operation::<operations::OpAddGroupUser>();
-        assert_operation::<operations::OpAddProjectGroup>();
-        assert_operation::<operations::OpAdminApiKeysCreate>();
-        assert_operation::<operations::OpAdminApiKeysDelete>();
-        assert_operation::<operations::OpAdminApiKeysGet>();
-        assert_operation::<operations::OpAdminApiKeysList>();
-        assert_operation::<operations::OpArchiveProject>();
-        assert_operation::<operations::OpAssignGroupRole>();
-        assert_operation::<operations::OpAssignProjectGroupRole>();
-        assert_operation::<operations::OpAssignProjectUserRole>();
-        assert_operation::<operations::OpAssignUserRole>();
-        assert_operation::<operations::OpCreateGroup>();
-        assert_operation::<operations::OpCreateOrganizationSpendAlert>();
-        assert_operation::<operations::OpCreateProject>();
-        assert_operation::<operations::OpCreateProjectRole>();
-        assert_operation::<operations::OpCreateProjectServiceAccount>();
-        assert_operation::<operations::OpCreateProjectSpendAlert>();
-        assert_operation::<operations::OpCreateProjectUser>();
-        assert_operation::<operations::OpCreateRole>();
-        assert_operation::<operations::OpDeactivateOrganizationCertificates>();
-        assert_operation::<operations::OpDeactivateProjectCertificates>();
-        assert_operation::<operations::OpDeleteGroup>();
-        assert_operation::<operations::OpDeleteInvite>();
-        assert_operation::<operations::OpDeleteOrganizationSpendAlert>();
-        assert_operation::<operations::OpDeleteProjectApiKey>();
-        assert_operation::<operations::OpDeleteProjectModelPermissions>();
-        assert_operation::<operations::OpDeleteProjectRole>();
-        assert_operation::<operations::OpDeleteProjectServiceAccount>();
-        assert_operation::<operations::OpDeleteProjectSpendAlert>();
-        assert_operation::<operations::OpDeleteProjectUser>();
-        assert_operation::<operations::OpDeleteRole>();
-        assert_operation::<operations::OpDeleteUser>();
-        assert_operation::<operations::OpDeleteCertificate>();
-        assert_operation::<operations::OpGetCertificate>();
-        assert_operation::<operations::OpInviteUser>();
-        assert_operation::<operations::OpListAuditLogs>();
-        assert_operation::<operations::OpListGroupRoleAssignments>();
-        assert_operation::<operations::OpListGroupUsers>();
-        assert_operation::<operations::OpListGroups>();
-        assert_operation::<operations::OpListInvites>();
-        assert_operation::<operations::OpListOrganizationSpendAlerts>();
-        assert_operation::<operations::OpListProjectApiKeys>();
-        assert_operation::<operations::OpListProjectGroupRoleAssignments>();
-        assert_operation::<operations::OpListProjectGroups>();
-        assert_operation::<operations::OpListProjectRateLimits>();
-        assert_operation::<operations::OpListProjectRoles>();
-        assert_operation::<operations::OpListProjectServiceAccounts>();
-        assert_operation::<operations::OpListProjectSpendAlerts>();
-        assert_operation::<operations::OpListProjectUserRoleAssignments>();
-        assert_operation::<operations::OpListProjectUsers>();
-        assert_operation::<operations::OpListProjects>();
-        assert_operation::<operations::OpListRoles>();
-        assert_operation::<operations::OpListUserRoleAssignments>();
-        assert_operation::<operations::OpListUsers>();
-        assert_operation::<operations::OpListOrganizationCertificates>();
-        assert_operation::<operations::OpListProjectCertificates>();
-        assert_operation::<operations::OpModifyProject>();
-        assert_operation::<operations::OpModifyProjectUser>();
-        assert_operation::<operations::OpModifyUser>();
-        assert_operation::<operations::OpModifyCertificate>();
-        assert_operation::<operations::OpRemoveGroupUser>();
-        assert_operation::<operations::OpRemoveProjectGroup>();
-        assert_operation::<operations::OpRetrieveGroup>();
-        assert_operation::<operations::OpRetrieveGroupRole>();
-        assert_operation::<operations::OpRetrieveGroupUser>();
-        assert_operation::<operations::OpRetrieveInvite>();
-        assert_operation::<operations::OpRetrieveOrganizationDataRetention>();
-        assert_operation::<operations::OpRetrieveOrganizationSpendAlert>();
-        assert_operation::<operations::OpRetrieveProject>();
-        assert_operation::<operations::OpRetrieveProjectApiKey>();
-        assert_operation::<operations::OpRetrieveProjectDataRetention>();
-        assert_operation::<operations::OpRetrieveProjectGroup>();
-        assert_operation::<operations::OpRetrieveProjectGroupRole>();
-        assert_operation::<operations::OpRetrieveProjectHostedToolPermissions>();
-        assert_operation::<operations::OpRetrieveProjectModelPermissions>();
-        assert_operation::<operations::OpRetrieveProjectRole>();
-        assert_operation::<operations::OpRetrieveProjectServiceAccount>();
-        assert_operation::<operations::OpRetrieveProjectSpendAlert>();
-        assert_operation::<operations::OpRetrieveProjectUser>();
-        assert_operation::<operations::OpRetrieveProjectUserRole>();
-        assert_operation::<operations::OpRetrieveRole>();
-        assert_operation::<operations::OpRetrieveUser>();
-        assert_operation::<operations::OpRetrieveUserRole>();
-        assert_operation::<operations::OpUnassignGroupRole>();
-        assert_operation::<operations::OpUnassignProjectGroupRole>();
-        assert_operation::<operations::OpUnassignProjectUserRole>();
-        assert_operation::<operations::OpUnassignUserRole>();
-        assert_operation::<operations::OpUpdateGroup>();
-        assert_operation::<operations::OpUpdateOrganizationDataRetention>();
-        assert_operation::<operations::OpUpdateOrganizationSpendAlert>();
-        assert_operation::<operations::OpUpdateProjectDataRetention>();
-        assert_operation::<operations::OpUpdateProjectHostedToolPermissions>();
-        assert_operation::<operations::OpUpdateProjectModelPermissions>();
-        assert_operation::<operations::OpUpdateProjectRateLimits>();
-        assert_operation::<operations::OpUpdateProjectRole>();
-        assert_operation::<operations::OpUpdateProjectServiceAccount>();
-        assert_operation::<operations::OpUpdateProjectSpendAlert>();
-        assert_operation::<operations::OpUpdateRole>();
-        assert_operation::<operations::OpUploadCertificate>();
-        assert_operation::<operations::OpUsageAudioSpeeches>();
-        assert_operation::<operations::OpUsageAudioTranscriptions>();
-        assert_operation::<operations::OpUsageCodeInterpreterSessions>();
-        assert_operation::<operations::OpUsageCompletions>();
-        assert_operation::<operations::OpUsageCosts>();
-        assert_operation::<operations::OpUsageEmbeddings>();
-        assert_operation::<operations::OpUsageFileSearchCalls>();
-        assert_operation::<operations::OpUsageImages>();
-        assert_operation::<operations::OpUsageModerations>();
-        assert_operation::<operations::OpUsageVectorStores>();
-        assert_operation::<operations::OpUsageWebSearchCalls>();
+        let mut bound_ids: HashSet<&'static str> = HashSet::new();
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpCreateanAPIkeyforaserviceaccount,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteorganizationspendlimit>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteprojectspendlimit>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpGetorganizationspendlimit>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpGetprojectspendlimit>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUpdateorganizationspendlimit>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUpdateprojectspendlimit>()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpActivateOrganizationCertificates,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpActivateProjectCertificates>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpAddGroupUser>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpAddProjectGroup>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpAdminApiKeysCreate>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpAdminApiKeysDelete>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpAdminApiKeysGet>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpAdminApiKeysList>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpArchiveProject>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpAssignGroupRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpAssignProjectGroupRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpAssignProjectUserRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpAssignUserRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpCreateGroup>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpCreateOrganizationSpendAlert>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpCreateProject>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpCreateProjectRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpCreateProjectServiceAccount>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpCreateProjectSpendAlert>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpCreateProjectUser>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpCreateRole>()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpDeactivateOrganizationCertificates,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpDeactivateProjectCertificates,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteGroup>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteInvite>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteOrganizationSpendAlert>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteProjectApiKey>()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpDeleteProjectModelPermissions,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteProjectRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteProjectServiceAccount>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteProjectSpendAlert>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteProjectUser>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteUser>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpDeleteCertificate>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpGetCertificate>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpInviteUser>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListAuditLogs>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListGroupRoleAssignments>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListGroupUsers>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListGroups>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListInvites>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListOrganizationSpendAlerts>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListProjectApiKeys>()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpListProjectGroupRoleAssignments,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListProjectGroups>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListProjectRateLimits>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListProjectRoles>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListProjectServiceAccounts>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListProjectSpendAlerts>()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpListProjectUserRoleAssignments,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListProjectUsers>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListProjects>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListRoles>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListUserRoleAssignments>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListUsers>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListOrganizationCertificates>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpListProjectCertificates>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpModifyProject>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpModifyProjectUser>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpModifyUser>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpModifyCertificate>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRemoveGroupUser>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRemoveProjectGroup>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveGroup>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveGroupRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveGroupUser>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveInvite>()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpRetrieveOrganizationDataRetention,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpRetrieveOrganizationSpendAlert,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveProject>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveProjectApiKey>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveProjectDataRetention>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveProjectGroup>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveProjectGroupRole>()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpRetrieveProjectHostedToolPermissions,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpRetrieveProjectModelPermissions,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveProjectRole>()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpRetrieveProjectServiceAccount,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveProjectSpendAlert>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveProjectUser>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveProjectUserRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveUser>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpRetrieveUserRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUnassignGroupRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUnassignProjectGroupRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUnassignProjectUserRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUnassignUserRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUpdateGroup>()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpUpdateOrganizationDataRetention,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUpdateOrganizationSpendAlert>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUpdateProjectDataRetention>()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpUpdateProjectHostedToolPermissions,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<
+            operations::OpUpdateProjectModelPermissions,
+        >()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUpdateProjectRateLimits>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUpdateProjectRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUpdateProjectServiceAccount>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUpdateProjectSpendAlert>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUpdateRole>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUploadCertificate>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUsageAudioSpeeches>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUsageAudioTranscriptions>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUsageCodeInterpreterSessions>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUsageCompletions>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUsageCosts>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUsageEmbeddings>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUsageFileSearchCalls>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUsageImages>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUsageModerations>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUsageVectorStores>()));
+        assert!(bound_ids.insert(assert_operation::<operations::OpUsageWebSearchCalls>()));
+        assert_eq!(bound_ids.len(), ADMIN_OPERATION_MANIFEST.len());
+        for operation in ADMIN_OPERATION_MANIFEST {
+            assert!(bound_ids.contains(operation.operation_id));
+        }
     }
 }
