@@ -29,7 +29,6 @@ pub(crate) enum ResponseMode {
 pub(crate) enum RetryClass {
     Safe,
     Replayable,
-    Never,
 }
 
 /// Static wire contract for one generated or handwritten operation.

@@ -3,11 +3,23 @@ use std::fs;
 use std::path::Path;
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
 
 const MANIFEST_PATH: &str = "spec/contracts/codex-compatibility.toml";
 const SCHEMA_PATH: &str = "spec/contracts/codex-compatibility.schema.json";
+const SOURCES_PATH: &str = "spec/SOURCES.toml";
+const AUDITED_VERSION: &str = "0.144.5";
+const AUDITED_TARGET: &str = "aarch64-apple-darwin";
+const AUDITED_EXECUTABLE_SHA256: &str =
+    "5e29ab10ca1171be158f7335dd6bd8ce1aaf9af1556939db36a5ee338be6f5f2";
+const AUDITED_SCHEMA_SHA256: &str =
+    "95f68321313fc4d64c8781737abf60657d6d100e2f516a036253ca936f4d73a2";
+const AUDITED_SCHEMA_BYTE_LENGTH: usize = 560_640;
+const AUDITED_SCHEMA_PATH: &str =
+    "spec/upstream/codex/0.144.5/codex_app_server_protocol.schemas.json";
+const AUDITED_SOURCE_ID: &str = "codex-app-server-schema-0.144.5-aarch64-apple-darwin";
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct RuntimeIdentity {
@@ -22,6 +34,7 @@ pub fn verify(repository_root: &Path) -> Result<()> {
     let input = fs::read_to_string(&manifest_path)
         .map_err(|source| Error::io("read Codex compatibility manifest", &manifest_path, source))?;
     let runtimes = parse_manifest(&input, &manifest_path)?;
+    verify_audited_runtime(repository_root, &runtimes)?;
 
     let schema_path = repository_root.join(SCHEMA_PATH);
     let schema_bytes = fs::read(&schema_path)
@@ -44,6 +57,105 @@ pub fn verify(repository_root: &Path) -> Result<()> {
         runtimes.len()
     );
     Ok(())
+}
+
+fn verify_audited_runtime(repository_root: &Path, runtimes: &[RuntimeIdentity]) -> Result<()> {
+    if runtimes.len() != 1 {
+        return Err(Error::message(format!(
+            "{MANIFEST_PATH} must contain exactly the one audited runtime mapping, found {}",
+            runtimes.len()
+        )));
+    }
+    let runtime = runtimes.first().ok_or_else(|| {
+        Error::message("audited Codex runtime mapping disappeared after count validation")
+    })?;
+    let mut problems = Vec::new();
+    compare(
+        &mut problems,
+        "Codex runtime version",
+        AUDITED_VERSION,
+        runtime.version.as_str(),
+    );
+    compare(
+        &mut problems,
+        "Codex runtime target",
+        AUDITED_TARGET,
+        runtime.target.as_str(),
+    );
+    compare(
+        &mut problems,
+        "Codex executable SHA-256",
+        AUDITED_EXECUTABLE_SHA256,
+        runtime.executable_sha256.as_str(),
+    );
+    compare(
+        &mut problems,
+        "Codex app-server schema SHA-256",
+        AUDITED_SCHEMA_SHA256,
+        runtime.app_server_schema_sha256.as_str(),
+    );
+
+    let schema_path = repository_root.join(AUDITED_SCHEMA_PATH);
+    let schema_bytes = fs::read(&schema_path).map_err(|source| {
+        Error::io(
+            "read vendored Codex app-server schema",
+            &schema_path,
+            source,
+        )
+    })?;
+    compare(
+        &mut problems,
+        "vendored Codex schema byte length",
+        AUDITED_SCHEMA_BYTE_LENGTH,
+        schema_bytes.len(),
+    );
+    let schema_sha256 = format!("{:x}", Sha256::digest(&schema_bytes));
+    compare(
+        &mut problems,
+        "vendored Codex schema SHA-256",
+        AUDITED_SCHEMA_SHA256,
+        schema_sha256.as_str(),
+    );
+    serde_json::from_slice::<Value>(&schema_bytes).map_err(|source| Error::Json {
+        path: schema_path,
+        source,
+    })?;
+
+    let sources_path = repository_root.join(SOURCES_PATH);
+    let sources = fs::read_to_string(&sources_path)
+        .map_err(|source| Error::io("read provenance sources", &sources_path, source))?;
+    for required_line in [
+        format!("id = \"{AUDITED_SOURCE_ID}\""),
+        format!("runtime_version = \"{AUDITED_VERSION}\""),
+        format!("runtime_target = \"{AUDITED_TARGET}\""),
+        format!("runtime_executable_sha256 = \"{AUDITED_EXECUTABLE_SHA256}\""),
+        format!("path = \"{AUDITED_SCHEMA_PATH}\""),
+        format!("byte_length = {AUDITED_SCHEMA_BYTE_LENGTH}"),
+        format!("sha256 = \"{AUDITED_SCHEMA_SHA256}\""),
+    ] {
+        if !sources.lines().any(|line| line.trim() == required_line) {
+            problems.push(format!(
+                "{SOURCES_PATH} is missing audited Codex provenance line `{required_line}`"
+            ));
+        }
+    }
+
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::verification(&problems))
+    }
+}
+
+fn compare<T: std::fmt::Display + PartialEq>(
+    problems: &mut Vec<String>,
+    label: &str,
+    expected: T,
+    actual: T,
+) {
+    if expected != actual {
+        problems.push(format!("{label}: expected {expected}, found {actual}"));
+    }
 }
 
 fn parse_manifest(input: &str, path: &Path) -> Result<Vec<RuntimeIdentity>> {

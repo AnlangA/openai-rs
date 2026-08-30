@@ -113,18 +113,6 @@ impl<C> AppServerConfig<C>
 where
     C: CodexCredentialMarker,
 {
-    /// Replace the full child argument vector. This is useful for audited
-    /// wrapper binaries and deterministic test children.
-    #[must_use]
-    pub fn with_arguments<I, S>(mut self, arguments: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<OsString>,
-    {
-        self.arguments = arguments.into_iter().map(Into::into).collect();
-        self
-    }
-
     #[must_use]
     pub fn with_limits(mut self, limits: AppServerLimits) -> Self {
         self.limits = limits;
@@ -1173,13 +1161,13 @@ mod tests {
             ..AppServerLimits::default()
         };
         let compatibility = fake_runtime(Path::new("/bin/sh"))?;
-        let config = AppServerConfig::new("/bin/sh", profile.path(), compatibility)
-            .with_arguments([
-                OsString::from("-c"),
-                OsString::from(script),
-                profile.path().as_os_str().to_owned(),
-            ])
-            .with_limits(limits);
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![
+            OsString::from("-c"),
+            OsString::from(script),
+            profile.path().as_os_str().to_owned(),
+        ];
+        let config = config.with_limits(limits);
         let client = AppServerClient::spawn(config, ClientInfo::new("test", "0.0.0")).await?;
         assert_eq!(client.initialize_response().user_agent, "fake/1");
         assert_eq!(client.runtime_identity().released_version(), "1.0.0");
@@ -1263,8 +1251,8 @@ mod tests {
             IFS= read -r until_eof
         "#;
         let compatibility = fake_runtime(Path::new("/bin/sh"))?;
-        let config = AppServerConfig::new("/bin/sh", profile.path(), compatibility)
-            .with_arguments([OsString::from("-c"), OsString::from(script)]);
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
         let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
 
         let browser = client
@@ -1336,8 +1324,7 @@ mod tests {
             crate::COMPILED_APP_SERVER_SCHEMA_SHA256,
         )?;
         let compatibility = RuntimeCompatibility::new([wrong_identity])?;
-        let config = AppServerConfig::new("/bin/sh", profile.path(), compatibility)
-            .with_arguments([OsString::from("-c"), OsString::from("exit 99")]);
+        let config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
 
         let result = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await;
         assert!(matches!(result, Err(Error::RuntimeArtifactMismatch { .. })));
@@ -1364,9 +1351,9 @@ mod tests {
         let credential = crate::CodexAccessTokenCredential::new(secrecy::SecretString::from(
             "unit-secret".to_owned(),
         ));
-        let config = AppServerConfig::new("/bin/sh", profile.path(), compatibility)
-            .with_arguments([OsString::from("-c"), OsString::from(script)])
-            .with_access_token(credential);
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let config = config.with_access_token(credential);
         let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
         client.close().await?;
         Ok(())

@@ -229,7 +229,10 @@ operation!(
 mod tests {
     use std::{
         convert::Infallible,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use bytes::Bytes;
@@ -313,6 +316,59 @@ mod tests {
         (client, receiver)
     }
 
+    async fn serve_retrying_models() -> (Client, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind retry loopback server");
+        let address = listener.local_addr().expect("retry loopback address");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let server_attempts = Arc::clone(&attempts);
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let attempts = Arc::clone(&server_attempts);
+                tokio::spawn(async move {
+                    let service = service_fn(move |_request: Request<Incoming>| {
+                        let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                        async move {
+                            let (status, body) = if attempt == 0 {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    r#"{"error":{"message":"retry","type":"server_error","code":"temporary"}}"#,
+                                )
+                            } else {
+                                (StatusCode::OK, r#"{"object":"list","data":[]}"#)
+                            };
+                            let response = hyper::Response::builder()
+                                .status(status)
+                                .header(http::header::CONTENT_TYPE, "application/json")
+                                .header("retry-after-ms", "0")
+                                .body(Full::new(Bytes::from_static(body.as_bytes())))
+                                .expect("build retry response");
+                            Ok::<_, Infallible>(response)
+                        }
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("parse retry loopback base URL");
+        let key = ApiKey::new("test-placeholder-key").expect("valid test key");
+        let client = Client::builder(key)
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("retry loopback client");
+        (client, attempts)
+    }
+
     #[tokio::test]
     async fn models_retrieve_percent_encodes_opaque_id() {
         let (client, captured) =
@@ -336,6 +392,14 @@ mod tests {
             Some("Bearer test-placeholder-key")
         );
         assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn safe_operation_retries_before_delivering_a_response() {
+        let (client, attempts) = serve_retrying_models().await;
+        let response = client.models().list().await.expect("retried model list");
+        assert!(response.data.is_empty());
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

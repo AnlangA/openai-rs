@@ -1,0 +1,1823 @@
+{
+  "schema_version": 1,
+  "source": {
+    "revision": "690521b1753dce0c6d6b275f583d22537679cff9",
+    "sha256": "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899"
+  },
+  "count": 107,
+  "entries": [
+    {
+      "schema": "Annotation",
+      "pointer": "#/components/schemas/Annotation",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 4,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ContainerFileCitationBody",
+        "#/components/schemas/FileCitationBody",
+        "#/components/schemas/FilePath",
+        "#/components/schemas/UrlCitationBody"
+      ]
+    },
+    {
+      "schema": "ApplyPatchOperationParam",
+      "pointer": "#/components/schemas/ApplyPatchOperationParam",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ApplyPatchCreateFileOperationParam",
+        "#/components/schemas/ApplyPatchDeleteFileOperationParam",
+        "#/components/schemas/ApplyPatchUpdateFileOperationParam"
+      ]
+    },
+    {
+      "schema": "ApplyPatchToolCall",
+      "pointer": "#/components/schemas/ApplyPatchToolCall/properties/operation",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ApplyPatchCreateFileOperation",
+        "#/components/schemas/ApplyPatchDeleteFileOperation",
+        "#/components/schemas/ApplyPatchUpdateFileOperation"
+      ]
+    },
+    {
+      "schema": "AutoCodeInterpreterToolParam",
+      "pointer": "#/components/schemas/AutoCodeInterpreterToolParam/properties/network_policy",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ContainerNetworkPolicyAllowlistParam",
+        "#/components/schemas/ContainerNetworkPolicyDisabledParam"
+      ]
+    },
+    {
+      "schema": "BetaAgentMessage",
+      "pointer": "#/components/schemas/BetaAgentMessage/properties/content/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 10,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaComputerScreenshotContent",
+        "#/components/schemas/BetaEncryptedContent",
+        "#/components/schemas/BetaInputFileContent",
+        "#/components/schemas/BetaInputImageContent",
+        "#/components/schemas/BetaInputTextContent",
+        "#/components/schemas/BetaOutputTextContent",
+        "#/components/schemas/BetaReasoningTextContent",
+        "#/components/schemas/BetaRefusalContent",
+        "#/components/schemas/BetaSummaryTextContent",
+        "#/components/schemas/BetaTextContent"
+      ]
+    },
+    {
+      "schema": "BetaAgentMessageItemParam",
+      "pointer": "#/components/schemas/BetaAgentMessageItemParam/properties/content/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaEncryptedContentParam",
+        "#/components/schemas/BetaInputImageContentParamAutoParam",
+        "#/components/schemas/BetaInputTextContentParam"
+      ]
+    },
+    {
+      "schema": "BetaAnnotation",
+      "pointer": "#/components/schemas/BetaAnnotation",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 4,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaContainerFileCitationBody",
+        "#/components/schemas/BetaFileCitationBody",
+        "#/components/schemas/BetaFilePath",
+        "#/components/schemas/BetaUrlCitationBody"
+      ]
+    },
+    {
+      "schema": "BetaApplyPatchOperationParam",
+      "pointer": "#/components/schemas/BetaApplyPatchOperationParam",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaApplyPatchCreateFileOperationParam",
+        "#/components/schemas/BetaApplyPatchDeleteFileOperationParam",
+        "#/components/schemas/BetaApplyPatchUpdateFileOperationParam"
+      ]
+    },
+    {
+      "schema": "BetaApplyPatchToolCall",
+      "pointer": "#/components/schemas/BetaApplyPatchToolCall/properties/operation",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaApplyPatchCreateFileOperation",
+        "#/components/schemas/BetaApplyPatchDeleteFileOperation",
+        "#/components/schemas/BetaApplyPatchUpdateFileOperation"
+      ]
+    },
+    {
+      "schema": "BetaAutoCodeInterpreterToolParam",
+      "pointer": "#/components/schemas/BetaAutoCodeInterpreterToolParam/properties/network_policy",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaContainerNetworkPolicyAllowlistParam",
+        "#/components/schemas/BetaContainerNetworkPolicyDisabledParam"
+      ]
+    },
+    {
+      "schema": "BetaCodeInterpreterToolCall",
+      "pointer": "#/components/schemas/BetaCodeInterpreterToolCall/properties/outputs/anyOf/0",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 0,
+      "branch_refs": []
+    },
+    {
+      "schema": "BetaCodeInterpreterToolCall",
+      "pointer": "#/components/schemas/BetaCodeInterpreterToolCall/properties/outputs/anyOf/0/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaCodeInterpreterOutputImage",
+        "#/components/schemas/BetaCodeInterpreterOutputLogs"
+      ]
+    },
+    {
+      "schema": "BetaCompoundFilter",
+      "pointer": "#/components/schemas/BetaCompoundFilter/properties/filters/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaComparisonFilter"
+      ]
+    },
+    {
+      "schema": "BetaComputerAction",
+      "pointer": "#/components/schemas/BetaComputerAction",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 9,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaClickParam",
+        "#/components/schemas/BetaDoubleClickAction",
+        "#/components/schemas/BetaDragParam",
+        "#/components/schemas/BetaKeyPressAction",
+        "#/components/schemas/BetaMoveParam",
+        "#/components/schemas/BetaScreenshotParam",
+        "#/components/schemas/BetaScrollParam",
+        "#/components/schemas/BetaTypeParam",
+        "#/components/schemas/BetaWaitParam"
+      ]
+    },
+    {
+      "schema": "BetaContainerAutoParam",
+      "pointer": "#/components/schemas/BetaContainerAutoParam/properties/network_policy",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaContainerNetworkPolicyAllowlistParam",
+        "#/components/schemas/BetaContainerNetworkPolicyDisabledParam"
+      ]
+    },
+    {
+      "schema": "BetaContainerAutoParam",
+      "pointer": "#/components/schemas/BetaContainerAutoParam/properties/skills/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaInlineSkillParam",
+        "#/components/schemas/BetaSkillReferenceParam"
+      ]
+    },
+    {
+      "schema": "BetaCustomToolParam",
+      "pointer": "#/components/schemas/BetaCustomToolParam/properties/format",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaCustomGrammarFormatParam",
+        "#/components/schemas/BetaCustomTextFormatParam"
+      ]
+    },
+    {
+      "schema": "BetaFunctionAndCustomToolCallOutput",
+      "pointer": "#/components/schemas/BetaFunctionAndCustomToolCallOutput",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaInputFileContent",
+        "#/components/schemas/BetaInputImageContent",
+        "#/components/schemas/BetaInputTextContent"
+      ]
+    },
+    {
+      "schema": "BetaFunctionCallOutputItemParam",
+      "pointer": "#/components/schemas/BetaFunctionCallOutputItemParam/properties/output/oneOf/1/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaInputFileContentParam",
+        "#/components/schemas/BetaInputImageContentParamAutoParam",
+        "#/components/schemas/BetaInputTextContentParam"
+      ]
+    },
+    {
+      "schema": "BetaFunctionShellCall",
+      "pointer": "#/components/schemas/BetaFunctionShellCall/properties/environment/anyOf/0",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaContainerReferenceResource",
+        "#/components/schemas/BetaLocalEnvironmentResource"
+      ]
+    },
+    {
+      "schema": "BetaFunctionShellCallItemParam",
+      "pointer": "#/components/schemas/BetaFunctionShellCallItemParam/properties/environment/anyOf/0",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaContainerReferenceParam",
+        "#/components/schemas/BetaLocalEnvironmentParam"
+      ]
+    },
+    {
+      "schema": "BetaFunctionShellCallOutputContent",
+      "pointer": "#/components/schemas/BetaFunctionShellCallOutputContent/properties/outcome",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaFunctionShellCallOutputExitOutcome",
+        "#/components/schemas/BetaFunctionShellCallOutputTimeoutOutcome"
+      ]
+    },
+    {
+      "schema": "BetaFunctionShellCallOutputOutcomeParam",
+      "pointer": "#/components/schemas/BetaFunctionShellCallOutputOutcomeParam",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaFunctionShellCallOutputExitOutcomeParam",
+        "#/components/schemas/BetaFunctionShellCallOutputTimeoutOutcomeParam"
+      ]
+    },
+    {
+      "schema": "BetaFunctionShellToolParam",
+      "pointer": "#/components/schemas/BetaFunctionShellToolParam/properties/environment/anyOf/0",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaContainerAutoParam",
+        "#/components/schemas/BetaContainerReferenceParam",
+        "#/components/schemas/BetaLocalEnvironmentParam"
+      ]
+    },
+    {
+      "schema": "BetaInputContent",
+      "pointer": "#/components/schemas/BetaInputContent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaInputFileContent",
+        "#/components/schemas/BetaInputImageContent",
+        "#/components/schemas/BetaInputTextContent"
+      ]
+    },
+    {
+      "schema": "BetaInputItem",
+      "pointer": "#/components/schemas/BetaInputItem",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 6,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaCompactionTriggerItemParam",
+        "#/components/schemas/BetaEasyInputMessage",
+        "#/components/schemas/BetaItem",
+        "#/components/schemas/BetaItemReferenceParam",
+        "#/components/schemas/BetaProgramItemParam",
+        "#/components/schemas/BetaProgramOutputItemParam"
+      ]
+    },
+    {
+      "schema": "BetaItem",
+      "pointer": "#/components/schemas/BetaItem",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 30,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaAdditionalToolsItemParam",
+        "#/components/schemas/BetaAgentMessageItemParam",
+        "#/components/schemas/BetaApplyPatchToolCallItemParam",
+        "#/components/schemas/BetaApplyPatchToolCallOutputItemParam",
+        "#/components/schemas/BetaCodeInterpreterToolCall",
+        "#/components/schemas/BetaCompactionSummaryItemParam",
+        "#/components/schemas/BetaComputerCallOutputItemParam",
+        "#/components/schemas/BetaComputerToolCall",
+        "#/components/schemas/BetaCustomToolCall",
+        "#/components/schemas/BetaCustomToolCallOutput",
+        "#/components/schemas/BetaFileSearchToolCall",
+        "#/components/schemas/BetaFunctionCallOutputItemParam",
+        "#/components/schemas/BetaFunctionShellCallItemParam",
+        "#/components/schemas/BetaFunctionShellCallOutputItemParam",
+        "#/components/schemas/BetaFunctionToolCall",
+        "#/components/schemas/BetaImageGenToolCall",
+        "#/components/schemas/BetaInputMessage",
+        "#/components/schemas/BetaLocalShellToolCall",
+        "#/components/schemas/BetaLocalShellToolCallOutput",
+        "#/components/schemas/BetaMCPApprovalRequest",
+        "#/components/schemas/BetaMCPApprovalResponse",
+        "#/components/schemas/BetaMCPListTools",
+        "#/components/schemas/BetaMCPToolCall",
+        "#/components/schemas/BetaMultiAgentCallItemParam",
+        "#/components/schemas/BetaMultiAgentCallOutputItemParam",
+        "#/components/schemas/BetaOutputMessage",
+        "#/components/schemas/BetaReasoningItem",
+        "#/components/schemas/BetaToolSearchCallItemParam",
+        "#/components/schemas/BetaToolSearchOutputItemParam",
+        "#/components/schemas/BetaWebSearchToolCall"
+      ]
+    },
+    {
+      "schema": "BetaItemField",
+      "pointer": "#/components/schemas/BetaItemField",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 31,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaAdditionalTools",
+        "#/components/schemas/BetaAgentMessage",
+        "#/components/schemas/BetaApplyPatchToolCall",
+        "#/components/schemas/BetaApplyPatchToolCallOutput",
+        "#/components/schemas/BetaCodeInterpreterToolCall",
+        "#/components/schemas/BetaCompactionBody",
+        "#/components/schemas/BetaComputerToolCall",
+        "#/components/schemas/BetaComputerToolCallOutputResource",
+        "#/components/schemas/BetaCustomToolCall",
+        "#/components/schemas/BetaCustomToolCallOutput",
+        "#/components/schemas/BetaFileSearchToolCall",
+        "#/components/schemas/BetaFunctionShellCall",
+        "#/components/schemas/BetaFunctionShellCallOutput",
+        "#/components/schemas/BetaFunctionToolCall",
+        "#/components/schemas/BetaFunctionToolCallOutput",
+        "#/components/schemas/BetaImageGenToolCall",
+        "#/components/schemas/BetaLocalShellToolCall",
+        "#/components/schemas/BetaLocalShellToolCallOutput",
+        "#/components/schemas/BetaMCPApprovalRequest",
+        "#/components/schemas/BetaMCPApprovalResponseResource",
+        "#/components/schemas/BetaMCPListTools",
+        "#/components/schemas/BetaMCPToolCall",
+        "#/components/schemas/BetaMessage",
+        "#/components/schemas/BetaMultiAgentCall",
+        "#/components/schemas/BetaMultiAgentCallOutput",
+        "#/components/schemas/BetaProgram",
+        "#/components/schemas/BetaProgramOutput",
+        "#/components/schemas/BetaReasoningItem",
+        "#/components/schemas/BetaToolSearchCall",
+        "#/components/schemas/BetaToolSearchOutput",
+        "#/components/schemas/BetaWebSearchToolCall"
+      ]
+    },
+    {
+      "schema": "BetaItemResource",
+      "pointer": "#/components/schemas/BetaItemResource",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 32,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaAdditionalTools",
+        "#/components/schemas/BetaAgentMessage",
+        "#/components/schemas/BetaApplyPatchToolCall",
+        "#/components/schemas/BetaApplyPatchToolCallOutput",
+        "#/components/schemas/BetaCodeInterpreterToolCall",
+        "#/components/schemas/BetaCompactionBody",
+        "#/components/schemas/BetaComputerToolCall",
+        "#/components/schemas/BetaComputerToolCallOutputResource",
+        "#/components/schemas/BetaCustomToolCallOutputResource",
+        "#/components/schemas/BetaCustomToolCallResource",
+        "#/components/schemas/BetaFileSearchToolCall",
+        "#/components/schemas/BetaFunctionShellCall",
+        "#/components/schemas/BetaFunctionShellCallOutput",
+        "#/components/schemas/BetaFunctionToolCallOutputResource",
+        "#/components/schemas/BetaFunctionToolCallResource",
+        "#/components/schemas/BetaImageGenToolCall",
+        "#/components/schemas/BetaInputMessageResource",
+        "#/components/schemas/BetaLocalShellToolCall",
+        "#/components/schemas/BetaLocalShellToolCallOutput",
+        "#/components/schemas/BetaMCPApprovalRequest",
+        "#/components/schemas/BetaMCPApprovalResponseResource",
+        "#/components/schemas/BetaMCPListTools",
+        "#/components/schemas/BetaMCPToolCall",
+        "#/components/schemas/BetaMultiAgentCall",
+        "#/components/schemas/BetaMultiAgentCallOutput",
+        "#/components/schemas/BetaOutputMessage",
+        "#/components/schemas/BetaProgram",
+        "#/components/schemas/BetaProgramOutput",
+        "#/components/schemas/BetaReasoningItem",
+        "#/components/schemas/BetaToolSearchCall",
+        "#/components/schemas/BetaToolSearchOutput",
+        "#/components/schemas/BetaWebSearchToolCall"
+      ]
+    },
+    {
+      "schema": "BetaMCPToolCallError",
+      "pointer": "#/components/schemas/BetaMCPToolCallError",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaHTTPError",
+        "#/components/schemas/BetaMCPProtocolError",
+        "#/components/schemas/BetaMCPToolExecutionError"
+      ]
+    },
+    {
+      "schema": "BetaMessage",
+      "pointer": "#/components/schemas/BetaMessage/properties/content/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 10,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaComputerScreenshotContent",
+        "#/components/schemas/BetaEncryptedContent",
+        "#/components/schemas/BetaInputFileContent",
+        "#/components/schemas/BetaInputImageContent",
+        "#/components/schemas/BetaInputTextContent",
+        "#/components/schemas/BetaOutputTextContent",
+        "#/components/schemas/BetaReasoningTextContent",
+        "#/components/schemas/BetaRefusalContent",
+        "#/components/schemas/BetaSummaryTextContent",
+        "#/components/schemas/BetaTextContent"
+      ]
+    },
+    {
+      "schema": "BetaModeration",
+      "pointer": "#/components/schemas/BetaModeration/properties/input",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaModerationErrorBody",
+        "#/components/schemas/BetaModerationResultBody"
+      ]
+    },
+    {
+      "schema": "BetaModeration",
+      "pointer": "#/components/schemas/BetaModeration/properties/output",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaModerationErrorBody",
+        "#/components/schemas/BetaModerationResultBody"
+      ]
+    },
+    {
+      "schema": "BetaNamespaceToolParam",
+      "pointer": "#/components/schemas/BetaNamespaceToolParam/properties/tools/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaCustomToolParam",
+        "#/components/schemas/BetaFunctionToolParam"
+      ]
+    },
+    {
+      "schema": "BetaOutputContent",
+      "pointer": "#/components/schemas/BetaOutputContent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaOutputTextContent",
+        "#/components/schemas/BetaReasoningTextContent",
+        "#/components/schemas/BetaRefusalContent"
+      ]
+    },
+    {
+      "schema": "BetaOutputItem",
+      "pointer": "#/components/schemas/BetaOutputItem",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 31,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaAdditionalTools",
+        "#/components/schemas/BetaAgentMessage",
+        "#/components/schemas/BetaApplyPatchToolCall",
+        "#/components/schemas/BetaApplyPatchToolCallOutput",
+        "#/components/schemas/BetaCodeInterpreterToolCall",
+        "#/components/schemas/BetaCompactionBody",
+        "#/components/schemas/BetaComputerToolCall",
+        "#/components/schemas/BetaComputerToolCallOutputResource",
+        "#/components/schemas/BetaCustomToolCall",
+        "#/components/schemas/BetaCustomToolCallOutputResource",
+        "#/components/schemas/BetaFileSearchToolCall",
+        "#/components/schemas/BetaFunctionShellCall",
+        "#/components/schemas/BetaFunctionShellCallOutput",
+        "#/components/schemas/BetaFunctionToolCall",
+        "#/components/schemas/BetaFunctionToolCallOutputResource",
+        "#/components/schemas/BetaImageGenToolCall",
+        "#/components/schemas/BetaLocalShellToolCall",
+        "#/components/schemas/BetaLocalShellToolCallOutput",
+        "#/components/schemas/BetaMCPApprovalRequest",
+        "#/components/schemas/BetaMCPApprovalResponseResource",
+        "#/components/schemas/BetaMCPListTools",
+        "#/components/schemas/BetaMCPToolCall",
+        "#/components/schemas/BetaMultiAgentCall",
+        "#/components/schemas/BetaMultiAgentCallOutput",
+        "#/components/schemas/BetaOutputMessage",
+        "#/components/schemas/BetaProgram",
+        "#/components/schemas/BetaProgramOutput",
+        "#/components/schemas/BetaReasoningItem",
+        "#/components/schemas/BetaToolSearchCall",
+        "#/components/schemas/BetaToolSearchOutput",
+        "#/components/schemas/BetaWebSearchToolCall"
+      ]
+    },
+    {
+      "schema": "BetaOutputMessageContent",
+      "pointer": "#/components/schemas/BetaOutputMessageContent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaOutputTextContent",
+        "#/components/schemas/BetaRefusalContent"
+      ]
+    },
+    {
+      "schema": "BetaOutputTextContentParam",
+      "pointer": "#/components/schemas/BetaOutputTextContentParam/properties/annotations/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaContainerFileCitationParam",
+        "#/components/schemas/BetaFileCitationParam",
+        "#/components/schemas/BetaUrlCitationParam"
+      ]
+    },
+    {
+      "schema": "BetaResponseStreamEvent",
+      "pointer": "#/components/schemas/BetaResponseStreamEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 58,
+      "branch_refs": [
+        "#/components/schemas/BetaResponseAudioDeltaEvent",
+        "#/components/schemas/BetaResponseAudioDoneEvent",
+        "#/components/schemas/BetaResponseAudioTranscriptDeltaEvent",
+        "#/components/schemas/BetaResponseAudioTranscriptDoneEvent",
+        "#/components/schemas/BetaResponseCodeInterpreterCallCodeDeltaEvent",
+        "#/components/schemas/BetaResponseCodeInterpreterCallCodeDoneEvent",
+        "#/components/schemas/BetaResponseCodeInterpreterCallCompletedEvent",
+        "#/components/schemas/BetaResponseCodeInterpreterCallInProgressEvent",
+        "#/components/schemas/BetaResponseCodeInterpreterCallInterpretingEvent",
+        "#/components/schemas/BetaResponseCompletedEvent",
+        "#/components/schemas/BetaResponseContentPartAddedEvent",
+        "#/components/schemas/BetaResponseContentPartDoneEvent",
+        "#/components/schemas/BetaResponseCreatedEvent",
+        "#/components/schemas/BetaResponseCustomToolCallInputDeltaEvent",
+        "#/components/schemas/BetaResponseCustomToolCallInputDoneEvent",
+        "#/components/schemas/BetaResponseErrorEvent",
+        "#/components/schemas/BetaResponseFailedEvent",
+        "#/components/schemas/BetaResponseFileSearchCallCompletedEvent",
+        "#/components/schemas/BetaResponseFileSearchCallInProgressEvent",
+        "#/components/schemas/BetaResponseFileSearchCallSearchingEvent",
+        "#/components/schemas/BetaResponseFunctionCallArgumentsDeltaEvent",
+        "#/components/schemas/BetaResponseFunctionCallArgumentsDoneEvent",
+        "#/components/schemas/BetaResponseImageGenCallCompletedEvent",
+        "#/components/schemas/BetaResponseImageGenCallGeneratingEvent",
+        "#/components/schemas/BetaResponseImageGenCallInProgressEvent",
+        "#/components/schemas/BetaResponseImageGenCallPartialImageEvent",
+        "#/components/schemas/BetaResponseInProgressEvent",
+        "#/components/schemas/BetaResponseIncompleteEvent",
+        "#/components/schemas/BetaResponseMCPCallArgumentsDeltaEvent",
+        "#/components/schemas/BetaResponseMCPCallArgumentsDoneEvent",
+        "#/components/schemas/BetaResponseMCPCallCompletedEvent",
+        "#/components/schemas/BetaResponseMCPCallFailedEvent",
+        "#/components/schemas/BetaResponseMCPCallInProgressEvent",
+        "#/components/schemas/BetaResponseMCPListToolsCompletedEvent",
+        "#/components/schemas/BetaResponseMCPListToolsFailedEvent",
+        "#/components/schemas/BetaResponseMCPListToolsInProgressEvent",
+        "#/components/schemas/BetaResponseOutputItemAddedEvent",
+        "#/components/schemas/BetaResponseOutputItemDoneEvent",
+        "#/components/schemas/BetaResponseOutputTextAnnotationAddedEvent",
+        "#/components/schemas/BetaResponseQueuedEvent",
+        "#/components/schemas/BetaResponseReasoningSummaryPartAddedEvent",
+        "#/components/schemas/BetaResponseReasoningSummaryPartDoneEvent",
+        "#/components/schemas/BetaResponseReasoningSummaryTextDeltaEvent",
+        "#/components/schemas/BetaResponseReasoningSummaryTextDoneEvent",
+        "#/components/schemas/BetaResponseReasoningTextDeltaEvent",
+        "#/components/schemas/BetaResponseReasoningTextDoneEvent",
+        "#/components/schemas/BetaResponseRefusalDeltaEvent",
+        "#/components/schemas/BetaResponseRefusalDoneEvent",
+        "#/components/schemas/BetaResponseShellCallCommandAddedStreamingEvent",
+        "#/components/schemas/BetaResponseShellCallCommandDeltaStreamingEvent",
+        "#/components/schemas/BetaResponseShellCallCommandDoneStreamingEvent",
+        "#/components/schemas/BetaResponseShellCallOutputContentDeltaStreamingEvent",
+        "#/components/schemas/BetaResponseShellCallOutputContentDoneStreamingEvent",
+        "#/components/schemas/BetaResponseTextDeltaEvent",
+        "#/components/schemas/BetaResponseTextDoneEvent",
+        "#/components/schemas/BetaResponseWebSearchCallCompletedEvent",
+        "#/components/schemas/BetaResponseWebSearchCallInProgressEvent",
+        "#/components/schemas/BetaResponseWebSearchCallSearchingEvent"
+      ]
+    },
+    {
+      "schema": "BetaResponsesClientEvent",
+      "pointer": "#/components/schemas/BetaResponsesClientEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 2,
+      "branch_refs": [
+        "#/components/schemas/BetaResponseInjectEvent",
+        "#/components/schemas/BetaResponsesClientEventResponseCreate"
+      ]
+    },
+    {
+      "schema": "BetaResponsesServerEvent",
+      "pointer": "#/components/schemas/BetaResponsesServerEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 60,
+      "branch_refs": [
+        "#/components/schemas/BetaResponseInjectCreatedEvent",
+        "#/components/schemas/BetaResponseInjectFailedEvent",
+        "#/components/schemas/BetaResponseWsError"
+      ]
+    },
+    {
+      "schema": "BetaTool",
+      "pointer": "#/components/schemas/BetaTool",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 16,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaApplyPatchToolParam",
+        "#/components/schemas/BetaCodeInterpreterTool",
+        "#/components/schemas/BetaComputerTool",
+        "#/components/schemas/BetaComputerUsePreviewTool",
+        "#/components/schemas/BetaCustomToolParam",
+        "#/components/schemas/BetaFileSearchTool",
+        "#/components/schemas/BetaFunctionShellToolParam",
+        "#/components/schemas/BetaFunctionTool",
+        "#/components/schemas/BetaImageGenTool",
+        "#/components/schemas/BetaLocalShellToolParam",
+        "#/components/schemas/BetaMCPTool",
+        "#/components/schemas/BetaNamespaceToolParam",
+        "#/components/schemas/BetaProgrammaticToolCallingParam",
+        "#/components/schemas/BetaToolSearchToolParam",
+        "#/components/schemas/BetaWebSearchPreviewTool",
+        "#/components/schemas/BetaWebSearchTool"
+      ]
+    },
+    {
+      "schema": "BetaToolCallCaller",
+      "pointer": "#/components/schemas/BetaToolCallCaller",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaDirectToolCallCaller",
+        "#/components/schemas/BetaProgramToolCallCaller"
+      ]
+    },
+    {
+      "schema": "BetaToolCallCallerParam",
+      "pointer": "#/components/schemas/BetaToolCallCallerParam",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaDirectToolCallCallerParam",
+        "#/components/schemas/BetaProgramToolCallCallerParam"
+      ]
+    },
+    {
+      "schema": "BetaWebSearchToolCall",
+      "pointer": "#/components/schemas/BetaWebSearchToolCall/properties/action",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/BetaWebSearchActionFind",
+        "#/components/schemas/BetaWebSearchActionOpenPage",
+        "#/components/schemas/BetaWebSearchActionSearch"
+      ]
+    },
+    {
+      "schema": "ChatCompletionMessageToolCalls",
+      "pointer": "#/components/schemas/ChatCompletionMessageToolCalls/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ChatCompletionMessageCustomToolCall",
+        "#/components/schemas/ChatCompletionMessageToolCall"
+      ]
+    },
+    {
+      "schema": "ChatCompletionModeration",
+      "pointer": "#/components/schemas/ChatCompletionModeration/properties/input",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ChatCompletionModerationError",
+        "#/components/schemas/ChatCompletionModerationResults"
+      ]
+    },
+    {
+      "schema": "ChatCompletionModeration",
+      "pointer": "#/components/schemas/ChatCompletionModeration/properties/output",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ChatCompletionModerationError",
+        "#/components/schemas/ChatCompletionModerationResults"
+      ]
+    },
+    {
+      "schema": "ChatCompletionRequestAssistantMessageContentPart",
+      "pointer": "#/components/schemas/ChatCompletionRequestAssistantMessageContentPart",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ChatCompletionRequestMessageContentPartRefusal",
+        "#/components/schemas/ChatCompletionRequestMessageContentPartText"
+      ]
+    },
+    {
+      "schema": "ChatCompletionRequestMessage",
+      "pointer": "#/components/schemas/ChatCompletionRequestMessage",
+      "property_name": "role",
+      "mapping": {},
+      "one_of_branches": 6,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ChatCompletionRequestAssistantMessage",
+        "#/components/schemas/ChatCompletionRequestDeveloperMessage",
+        "#/components/schemas/ChatCompletionRequestFunctionMessage",
+        "#/components/schemas/ChatCompletionRequestSystemMessage",
+        "#/components/schemas/ChatCompletionRequestToolMessage",
+        "#/components/schemas/ChatCompletionRequestUserMessage"
+      ]
+    },
+    {
+      "schema": "ChunkingStrategyRequestParam",
+      "pointer": "#/components/schemas/ChunkingStrategyRequestParam",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/AutoChunkingStrategyRequestParam",
+        "#/components/schemas/StaticChunkingStrategyRequestParam"
+      ]
+    },
+    {
+      "schema": "CodeInterpreterToolCall",
+      "pointer": "#/components/schemas/CodeInterpreterToolCall/properties/outputs/anyOf/0",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 0,
+      "branch_refs": []
+    },
+    {
+      "schema": "CodeInterpreterToolCall",
+      "pointer": "#/components/schemas/CodeInterpreterToolCall/properties/outputs/anyOf/0/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/CodeInterpreterOutputImage",
+        "#/components/schemas/CodeInterpreterOutputLogs"
+      ]
+    },
+    {
+      "schema": "CompoundFilter",
+      "pointer": "#/components/schemas/CompoundFilter/properties/filters/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ComparisonFilter"
+      ]
+    },
+    {
+      "schema": "ComputerAction",
+      "pointer": "#/components/schemas/ComputerAction",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 9,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ClickParam",
+        "#/components/schemas/DoubleClickAction",
+        "#/components/schemas/DragParam",
+        "#/components/schemas/KeyPressAction",
+        "#/components/schemas/MoveParam",
+        "#/components/schemas/ScreenshotParam",
+        "#/components/schemas/ScrollParam",
+        "#/components/schemas/TypeParam",
+        "#/components/schemas/WaitParam"
+      ]
+    },
+    {
+      "schema": "ContainerAutoParam",
+      "pointer": "#/components/schemas/ContainerAutoParam/properties/network_policy",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ContainerNetworkPolicyAllowlistParam",
+        "#/components/schemas/ContainerNetworkPolicyDisabledParam"
+      ]
+    },
+    {
+      "schema": "ContainerAutoParam",
+      "pointer": "#/components/schemas/ContainerAutoParam/properties/skills/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/InlineSkillParam",
+        "#/components/schemas/SkillReferenceParam"
+      ]
+    },
+    {
+      "schema": "ConversationItem",
+      "pointer": "#/components/schemas/ConversationItem",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 28,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/AdditionalTools",
+        "#/components/schemas/ApplyPatchToolCall",
+        "#/components/schemas/ApplyPatchToolCallOutput",
+        "#/components/schemas/CodeInterpreterToolCall",
+        "#/components/schemas/CompactionBody",
+        "#/components/schemas/ComputerToolCall",
+        "#/components/schemas/ComputerToolCallOutputResource",
+        "#/components/schemas/CustomToolCall",
+        "#/components/schemas/CustomToolCallOutput",
+        "#/components/schemas/FileSearchToolCall",
+        "#/components/schemas/FunctionShellCall",
+        "#/components/schemas/FunctionShellCallOutput",
+        "#/components/schemas/FunctionToolCallOutputResource",
+        "#/components/schemas/FunctionToolCallResource",
+        "#/components/schemas/ImageGenToolCall",
+        "#/components/schemas/LocalShellToolCall",
+        "#/components/schemas/LocalShellToolCallOutput",
+        "#/components/schemas/MCPApprovalRequest",
+        "#/components/schemas/MCPApprovalResponseResource",
+        "#/components/schemas/MCPListTools",
+        "#/components/schemas/MCPToolCall",
+        "#/components/schemas/Message",
+        "#/components/schemas/Program",
+        "#/components/schemas/ProgramOutput",
+        "#/components/schemas/ReasoningItem",
+        "#/components/schemas/ToolSearchCall",
+        "#/components/schemas/ToolSearchOutput",
+        "#/components/schemas/WebSearchToolCall"
+      ]
+    },
+    {
+      "schema": "CreateChatCompletionRequest",
+      "pointer": "#/components/schemas/CreateChatCompletionRequest/allOf/1/properties/response_format",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ResponseFormatJsonObject",
+        "#/components/schemas/ResponseFormatJsonSchema",
+        "#/components/schemas/ResponseFormatText"
+      ]
+    },
+    {
+      "schema": "CreateContainerBody",
+      "pointer": "#/components/schemas/CreateContainerBody/properties/network_policy",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ContainerNetworkPolicyAllowlistParam",
+        "#/components/schemas/ContainerNetworkPolicyDisabledParam"
+      ]
+    },
+    {
+      "schema": "CreateContainerBody",
+      "pointer": "#/components/schemas/CreateContainerBody/properties/skills/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/InlineSkillParam",
+        "#/components/schemas/SkillReferenceParam"
+      ]
+    },
+    {
+      "schema": "CreateSpeechResponseStreamEvent",
+      "pointer": "#/components/schemas/CreateSpeechResponseStreamEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 2,
+      "branch_refs": [
+        "#/components/schemas/SpeechAudioDeltaEvent",
+        "#/components/schemas/SpeechAudioDoneEvent"
+      ]
+    },
+    {
+      "schema": "CreateTranscriptionResponseDiarizedJson",
+      "pointer": "#/components/schemas/CreateTranscriptionResponseDiarizedJson/properties/usage",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/TranscriptTextUsageDuration",
+        "#/components/schemas/TranscriptTextUsageTokens"
+      ]
+    },
+    {
+      "schema": "CreateTranscriptionResponseStreamEvent",
+      "pointer": "#/components/schemas/CreateTranscriptionResponseStreamEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 3,
+      "branch_refs": [
+        "#/components/schemas/TranscriptTextDeltaEvent",
+        "#/components/schemas/TranscriptTextDoneEvent",
+        "#/components/schemas/TranscriptTextSegmentEvent"
+      ]
+    },
+    {
+      "schema": "CustomToolParam",
+      "pointer": "#/components/schemas/CustomToolParam/properties/format",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/CustomGrammarFormatParam",
+        "#/components/schemas/CustomTextFormatParam"
+      ]
+    },
+    {
+      "schema": "FunctionAndCustomToolCallOutput",
+      "pointer": "#/components/schemas/FunctionAndCustomToolCallOutput",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/InputFileContent",
+        "#/components/schemas/InputImageContent",
+        "#/components/schemas/InputTextContent"
+      ]
+    },
+    {
+      "schema": "FunctionCallOutputItemParam",
+      "pointer": "#/components/schemas/FunctionCallOutputItemParam/properties/output/oneOf/1/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/InputFileContentParam",
+        "#/components/schemas/InputImageContentParamAutoParam",
+        "#/components/schemas/InputTextContentParam"
+      ]
+    },
+    {
+      "schema": "FunctionShellCall",
+      "pointer": "#/components/schemas/FunctionShellCall/properties/environment/anyOf/0",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ContainerReferenceResource",
+        "#/components/schemas/LocalEnvironmentResource"
+      ]
+    },
+    {
+      "schema": "FunctionShellCallItemParam",
+      "pointer": "#/components/schemas/FunctionShellCallItemParam/properties/environment/anyOf/0",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ContainerReferenceParam",
+        "#/components/schemas/LocalEnvironmentParam"
+      ]
+    },
+    {
+      "schema": "FunctionShellCallOutputContent",
+      "pointer": "#/components/schemas/FunctionShellCallOutputContent/properties/outcome",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/FunctionShellCallOutputExitOutcome",
+        "#/components/schemas/FunctionShellCallOutputTimeoutOutcome"
+      ]
+    },
+    {
+      "schema": "FunctionShellCallOutputOutcomeParam",
+      "pointer": "#/components/schemas/FunctionShellCallOutputOutcomeParam",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/FunctionShellCallOutputExitOutcomeParam",
+        "#/components/schemas/FunctionShellCallOutputTimeoutOutcomeParam"
+      ]
+    },
+    {
+      "schema": "FunctionShellToolParam",
+      "pointer": "#/components/schemas/FunctionShellToolParam/properties/environment/anyOf/0",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ContainerAutoParam",
+        "#/components/schemas/ContainerReferenceParam",
+        "#/components/schemas/LocalEnvironmentParam"
+      ]
+    },
+    {
+      "schema": "ImageEditStreamEvent",
+      "pointer": "#/components/schemas/ImageEditStreamEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 2,
+      "branch_refs": [
+        "#/components/schemas/ImageEditCompletedEvent",
+        "#/components/schemas/ImageEditPartialImageEvent"
+      ]
+    },
+    {
+      "schema": "ImageGenStreamEvent",
+      "pointer": "#/components/schemas/ImageGenStreamEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 2,
+      "branch_refs": [
+        "#/components/schemas/ImageGenCompletedEvent",
+        "#/components/schemas/ImageGenPartialImageEvent"
+      ]
+    },
+    {
+      "schema": "InputContent",
+      "pointer": "#/components/schemas/InputContent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/InputFileContent",
+        "#/components/schemas/InputImageContent",
+        "#/components/schemas/InputTextContent"
+      ]
+    },
+    {
+      "schema": "InputItem",
+      "pointer": "#/components/schemas/InputItem",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 6,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/CompactionTriggerItemParam",
+        "#/components/schemas/EasyInputMessage",
+        "#/components/schemas/Item",
+        "#/components/schemas/ItemReferenceParam",
+        "#/components/schemas/ProgramItemParam",
+        "#/components/schemas/ProgramOutputItemParam"
+      ]
+    },
+    {
+      "schema": "Item",
+      "pointer": "#/components/schemas/Item",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 27,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/AdditionalToolsItemParam",
+        "#/components/schemas/ApplyPatchToolCallItemParam",
+        "#/components/schemas/ApplyPatchToolCallOutputItemParam",
+        "#/components/schemas/CodeInterpreterToolCall",
+        "#/components/schemas/CompactionSummaryItemParam",
+        "#/components/schemas/ComputerCallOutputItemParam",
+        "#/components/schemas/ComputerToolCall",
+        "#/components/schemas/CustomToolCall",
+        "#/components/schemas/CustomToolCallOutput",
+        "#/components/schemas/FileSearchToolCall",
+        "#/components/schemas/FunctionCallOutputItemParam",
+        "#/components/schemas/FunctionShellCallItemParam",
+        "#/components/schemas/FunctionShellCallOutputItemParam",
+        "#/components/schemas/FunctionToolCall",
+        "#/components/schemas/ImageGenToolCall",
+        "#/components/schemas/InputMessage",
+        "#/components/schemas/LocalShellToolCall",
+        "#/components/schemas/LocalShellToolCallOutput",
+        "#/components/schemas/MCPApprovalRequest",
+        "#/components/schemas/MCPApprovalResponse",
+        "#/components/schemas/MCPListTools",
+        "#/components/schemas/MCPToolCall",
+        "#/components/schemas/OutputMessage",
+        "#/components/schemas/ReasoningItem",
+        "#/components/schemas/ToolSearchCallItemParam",
+        "#/components/schemas/ToolSearchOutputItemParam",
+        "#/components/schemas/WebSearchToolCall"
+      ]
+    },
+    {
+      "schema": "ItemField",
+      "pointer": "#/components/schemas/ItemField",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 28,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/AdditionalTools",
+        "#/components/schemas/ApplyPatchToolCall",
+        "#/components/schemas/ApplyPatchToolCallOutput",
+        "#/components/schemas/CodeInterpreterToolCall",
+        "#/components/schemas/CompactionBody",
+        "#/components/schemas/ComputerToolCall",
+        "#/components/schemas/ComputerToolCallOutputResource",
+        "#/components/schemas/CustomToolCall",
+        "#/components/schemas/CustomToolCallOutput",
+        "#/components/schemas/FileSearchToolCall",
+        "#/components/schemas/FunctionShellCall",
+        "#/components/schemas/FunctionShellCallOutput",
+        "#/components/schemas/FunctionToolCall",
+        "#/components/schemas/FunctionToolCallOutput",
+        "#/components/schemas/ImageGenToolCall",
+        "#/components/schemas/LocalShellToolCall",
+        "#/components/schemas/LocalShellToolCallOutput",
+        "#/components/schemas/MCPApprovalRequest",
+        "#/components/schemas/MCPApprovalResponseResource",
+        "#/components/schemas/MCPListTools",
+        "#/components/schemas/MCPToolCall",
+        "#/components/schemas/Message",
+        "#/components/schemas/Program",
+        "#/components/schemas/ProgramOutput",
+        "#/components/schemas/ReasoningItem",
+        "#/components/schemas/ToolSearchCall",
+        "#/components/schemas/ToolSearchOutput",
+        "#/components/schemas/WebSearchToolCall"
+      ]
+    },
+    {
+      "schema": "ItemResource",
+      "pointer": "#/components/schemas/ItemResource",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 29,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/AdditionalTools",
+        "#/components/schemas/ApplyPatchToolCall",
+        "#/components/schemas/ApplyPatchToolCallOutput",
+        "#/components/schemas/CodeInterpreterToolCall",
+        "#/components/schemas/CompactionBody",
+        "#/components/schemas/ComputerToolCall",
+        "#/components/schemas/ComputerToolCallOutputResource",
+        "#/components/schemas/CustomToolCallOutputResource",
+        "#/components/schemas/CustomToolCallResource",
+        "#/components/schemas/FileSearchToolCall",
+        "#/components/schemas/FunctionShellCall",
+        "#/components/schemas/FunctionShellCallOutput",
+        "#/components/schemas/FunctionToolCallOutputResource",
+        "#/components/schemas/FunctionToolCallResource",
+        "#/components/schemas/ImageGenToolCall",
+        "#/components/schemas/InputMessageResource",
+        "#/components/schemas/LocalShellToolCall",
+        "#/components/schemas/LocalShellToolCallOutput",
+        "#/components/schemas/MCPApprovalRequest",
+        "#/components/schemas/MCPApprovalResponseResource",
+        "#/components/schemas/MCPListTools",
+        "#/components/schemas/MCPToolCall",
+        "#/components/schemas/OutputMessage",
+        "#/components/schemas/Program",
+        "#/components/schemas/ProgramOutput",
+        "#/components/schemas/ReasoningItem",
+        "#/components/schemas/ToolSearchCall",
+        "#/components/schemas/ToolSearchOutput",
+        "#/components/schemas/WebSearchToolCall"
+      ]
+    },
+    {
+      "schema": "MCPToolCallError",
+      "pointer": "#/components/schemas/MCPToolCallError",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/HTTPError",
+        "#/components/schemas/MCPProtocolError",
+        "#/components/schemas/MCPToolExecutionError"
+      ]
+    },
+    {
+      "schema": "Message",
+      "pointer": "#/components/schemas/Message/properties/content/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 9,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ComputerScreenshotContent",
+        "#/components/schemas/InputFileContent",
+        "#/components/schemas/InputImageContent",
+        "#/components/schemas/InputTextContent",
+        "#/components/schemas/OutputTextContent",
+        "#/components/schemas/ReasoningTextContent",
+        "#/components/schemas/RefusalContent",
+        "#/components/schemas/SummaryTextContent",
+        "#/components/schemas/TextContent"
+      ]
+    },
+    {
+      "schema": "Moderation",
+      "pointer": "#/components/schemas/Moderation/properties/input",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ModerationErrorBody",
+        "#/components/schemas/ModerationResultBody"
+      ]
+    },
+    {
+      "schema": "Moderation",
+      "pointer": "#/components/schemas/Moderation/properties/output",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ModerationErrorBody",
+        "#/components/schemas/ModerationResultBody"
+      ]
+    },
+    {
+      "schema": "NamespaceToolParam",
+      "pointer": "#/components/schemas/NamespaceToolParam/properties/tools/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/CustomToolParam",
+        "#/components/schemas/FunctionToolParam"
+      ]
+    },
+    {
+      "schema": "OutputContent",
+      "pointer": "#/components/schemas/OutputContent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/OutputTextContent",
+        "#/components/schemas/ReasoningTextContent",
+        "#/components/schemas/RefusalContent"
+      ]
+    },
+    {
+      "schema": "OutputItem",
+      "pointer": "#/components/schemas/OutputItem",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 28,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/AdditionalTools",
+        "#/components/schemas/ApplyPatchToolCall",
+        "#/components/schemas/ApplyPatchToolCallOutput",
+        "#/components/schemas/CodeInterpreterToolCall",
+        "#/components/schemas/CompactionBody",
+        "#/components/schemas/ComputerToolCall",
+        "#/components/schemas/ComputerToolCallOutputResource",
+        "#/components/schemas/CustomToolCall",
+        "#/components/schemas/CustomToolCallOutputResource",
+        "#/components/schemas/FileSearchToolCall",
+        "#/components/schemas/FunctionShellCall",
+        "#/components/schemas/FunctionShellCallOutput",
+        "#/components/schemas/FunctionToolCall",
+        "#/components/schemas/FunctionToolCallOutputResource",
+        "#/components/schemas/ImageGenToolCall",
+        "#/components/schemas/LocalShellToolCall",
+        "#/components/schemas/LocalShellToolCallOutput",
+        "#/components/schemas/MCPApprovalRequest",
+        "#/components/schemas/MCPApprovalResponseResource",
+        "#/components/schemas/MCPListTools",
+        "#/components/schemas/MCPToolCall",
+        "#/components/schemas/OutputMessage",
+        "#/components/schemas/Program",
+        "#/components/schemas/ProgramOutput",
+        "#/components/schemas/ReasoningItem",
+        "#/components/schemas/ToolSearchCall",
+        "#/components/schemas/ToolSearchOutput",
+        "#/components/schemas/WebSearchToolCall"
+      ]
+    },
+    {
+      "schema": "OutputMessageContent",
+      "pointer": "#/components/schemas/OutputMessageContent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/OutputTextContent",
+        "#/components/schemas/RefusalContent"
+      ]
+    },
+    {
+      "schema": "ProvenanceResource",
+      "pointer": "#/components/schemas/ProvenanceResource/properties/results/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/C2PAProvenanceResult",
+        "#/components/schemas/SynthIDProvenanceResult"
+      ]
+    },
+    {
+      "schema": "RealtimeClientEvent",
+      "pointer": "#/components/schemas/RealtimeClientEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 11,
+      "branch_refs": [
+        "#/components/schemas/RealtimeClientEventConversationItemCreate",
+        "#/components/schemas/RealtimeClientEventConversationItemDelete",
+        "#/components/schemas/RealtimeClientEventConversationItemRetrieve",
+        "#/components/schemas/RealtimeClientEventConversationItemTruncate",
+        "#/components/schemas/RealtimeClientEventInputAudioBufferAppend",
+        "#/components/schemas/RealtimeClientEventInputAudioBufferClear",
+        "#/components/schemas/RealtimeClientEventInputAudioBufferCommit",
+        "#/components/schemas/RealtimeClientEventOutputAudioBufferClear",
+        "#/components/schemas/RealtimeClientEventResponseCancel",
+        "#/components/schemas/RealtimeClientEventResponseCreate",
+        "#/components/schemas/RealtimeClientEventSessionUpdate"
+      ]
+    },
+    {
+      "schema": "RealtimeConversationItem",
+      "pointer": "#/components/schemas/RealtimeConversationItem",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 9,
+      "branch_refs": [
+        "#/components/schemas/RealtimeConversationItemFunctionCall",
+        "#/components/schemas/RealtimeConversationItemFunctionCallOutput",
+        "#/components/schemas/RealtimeConversationItemMessageAssistant",
+        "#/components/schemas/RealtimeConversationItemMessageSystem",
+        "#/components/schemas/RealtimeConversationItemMessageUser",
+        "#/components/schemas/RealtimeMCPApprovalRequest",
+        "#/components/schemas/RealtimeMCPApprovalResponse",
+        "#/components/schemas/RealtimeMCPListTools",
+        "#/components/schemas/RealtimeMCPToolCall"
+      ]
+    },
+    {
+      "schema": "RealtimeCreateClientSecretResponse",
+      "pointer": "#/components/schemas/RealtimeCreateClientSecretResponse/properties/session",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/RealtimeSessionCreateResponseGA",
+        "#/components/schemas/RealtimeTranscriptionSessionCreateResponseGA"
+      ]
+    },
+    {
+      "schema": "RealtimeServerEvent",
+      "pointer": "#/components/schemas/RealtimeServerEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 46,
+      "branch_refs": [
+        "#/components/schemas/RealtimeServerEventConversationCreated",
+        "#/components/schemas/RealtimeServerEventConversationItemAdded",
+        "#/components/schemas/RealtimeServerEventConversationItemCreated",
+        "#/components/schemas/RealtimeServerEventConversationItemDeleted",
+        "#/components/schemas/RealtimeServerEventConversationItemDone",
+        "#/components/schemas/RealtimeServerEventConversationItemInputAudioTranscriptionCompleted",
+        "#/components/schemas/RealtimeServerEventConversationItemInputAudioTranscriptionDelta",
+        "#/components/schemas/RealtimeServerEventConversationItemInputAudioTranscriptionFailed",
+        "#/components/schemas/RealtimeServerEventConversationItemInputAudioTranscriptionSegment",
+        "#/components/schemas/RealtimeServerEventConversationItemRetrieved",
+        "#/components/schemas/RealtimeServerEventConversationItemTruncated",
+        "#/components/schemas/RealtimeServerEventError",
+        "#/components/schemas/RealtimeServerEventInputAudioBufferCleared",
+        "#/components/schemas/RealtimeServerEventInputAudioBufferCommitted",
+        "#/components/schemas/RealtimeServerEventInputAudioBufferDtmfEventReceived",
+        "#/components/schemas/RealtimeServerEventInputAudioBufferSpeechStarted",
+        "#/components/schemas/RealtimeServerEventInputAudioBufferSpeechStopped",
+        "#/components/schemas/RealtimeServerEventInputAudioBufferTimeoutTriggered",
+        "#/components/schemas/RealtimeServerEventMCPListToolsCompleted",
+        "#/components/schemas/RealtimeServerEventMCPListToolsFailed",
+        "#/components/schemas/RealtimeServerEventMCPListToolsInProgress",
+        "#/components/schemas/RealtimeServerEventOutputAudioBufferCleared",
+        "#/components/schemas/RealtimeServerEventOutputAudioBufferStarted",
+        "#/components/schemas/RealtimeServerEventOutputAudioBufferStopped",
+        "#/components/schemas/RealtimeServerEventRateLimitsUpdated",
+        "#/components/schemas/RealtimeServerEventResponseAudioDelta",
+        "#/components/schemas/RealtimeServerEventResponseAudioDone",
+        "#/components/schemas/RealtimeServerEventResponseAudioTranscriptDelta",
+        "#/components/schemas/RealtimeServerEventResponseAudioTranscriptDone",
+        "#/components/schemas/RealtimeServerEventResponseContentPartAdded",
+        "#/components/schemas/RealtimeServerEventResponseContentPartDone",
+        "#/components/schemas/RealtimeServerEventResponseCreated",
+        "#/components/schemas/RealtimeServerEventResponseDone",
+        "#/components/schemas/RealtimeServerEventResponseFunctionCallArgumentsDelta",
+        "#/components/schemas/RealtimeServerEventResponseFunctionCallArgumentsDone",
+        "#/components/schemas/RealtimeServerEventResponseMCPCallArgumentsDelta",
+        "#/components/schemas/RealtimeServerEventResponseMCPCallArgumentsDone",
+        "#/components/schemas/RealtimeServerEventResponseMCPCallCompleted",
+        "#/components/schemas/RealtimeServerEventResponseMCPCallFailed",
+        "#/components/schemas/RealtimeServerEventResponseMCPCallInProgress",
+        "#/components/schemas/RealtimeServerEventResponseOutputItemAdded",
+        "#/components/schemas/RealtimeServerEventResponseOutputItemDone",
+        "#/components/schemas/RealtimeServerEventResponseTextDelta",
+        "#/components/schemas/RealtimeServerEventResponseTextDone",
+        "#/components/schemas/RealtimeServerEventSessionCreated",
+        "#/components/schemas/RealtimeServerEventSessionUpdated"
+      ]
+    },
+    {
+      "schema": "RealtimeTranslationClientEvent",
+      "pointer": "#/components/schemas/RealtimeTranslationClientEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 3,
+      "branch_refs": [
+        "#/components/schemas/RealtimeTranslationClientEventInputAudioBufferAppend",
+        "#/components/schemas/RealtimeTranslationClientEventSessionClose",
+        "#/components/schemas/RealtimeTranslationClientEventSessionUpdate"
+      ]
+    },
+    {
+      "schema": "RealtimeTranslationServerEvent",
+      "pointer": "#/components/schemas/RealtimeTranslationServerEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 7,
+      "branch_refs": [
+        "#/components/schemas/RealtimeServerEventError",
+        "#/components/schemas/RealtimeTranslationServerEventSessionClosed",
+        "#/components/schemas/RealtimeTranslationServerEventSessionCreated",
+        "#/components/schemas/RealtimeTranslationServerEventSessionInputTranscriptDelta",
+        "#/components/schemas/RealtimeTranslationServerEventSessionOutputAudioDelta",
+        "#/components/schemas/RealtimeTranslationServerEventSessionOutputTranscriptDelta",
+        "#/components/schemas/RealtimeTranslationServerEventSessionUpdated"
+      ]
+    },
+    {
+      "schema": "RealtimeTurnDetection",
+      "pointer": "#/components/schemas/RealtimeTurnDetection/anyOf/0",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": []
+    },
+    {
+      "schema": "ResponseOutputText",
+      "pointer": "#/components/schemas/ResponseOutputText/properties/annotations/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/FileAnnotation",
+        "#/components/schemas/UrlAnnotation"
+      ]
+    },
+    {
+      "schema": "ResponseStreamEvent",
+      "pointer": "#/components/schemas/ResponseStreamEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 58,
+      "branch_refs": [
+        "#/components/schemas/ResponseAudioDeltaEvent",
+        "#/components/schemas/ResponseAudioDoneEvent",
+        "#/components/schemas/ResponseAudioTranscriptDeltaEvent",
+        "#/components/schemas/ResponseAudioTranscriptDoneEvent",
+        "#/components/schemas/ResponseCodeInterpreterCallCodeDeltaEvent",
+        "#/components/schemas/ResponseCodeInterpreterCallCodeDoneEvent",
+        "#/components/schemas/ResponseCodeInterpreterCallCompletedEvent",
+        "#/components/schemas/ResponseCodeInterpreterCallInProgressEvent",
+        "#/components/schemas/ResponseCodeInterpreterCallInterpretingEvent",
+        "#/components/schemas/ResponseCompletedEvent",
+        "#/components/schemas/ResponseContentPartAddedEvent",
+        "#/components/schemas/ResponseContentPartDoneEvent",
+        "#/components/schemas/ResponseCreatedEvent",
+        "#/components/schemas/ResponseCustomToolCallInputDeltaEvent",
+        "#/components/schemas/ResponseCustomToolCallInputDoneEvent",
+        "#/components/schemas/ResponseErrorEvent",
+        "#/components/schemas/ResponseFailedEvent",
+        "#/components/schemas/ResponseFileSearchCallCompletedEvent",
+        "#/components/schemas/ResponseFileSearchCallInProgressEvent",
+        "#/components/schemas/ResponseFileSearchCallSearchingEvent",
+        "#/components/schemas/ResponseFunctionCallArgumentsDeltaEvent",
+        "#/components/schemas/ResponseFunctionCallArgumentsDoneEvent",
+        "#/components/schemas/ResponseImageGenCallCompletedEvent",
+        "#/components/schemas/ResponseImageGenCallGeneratingEvent",
+        "#/components/schemas/ResponseImageGenCallInProgressEvent",
+        "#/components/schemas/ResponseImageGenCallPartialImageEvent",
+        "#/components/schemas/ResponseInProgressEvent",
+        "#/components/schemas/ResponseIncompleteEvent",
+        "#/components/schemas/ResponseMCPCallArgumentsDeltaEvent",
+        "#/components/schemas/ResponseMCPCallArgumentsDoneEvent",
+        "#/components/schemas/ResponseMCPCallCompletedEvent",
+        "#/components/schemas/ResponseMCPCallFailedEvent",
+        "#/components/schemas/ResponseMCPCallInProgressEvent",
+        "#/components/schemas/ResponseMCPListToolsCompletedEvent",
+        "#/components/schemas/ResponseMCPListToolsFailedEvent",
+        "#/components/schemas/ResponseMCPListToolsInProgressEvent",
+        "#/components/schemas/ResponseOutputItemAddedEvent",
+        "#/components/schemas/ResponseOutputItemDoneEvent",
+        "#/components/schemas/ResponseOutputTextAnnotationAddedEvent",
+        "#/components/schemas/ResponseQueuedEvent",
+        "#/components/schemas/ResponseReasoningSummaryPartAddedEvent",
+        "#/components/schemas/ResponseReasoningSummaryPartDoneEvent",
+        "#/components/schemas/ResponseReasoningSummaryTextDeltaEvent",
+        "#/components/schemas/ResponseReasoningSummaryTextDoneEvent",
+        "#/components/schemas/ResponseReasoningTextDeltaEvent",
+        "#/components/schemas/ResponseReasoningTextDoneEvent",
+        "#/components/schemas/ResponseRefusalDeltaEvent",
+        "#/components/schemas/ResponseRefusalDoneEvent",
+        "#/components/schemas/ResponseShellCallCommandAddedStreamingEvent",
+        "#/components/schemas/ResponseShellCallCommandDeltaStreamingEvent",
+        "#/components/schemas/ResponseShellCallCommandDoneStreamingEvent",
+        "#/components/schemas/ResponseShellCallOutputContentDeltaStreamingEvent",
+        "#/components/schemas/ResponseShellCallOutputContentDoneStreamingEvent",
+        "#/components/schemas/ResponseTextDeltaEvent",
+        "#/components/schemas/ResponseTextDoneEvent",
+        "#/components/schemas/ResponseWebSearchCallCompletedEvent",
+        "#/components/schemas/ResponseWebSearchCallInProgressEvent",
+        "#/components/schemas/ResponseWebSearchCallSearchingEvent"
+      ]
+    },
+    {
+      "schema": "ResponsesClientEvent",
+      "pointer": "#/components/schemas/ResponsesClientEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 1,
+      "branch_refs": [
+        "#/components/schemas/ResponsesClientEventResponseCreate"
+      ]
+    },
+    {
+      "schema": "ResponsesServerEvent",
+      "pointer": "#/components/schemas/ResponsesServerEvent",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 0,
+      "any_of_branches": 58,
+      "branch_refs": [
+        "#/components/schemas/ResponseWsError"
+      ]
+    },
+    {
+      "schema": "ThreadItem",
+      "pointer": "#/components/schemas/ThreadItem",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 6,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/AssistantMessageItem",
+        "#/components/schemas/ClientToolCallItem",
+        "#/components/schemas/TaskGroupItem",
+        "#/components/schemas/TaskItem",
+        "#/components/schemas/UserMessageItem",
+        "#/components/schemas/WidgetMessageItem"
+      ]
+    },
+    {
+      "schema": "ThreadResource",
+      "pointer": "#/components/schemas/ThreadResource/properties/status",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ActiveStatus",
+        "#/components/schemas/ClosedStatus",
+        "#/components/schemas/LockedStatus"
+      ]
+    },
+    {
+      "schema": "Tool",
+      "pointer": "#/components/schemas/Tool",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 16,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ApplyPatchToolParam",
+        "#/components/schemas/CodeInterpreterTool",
+        "#/components/schemas/ComputerTool",
+        "#/components/schemas/ComputerUsePreviewTool",
+        "#/components/schemas/CustomToolParam",
+        "#/components/schemas/FileSearchTool",
+        "#/components/schemas/FunctionShellToolParam",
+        "#/components/schemas/FunctionTool",
+        "#/components/schemas/ImageGenTool",
+        "#/components/schemas/LocalShellToolParam",
+        "#/components/schemas/MCPTool",
+        "#/components/schemas/NamespaceToolParam",
+        "#/components/schemas/ProgrammaticToolCallingParam",
+        "#/components/schemas/ToolSearchToolParam",
+        "#/components/schemas/WebSearchPreviewTool",
+        "#/components/schemas/WebSearchTool"
+      ]
+    },
+    {
+      "schema": "ToolCallCaller",
+      "pointer": "#/components/schemas/ToolCallCaller",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/DirectToolCallCaller",
+        "#/components/schemas/ProgramToolCallCaller"
+      ]
+    },
+    {
+      "schema": "ToolCallCallerParam",
+      "pointer": "#/components/schemas/ToolCallCallerParam",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/DirectToolCallCallerParam",
+        "#/components/schemas/ProgramToolCallCallerParam"
+      ]
+    },
+    {
+      "schema": "UsageTimeBucket",
+      "pointer": "#/components/schemas/UsageTimeBucket/properties/results/items",
+      "property_name": "object",
+      "mapping": {},
+      "one_of_branches": 11,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/CostsResult",
+        "#/components/schemas/UsageAudioSpeechesResult",
+        "#/components/schemas/UsageAudioTranscriptionsResult",
+        "#/components/schemas/UsageCodeInterpreterSessionsResult",
+        "#/components/schemas/UsageCompletionsResult",
+        "#/components/schemas/UsageEmbeddingsResult",
+        "#/components/schemas/UsageFileSearchCallsResult",
+        "#/components/schemas/UsageImagesResult",
+        "#/components/schemas/UsageModerationsResult",
+        "#/components/schemas/UsageVectorStoresResult",
+        "#/components/schemas/UsageWebSearchCallsResult"
+      ]
+    },
+    {
+      "schema": "UserMessageItem",
+      "pointer": "#/components/schemas/UserMessageItem/properties/content/items",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 2,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/UserMessageInputText",
+        "#/components/schemas/UserMessageQuotedText"
+      ]
+    },
+    {
+      "schema": "WebSearchToolCall",
+      "pointer": "#/components/schemas/WebSearchToolCall/properties/action",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 3,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/WebSearchActionFind",
+        "#/components/schemas/WebSearchActionOpenPage",
+        "#/components/schemas/WebSearchActionSearch"
+      ]
+    }
+  ]
+}

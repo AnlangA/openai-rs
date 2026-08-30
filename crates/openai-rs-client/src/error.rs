@@ -390,6 +390,9 @@ pub enum Error {
     #[error("HTTP request timed out: {0}")]
     Timeout(#[source] reqwest::Error),
 
+    #[error("the overall request deadline elapsed before a response was delivered")]
+    DeadlineExceeded,
+
     #[error("failed while reading HTTP response body (status {status}): {source}")]
     ResponseBody {
         #[source]
@@ -499,6 +502,7 @@ impl Error {
             Self::UnexpectedContentType { status, .. } => Some(*status),
             Self::Transport(_)
             | Self::Timeout(_)
+            | Self::DeadlineExceeded
             | Self::Encode(_)
             | Self::EncodeQuery(_)
             | Self::Sse { .. }
@@ -522,6 +526,7 @@ impl Error {
             Self::StreamProtocol { request_id, .. } => request_id.as_deref(),
             Self::Transport(_)
             | Self::Timeout(_)
+            | Self::DeadlineExceeded
             | Self::Encode(_)
             | Self::EncodeQuery(_)
             | Self::InvalidConfiguration(_)

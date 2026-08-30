@@ -37,8 +37,9 @@ stability level of experimental features.
 validates checked-in provenance, hashes, operation/schema inventories, and any
 registered generated artifacts without updating them. The command must return
 a failure if it would change a tracked artifact or if a pinned input no longer
-matches its recorded hash. M0 currently has no registered code generators, so a
-zero-generator codegen check is expected.
+matches its recorded hash. M0 currently checks four registered contract
+projections for zero diff, in addition to the vendored OpenAPI and Codex schema
+provenance.
 
 Refresh commands, when added, must be separate and explicit. Normal builds,
 tests, and `xtask check` must not fetch a moving specification.

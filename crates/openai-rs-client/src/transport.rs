@@ -1,4 +1,7 @@
-use std::fmt;
+use std::{
+    fmt,
+    time::{Duration, Instant, SystemTime},
+};
 
 use futures_util::StreamExt;
 use http::{HeaderValue, header};
@@ -7,8 +10,8 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::{
-    ApiError, ApiResponse, BodyPreview, Error, ResponseMeta,
-    operation::{AuthScope, Operation, RequestEncoding},
+    ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy,
+    operation::{AuthScope, Operation, RequestEncoding, RetryClass},
 };
 
 const JSON_MIME: &str = "application/json";
@@ -59,6 +62,8 @@ pub(crate) struct Transport {
     project: Option<HeaderValue>,
     max_json_body_bytes: usize,
     max_error_body_bytes: usize,
+    retry_policy: RetryPolicy,
+    overall_timeout: Duration,
 }
 
 impl Transport {
@@ -71,6 +76,8 @@ impl Transport {
         project: Option<HeaderValue>,
         max_json_body_bytes: usize,
         max_error_body_bytes: usize,
+        retry_policy: RetryPolicy,
+        overall_timeout: Duration,
     ) -> Self {
         Self {
             http,
@@ -80,6 +87,8 @@ impl Transport {
             project,
             max_json_body_bytes,
             max_error_body_bytes,
+            retry_policy,
+            overall_timeout,
         }
     }
 
@@ -174,45 +183,96 @@ impl Transport {
             }
             crate::operation::ResponseMode::Sse => SSE_MIME,
         };
-        let mut request = self
-            .http
-            .request(meta.method.clone(), url)
-            .header(header::AUTHORIZATION, self.authorization.clone())
-            .header(header::ACCEPT, accept);
-        if let Some(organization) = &self.organization {
-            request = request.header("OpenAI-Organization", organization.clone());
-        }
-        if let Some(project) = &self.project {
-            request = request.header("OpenAI-Project", project.clone());
-        }
-        if let Some(body) = body {
-            let encoded = serde_json::to_vec(body).map_err(Error::Encode)?;
-            request = request
-                .header(header::CONTENT_TYPE, JSON_MIME)
-                .body(encoded);
-        }
+        let encoded_body = body
+            .map(serde_json::to_vec)
+            .transpose()
+            .map_err(Error::Encode)?;
+        let started = Instant::now();
+        let mut retries = 0;
 
-        let request = request.build().map_err(Error::from_reqwest)?;
-        if !same_origin(request.url(), &self.base_url) {
-            return Err(Error::InvalidConfiguration(
-                "operation URL escaped the configured authentication origin".into(),
-            ));
+        loop {
+            let remaining = self
+                .overall_timeout
+                .checked_sub(started.elapsed())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or(Error::DeadlineExceeded)?;
+            let mut request = self
+                .http
+                .request(meta.method.clone(), url.clone())
+                .timeout(remaining)
+                .header(header::AUTHORIZATION, self.authorization.clone())
+                .header(header::ACCEPT, accept);
+            if let Some(organization) = &self.organization {
+                request = request.header("OpenAI-Organization", organization.clone());
+            }
+            if let Some(project) = &self.project {
+                request = request.header("OpenAI-Project", project.clone());
+            }
+            if let Some(encoded) = &encoded_body {
+                request = request
+                    .header(header::CONTENT_TYPE, JSON_MIME)
+                    .body(encoded.clone());
+            }
+
+            let request = request.build().map_err(Error::from_reqwest)?;
+            if !same_origin(request.url(), &self.base_url) {
+                return Err(Error::InvalidConfiguration(
+                    "operation URL escaped the configured authentication origin".into(),
+                ));
+            }
+            let response = match self.http.execute(request).await {
+                Ok(response) => response,
+                Err(error)
+                    if retryable_operation(meta.retry, self.retry_policy)
+                        && retries < self.retry_policy.max_retries
+                        && (error.is_connect() || error.is_timeout()) =>
+                {
+                    let delay = local_retry_delay(retries);
+                    if !can_wait(started, delay, self.overall_timeout) {
+                        return Err(Error::from_reqwest(error));
+                    }
+                    retries += 1;
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Err(error) => return Err(Error::from_reqwest(error)),
+            };
+
+            if meta.success_statuses.contains(&response.status()) {
+                return Ok(response);
+            }
+
+            if retryable_operation(meta.retry, self.retry_policy)
+                && retries < self.retry_policy.max_retries
+                && should_retry_response(&response)
+            {
+                let delay = match server_retry_delay(
+                    response.headers(),
+                    self.retry_policy.max_server_delay,
+                ) {
+                    ServerDelay::Valid(delay) => delay,
+                    ServerDelay::Absent => local_retry_delay(retries),
+                    ServerDelay::TooLong => {
+                        return self.api_error(response).await;
+                    }
+                };
+                if can_wait(started, delay, self.overall_timeout) {
+                    retries += 1;
+                    drop(response);
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+            }
+            return self.api_error(response).await;
         }
-        let response = self
-            .http
-            .execute(request)
+    }
+
+    async fn api_error(&self, response: reqwest::Response) -> Result<reqwest::Response, Error> {
+        let response_meta = ResponseMeta::from_headers(response.status(), response.headers());
+        let (body, truncated) = read_up_to(response, self.max_error_body_bytes)
             .await
-            .map_err(Error::from_reqwest)?;
-
-        if meta.success_statuses.contains(&response.status()) {
-            Ok(response)
-        } else {
-            let response_meta = ResponseMeta::from_headers(response.status(), response.headers());
-            let (body, truncated) = read_up_to(response, self.max_error_body_bytes)
-                .await
-                .map_err(|error| Error::from_response_body(error, &response_meta))?;
-            Err(ApiError::from_body(response_meta, &body, truncated).into())
-        }
+            .map_err(|error| Error::from_response_body(error, &response_meta))?;
+        Err(ApiError::from_body(response_meta, &body, truncated).into())
     }
 
     pub(crate) async fn decode_json<T>(
@@ -300,6 +360,8 @@ impl fmt::Debug for Transport {
             .field("project", &self.project.as_ref().map(|_| "[REDACTED]"))
             .field("max_json_body_bytes", &self.max_json_body_bytes)
             .field("max_error_body_bytes", &self.max_error_body_bytes)
+            .field("retry_policy", &self.retry_policy)
+            .field("overall_timeout", &self.overall_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -355,6 +417,102 @@ fn same_origin(left: &Url, right: &Url) -> bool {
     left.scheme() == right.scheme()
         && left.host_str() == right.host_str()
         && left.port_or_known_default() == right.port_or_known_default()
+}
+
+fn retryable_operation(class: RetryClass, policy: RetryPolicy) -> bool {
+    match class {
+        RetryClass::Safe => true,
+        RetryClass::Replayable => policy.retry_replayable_mutations,
+    }
+}
+
+fn should_retry_response(response: &reqwest::Response) -> bool {
+    match response
+        .headers()
+        .get("x-should-retry")
+        .and_then(|value| value.to_str().ok())
+    {
+        Some("true") => true,
+        Some("false") => false,
+        Some(_) | None => {
+            matches!(response.status().as_u16(), 408 | 409 | 429)
+                || response.status().is_server_error()
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ServerDelay {
+    Absent,
+    Valid(Duration),
+    TooLong,
+}
+
+fn server_retry_delay(headers: &http::HeaderMap, maximum: Duration) -> ServerDelay {
+    if let Some(value) = headers
+        .get("retry-after-ms")
+        .and_then(|value| value.to_str().ok())
+        && let Ok(milliseconds) = value.parse::<f64>()
+        && milliseconds.is_finite()
+        && milliseconds >= 0.0
+    {
+        return bounded_delay(milliseconds / 1000.0, maximum);
+    }
+
+    let Some(value) = headers
+        .get(header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return ServerDelay::Absent;
+    };
+    if let Ok(seconds) = value.parse::<f64>()
+        && seconds.is_finite()
+        && seconds >= 0.0
+    {
+        return bounded_delay(seconds, maximum);
+    }
+    match httpdate::parse_http_date(value) {
+        Ok(time) => {
+            let delay = match time.duration_since(SystemTime::now()) {
+                Ok(delay) => delay,
+                Err(_) => Duration::ZERO,
+            };
+            if delay <= maximum {
+                ServerDelay::Valid(delay)
+            } else {
+                ServerDelay::TooLong
+            }
+        }
+        Err(_) => ServerDelay::Absent,
+    }
+}
+
+fn bounded_delay(seconds: f64, maximum: Duration) -> ServerDelay {
+    if seconds > maximum.as_secs_f64() {
+        ServerDelay::TooLong
+    } else {
+        match Duration::try_from_secs_f64(seconds) {
+            Ok(delay) => ServerDelay::Valid(delay),
+            Err(_) => ServerDelay::TooLong,
+        }
+    }
+}
+
+fn local_retry_delay(retries: u32) -> Duration {
+    let exponent = retries.min(4) as i32;
+    let base_seconds = (0.5_f64 * 2_f64.powi(exponent)).min(8.0);
+    let fraction = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(duration) => f64::from(duration.subsec_nanos()) / 1_000_000_000.0,
+        Err(_) => 0.5,
+    };
+    Duration::from_secs_f64(base_seconds * (0.75 + fraction * 0.25))
+}
+
+fn can_wait(started: Instant, delay: Duration, overall_timeout: Duration) -> bool {
+    started
+        .elapsed()
+        .checked_add(delay)
+        .is_some_and(|elapsed| elapsed < overall_timeout)
 }
 
 fn validate_operation_route(route: &str, path: &[PathSegment<'_>]) -> Result<(), Error> {
@@ -461,6 +619,8 @@ mod tests {
             None,
             1024,
             1024,
+            RetryPolicy::disabled(),
+            Duration::from_secs(1),
         );
         let path = [
             PathSegment::literal("responses"),
@@ -480,13 +640,42 @@ mod tests {
 
     #[test]
     fn empty_query_does_not_add_a_trailing_question_mark() {
-        let mut url = Url::parse("https://api.openai.com/v1/responses/resp_1")
-            .expect("test operation URL");
+        let mut url =
+            Url::parse("https://api.openai.com/v1/responses/resp_1").expect("test operation URL");
         append_query(&mut url, &serde_json::json!({})).expect("empty query");
-        assert_eq!(
-            url.as_str(),
-            "https://api.openai.com/v1/responses/resp_1"
-        );
+        assert_eq!(url.as_str(), "https://api.openai.com/v1/responses/resp_1");
         assert!(url.query().is_none());
+    }
+
+    #[test]
+    fn retry_headers_are_strict_and_bounded() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("retry-after-ms", HeaderValue::from_static("250"));
+        assert_eq!(
+            server_retry_delay(&headers, Duration::from_secs(1)),
+            ServerDelay::Valid(Duration::from_millis(250))
+        );
+
+        headers.insert("retry-after-ms", HeaderValue::from_static("2000"));
+        assert_eq!(
+            server_retry_delay(&headers, Duration::from_secs(1)),
+            ServerDelay::TooLong
+        );
+    }
+
+    #[test]
+    fn conservative_policy_only_retries_safe_operations() {
+        assert!(retryable_operation(
+            RetryClass::Safe,
+            RetryPolicy::conservative()
+        ));
+        assert!(!retryable_operation(
+            RetryClass::Replayable,
+            RetryPolicy::conservative()
+        ));
+        assert!(retryable_operation(
+            RetryClass::Replayable,
+            RetryPolicy::openai_compatible()
+        ));
     }
 }

@@ -32,9 +32,17 @@ tracks the [official Codex app-server
 documentation](https://learn.chatgpt.com/docs/app-server) and an exact audited
 runtime artifact; a moving documentation page alone is not a schema pin.
 
-The M0 repository does not yet ship an audited runtime-to-schema mapping.
-Consequently, the app-server feature is a protocol/client scaffold rather than
-an out-of-the-box supported runtime integration; unknown runtimes fail closed.
+M0 ships exactly one audited runtime-to-schema mapping: Codex 0.144.5 for
+`aarch64-apple-darwin`, executable SHA-256
+`5e29ab10ca1171be158f7335dd6bd8ce1aaf9af1556939db36a5ee338be6f5f2`, and
+vendored schema SHA-256
+`95f68321313fc4d64c8781737abf60657d6d100e2f516a036253ca936f4d73a2`.
+The full provenance is recorded in
+[`spec/SOURCES.toml`](../spec/SOURCES.toml) and the exact allowlist in
+[`codex-compatibility.toml`](../spec/contracts/codex-compatibility.toml).
+Every other version, target, executable byte sequence, schema hash, and source
+build reporting `0.0.0` fails closed. This narrow mapping does not change the
+experimental status of app-server.
 
 The client must complete the `initialize` request and then send exactly one
 `initialized` notification before other methods. Runtime artifacts must map to
@@ -71,12 +79,13 @@ types and a local RMCP client/server adapter remain separate concerns.
 
 ## Provenance and generation
 
-The M0 OpenAPI input is vendored and hash-verified, while code generation has no
-registered generators yet. Future generated API artifacts must be derived from
-pinned, hashed upstream inputs. Normal builds and tests consume checked-in
-artifacts; they do not download a moving schema or execute an unknown generator.
-A refresh is an explicit maintainer operation whose source revision, hash, and
-generated diff are reviewed.
+The M0 OpenAPI input and Codex app-server schema are vendored and hash-verified.
+Four registered contract projections are checked for zero diff. Future generated
+API artifacts must likewise be derived from pinned, hashed upstream inputs.
+Normal builds and tests consume checked-in artifacts; they do not download a
+moving schema or execute an unknown generator. A refresh is an explicit
+maintainer operation whose source revision, hash, and generated diff are
+reviewed.
 
 ## Excluded dependency and design source
 

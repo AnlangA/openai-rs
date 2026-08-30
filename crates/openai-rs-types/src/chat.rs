@@ -7,6 +7,7 @@
 
 use std::{collections::BTreeMap, fmt, marker::PhantomData};
 
+use base64::Engine as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Value};
 
@@ -392,6 +393,13 @@ impl ChatImageContentPart {
         }
     }
 
+    /// Construct an inline image data URL from raw bytes.
+    #[must_use]
+    pub fn from_bytes(media_type: &str, bytes: impl AsRef<[u8]>) -> Self {
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes.as_ref());
+        Self::new(format!("data:{media_type};base64,{data}"))
+    }
+
     /// Select image fidelity.
     #[must_use]
     pub fn with_detail(mut self, detail: ChatImageDetail) -> Self {
@@ -444,6 +452,15 @@ impl ChatAudioContentPart {
         }
     }
 
+    /// Encode raw audio bytes into the required base64 wire representation.
+    #[must_use]
+    pub fn from_bytes(bytes: impl AsRef<[u8]>, format: ChatInputAudioFormat) -> Self {
+        Self::new(
+            base64::engine::general_purpose::STANDARD.encode(bytes.as_ref()),
+            format,
+        )
+    }
+
     /// Mark a cache boundary after this part.
     #[must_use]
     pub fn with_cache_breakpoint(mut self) -> Self {
@@ -486,6 +503,15 @@ impl ChatInputFile {
             file_data: Omittable::Value(data.into()),
             file_id: Omittable::Omitted,
         }
+    }
+
+    /// Encode raw file bytes into the inline base64 wire representation.
+    #[must_use]
+    pub fn from_bytes(filename: impl Into<String>, bytes: impl AsRef<[u8]>) -> Self {
+        Self::from_base64(
+            filename,
+            base64::engine::general_purpose::STANDARD.encode(bytes.as_ref()),
+        )
     }
 }
 
@@ -2301,6 +2327,12 @@ where
     mode: PhantomData<fn() -> M>,
 }
 
+/// Ergonomic alias for a non-streaming Chat create request.
+pub type ChatCompletionRequest = CreateChatCompletionRequest<ChatNonStreaming>;
+
+/// Ergonomic alias for a streaming Chat create request.
+pub type ChatCompletionStreamRequest = CreateChatCompletionRequest<ChatStreaming>;
+
 #[derive(Deserialize)]
 struct CreateChatCompletionRequestWire {
     #[serde(flatten)]
@@ -3058,8 +3090,8 @@ mod tests {
             ChatImageContentPart::new("https://example.test/cat.png")
                 .with_detail(ChatImageDetail::High)
                 .into(),
-            ChatAudioContentPart::new("UklGRg==", ChatInputAudioFormat::Wav).into(),
-            ChatFileContentPart::new(ChatInputFile::from_id(FileId::new("file_123"))).into(),
+            ChatAudioContentPart::from_bytes(b"RIFF", ChatInputAudioFormat::Wav).into(),
+            ChatFileContentPart::new(ChatInputFile::from_bytes("notes.txt", b"hello")).into(),
         ];
         let request = CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::parts(parts))
             .with_message(ChatDeveloperMessage::new("Be concise"))

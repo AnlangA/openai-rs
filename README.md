@@ -26,7 +26,7 @@ remain in progress, scaffolded, or planned.
 | Full OpenAPI resource coverage | Not implemented |
 | Realtime, administration, and webhook helpers | Feature boundaries reserved; not complete |
 | RMCP bridge | Optional scaffold; not production-ready |
-| Codex app-server integration | Experimental scaffold; no audited runtime mapping ships yet |
+| Codex app-server integration | Experimental; only one exact Codex 0.144.5 macOS arm64 artifact is audited |
 | Direct Codex Responses transport | Experimental, private-backend compatibility work only |
 
 See [feature status](docs/feature-status.md) for the exact Cargo feature matrix

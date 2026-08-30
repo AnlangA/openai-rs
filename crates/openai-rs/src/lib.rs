@@ -10,7 +10,7 @@ pub use openai_rs_types::{StructuredError, StructuredOutput, TypedFunction};
 pub use openai_rs_client::{
     ApiError, ApiKey, ApiKeyError, ApiResponse, Client, ClientBuilder, DeleteResponseResult,
     Embeddings, Error, InputItems, InputTokens, Models, Moderations, ResponseEventStream,
-    ResponseMeta, Responses, StreamError, TlsBackend,
+    ResponseMeta, Responses, RetryPolicy, StreamError, TlsBackend,
 };
 
 #[cfg(feature = "codex-app-server")]

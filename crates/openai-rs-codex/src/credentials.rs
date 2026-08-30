@@ -44,6 +44,17 @@ impl CodexCredentialMarker for ManagedAppServerCredential {}
 ///
 /// It is never sent through `account/login/start`, never exposed by this
 /// crate's protocol DTOs, and cannot be used as a Platform API credential.
+/// Managed login methods are also absent from an access-token client:
+///
+/// ```compile_fail
+/// use openai_rs_codex::{AppServerClient, CodexAccessTokenCredential};
+///
+/// async fn cannot_switch_login(
+///     client: &AppServerClient<CodexAccessTokenCredential>,
+/// ) {
+///     client.account_login_device().await;
+/// }
+/// ```
 #[cfg(feature = "access-token")]
 pub struct CodexAccessTokenCredential {
     token: secrecy::SecretString,

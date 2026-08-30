@@ -53,8 +53,19 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["url", "sha256"],
+            "required": ["category", "fixture_status"],
             "properties": {
+              "category": {
+                "enum": [
+                  "official_reference",
+                  "raw_openapi",
+                  "official_sdk",
+                  "wire_fixture"
+                ]
+              },
+              "fixture_status": {
+                "enum": ["captured", "pending"]
+              },
               "url": {
                 "type": "string",
                 "format": "uri"
@@ -65,8 +76,40 @@
               },
               "excerpt": {
                 "type": "string"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1
               }
-            }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "fixture_status": {
+                      "const": "captured"
+                    }
+                  },
+                  "required": ["fixture_status"]
+                },
+                "then": {
+                  "required": ["url", "sha256"]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "fixture_status": {
+                      "const": "pending"
+                    }
+                  },
+                  "required": ["fixture_status"]
+                },
+                "then": {
+                  "required": ["note"]
+                }
+              }
+            ]
           }
         },
         "reviewed_at": {

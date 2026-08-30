@@ -1,3 +1,6 @@
+mod contracts;
+
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,14 +12,14 @@ const DECISIONS_PATH: &str = "spec/contracts/decisions.md";
 const OVERRIDES_PATH: &str = "spec/contracts/manual-overrides.toml";
 const OVERRIDES_SCHEMA_PATH: &str = "spec/contracts/manual-overrides.schema.json";
 
-struct RenderedArtifact {
-    relative_path: PathBuf,
-    bytes: Vec<u8>,
+pub(super) struct RenderedArtifact {
+    pub(super) relative_path: PathBuf,
+    pub(super) bytes: Vec<u8>,
 }
 
 pub fn run(repository_root: &Path, check: bool) -> Result<()> {
     validate_contract_inputs(repository_root)?;
-    let artifacts = render_artifacts();
+    let artifacts = render_artifacts(repository_root)?;
 
     if check {
         check_artifacts(repository_root, &artifacts)?;
@@ -34,10 +37,8 @@ pub fn run(repository_root: &Path, check: bool) -> Result<()> {
     Ok(())
 }
 
-// M0 intentionally registers no Rust output yet. New lowering stages append
-// deterministic RenderedArtifact values here; the check/write paths stay shared.
-fn render_artifacts() -> Vec<RenderedArtifact> {
-    Vec::new()
+fn render_artifacts(repository_root: &Path) -> Result<Vec<RenderedArtifact>> {
+    contracts::render(repository_root)
 }
 
 fn validate_contract_inputs(repository_root: &Path) -> Result<()> {
@@ -52,18 +53,7 @@ fn validate_contract_inputs(repository_root: &Path) -> Result<()> {
 
     let overrides_path = repository_root.join(OVERRIDES_PATH);
     let overrides = read_text(&overrides_path, "read manual overrides")?;
-    if !overrides
-        .lines()
-        .any(|line| line.trim() == "schema_version = 1")
-        || !overrides
-            .lines()
-            .any(|line| line.trim() == "overrides = []")
-    {
-        return Err(Error::message(format!(
-            "{} must declare schema_version = 1 and an explicit overrides array",
-            overrides_path.display()
-        )));
-    }
+    validate_override_manifest(&overrides, &overrides_path)?;
 
     let schema_path = repository_root.join(OVERRIDES_SCHEMA_PATH);
     let schema_bytes = fs::read(&schema_path)
@@ -79,6 +69,94 @@ fn validate_contract_inputs(repository_root: &Path) -> Result<()> {
             "{} must define schema_version const 1 and an overrides array",
             schema_path.display()
         )));
+    }
+    Ok(())
+}
+
+fn validate_override_manifest(input: &str, path: &Path) -> Result<()> {
+    let has_schema_version = input
+        .lines()
+        .any(|line| line.trim() == "schema_version = 1");
+    let declares_empty = input
+        .lines()
+        .any(|line| line.trim() == "overrides = []");
+    let mut blocks = Vec::new();
+    let mut current: Option<BTreeSet<String>> = None;
+    let mut ids = BTreeSet::new();
+
+    for raw_line in input.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line == "[[overrides]]" {
+            if let Some(block) = current.take() {
+                blocks.push(block);
+            }
+            current = Some(BTreeSet::new());
+            continue;
+        }
+        let Some(block) = current.as_mut() else {
+            continue;
+        };
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(Error::message(format!(
+                "invalid manual override assignment in {}: {line}",
+                path.display()
+            )));
+        };
+        let key = key.trim().to_owned();
+        if !block.insert(key.clone()) {
+            return Err(Error::message(format!(
+                "duplicate manual override key `{key}` in {}",
+                path.display()
+            )));
+        }
+        if key == "id" {
+            let id = serde_json::from_str::<String>(value.trim()).map_err(|source| {
+                Error::message(format!(
+                    "manual override id in {} must be a TOML basic string compatible with JSON quoting: {source}",
+                    path.display()
+                ))
+            })?;
+            if !ids.insert(id.clone()) {
+                return Err(Error::message(format!(
+                    "duplicate manual override id `{id}` in {}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    if let Some(block) = current {
+        blocks.push(block);
+    }
+
+    if !has_schema_version || (declares_empty == !blocks.is_empty()) {
+        return Err(Error::message(format!(
+            "{} must declare schema_version = 1 and exactly one of `overrides = []` or [[overrides]] entries",
+            path.display()
+        )));
+    }
+    let required = [
+        "id",
+        "target",
+        "action",
+        "sources",
+        "reviewed_at",
+        "reason",
+        "impact",
+        "tests",
+    ];
+    for (index, block) in blocks.iter().enumerate() {
+        for key in required {
+            if !block.contains(key) {
+                return Err(Error::message(format!(
+                    "manual override {} in {} is missing `{key}`",
+                    index + 1,
+                    path.display()
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -124,13 +202,22 @@ fn read_text(path: &Path, action: &'static str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderedArtifact, check_artifacts};
+    use std::path::Path;
+
+    use super::{RenderedArtifact, check_artifacts, validate_override_manifest};
 
     #[test]
     fn empty_artifact_set_is_a_zero_diff() -> Result<(), Box<dyn std::error::Error>> {
         let root = std::env::temp_dir();
         let artifacts: Vec<RenderedArtifact> = Vec::new();
         check_artifacts(&root, &artifacts)?;
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_nonempty_override_manifest() -> Result<(), Box<dyn std::error::Error>> {
+        let input = "schema_version = 1\n[[overrides]]\nid = \"OVR-0001\"\ntarget = \"/paths\"\naction = \"replace\"\nsources = []\nreviewed_at = \"2026-08-30\"\nreason = \"proof\"\nimpact = [\"proof\"]\ntests = [\"proof\"]\n";
+        validate_override_manifest(input, Path::new("manual-overrides.toml"))?;
         Ok(())
     }
 }

@@ -3,4 +3,9 @@
 # unsupported. Source builds reporting 0.0.0 are never eligible.
 
 schema_version = 1
-runtime = []
+
+[[runtime]]
+version = "0.144.5"
+target = "aarch64-apple-darwin"
+executable_sha256 = "5e29ab10ca1171be158f7335dd6bd8ce1aaf9af1556939db36a5ee338be6f5f2"
+app_server_schema_sha256 = "95f68321313fc4d64c8781737abf60657d6d100e2f516a036253ca936f4d73a2"

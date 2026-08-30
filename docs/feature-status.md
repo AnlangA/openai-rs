@@ -47,7 +47,7 @@ tools; applications must explicitly register or allowlist tools.
 
 | Feature | Status | Notes |
 |---|---|---|
-| `codex-app-server` | Experimental scaffold | JSON-RPC client and exact artifact/schema mapping support exist, but the repository currently ships no audited runtime mapping, so no runtime is accepted out of the box. App-server itself is experimental. |
+| `codex-app-server` | Experimental | JSON-RPC client plus one audited mapping for Codex 0.144.5 on `aarch64-apple-darwin`. Only the exact executable and vendored schema hashes in the compatibility manifest are accepted; every other runtime fails closed. |
 | `codex-access-token` | Experimental | Trusted local Business/Enterprise automation only. The runtime receives `CODEX_ACCESS_TOKEN` or a prior `codex login --with-access-token` login; this is not an `account/login/start` variant. |
 | `experimental-codex-direct` | Experimental | Direct, host-locked access to the private Codex Responses backend. Not a public OpenAI API contract. |
 | `experimental-codex-direct-device` | Experimental | Adds device-code UX to the direct backend and has an independent beta boundary. |

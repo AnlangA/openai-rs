@@ -611,6 +611,69 @@ impl InputMessage {
     }
 }
 
+/// Role accepted by the stored `InputMessage` schema.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StoredInputMessageRole {
+    /// User input.
+    User,
+    /// System instruction.
+    System,
+    /// Developer instruction.
+    Developer,
+}
+
+/// The item-form input message used inside the expanded `Item` union.
+///
+/// This differs from [`InputMessage`]'s ergonomic schema: content is always an
+/// array, assistant is not an accepted role, and a returned item may carry a
+/// status.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredInputMessage {
+    #[serde(
+        rename = "type",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    kind: Omittable<InputMessageTag>,
+    role: StoredInputMessageRole,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    status: Omittable<ResponseItemStatus>,
+    content: Vec<InputContent>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl StoredInputMessage {
+    /// Creates an item-form input message.
+    #[must_use]
+    pub fn new(
+        role: StoredInputMessageRole,
+        content: impl IntoIterator<Item = impl Into<InputContent>>,
+    ) -> Self {
+        Self {
+            kind: Omittable::Value(InputMessageTag::Message),
+            role,
+            status: Omittable::Omitted,
+            content: content.into_iter().map(Into::into).collect(),
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Sets the returned item status.
+    #[must_use]
+    pub fn status(mut self, status: ResponseItemStatus) -> Self {
+        self.status = Omittable::Value(status);
+        self
+    }
+
+    /// Returns content parts.
+    #[must_use]
+    pub fn content(&self) -> &[InputContent] {
+        &self.content
+    }
+}
+
 /// A plain string input or a sequence of typed input items.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -1687,6 +1750,8 @@ impl OutputMessage {
 pub enum ResponseInputItem {
     /// A request message, whose `type` property may be omitted.
     Message(InputMessage),
+    /// An item-form input message with array content.
+    StoredMessage(StoredInputMessage),
     /// A prior assistant output message replayed as input.
     OutputMessage(OutputMessage),
     /// A prior function invocation replayed as input.
@@ -1758,6 +1823,7 @@ impl Serialize for ResponseInputItem {
     {
         match self {
             Self::Message(value) => value.serialize(serializer),
+            Self::StoredMessage(value) => value.serialize(serializer),
             Self::OutputMessage(value) => value.serialize(serializer),
             Self::FunctionCall(value) => value.serialize(serializer),
             Self::FunctionCallOutput(value) => value.serialize(serializer),
@@ -1821,9 +1887,16 @@ impl<'de> Deserialize<'de> for ResponseInputItem {
             None => serde_json::from_value(value)
                 .map(Self::ItemReference)
                 .map_err(D::Error::custom),
-            Some("message") if object.contains_key("id") || object.contains_key("status") => {
+            Some("message") if object.contains_key("id") => serde_json::from_value(value)
+                .map(Self::OutputMessage)
+                .map_err(D::Error::custom),
+            Some("message")
+                if object.contains_key("status")
+                    || (object.get("content").is_some_and(Value::is_array)
+                        && object.get("role").and_then(Value::as_str) != Some("assistant")) =>
+            {
                 serde_json::from_value(value)
-                    .map(Self::OutputMessage)
+                    .map(Self::StoredMessage)
                     .map_err(D::Error::custom)
             }
             Some("message") => serde_json::from_value(value)
@@ -1923,6 +1996,12 @@ impl<'de> Deserialize<'de> for ResponseInputItem {
 impl From<InputMessage> for ResponseInputItem {
     fn from(value: InputMessage) -> Self {
         Self::Message(value)
+    }
+}
+
+impl From<StoredInputMessage> for ResponseInputItem {
+    fn from(value: StoredInputMessage) -> Self {
+        Self::StoredMessage(value)
     }
 }
 
@@ -2437,25 +2516,35 @@ struct CreateResponseBody {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input: Omittable<ResponseInput>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    instructions: Omittable<Nullable<ResponseInstructions>>,
+    instructions: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    background: Omittable<bool>,
+    background: Omittable<Nullable<bool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     conversation: Omittable<Nullable<ConversationReference>>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    include: Vec<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    context_management: Omittable<Nullable<Vec<Value>>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    include: Omittable<Nullable<Vec<String>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     max_output_tokens: Omittable<Nullable<u32>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     max_tool_calls: Omittable<Nullable<u32>>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    metadata: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    parallel_tool_calls: Omittable<bool>,
+    metadata: Omittable<Nullable<BTreeMap<String, String>>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    moderation: Omittable<Nullable<Value>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    parallel_tool_calls: Omittable<Nullable<bool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     previous_response_id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     prompt: Omittable<Nullable<PromptReference>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_key: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_options: Omittable<Value>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_retention: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     reasoning: Omittable<Nullable<ReasoningConfig>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2463,19 +2552,21 @@ struct CreateResponseBody {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     service_tier: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    store: Omittable<bool>,
+    store: Omittable<Nullable<bool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     temperature: Omittable<Nullable<f64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     text: Omittable<ResponseTextConfig>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     tool_choice: Omittable<ToolChoice>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<ResponseTool>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    tools: Omittable<Vec<ResponseTool>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    top_logprobs: Omittable<u32>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     top_p: Omittable<Nullable<f64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    truncation: Omittable<TruncationStrategy>,
+    truncation: Omittable<Nullable<TruncationStrategy>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     user: Omittable<String>,
 }
@@ -5655,6 +5746,8 @@ mod tests {
         assert_json_dto::<InputContent>();
         assert_json_dto::<MessageContent>();
         assert_json_dto::<InputMessage>();
+        assert_json_dto::<StoredInputMessageRole>();
+        assert_json_dto::<StoredInputMessage>();
         assert_json_dto::<ResponseInput>();
         assert_json_dto::<ResponseInstructions>();
         assert_json_dto::<FunctionTool>();
@@ -5671,6 +5764,7 @@ mod tests {
         assert_json_dto::<McpCall>();
         assert_json_dto::<McpApprovalRequest>();
         assert_json_dto::<McpApprovalResponse>();
+        assert_json_dto::<FunctionCallOutputValue>();
         assert_json_dto::<OutputText>();
         assert_json_dto::<Refusal>();
         assert_json_dto::<OutputContent>();
@@ -5730,7 +5824,207 @@ mod tests {
         assert_json_dto::<McpListToolsCompletedEvent>();
         assert_json_dto::<McpListToolsFailedEvent>();
         assert_json_dto::<StreamErrorEvent>();
+        assert_json_dto::<CompactionTrigger>();
+        assert_json_dto::<ItemReference>();
+        assert_json_dto::<ProgramItem>();
+        assert_json_dto::<ProgramOutputItem>();
+        assert_json_dto::<FileSearchCall>();
+        assert_json_dto::<ComputerCall>();
+        assert_json_dto::<ComputerCallOutput>();
+        assert_json_dto::<ComputerCallOutputResource>();
+        assert_json_dto::<WebSearchCall>();
+        assert_json_dto::<FunctionCallOutputResource>();
+        assert_json_dto::<ToolSearchCallInput>();
+        assert_json_dto::<ToolSearchCall>();
+        assert_json_dto::<ToolSearchOutputInput>();
+        assert_json_dto::<ToolSearchOutput>();
+        assert_json_dto::<AdditionalToolsInput>();
+        assert_json_dto::<AdditionalTools>();
+        assert_json_dto::<ReasoningItem>();
+        assert_json_dto::<CompactionSummaryInput>();
+        assert_json_dto::<CompactionItem>();
+        assert_json_dto::<ImageGenerationCall>();
+        assert_json_dto::<CodeInterpreterCall>();
+        assert_json_dto::<LocalShellCall>();
+        assert_json_dto::<LocalShellCallOutput>();
+        assert_json_dto::<FunctionShellCallInput>();
+        assert_json_dto::<FunctionShellCall>();
+        assert_json_dto::<FunctionShellCallOutputInput>();
+        assert_json_dto::<FunctionShellCallOutput>();
+        assert_json_dto::<ApplyPatchCallInput>();
+        assert_json_dto::<ApplyPatchCall>();
+        assert_json_dto::<ApplyPatchCallOutputInput>();
+        assert_json_dto::<ApplyPatchCallOutput>();
+        assert_json_dto::<McpApprovalResponseResource>();
+        assert_json_dto::<CustomToolCall>();
+        assert_json_dto::<CustomToolCallOutput>();
+        assert_json_dto::<CustomToolCallOutputResource>();
+        assert_json_dto::<FileSearchTool>();
+        assert_json_dto::<ComputerTool>();
+        assert_json_dto::<ComputerUsePreviewTool>();
+        assert_json_dto::<WebSearchTool>();
+        assert_json_dto::<CodeInterpreterTool>();
+        assert_json_dto::<ProgrammaticTool>();
+        assert_json_dto::<ImageGenerationTool>();
+        assert_json_dto::<LocalShellTool>();
+        assert_json_dto::<FunctionShellTool>();
+        assert_json_dto::<CustomTool>();
+        assert_json_dto::<NamespaceTool>();
+        assert_json_dto::<ToolSearchTool>();
+        assert_json_dto::<WebSearchPreviewTool>();
+        assert_json_dto::<ApplyPatchTool>();
+        assert_json_dto::<AllowedToolsMode>();
+        assert_json_dto::<AllowedToolsChoice>();
+        assert_json_dto::<HostedToolType>();
+        assert_json_dto::<HostedToolChoice>();
+        assert_json_dto::<CustomToolChoice>();
+        assert_json_dto::<ProgrammaticToolChoice>();
+        assert_json_dto::<ApplyPatchToolChoice>();
+        assert_json_dto::<FunctionShellToolChoice>();
+        assert_json_dto::<AudioDeltaEvent>();
+        assert_json_dto::<AudioDoneEvent>();
+        assert_json_dto::<AudioTranscriptDeltaEvent>();
+        assert_json_dto::<AudioTranscriptDoneEvent>();
+        assert_json_dto::<CodeInterpreterCodeDeltaEvent>();
+        assert_json_dto::<CodeInterpreterCodeDoneEvent>();
+        assert_json_dto::<CodeInterpreterCompletedEvent>();
+        assert_json_dto::<CodeInterpreterInProgressEvent>();
+        assert_json_dto::<CodeInterpreterInterpretingEvent>();
+        assert_json_dto::<FileSearchCompletedEvent>();
+        assert_json_dto::<FileSearchInProgressEvent>();
+        assert_json_dto::<FileSearchSearchingEvent>();
+        assert_json_dto::<ShellCommandAddedEvent>();
+        assert_json_dto::<ShellCommandDeltaEvent>();
+        assert_json_dto::<ShellCommandDoneEvent>();
+        assert_json_dto::<ShellOutputContentDeltaEvent>();
+        assert_json_dto::<ShellOutputContentDoneEvent>();
+        assert_json_dto::<ReasoningSummaryPartAddedEvent>();
+        assert_json_dto::<ReasoningSummaryPartDoneEvent>();
+        assert_json_dto::<ReasoningSummaryTextDeltaEvent>();
+        assert_json_dto::<ReasoningSummaryTextDoneEvent>();
+        assert_json_dto::<ReasoningTextDeltaEvent>();
+        assert_json_dto::<ReasoningTextDoneEvent>();
+        assert_json_dto::<WebSearchCompletedEvent>();
+        assert_json_dto::<WebSearchInProgressEvent>();
+        assert_json_dto::<WebSearchSearchingEvent>();
+        assert_json_dto::<ImageGenerationCompletedEvent>();
+        assert_json_dto::<ImageGenerationGeneratingEvent>();
+        assert_json_dto::<ImageGenerationInProgressEvent>();
+        assert_json_dto::<ImageGenerationPartialImageEvent>();
+        assert_json_dto::<OutputTextAnnotationAddedEvent>();
+        assert_json_dto::<CustomToolCallInputDeltaEvent>();
+        assert_json_dto::<CustomToolCallInputDoneEvent>();
         assert_json_dto::<ResponseStreamEvent>();
+    }
+
+    #[test]
+    fn frozen_union_manifests_route_every_known_discriminator_strictly() {
+        assert_eq!(STABLE_RESPONSE_INPUT_SCHEMAS.len(), 32);
+        assert_eq!(STABLE_RESPONSE_INPUT_DISCRIMINATORS.len(), 32);
+        assert_eq!(STABLE_RESPONSE_OUTPUT_SCHEMAS.len(), 28);
+        assert_eq!(STABLE_RESPONSE_OUTPUT_DISCRIMINATORS.len(), 28);
+        assert_eq!(STABLE_RESPONSE_TOOL_SCHEMAS.len(), 16);
+        assert_eq!(STABLE_RESPONSE_TOOL_DISCRIMINATORS.len(), 16);
+        assert_eq!(STABLE_RESPONSE_TOOL_CHOICE_SCHEMAS.len(), 9);
+        assert_eq!(STABLE_RESPONSE_TOOL_CHOICE_DISCRIMINATORS.len(), 9);
+        assert_eq!(STABLE_RESPONSE_STREAM_EVENT_SCHEMAS.len(), 58);
+        assert_eq!(STABLE_RESPONSE_STREAM_EVENT_DISCRIMINATORS.len(), 58);
+
+        for discriminator in STABLE_RESPONSE_INPUT_DISCRIMINATORS {
+            if matches!(discriminator, "compaction_trigger" | "<absent:id>") {
+                continue;
+            }
+            let decoded = serde_json::from_value::<ResponseInputItem>(json!({
+                "type": discriminator
+            }));
+            assert!(
+                decoded.is_err(),
+                "known input tag {discriminator} must validate its required payload"
+            );
+        }
+
+        let item_reference: ResponseInputItem = serde_json::from_value(json!({"id": "item_1"}))
+            .expect("decode untagged item reference");
+        assert!(matches!(
+            item_reference,
+            ResponseInputItem::ItemReference(_)
+        ));
+        let trigger: ResponseInputItem =
+            serde_json::from_value(json!({"type": "compaction_trigger"}))
+                .expect("decode tag-only compaction trigger");
+        assert!(matches!(trigger, ResponseInputItem::CompactionTrigger(_)));
+
+        for discriminator in STABLE_RESPONSE_OUTPUT_DISCRIMINATORS {
+            let decoded = serde_json::from_value::<ResponseOutputItem>(json!({
+                "type": discriminator
+            }));
+            assert!(
+                decoded.is_err(),
+                "known output tag {discriminator} must validate its required payload"
+            );
+        }
+
+        for discriminator in STABLE_RESPONSE_STREAM_EVENT_DISCRIMINATORS {
+            let decoded = serde_json::from_value::<ResponseStreamEvent>(json!({
+                "type": discriminator
+            }));
+            assert!(
+                decoded.is_err(),
+                "known event tag {discriminator} must validate its required payload"
+            );
+        }
+
+        for discriminator in [
+            "function",
+            "file_search",
+            "computer_use_preview",
+            "mcp",
+            "code_interpreter",
+            "custom",
+            "namespace",
+        ] {
+            let decoded = serde_json::from_value::<ResponseTool>(json!({"type": discriminator}));
+            assert!(
+                decoded.is_err(),
+                "known tool tag {discriminator} must validate its required payload"
+            );
+        }
+
+        for discriminator in [
+            "computer",
+            "web_search",
+            "programmatic_tool_calling",
+            "image_generation",
+            "local_shell",
+            "shell",
+            "tool_search",
+            "web_search_preview",
+            "apply_patch",
+        ] {
+            let decoded: ResponseTool = serde_json::from_value(json!({"type": discriminator}))
+                .expect("decode tag-only known tool");
+            assert!(!matches!(decoded, ResponseTool::Unknown(_)));
+        }
+
+        for discriminator in ["allowed_tools", "function", "mcp", "custom"] {
+            assert!(
+                serde_json::from_value::<ToolChoice>(json!({"type": discriminator})).is_err(),
+                "known choice tag {discriminator} must validate its required payload"
+            );
+        }
+        for discriminator in [
+            "file_search",
+            "programmatic_tool_calling",
+            "apply_patch",
+            "shell",
+        ] {
+            let decoded: ToolChoice = serde_json::from_value(json!({"type": discriminator}))
+                .expect("decode tag-only known tool choice");
+            assert!(!matches!(decoded, ToolChoice::Unknown(_)));
+        }
+        for mode in ["none", "auto", "required"] {
+            serde_json::from_value::<ToolChoice>(json!(mode)).expect("decode string tool choice");
+        }
     }
 
     #[test]

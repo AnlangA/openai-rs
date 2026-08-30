@@ -22,3 +22,20 @@ client_operation_count = 288
 webhook_count = 18
 webhook_operation_count = 18
 schema_count = 1424
+
+[[source]]
+id = "codex-app-server-schema-0.144.5-aarch64-apple-darwin"
+kind = "generated-codex-app-server-schema"
+repository = "openai/codex"
+upstream_repository_url = "https://github.com/openai/codex"
+runtime_version = "0.144.5"
+runtime_version_output = "codex-cli 0.144.5"
+runtime_target = "aarch64-apple-darwin"
+runtime_executable_sha256 = "5e29ab10ca1171be158f7335dd6bd8ce1aaf9af1556939db36a5ee338be6f5f2"
+generator = "codex app-server generate-json-schema"
+schema_kind = "combined"
+generated_at = "2026-08-30"
+path = "spec/upstream/codex/0.144.5/codex_app_server_protocol.schemas.json"
+byte_length = 560640
+sha256 = "95f68321313fc4d64c8781737abf60657d6d100e2f516a036253ca936f4d73a2"
+license = "Apache-2.0"
