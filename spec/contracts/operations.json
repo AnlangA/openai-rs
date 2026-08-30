@@ -9,11 +9,11 @@
     "webhook": 18,
     "total": 306,
     "implementation_statuses": {
-      "partial": 44,
-      "planned": 34,
-      "verified": 210
+      "omitted": 33,
+      "quarantined": 1,
+      "verified": 254
     },
-    "verified_units": 241
+    "verified_units": 294
   },
   "client_operations": [
     {
@@ -81,10 +81,16 @@
       "lifecycle": "deprecated",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::listAssistants"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -120,10 +126,16 @@
       "lifecycle": "deprecated",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::createAssistant"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -162,10 +174,16 @@
       "lifecycle": "deprecated",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::getAssistant"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -212,10 +230,16 @@
       "lifecycle": "deprecated",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::modifyAssistant"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -254,10 +278,16 @@
       "lifecycle": "deprecated",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::deleteAssistant"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -926,13 +956,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M6-batches-client",
         "units": [
           "RetrieveBatch"
         ],
         "tests": [
-          "pending: direct retrieveBatch client route test"
+          "openai-rs-client::batches::tests::retrieve_batch_has_exact_bodyless_wire_contract"
         ]
       },
       "manual_overrides": []
@@ -1060,14 +1090,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M5-chat-client",
         "units": [
           "ListChatCompletions"
         ],
         "tests": [
-          "openai-rs-client::chat_completions::tests::stored_list_encodes_deep_object_metadata_and_typed_cursor",
-          "pending: assert the collection path independently"
+          "openai-rs-client::chat_completions::tests::stored_list_encodes_deep_object_metadata_and_typed_cursor"
         ]
       },
       "manual_overrides": []
@@ -1154,13 +1183,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M5-chat-client",
         "units": [
           "GetChatCompletion"
         ],
         "tests": [
-          "pending: direct getChatCompletion client route test"
+          "openai-rs-client::chat_completions::tests::get_chat_completion_uses_encoded_id_without_query_or_body"
         ]
       },
       "manual_overrides": []
@@ -1883,7 +1912,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-containers-client",
         "units": [
           "ListContainers",
@@ -1893,10 +1922,11 @@
           "ContainerPageStream"
         ],
         "tests": [
-          "openai-rs-client::containers::tests::container_list_retrieve_and_delete_use_typed_routes",
-          "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor",
-          "openai-rs-client::containers::tests::container_file_attach_list_retrieve_and_delete_match_contract",
-          "pending: add independent collection/delete path assertions"
+          "openai-rs-client::containers::tests::list_containers_loopback_checks_method_query_body_and_decode",
+          "openai-rs-client::containers::tests::delete_container_loopback_checks_method_path_body_and_decode",
+          "openai-rs-client::containers::tests::list_container_files_loopback_checks_method_query_body_and_decode",
+          "openai-rs-client::containers::tests::delete_container_file_loopback_checks_method_path_body_and_decode",
+          "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor"
         ],
         "registry_group": "containers-shared-path-coverage"
       },
@@ -2044,7 +2074,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-containers-client",
         "units": [
           "ListContainers",
@@ -2054,10 +2084,11 @@
           "ContainerPageStream"
         ],
         "tests": [
-          "openai-rs-client::containers::tests::container_list_retrieve_and_delete_use_typed_routes",
-          "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor",
-          "openai-rs-client::containers::tests::container_file_attach_list_retrieve_and_delete_match_contract",
-          "pending: add independent collection/delete path assertions"
+          "openai-rs-client::containers::tests::list_containers_loopback_checks_method_query_body_and_decode",
+          "openai-rs-client::containers::tests::delete_container_loopback_checks_method_path_body_and_decode",
+          "openai-rs-client::containers::tests::list_container_files_loopback_checks_method_query_body_and_decode",
+          "openai-rs-client::containers::tests::delete_container_file_loopback_checks_method_path_body_and_decode",
+          "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor"
         ],
         "registry_group": "containers-shared-path-coverage"
       },
@@ -2128,7 +2159,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-containers-client",
         "units": [
           "ListContainers",
@@ -2138,10 +2169,11 @@
           "ContainerPageStream"
         ],
         "tests": [
-          "openai-rs-client::containers::tests::container_list_retrieve_and_delete_use_typed_routes",
-          "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor",
-          "openai-rs-client::containers::tests::container_file_attach_list_retrieve_and_delete_match_contract",
-          "pending: add independent collection/delete path assertions"
+          "openai-rs-client::containers::tests::list_containers_loopback_checks_method_query_body_and_decode",
+          "openai-rs-client::containers::tests::delete_container_loopback_checks_method_path_body_and_decode",
+          "openai-rs-client::containers::tests::list_container_files_loopback_checks_method_query_body_and_decode",
+          "openai-rs-client::containers::tests::delete_container_file_loopback_checks_method_path_body_and_decode",
+          "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor"
         ],
         "registry_group": "containers-shared-path-coverage"
       },
@@ -2321,7 +2353,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-containers-client",
         "units": [
           "ListContainers",
@@ -2331,10 +2363,11 @@
           "ContainerPageStream"
         ],
         "tests": [
-          "openai-rs-client::containers::tests::container_list_retrieve_and_delete_use_typed_routes",
-          "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor",
-          "openai-rs-client::containers::tests::container_file_attach_list_retrieve_and_delete_match_contract",
-          "pending: add independent collection/delete path assertions"
+          "openai-rs-client::containers::tests::list_containers_loopback_checks_method_query_body_and_decode",
+          "openai-rs-client::containers::tests::delete_container_loopback_checks_method_path_body_and_decode",
+          "openai-rs-client::containers::tests::list_container_files_loopback_checks_method_query_body_and_decode",
+          "openai-rs-client::containers::tests::delete_container_file_loopback_checks_method_path_body_and_decode",
+          "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor"
         ],
         "registry_group": "containers-shared-path-coverage"
       },
@@ -2598,7 +2631,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-conversations-client",
         "units": [
           "UpdateConversation",
@@ -2608,10 +2641,11 @@
           "ConversationItemPageStream"
         ],
         "tests": [
-          "openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible",
-          "openai-rs-client::conversations::tests::operation_metadata_matches_the_pinned_contract",
-          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor",
-          "pending: add independent path assertions for each listed operation"
+          "openai-rs-client::conversations::tests::update_conversation_has_exact_json_wire_contract",
+          "openai-rs-client::conversations::tests::delete_conversation_has_exact_bodyless_wire_contract",
+          "openai-rs-client::conversations::tests::delete_conversation_item_has_exact_bodyless_wire_contract",
+          "openai-rs-client::conversations::tests::list_conversation_items_has_exact_bodyless_wire_contract",
+          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor"
         ],
         "registry_group": "conversations-shared-path-coverage"
       },
@@ -2652,7 +2686,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-conversations-client",
         "units": [
           "UpdateConversation",
@@ -2662,10 +2696,11 @@
           "ConversationItemPageStream"
         ],
         "tests": [
-          "openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible",
-          "openai-rs-client::conversations::tests::operation_metadata_matches_the_pinned_contract",
-          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor",
-          "pending: add independent path assertions for each listed operation"
+          "openai-rs-client::conversations::tests::update_conversation_has_exact_json_wire_contract",
+          "openai-rs-client::conversations::tests::delete_conversation_has_exact_bodyless_wire_contract",
+          "openai-rs-client::conversations::tests::delete_conversation_item_has_exact_bodyless_wire_contract",
+          "openai-rs-client::conversations::tests::list_conversation_items_has_exact_bodyless_wire_contract",
+          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor"
         ],
         "registry_group": "conversations-shared-path-coverage"
       },
@@ -2748,7 +2783,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-conversations-client",
         "units": [
           "UpdateConversation",
@@ -2758,10 +2793,11 @@
           "ConversationItemPageStream"
         ],
         "tests": [
-          "openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible",
-          "openai-rs-client::conversations::tests::operation_metadata_matches_the_pinned_contract",
-          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor",
-          "pending: add independent path assertions for each listed operation"
+          "openai-rs-client::conversations::tests::update_conversation_has_exact_json_wire_contract",
+          "openai-rs-client::conversations::tests::delete_conversation_has_exact_bodyless_wire_contract",
+          "openai-rs-client::conversations::tests::delete_conversation_item_has_exact_bodyless_wire_contract",
+          "openai-rs-client::conversations::tests::list_conversation_items_has_exact_bodyless_wire_contract",
+          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor"
         ],
         "registry_group": "conversations-shared-path-coverage"
       },
@@ -2962,7 +2998,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-conversations-client",
         "units": [
           "UpdateConversation",
@@ -2972,10 +3008,11 @@
           "ConversationItemPageStream"
         ],
         "tests": [
-          "openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible",
-          "openai-rs-client::conversations::tests::operation_metadata_matches_the_pinned_contract",
-          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor",
-          "pending: add independent path assertions for each listed operation"
+          "openai-rs-client::conversations::tests::update_conversation_has_exact_json_wire_contract",
+          "openai-rs-client::conversations::tests::delete_conversation_has_exact_bodyless_wire_contract",
+          "openai-rs-client::conversations::tests::delete_conversation_item_has_exact_bodyless_wire_contract",
+          "openai-rs-client::conversations::tests::list_conversation_items_has_exact_bodyless_wire_contract",
+          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor"
         ],
         "registry_group": "conversations-shared-path-coverage"
       },
@@ -3091,7 +3128,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
@@ -3108,11 +3145,19 @@
           "EvalRunPoller"
         ],
         "tests": [
-          "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
+          "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::update_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_runs_loopback_wire_contract",
+          "openai-rs-client::evals::tests::create_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::delete_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::cancel_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_items_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_item_loopback_wire_contract",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
-          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "pending: add independent path/body assertions for each listed operation"
+          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
         "registry_group": "evals-shared-or-manifest-only"
       },
@@ -3200,7 +3245,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
@@ -3217,11 +3262,19 @@
           "EvalRunPoller"
         ],
         "tests": [
-          "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
+          "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::update_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_runs_loopback_wire_contract",
+          "openai-rs-client::evals::tests::create_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::delete_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::cancel_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_items_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_item_loopback_wire_contract",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
-          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "pending: add independent path/body assertions for each listed operation"
+          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
         "registry_group": "evals-shared-or-manifest-only"
       },
@@ -3270,7 +3323,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
@@ -3287,11 +3340,19 @@
           "EvalRunPoller"
         ],
         "tests": [
-          "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
+          "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::update_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_runs_loopback_wire_contract",
+          "openai-rs-client::evals::tests::create_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::delete_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::cancel_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_items_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_item_loopback_wire_contract",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
-          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "pending: add independent path/body assertions for each listed operation"
+          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
         "registry_group": "evals-shared-or-manifest-only"
       },
@@ -3420,7 +3481,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
@@ -3437,11 +3498,19 @@
           "EvalRunPoller"
         ],
         "tests": [
-          "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
+          "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::update_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_runs_loopback_wire_contract",
+          "openai-rs-client::evals::tests::create_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::delete_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::cancel_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_items_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_item_loopback_wire_contract",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
-          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "pending: add independent path/body assertions for each listed operation"
+          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
         "registry_group": "evals-shared-or-manifest-only"
       },
@@ -3490,7 +3559,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
@@ -3507,11 +3576,19 @@
           "EvalRunPoller"
         ],
         "tests": [
-          "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
+          "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::update_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_runs_loopback_wire_contract",
+          "openai-rs-client::evals::tests::create_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::delete_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::cancel_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_items_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_item_loopback_wire_contract",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
-          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "pending: add independent path/body assertions for each listed operation"
+          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
         "registry_group": "evals-shared-or-manifest-only"
       },
@@ -3562,7 +3639,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
@@ -3579,11 +3656,19 @@
           "EvalRunPoller"
         ],
         "tests": [
-          "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
+          "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::update_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_runs_loopback_wire_contract",
+          "openai-rs-client::evals::tests::create_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::delete_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::cancel_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_items_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_item_loopback_wire_contract",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
-          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "pending: add independent path/body assertions for each listed operation"
+          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
         "registry_group": "evals-shared-or-manifest-only"
       },
@@ -3634,7 +3719,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
@@ -3651,11 +3736,19 @@
           "EvalRunPoller"
         ],
         "tests": [
-          "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
+          "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::update_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_runs_loopback_wire_contract",
+          "openai-rs-client::evals::tests::create_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::delete_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::cancel_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_items_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_item_loopback_wire_contract",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
-          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "pending: add independent path/body assertions for each listed operation"
+          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
         "registry_group": "evals-shared-or-manifest-only"
       },
@@ -3704,7 +3797,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
@@ -3721,11 +3814,19 @@
           "EvalRunPoller"
         ],
         "tests": [
-          "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
+          "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::update_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_runs_loopback_wire_contract",
+          "openai-rs-client::evals::tests::create_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::delete_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::cancel_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_items_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_item_loopback_wire_contract",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
-          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "pending: add independent path/body assertions for each listed operation"
+          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
         "registry_group": "evals-shared-or-manifest-only"
       },
@@ -3816,7 +3917,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
@@ -3833,11 +3934,19 @@
           "EvalRunPoller"
         ],
         "tests": [
-          "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
+          "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::update_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_runs_loopback_wire_contract",
+          "openai-rs-client::evals::tests::create_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::delete_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::cancel_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_items_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_item_loopback_wire_contract",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
-          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "pending: add independent path/body assertions for each listed operation"
+          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
         "registry_group": "evals-shared-or-manifest-only"
       },
@@ -3898,7 +4007,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
@@ -3915,11 +4024,19 @@
           "EvalRunPoller"
         ],
         "tests": [
-          "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
+          "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::update_eval_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_runs_loopback_wire_contract",
+          "openai-rs-client::evals::tests::create_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::delete_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::cancel_eval_run_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_items_loopback_wire_contract",
+          "openai-rs-client::evals::tests::get_eval_run_output_item_loopback_wire_contract",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
-          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "pending: add independent path/body assertions for each listed operation"
+          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
         "registry_group": "evals-shared-or-manifest-only"
       },
@@ -4085,14 +4202,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M5-files-client",
         "units": [
           "RetrieveFile"
         ],
         "tests": [
           "openai-rs-types::files::tests::file_object_preserves_unknown_enums_and_extra_fields",
-          "pending: direct retrieveFile client route test"
+          "openai-rs-client::files::tests::retrieve_file_has_exact_bodyless_wire_contract"
         ]
       },
       "manual_overrides": []
@@ -4132,14 +4249,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M5-files-client",
         "units": [
           "DeleteFile"
         ],
         "tests": [
           "openai-rs-types::files::tests::list_page_and_delete_response_keep_future_fields",
-          "pending: direct deleteFile client route test"
+          "openai-rs-client::files::tests::delete_file_has_exact_bodyless_wire_contract"
         ]
       },
       "manual_overrides": []
@@ -4673,16 +4790,15 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-fine-tuning-client",
         "units": [
           "RetrieveFineTuningJob",
           "FineTuningJobPoller"
         ],
         "tests": [
-          "openai-rs-client::fine_tuning::tests::operation_manifest_matches_pinned_routes_and_excludes_admin_and_alpha",
-          "openai-rs-client::fine_tuning::tests::polling_is_bounded_cancellable_and_stops_on_terminal_status",
-          "pending: assert the retrieve path independently"
+          "openai-rs-client::fine_tuning::tests::retrieve_job_uses_exact_encoded_path_and_no_body",
+          "openai-rs-client::fine_tuning::tests::polling_is_bounded_cancellable_and_stops_on_terminal_status"
         ],
         "registry_group": "fine-tuning-retrieve"
       },
@@ -5186,10 +5302,16 @@
       "lifecycle": "quarantined",
       "feature": "quarantine",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "quarantined",
+        "milestone": "M10-quarantine-policy",
+        "units": [
+          "QuarantinedImageVariation"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "image-variation-quarantine"
       },
       "manual_overrides": []
     },
@@ -5217,14 +5339,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M1-core-resources",
         "units": [
           "ListModels"
         ],
         "tests": [
-          "openai-rs-client::core_resources::tests::safe_operation_retries_before_delivering_a_response",
-          "pending: capture and assert listModels route"
+          "openai-rs-client::core_resources::tests::models_list_has_exact_bodyless_wire_contract",
+          "openai-rs-client::core_resources::tests::safe_operation_retries_before_delivering_a_response"
         ]
       },
       "manual_overrides": []
@@ -5310,13 +5432,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M1-core-resources",
         "units": [
           "DeleteModel"
         ],
         "tests": [
-          "pending: direct deleteModel loopback contract test"
+          "openai-rs-client::core_resources::tests::models_delete_has_exact_bodyless_wire_contract"
         ]
       },
       "manual_overrides": []
@@ -14046,15 +14168,15 @@
       "lifecycle": "active",
       "feature": "realtime",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M8-realtime-client",
         "units": [
           "RejectCall",
           "RejectCallDefault"
         ],
         "tests": [
-          "openai-rs-client::realtime::tests::sip_actions_use_typed_routes_and_never_need_response_json",
-          "pending: cover the typed reject body branch"
+          "openai-rs-client::realtime::tests::reject_call_covers_typed_and_default_wire_modes",
+          "openai-rs-client::realtime::tests::sip_actions_use_typed_routes_and_never_need_response_json"
         ],
         "registry_group": "realtime-reject-body-coverage"
       },
@@ -14292,16 +14414,16 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M1-responses-client",
         "units": [
           "CreateResponse",
           "CreateStreamingResponse"
         ],
         "tests": [
+          "openai-rs-client::responses::tests::create_response_uses_post_responses_and_typed_json_body",
           "openai-rs-client::responses::tests::create_stream_decodes_events_and_stops_at_done",
-          "openai-rs-client::responses::tests::create_stream_surfaces_in_band_error_once",
-          "pending: direct non-streaming createResponse wire test"
+          "openai-rs-client::responses::tests::create_stream_surfaces_in_band_error_once"
         ]
       },
       "manual_overrides": []
@@ -14338,13 +14460,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M1-responses-client",
         "units": [
           "CompactResponse"
         ],
         "tests": [
-          "pending: direct Compactconversation loopback contract test"
+          "openai-rs-client::responses::tests::compact_conversation_uses_fixed_post_and_typed_body"
         ]
       },
       "manual_overrides": []
@@ -14603,15 +14725,15 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M1-responses-client",
         "units": [
           "RetrieveResponse",
           "RetrieveResponseStream"
         ],
         "tests": [
-          "openai-rs-client::responses::tests::retrieve_stream_encodes_resume_query_and_repeated_include",
-          "pending: direct non-streaming getResponse wire test"
+          "openai-rs-client::responses::tests::get_response_uses_encoded_id_without_query_or_body",
+          "openai-rs-client::responses::tests::retrieve_stream_encodes_resume_query_and_repeated_include"
         ]
       },
       "manual_overrides": []
@@ -14693,13 +14815,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M1-responses-client",
         "units": [
           "CancelResponse"
         ],
         "tests": [
-          "pending: direct cancelResponse loopback contract test"
+          "openai-rs-client::responses::tests::cancel_response_uses_post_cancel_with_no_body"
         ]
       },
       "manual_overrides": []
@@ -14850,14 +14972,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M1-responses-client",
         "units": [
           "ListInputItems"
         ],
         "tests": [
-          "openai-rs-client::responses::tests::input_items_encodes_cursor_query_without_following_a_url",
-          "pending: assert listInputItems path independently"
+          "openai-rs-client::responses::tests::list_input_items_uses_fixed_path_and_typed_cursor_query",
+          "openai-rs-client::responses::tests::input_items_encodes_cursor_query_without_following_a_url"
         ]
       },
       "manual_overrides": []
@@ -15275,7 +15397,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-skills-client",
         "units": [
           "ListSkills",
@@ -15287,10 +15409,13 @@
           "SkillPageStream"
         ],
         "tests": [
-          "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes",
-          "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query",
-          "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract",
-          "pending: add independent request path/query assertions for each listed operation"
+          "openai-rs-client::skills::tests::list_skills_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::update_skill_default_version_has_exact_json_wire_contract",
+          "openai-rs-client::skills::tests::delete_skill_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::create_skill_version_has_exact_multipart_wire_contract",
+          "openai-rs-client::skills::tests::list_skill_versions_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::delete_skill_version_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query"
         ],
         "registry_group": "skills-shared-path-coverage"
       },
@@ -15451,7 +15576,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-skills-client",
         "units": [
           "ListSkills",
@@ -15463,10 +15588,13 @@
           "SkillPageStream"
         ],
         "tests": [
-          "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes",
-          "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query",
-          "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract",
-          "pending: add independent request path/query assertions for each listed operation"
+          "openai-rs-client::skills::tests::list_skills_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::update_skill_default_version_has_exact_json_wire_contract",
+          "openai-rs-client::skills::tests::delete_skill_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::create_skill_version_has_exact_multipart_wire_contract",
+          "openai-rs-client::skills::tests::list_skill_versions_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::delete_skill_version_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query"
         ],
         "registry_group": "skills-shared-path-coverage"
       },
@@ -15507,7 +15635,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-skills-client",
         "units": [
           "ListSkills",
@@ -15519,10 +15647,13 @@
           "SkillPageStream"
         ],
         "tests": [
-          "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes",
-          "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query",
-          "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract",
-          "pending: add independent request path/query assertions for each listed operation"
+          "openai-rs-client::skills::tests::list_skills_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::update_skill_default_version_has_exact_json_wire_contract",
+          "openai-rs-client::skills::tests::delete_skill_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::create_skill_version_has_exact_multipart_wire_contract",
+          "openai-rs-client::skills::tests::list_skill_versions_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::delete_skill_version_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query"
         ],
         "registry_group": "skills-shared-path-coverage"
       },
@@ -15651,7 +15782,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-skills-client",
         "units": [
           "ListSkills",
@@ -15663,10 +15794,13 @@
           "SkillPageStream"
         ],
         "tests": [
-          "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes",
-          "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query",
-          "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract",
-          "pending: add independent request path/query assertions for each listed operation"
+          "openai-rs-client::skills::tests::list_skills_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::update_skill_default_version_has_exact_json_wire_contract",
+          "openai-rs-client::skills::tests::delete_skill_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::create_skill_version_has_exact_multipart_wire_contract",
+          "openai-rs-client::skills::tests::list_skill_versions_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::delete_skill_version_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query"
         ],
         "registry_group": "skills-shared-path-coverage"
       },
@@ -15716,7 +15850,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-skills-client",
         "units": [
           "ListSkills",
@@ -15728,10 +15862,13 @@
           "SkillPageStream"
         ],
         "tests": [
-          "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes",
-          "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query",
-          "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract",
-          "pending: add independent request path/query assertions for each listed operation"
+          "openai-rs-client::skills::tests::list_skills_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::update_skill_default_version_has_exact_json_wire_contract",
+          "openai-rs-client::skills::tests::delete_skill_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::create_skill_version_has_exact_multipart_wire_contract",
+          "openai-rs-client::skills::tests::list_skill_versions_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::delete_skill_version_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query"
         ],
         "registry_group": "skills-shared-path-coverage"
       },
@@ -15849,7 +15986,7 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M7-skills-client",
         "units": [
           "ListSkills",
@@ -15861,10 +15998,13 @@
           "SkillPageStream"
         ],
         "tests": [
-          "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes",
-          "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query",
-          "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract",
-          "pending: add independent request path/query assertions for each listed operation"
+          "openai-rs-client::skills::tests::list_skills_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::update_skill_default_version_has_exact_json_wire_contract",
+          "openai-rs-client::skills::tests::delete_skill_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::create_skill_version_has_exact_multipart_wire_contract",
+          "openai-rs-client::skills::tests::list_skill_versions_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::delete_skill_version_has_exact_bodyless_wire_contract",
+          "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query"
         ],
         "registry_group": "skills-shared-path-coverage"
       },
@@ -15968,10 +16108,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::createThread"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16007,10 +16153,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::createThreadAndRun"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16049,10 +16201,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::getThread"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16099,10 +16257,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::modifyThread"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16141,10 +16305,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::deleteThread"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16233,10 +16403,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::listMessages"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16283,10 +16459,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::createMessage"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16335,10 +16517,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::getMessage"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16395,10 +16583,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::modifyMessage"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16447,10 +16641,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::deleteMessage"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16529,10 +16729,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::listRuns"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16589,10 +16795,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::createRun"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16641,10 +16853,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::getRun"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16701,10 +16919,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::modifyRun"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16753,10 +16977,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::cancelRun"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16855,10 +17085,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::listRunSteps"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16927,10 +17163,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::getRunStep"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -16987,10 +17229,16 @@
       "lifecycle": "sunset",
       "feature": "legacy-assistants",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedLegacyAssistants::submitToolOuputsToRun"
+        ],
+        "tests": [
+          "xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces",
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "legacy-assistants-omitted"
       },
       "manual_overrides": []
     },
@@ -17075,14 +17323,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M5-files-client",
         "units": [
           "CancelUpload"
         ],
         "tests": [
           "openai-rs-types::files::tests::upload_and_part_preserve_unknown_values_and_fields",
-          "pending: direct cancelUpload client route test"
+          "openai-rs-client::files::tests::cancel_upload_has_exact_bodyless_wire_contract"
         ]
       },
       "manual_overrides": []
@@ -17405,14 +17653,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M6-vector-stores-client",
         "units": [
           "ModifyVectorStore"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::operation_manifest_covers_every_pinned_vector_store_route",
-          "pending: assert the update path independently"
+          "openai-rs-client::vector_stores::tests::store_crud_list_and_search_match_pinned_routes"
         ]
       },
       "manual_overrides": []
@@ -17452,14 +17699,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M6-vector-stores-client",
         "units": [
           "DeleteVectorStore"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::operation_manifest_covers_every_pinned_vector_store_route",
-          "pending: assert the delete path independently"
+          "openai-rs-client::vector_stores::tests::store_crud_list_and_search_match_pinned_routes"
         ]
       },
       "manual_overrides": []
@@ -17821,14 +18067,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M6-vector-stores-client",
         "units": [
           "ListVectorStoreFiles"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies",
-          "pending: assert the collection path independently"
+          "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"
         ]
       },
       "manual_overrides": []
@@ -17996,14 +18241,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M6-vector-stores-client",
         "units": [
           "UpdateVectorStoreFileAttributes"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies",
-          "pending: assert the attribute update path independently"
+          "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"
         ]
       },
       "manual_overrides": []
@@ -18053,14 +18297,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
+        "status": "verified",
         "milestone": "M6-vector-stores-client",
         "units": [
           "DeleteVectorStoreFile"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies",
-          "pending: assert the attached-file delete path independently"
+          "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"
         ]
       },
       "manual_overrides": []
@@ -18232,10 +18475,15 @@
       "lifecycle": "deprecated",
       "feature": "legacy-video",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedDeprecatedVideo::ListVideos"
+        ],
+        "tests": [
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "deprecated-videos-omitted"
       },
       "manual_overrides": []
     },
@@ -18273,10 +18521,15 @@
       "lifecycle": "deprecated",
       "feature": "legacy-video",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedDeprecatedVideo::createVideo"
+        ],
+        "tests": [
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "deprecated-videos-omitted"
       },
       "manual_overrides": []
     },
@@ -18312,10 +18565,15 @@
       "lifecycle": "deprecated",
       "feature": "legacy-video",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedDeprecatedVideo::CreateVideoCharacter"
+        ],
+        "tests": [
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "deprecated-videos-omitted"
       },
       "manual_overrides": []
     },
@@ -18354,10 +18612,15 @@
       "lifecycle": "deprecated",
       "feature": "legacy-video",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedDeprecatedVideo::GetVideoCharacter"
+        ],
+        "tests": [
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "deprecated-videos-omitted"
       },
       "manual_overrides": []
     },
@@ -18395,10 +18658,15 @@
       "lifecycle": "deprecated",
       "feature": "legacy-video",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedDeprecatedVideo::CreateVideoEdit"
+        ],
+        "tests": [
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "deprecated-videos-omitted"
       },
       "manual_overrides": []
     },
@@ -18436,10 +18704,15 @@
       "lifecycle": "deprecated",
       "feature": "legacy-video",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedDeprecatedVideo::CreateVideoExtend"
+        ],
+        "tests": [
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "deprecated-videos-omitted"
       },
       "manual_overrides": []
     },
@@ -18478,10 +18751,15 @@
       "lifecycle": "deprecated",
       "feature": "legacy-video",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedDeprecatedVideo::GetVideo"
+        ],
+        "tests": [
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "deprecated-videos-omitted"
       },
       "manual_overrides": []
     },
@@ -18520,10 +18798,15 @@
       "lifecycle": "deprecated",
       "feature": "legacy-video",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedDeprecatedVideo::DeleteVideo"
+        ],
+        "tests": [
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "deprecated-videos-omitted"
       },
       "manual_overrides": []
     },
@@ -18574,10 +18857,15 @@
       "lifecycle": "deprecated",
       "feature": "legacy-video",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedDeprecatedVideo::RetrieveVideoContent"
+        ],
+        "tests": [
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "deprecated-videos-omitted"
       },
       "manual_overrides": []
     },
@@ -18625,10 +18913,15 @@
       "lifecycle": "deprecated",
       "feature": "legacy-video",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "omitted",
+        "milestone": "M10-sunset-policy",
+        "units": [
+          "OmittedDeprecatedVideo::CreateVideoRemix"
+        ],
+        "tests": [
+          "spec/contracts/decisions.md::D0013"
+        ],
+        "registry_group": "deprecated-videos-omitted"
       },
       "manual_overrides": []
     }

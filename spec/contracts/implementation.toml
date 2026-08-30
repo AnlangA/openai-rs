@@ -265,10 +265,10 @@ tests = ["openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_
 [[groups]]
 name = "evals-shared-or-manifest-only"
 operation_ids = ["listEvals", "getEval", "updateEval", "getEvalRuns", "createEvalRun", "getEvalRun", "deleteEvalRun", "cancelEvalRun", "getEvalRunOutputItems", "getEvalRunOutputItem"]
-status = "partial"
+status = "verified"
 milestone = "M7-evals-client"
 units = ["ListEvals", "RetrieveEval", "UpdateEval", "ListEvalRuns", "CreateEvalRun", "RetrieveEvalRun", "DeleteEvalRun", "CancelEvalRun", "ListEvalRunOutputItems", "RetrieveEvalRunOutputItem", "EvalPageStream", "EvalRunPoller"]
-tests = ["openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints", "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query", "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status", "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error", "pending: add independent path/body assertions for each listed operation"]
+tests = ["openai-rs-client::evals::tests::list_evals_loopback_wire_contract", "openai-rs-client::evals::tests::get_eval_loopback_wire_contract", "openai-rs-client::evals::tests::update_eval_loopback_wire_contract", "openai-rs-client::evals::tests::get_eval_runs_loopback_wire_contract", "openai-rs-client::evals::tests::create_eval_run_loopback_wire_contract", "openai-rs-client::evals::tests::get_eval_run_loopback_wire_contract", "openai-rs-client::evals::tests::delete_eval_run_loopback_wire_contract", "openai-rs-client::evals::tests::cancel_eval_run_loopback_wire_contract", "openai-rs-client::evals::tests::get_eval_run_output_items_loopback_wire_contract", "openai-rs-client::evals::tests::get_eval_run_output_item_loopback_wire_contract", "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query", "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status", "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"]
 
 [[groups]]
 name = "conversations-items"
@@ -281,10 +281,10 @@ tests = ["openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed
 [[groups]]
 name = "conversations-shared-path-coverage"
 operation_ids = ["deleteConversation", "deleteConversationItem", "listConversationItems", "updateConversation"]
-status = "partial"
+status = "verified"
 milestone = "M7-conversations-client"
 units = ["UpdateConversation", "DeleteConversation", "DeleteConversationItem", "ListConversationItems", "ConversationItemPageStream"]
-tests = ["openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible", "openai-rs-client::conversations::tests::operation_metadata_matches_the_pinned_contract", "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor", "pending: add independent path assertions for each listed operation"]
+tests = ["openai-rs-client::conversations::tests::update_conversation_has_exact_json_wire_contract", "openai-rs-client::conversations::tests::delete_conversation_has_exact_bodyless_wire_contract", "openai-rs-client::conversations::tests::delete_conversation_item_has_exact_bodyless_wire_contract", "openai-rs-client::conversations::tests::list_conversation_items_has_exact_bodyless_wire_contract", "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor"]
 
 [[groups]]
 name = "containers-files"
@@ -405,6 +405,30 @@ status = "verified"
 milestone = "M9-admin-client"
 units = ["AdminOperation::{operation_id}", "AdminRequest<O>", "ADMIN_OPERATION_MANIFEST[119]"]
 tests = ["openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker", "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth", "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted", "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects", "openai-rs-client::admin::tests::unexpected_legacy_204_delete_is_not_accepted_as_verified_success"]
+
+[[groups]]
+name = "legacy-assistants-omitted"
+operation_ids = ["listAssistants", "createAssistant", "getAssistant", "modifyAssistant", "deleteAssistant", "createThread", "createThreadAndRun", "getThread", "modifyThread", "deleteThread", "listMessages", "createMessage", "getMessage", "modifyMessage", "deleteMessage", "listRuns", "createRun", "getRun", "modifyRun", "cancelRun", "listRunSteps", "getRunStep", "submitToolOuputsToRun"]
+status = "omitted"
+milestone = "M10-sunset-policy"
+units = ["OmittedLegacyAssistants::{operation_id}"]
+tests = ["xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces", "spec/contracts/decisions.md::D0013"]
+
+[[groups]]
+name = "deprecated-videos-omitted"
+operation_ids = ["ListVideos", "createVideo", "CreateVideoCharacter", "GetVideoCharacter", "CreateVideoEdit", "CreateVideoExtend", "GetVideo", "DeleteVideo", "RetrieveVideoContent", "CreateVideoRemix"]
+status = "omitted"
+milestone = "M10-sunset-policy"
+units = ["OmittedDeprecatedVideo::{operation_id}"]
+tests = ["spec/contracts/decisions.md::D0013"]
+
+[[groups]]
+name = "image-variation-quarantine"
+operation_ids = ["createImageVariation"]
+status = "quarantined"
+milestone = "M10-quarantine-policy"
+units = ["QuarantinedImageVariation"]
+tests = ["xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces", "spec/contracts/decisions.md::D0013"]
 
 # Non-REST capabilities are intentionally separate from OpenAPI path operations.
 

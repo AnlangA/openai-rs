@@ -581,9 +581,9 @@ fn parse_implementation_fields(
     let milestone = take_registry_string(entry, "milestone", path)?;
     let units = take_registry_array(entry, "units", path)?;
     let tests = take_registry_array(entry, "tests", path)?;
-    if !matches!(status.as_str(), "planned" | "partial" | "verified") {
+    if !is_valid_implementation_status(&status) {
         return Err(Error::message(format!(
-            "implementation status for {label} must be planned, partial, or verified"
+            "implementation status for {label} must be planned, partial, implemented, verified, historical, quarantined, or omitted"
         )));
     }
     if milestone.is_empty() || units.is_empty() || tests.is_empty() {
@@ -604,6 +604,19 @@ fn parse_implementation_fields(
         tests,
         registry_group,
     })
+}
+
+fn is_valid_implementation_status(status: &str) -> bool {
+    matches!(
+        status,
+        "planned"
+            | "partial"
+            | "implemented"
+            | "verified"
+            | "historical"
+            | "quarantined"
+            | "omitted"
+    )
 }
 
 fn insert_operation(
@@ -1452,8 +1465,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        initial_feature, initial_lifecycle, is_success_status, nullability_encodings,
-        response_mode, schema_kind,
+        initial_feature, initial_lifecycle, is_success_status, is_valid_implementation_status,
+        nullability_encodings, response_mode, schema_kind,
     };
 
     #[test]
@@ -1513,5 +1526,22 @@ mod tests {
             assert_eq!(initial_feature(path, false, lifecycle), feature);
         }
         Ok(())
+    }
+
+    #[test]
+    fn accepts_every_documented_implementation_status_and_rejects_unknown_values() {
+        for status in [
+            "planned",
+            "partial",
+            "implemented",
+            "verified",
+            "historical",
+            "quarantined",
+            "omitted",
+        ] {
+            assert!(is_valid_implementation_status(status), "rejected {status}");
+        }
+        assert!(!is_valid_implementation_status("complete"));
+        assert!(!is_valid_implementation_status("deprecated"));
     }
 }

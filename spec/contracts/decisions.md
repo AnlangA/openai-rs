@@ -183,3 +183,28 @@ until a decision is recorded here and its fixtures pass.
 - Overrides: none.
 - Tests: 46-branch server-event manifest test plus known-malformed session-event
   fixture.
+
+## D0013 — Sunset, deprecated, and conflicting operations are not callable
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: Assistants/Threads/Runs, Videos, and `createImageVariation`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Assistants migration
+  guidance and deprecated Assistants/Videos reference pages reviewed on the
+  stated date; the conflicting DALL-E 2 removal guidance and image-variation
+  reference page.
+- Decision: record all 33 Assistants/Threads/Runs and Videos operations as
+  `omitted`, and record `createImageVariation` as `quarantined`. Preserve them
+  in the generated inventory, but do not generate public request types, client
+  methods, or a Cargo feature that makes them callable.
+- Reason: the Assistants family has reached its announced sunset, Videos has a
+  dated shutdown path, and the image-variation sources conflict. A complete
+  inventory must not be confused with an unsafe promise that every historical
+  path remains callable.
+- Impact: operation disposition and coverage accounting only; the supported
+  typed client surface remains unchanged.
+- Overrides: none.
+- Tests: lifecycle/feature classification unit test, implementation-status
+  parser unit test, generated operation inventory zero-diff check, and absence
+  from all facade feature bundles.
