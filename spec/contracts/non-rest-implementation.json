@@ -4,12 +4,28 @@
     "revision": "690521b1753dce0c6d6b275f583d22537679cff9",
     "sha256": "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899"
   },
-  "count": 6,
+  "count": 7,
   "implementation_statuses": {
-    "verified": 6
+    "verified": 7
   },
-  "verified_units": 22,
+  "verified_units": 27,
   "units": [
+    {
+      "id": "beta-responses-websocket",
+      "status": "verified",
+      "milestone": "M8-beta-responses",
+      "units": [
+        "BetaResponsesWebSocket",
+        "BetaResponsesWebSocketConfig",
+        "response.create_on_stream",
+        "response.inject",
+        "typed beta server-event codec"
+      ],
+      "tests": [
+        "openai-rs-client::beta_responses::tests::beta_websocket_uses_pinned_path_without_query_and_supports_inject",
+        "openai-rs-client::beta_responses::tests::websocket_url_matches_pinned_node_oracle_without_beta_query"
+      ]
+    },
     {
       "id": "codex-app-server",
       "status": "verified",

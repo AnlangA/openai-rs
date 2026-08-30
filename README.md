@@ -11,15 +11,16 @@ Responses API.
 
 ## Current status
 
-The workspace, crate boundaries, feature flags, MSRV policy, and initial
-contract-test infrastructure are present. The pre-release MVP includes typed
-Responses create, retrieve, delete, cancel, compact, input-item listing, and
-input-token counting operations; a public SSE path with the 58-event stable
-union; Chat Completions create/SSE and stored-completion methods; Files,
-Uploads, Batches, Vector Stores, Models, Embeddings, and Moderations resource
-methods; and the complete pinned GA Realtime 11-client/46-server event type
-layer. A dedicated Realtime connection client and many other resource families
-remain in progress, scaffolded, or planned.
+The workspace, crate boundaries, feature flags, MSRV policy, and contract-test
+infrastructure are present. The pre-release implementation includes typed
+Responses REST, SSE, and persistent WebSocket paths; Chat Completions; Files,
+Uploads, Batches, Vector Stores, Models, Embeddings, Moderations, media,
+Fine-tuning, Evals, Conversations, Containers, Skills, and Content Provenance
+resources; and the pinned GA Realtime transport, including its 11-client/
+46-server event unions, WebSocket connection, WebRTC signaling, client-secret
+operations, and SIP call control. Administration, workload identity, and X.509
+are implemented behind separate default-off trust boundaries. The repository
+still does not claim complete OpenAPI coverage or a stable public API.
 
 | Area | Status |
 |---|---|
@@ -30,12 +31,16 @@ remain in progress, scaffolded, or planned.
 | Chat Completions | Typed create/SSE, stored resources, messages, and pagination implemented |
 | Files and Uploads | Typed replayable/one-shot multipart, download, and upload lifecycle implemented |
 | Batches and Vector Stores | Typed resource methods, pagination/polling, and workflow helpers implemented |
-| Realtime GA | 11 client events, 46 server events, session/call/SIP DTOs implemented; connection client pending |
+| Media, Fine-tuning, and Evals | Typed audio/image, fine-tuning job, and eval/run methods implemented |
+| Conversations, Containers, Skills, Content Provenance | Typed resource, pagination, multipart/content-stream, and provenance-check methods implemented |
+| Realtime GA | 11 client events, 46 server events, WebSocket transport, client secrets, WebRTC SDP, and SIP call control implemented |
+| Administration | Separate `AdminClient`/`AdminApiKey`; 119 sealed operations plus 3 fine-tuning checkpoint-permission operations implemented |
+| Workload identity and X.509 | RFC 8693-backed `Client` auth and an isolated mTLS `X509Client` implemented |
 | Full OpenAPI resource coverage | Not implemented |
-| Administration and later resource families | Feature boundaries reserved; not complete |
-| RMCP bridge | Typed local bridge MVP implemented; transport/server integration remains pre-release |
-| Codex app-server integration | Experimental; only one exact Codex 0.144.5 macOS arm64 artifact is audited |
-| Direct Codex Responses transport | Private experimental host-locked create/SSE and hardened auth; off by default |
+| Default-off gated/compatibility APIs | Custom Voice, alpha Graders, beta ChatKit, beta multi-agent Responses, legacy Completions, and legacy Realtime are implemented only behind explicit features |
+| RMCP bridge | Typed local Responses-function bridge implemented; transport, server, and auth feature flags pass through to the pinned `rmcp` dependency |
+| Codex app-server integration | Experimental JSONL client implemented for one exact audited Codex 0.144.5 macOS arm64 artifact |
+| Direct Codex Responses transport | Private experimental host-locked create/SSE and hardened browser/device auth implemented; off by default |
 
 See [feature status](docs/feature-status.md) for the exact Cargo feature matrix
 and [architecture boundaries](docs/architecture.md) for credential and protocol
@@ -73,16 +78,24 @@ Default features are `client`, `rustls-tls`, and `structured-output`.
 | Feature group | Features | Boundary |
 |---|---|---|
 | Platform transport | `client`, `rustls-tls`, `native-tls` | Standard OpenAI Platform API client |
-| Typed helpers | `structured-output`, `realtime`, `webhook-verification`, `admin`, `workload-identity`, `x509` | Realtime types and webhook verification exist; several later identity/admin surfaces remain planned |
-| RMCP | `rmcp`, `rmcp-stdio`, `rmcp-http-rustls`, `rmcp-http-native-tls`, `rmcp-server`, `rmcp-server-stdio`, `rmcp-auth` | Optional; no implicit tool exposure |
+| Typed helpers | `structured-output`, `realtime`, `webhook-verification` | Structured output, GA Realtime transports, Responses WebSocket, and webhook verification |
+| Privileged identity boundaries | `admin`, `workload-identity`, `x509` | Implemented and default-off; Administration and X.509 use dedicated client/credential boundaries |
+| Gated and compatibility APIs | `custom-voice`, `alpha-graders`, `beta-chatkit`, `beta-responses-multi-agent`, `legacy-completions`, `legacy-realtime` | Implemented, default-off, and explicitly access-controlled, alpha, beta, or legacy |
+| RMCP | `rmcp`, `rmcp-stdio`, `rmcp-http-rustls`, `rmcp-http-native-tls`, `rmcp-server`, `rmcp-server-stdio`, `rmcp-auth` | Local bridge implemented; transport/server/auth selections are upstream `rmcp` feature pass-throughs; no implicit tool exposure |
 | Codex app-server | `codex-app-server`, `codex-access-token` | Experimental and isolated from Platform credentials |
 | Direct Codex | `experimental-codex-direct`, `experimental-codex-direct-device`, `experimental-codex-direct-keyring` | Unstable private-backend compatibility; off by default; app-server is preferred |
-| Legacy compatibility | `legacy-completions` | Default-off support for only `POST /completions`; new applications should use Responses |
-| Convenience bundle | `full` | Non-Codex client bundle; it is not every feature and does not imply complete endpoint coverage |
+| Convenience bundle | `full` | Exactly `client`, rustls TLS, structured output, Realtime, webhook verification, the RMCP client bridge, and RMCP HTTP/rustls support |
 
-Enabling a feature only selects code and dependencies. It does not by itself
-mean that every API operation in that area is implemented. The authoritative
-status is maintained in [docs/feature-status.md](docs/feature-status.md).
+`full` intentionally excludes Custom Voice, every experimental, alpha, beta,
+and legacy surface, Administration, workload identity, X.509, and the other
+RMCP transport/server/auth selections. It is not "all features" and does not
+imply complete endpoint coverage.
+
+Enabling any feature only selects client-side code and dependencies. It never
+grants an account, organization, project, service account, or model any
+server-side permission, entitlement, or preview access. The authoritative
+implementation status is maintained in
+[docs/feature-status.md](docs/feature-status.md).
 
 ## Responses MVP example
 

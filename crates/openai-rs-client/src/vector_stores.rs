@@ -1194,7 +1194,14 @@ mod tests {
         assert!(query.contains(&("after".into(), "vs cursor".into())));
         assert_eq!(captures[2].path_and_query, "/v1/vector_stores/vs%2Fa%20b");
         assert_eq!(captures[3].method, Method::POST);
+        assert_eq!(captures[3].path_and_query, "/v1/vector_stores/vs%2Fa%20b");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captures[3].body).expect("update body"),
+            json!({"name":"renamed"})
+        );
         assert_eq!(captures[4].method, Method::DELETE);
+        assert_eq!(captures[4].path_and_query, "/v1/vector_stores/vs%2Fa%20b");
+        assert!(captures[4].body.is_empty());
         assert_eq!(
             captures[5].path_and_query,
             "/v1/vector_stores/vs%2Fa%20b/search"
@@ -1279,7 +1286,11 @@ mod tests {
         );
         let list_url = Url::parse(&format!("http://loopback{}", captures[1].path_and_query))
             .expect("file list URL");
+        assert_eq!(captures[1].method, Method::GET);
+        assert_eq!(list_url.path(), "/v1/vector_stores/vs%2Fa%20b/files");
         let query = list_url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("limit".into(), "2".into())));
+        assert!(query.contains(&("order".into(), "desc".into())));
         assert!(query.contains(&("filter".into(), "completed".into())));
         assert!(query.contains(&("after".into(), "file cursor".into())));
         assert_eq!(
@@ -1288,10 +1299,19 @@ mod tests {
         );
         assert_eq!(captures[3].method, Method::POST);
         assert_eq!(
+            captures[3].path_and_query,
+            "/v1/vector_stores/vs%2Fa%20b/files/file%2Fx%20y"
+        );
+        assert_eq!(
             serde_json::from_slice::<Value>(&captures[3].body).expect("attributes body"),
             json!({"attributes":null})
         );
         assert_eq!(captures[4].method, Method::DELETE);
+        assert_eq!(
+            captures[4].path_and_query,
+            "/v1/vector_stores/vs%2Fa%20b/files/file%2Fx%20y"
+        );
+        assert!(captures[4].body.is_empty());
         assert_eq!(
             captures[5].path_and_query,
             "/v1/vector_stores/vs%2Fa%20b/files/file%2Fx%20y/content"

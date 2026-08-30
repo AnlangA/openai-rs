@@ -328,11 +328,11 @@ tests = ["openai-rs-client::content_provenance::tests::create_uses_one_fixed_mul
 
 [[groups]]
 name = "realtime-http-sip"
-operation_ids = ["create-realtime-client-secret", "create-realtime-call", "accept-realtime-call", "hangup-realtime-call", "refer-realtime-call"]
+operation_ids = ["create-realtime-client-secret", "create-realtime-translation-client-secret", "create-realtime-call", "accept-realtime-call", "hangup-realtime-call", "refer-realtime-call"]
 status = "verified"
 milestone = "M8-realtime-client"
-units = ["CreateClientSecret", "CreateCall", "AcceptCall", "HangupCall", "ReferCall"]
-tests = ["openai-rs-client::realtime::tests::client_secret_route_is_typed_and_secret_debug_is_redacted", "openai-rs-client::realtime::tests::create_call_sends_multipart_and_returns_sdp_location", "openai-rs-client::realtime::tests::sip_actions_use_typed_routes_and_never_need_response_json"]
+units = ["CreateClientSecret", "CreateTranslationClientSecret", "CreateCall", "AcceptCall", "HangupCall", "ReferCall"]
+tests = ["openai-rs-client::realtime::tests::client_secret_route_is_typed_and_secret_debug_is_redacted", "openai-rs-client::realtime::tests::translation_client_secret_uses_fixed_typed_route_and_redacts_secret", "openai-rs-client::realtime::tests::create_call_sends_multipart_and_returns_sdp_location", "openai-rs-client::realtime::tests::sip_actions_use_typed_routes_and_never_need_response_json"]
 
 [[groups]]
 name = "realtime-reject-body-coverage"
@@ -343,14 +343,77 @@ units = ["RejectCall", "RejectCallDefault"]
 tests = ["openai-rs-client::realtime::tests::sip_actions_use_typed_routes_and_never_need_response_json", "pending: cover the typed reject body branch"]
 
 [[groups]]
+name = "beta-chatkit"
+operation_ids = ["CreateChatSessionMethod", "CancelChatSessionMethod", "ListThreadsMethod", "GetThreadMethod", "DeleteThreadMethod", "ListThreadItemsMethod"]
+status = "verified"
+milestone = "M8-beta-chatkit"
+units = ["ChatKitSessions::create", "ChatKitSessions::cancel", "ChatKitThreads::retrieve", "ChatKitThreads::delete", "ChatKitThreads::list", "ChatKitThreads::list_items", "ChatKitThreadPageStream", "ChatKitThreadItemPageStream"]
+tests = ["openai-rs-client::chatkit::tests::session_create_and_cancel_send_beta_header_and_fixed_routes", "openai-rs-client::chatkit::tests::thread_retrieve_and_delete_encode_one_path_segment", "openai-rs-client::chatkit::tests::list_threads_encodes_query_and_page_stream_cursor", "openai-rs-client::chatkit::tests::list_thread_items_decodes_union_and_encodes_query", "openai-rs-client::chatkit::tests::operation_manifest_matches_all_six_pinned_routes"]
+
+[[groups]]
+name = "beta-responses-multi-agent"
+operation_ids = ["beta_createResponse", "beta_getResponse", "beta_deleteResponse", "beta_cancelResponse", "beta_Compactconversation", "beta_listInputItems", "beta_Getinputtokencounts"]
+status = "verified"
+milestone = "M8-beta-responses"
+units = ["CreateBetaResponse", "CreateStreamingBetaResponse", "RetrieveBetaResponse", "RetrieveStreamingBetaResponse", "DeleteBetaResponse", "CancelBetaResponse", "CompactBetaResponse", "ListBetaResponseInputItems", "CountBetaResponseInputTokens", "BetaResponseEventStream"]
+tests = ["openai-rs-client::beta_responses::tests::create_uses_beta_query_and_typed_multi_agent_body_without_beta_header", "openai-rs-client::beta_responses::tests::retrieve_delete_cancel_and_compact_use_pinned_routes", "openai-rs-client::beta_responses::tests::input_items_and_input_tokens_use_operation_specific_contracts", "openai-rs-client::beta_responses::tests::beta_sse_decodes_agent_metadata_and_terminal_snapshot"]
+
+[[groups]]
+name = "custom-voice"
+operation_ids = ["listVoiceConsents", "createVoiceConsent", "getVoiceConsent", "updateVoiceConsent", "deleteVoiceConsent", "createVoice"]
+status = "verified"
+milestone = "M8-custom-voice"
+units = ["Voices::create", "VoiceConsents::list", "VoiceConsents::create", "VoiceConsents::retrieve", "VoiceConsents::update", "VoiceConsents::delete", "VoiceConsentPageStream"]
+tests = ["openai-rs-client::voices::tests::operation_manifest_covers_json_routes", "openai-rs-client::voices::tests::all_six_operations_use_fixed_typed_wire_contracts", "openai-rs-client::voices::tests::ineligible_project_error_stays_typed"]
+
+[[groups]]
+name = "alpha-graders"
+operation_ids = ["runGrader", "validateGrader"]
+status = "verified"
+milestone = "M8-alpha-graders"
+units = ["RunAlphaGrader", "ValidateAlphaGrader", "AlphaGraders::run", "AlphaGraders::validate"]
+tests = ["openai-rs-client::alpha_graders::tests::operation_manifest_is_exactly_the_two_pinned_alpha_routes", "openai-rs-client::alpha_graders::tests::run_and_validate_use_fixed_routes_and_typed_bodies", "openai-rs-client::alpha_graders::tests::access_denial_remains_a_typed_bounded_api_error"]
+
+[[groups]]
+name = "legacy-completions"
+operation_ids = ["createCompletion"]
+status = "verified"
+milestone = "M8-legacy-completions"
+units = ["CreateCompletion", "CreateCompletionStream", "CompletionEventStream"]
+tests = ["openai-rs-client::completions::tests::operation_contract_is_one_fixed_legacy_route", "openai-rs-client::completions::tests::non_streaming_create_sends_typed_body", "openai-rs-client::completions::tests::streaming_create_requires_done_and_ignores_later_bytes"]
+
+[[groups]]
+name = "legacy-realtime"
+operation_ids = ["create-realtime-session", "create-realtime-transcription-session"]
+status = "verified"
+milestone = "M8-legacy-realtime"
+units = ["CreateLegacyRealtimeSession", "CreateLegacyRealtimeTranscriptionSession", "LegacyRealtimeSessions"]
+tests = ["openai-rs-client::legacy_realtime::tests::session_creation_uses_fixed_beta_route_and_redacts_secret", "openai-rs-client::legacy_realtime::tests::transcription_creation_uses_fixed_beta_route_and_nullable_secret"]
+
+[[groups]]
+name = "admin-checkpoint-permissions"
+operation_ids = ["listFineTuningCheckpointPermissions", "createFineTuningCheckpointPermission", "deleteFineTuningCheckpointPermission"]
+status = "verified"
+milestone = "M9-admin-client"
+units = ["OpListFineTuningCheckpointPermissions", "OpCreateFineTuningCheckpointPermission", "OpDeleteFineTuningCheckpointPermission", "AdminFineTuningCheckpointPermissions"]
+tests = ["openai-rs-client::admin::tests::checkpoint_permission_manifest_is_exact_and_has_compiling_admin_markers", "openai-rs-client::admin::tests::checkpoint_permissions_loopback_list_create_delete_are_admin_only_and_opaque"]
+
+[[groups]]
 name = "administration-119"
 operation_ids = ["CreateanAPIkeyforaserviceaccount", "Deleteorganizationspendlimit", "Deleteprojectspendlimit", "Getorganizationspendlimit", "Getprojectspendlimit", "Updateorganizationspendlimit", "Updateprojectspendlimit", "activateOrganizationCertificates", "activateProjectCertificates", "add-group-user", "add-project-group", "admin-api-keys-create", "admin-api-keys-delete", "admin-api-keys-get", "admin-api-keys-list", "archive-project", "assign-group-role", "assign-project-group-role", "assign-project-user-role", "assign-user-role", "create-group", "create-organization-spend-alert", "create-project", "create-project-role", "create-project-service-account", "create-project-spend-alert", "create-project-user", "create-role", "deactivateOrganizationCertificates", "deactivateProjectCertificates", "delete-group", "delete-invite", "delete-organization-spend-alert", "delete-project-api-key", "delete-project-model-permissions", "delete-project-role", "delete-project-service-account", "delete-project-spend-alert", "delete-project-user", "delete-role", "delete-user", "deleteCertificate", "getCertificate", "inviteUser", "list-audit-logs", "list-group-role-assignments", "list-group-users", "list-groups", "list-invites", "list-organization-spend-alerts", "list-project-api-keys", "list-project-group-role-assignments", "list-project-groups", "list-project-rate-limits", "list-project-roles", "list-project-service-accounts", "list-project-spend-alerts", "list-project-user-role-assignments", "list-project-users", "list-projects", "list-roles", "list-user-role-assignments", "list-users", "listOrganizationCertificates", "listProjectCertificates", "modify-project", "modify-project-user", "modify-user", "modifyCertificate", "remove-group-user", "remove-project-group", "retrieve-group", "retrieve-group-role", "retrieve-group-user", "retrieve-invite", "retrieve-organization-data-retention", "retrieve-organization-spend-alert", "retrieve-project", "retrieve-project-api-key", "retrieve-project-data-retention", "retrieve-project-group", "retrieve-project-group-role", "retrieve-project-hosted-tool-permissions", "retrieve-project-model-permissions", "retrieve-project-role", "retrieve-project-service-account", "retrieve-project-spend-alert", "retrieve-project-user", "retrieve-project-user-role", "retrieve-role", "retrieve-user", "retrieve-user-role", "unassign-group-role", "unassign-project-group-role", "unassign-project-user-role", "unassign-user-role", "update-group", "update-organization-data-retention", "update-organization-spend-alert", "update-project-data-retention", "update-project-hosted-tool-permissions", "update-project-model-permissions", "update-project-rate-limits", "update-project-role", "update-project-service-account", "update-project-spend-alert", "update-role", "uploadCertificate", "usage-audio-speeches", "usage-audio-transcriptions", "usage-code-interpreter-sessions", "usage-completions", "usage-costs", "usage-embeddings", "usage-file-search-calls", "usage-images", "usage-moderations", "usage-vector-stores", "usage-web-search-calls"]
-status = "partial"
+status = "verified"
 milestone = "M9-admin-client"
 units = ["AdminOperation::{operation_id}", "AdminRequest<O>", "ADMIN_OPERATION_MANIFEST[119]"]
-tests = ["openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker", "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth", "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted", "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects", "pending: per-operation method/path/status/DTO manifest zero-diff before verified"]
+tests = ["openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker", "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth", "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted", "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects", "openai-rs-client::admin::tests::unexpected_legacy_204_delete_is_not_accepted_as_verified_success"]
 
 # Non-REST capabilities are intentionally separate from OpenAPI path operations.
+
+[[non_rest]]
+id = "beta-responses-websocket"
+status = "verified"
+milestone = "M8-beta-responses"
+units = ["BetaResponsesWebSocket", "BetaResponsesWebSocketConfig", "response.create_on_stream", "response.inject", "typed beta server-event codec"]
+tests = ["openai-rs-client::beta_responses::tests::beta_websocket_uses_pinned_path_without_query_and_supports_inject", "openai-rs-client::beta_responses::tests::websocket_url_matches_pinned_node_oracle_without_beta_query"]
 
 [[non_rest]]
 id = "responses-websocket"

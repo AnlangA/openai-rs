@@ -849,6 +849,14 @@ fn initial_feature(path: &str, webhook: bool, lifecycle: &str) -> &'static str {
         "custom-voice"
     } else if path == "/images/variations" {
         "quarantine"
+    } else if path == "/assistants"
+        || path.starts_with("/assistants/")
+        || path == "/threads"
+        || path.starts_with("/threads/")
+    {
+        "legacy-assistants"
+    } else if path == "/videos" || path.starts_with("/videos/") {
+        "legacy-video"
     } else if path == "/organization"
         || path.starts_with("/organization/")
         || path.starts_with("/projects/")
@@ -865,7 +873,9 @@ fn initial_feature(path: &str, webhook: bool, lifecycle: &str) -> &'static str {
 }
 
 fn initial_lifecycle(path: &str, operation: &Map<String, Value>) -> &'static str {
-    if operation
+    if path == "/threads" || path.starts_with("/threads/") {
+        "sunset"
+    } else if operation
         .get("deprecated")
         .and_then(Value::as_bool)
         .unwrap_or(false)
@@ -1441,7 +1451,10 @@ fn escape_json_pointer(segment: &str) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::{is_success_status, nullability_encodings, response_mode, schema_kind};
+    use super::{
+        initial_feature, initial_lifecycle, is_success_status, nullability_encodings,
+        response_mode, schema_kind,
+    };
 
     #[test]
     fn classifies_success_statuses() {
@@ -1478,6 +1491,27 @@ mod tests {
         let value = json!({"oneOf": [{"$ref": "#/components/schemas/A"}]});
         let object = value.as_object().ok_or("fixture must be an object")?;
         assert_eq!(schema_kind(object), "union");
+        Ok(())
+    }
+
+    #[test]
+    fn classifies_beta_alpha_legacy_and_access_controlled_surfaces()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let operation = json!({});
+        let operation = operation.as_object().ok_or("fixture must be an object")?;
+        for (path, lifecycle, feature) in [
+            ("/chatkit/sessions", "beta", "beta-chatkit"),
+            ("/responses?beta=true", "beta", "beta-responses"),
+            ("/fine_tuning/alpha/graders/run", "alpha", "alpha-graders"),
+            ("/completions", "legacy", "legacy-completions"),
+            ("/realtime/sessions", "legacy", "legacy-realtime"),
+            ("/audio/voices", "access-controlled", "custom-voice"),
+            ("/images/variations", "quarantined", "quarantine"),
+            ("/threads/thread_1/runs", "sunset", "legacy-assistants"),
+        ] {
+            assert_eq!(initial_lifecycle(path, operation), lifecycle);
+            assert_eq!(initial_feature(path, false, lifecycle), feature);
+        }
         Ok(())
     }
 }
