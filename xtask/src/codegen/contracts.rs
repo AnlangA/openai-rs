@@ -389,16 +389,7 @@ fn collect_operations(
                     "{collection_pointer}/{path}/{method} has an empty operationId"
                 )));
             }
-            let lifecycle = if operation
-                .get("deprecated")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                "deprecated"
-            } else {
-                "active"
-            }
-            .to_owned();
+            let lifecycle = initial_lifecycle(path, operation).to_owned();
             let feature = initial_feature(path, webhook, &lifecycle).to_owned();
 
             operations.push(OperationContract {
@@ -841,20 +832,62 @@ fn response_contract(
 fn initial_feature(path: &str, webhook: bool, lifecycle: &str) -> &'static str {
     if webhook {
         "webhooks"
-    } else if lifecycle == "deprecated" {
-        "legacy"
+    } else if path.starts_with("/chatkit/") {
+        "beta-chatkit"
+    } else if path.contains("?beta=true") {
+        "beta-responses"
+    } else if path.starts_with("/fine_tuning/alpha/") {
+        "alpha-graders"
+    } else if path == "/completions" {
+        "legacy-completions"
+    } else if matches!(
+        path,
+        "/realtime/sessions" | "/realtime/transcription_sessions"
+    ) {
+        "legacy-realtime"
+    } else if path.starts_with("/audio/voice_consents") || path == "/audio/voices" {
+        "custom-voice"
+    } else if path == "/images/variations" {
+        "quarantine"
     } else if path == "/organization"
         || path.starts_with("/organization/")
         || path.starts_with("/projects/")
         || (path.starts_with("/fine_tuning/checkpoints/") && path.contains("/permissions"))
     {
         "admin"
-    } else if path.starts_with("/fine_tuning/alpha/") {
-        "alpha"
     } else if path.starts_with("/realtime") {
         "realtime"
+    } else if lifecycle == "deprecated" || lifecycle == "legacy" {
+        "legacy"
     } else {
         "default"
+    }
+}
+
+fn initial_lifecycle(path: &str, operation: &Map<String, Value>) -> &'static str {
+    if operation
+        .get("deprecated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        "deprecated"
+    } else if path.starts_with("/chatkit/") || path.contains("?beta=true") {
+        "beta"
+    } else if path.starts_with("/fine_tuning/alpha/") {
+        "alpha"
+    } else if path == "/completions"
+        || matches!(
+            path,
+            "/realtime/sessions" | "/realtime/transcription_sessions"
+        )
+    {
+        "legacy"
+    } else if path.starts_with("/audio/voice_consents") || path == "/audio/voices" {
+        "access-controlled"
+    } else if path == "/images/variations" {
+        "quarantined"
+    } else {
+        "active"
     }
 }
 

@@ -3081,16 +3081,11 @@ mod tests {
                                 });
 
                             let checkpoint_permissions_path =
-                                "/v1/fine_tuning/checkpoints/ft%3Amodel%2Fcheckpoint/permissions";
-                            let (status, response_body) = if method == Method::GET
-                                && path_and_query.starts_with(checkpoint_permissions_path)
-                            {
-                                (
-                                    StatusCode::OK,
-                                    r#"{"object":"list","data":[{"id":"perm_1","created_at":1,"project_id":"proj_1","object":"checkpoint.permission"}],"has_more":false}"#,
-                                )
-                            } else if method == Method::POST
-                                && path_and_query == checkpoint_permissions_path
+                                "/v1/fine_tuning/checkpoints/ft:model%2Fcheckpoint/permissions";
+                            let (status, response_body) = if (method == Method::GET
+                                && path_and_query.starts_with(checkpoint_permissions_path))
+                                || (method == Method::POST
+                                    && path_and_query == checkpoint_permissions_path)
                             {
                                 (
                                     StatusCode::OK,
@@ -3288,6 +3283,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn checkpoint_permissions_loopback_list_create_delete_are_admin_only_and_opaque() {
+        let (base_url, captured, task) = spawn_server().await;
+        let client = AdminClient::builder(key())
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("build admin client");
+        let params = ListFineTuningCheckpointPermissionsParams {
+            project_id: openai_rs_types::Omittable::Value("proj_1".to_owned()),
+            after: openai_rs_types::Omittable::Value("perm_previous".to_owned()),
+            limit: openai_rs_types::Omittable::Value(10),
+            order: openai_rs_types::Omittable::Value(
+                openai_rs_types::fine_tuning::CheckpointPermissionOrder::Descending,
+            ),
+        };
+
+        let listed = client
+            .checkpoint_permissions()
+            .list("ft:model/checkpoint", &params)
+            .await
+            .expect("list checkpoint permissions");
+        assert_eq!(listed.data[0].id, "perm_1");
+        assert!(!listed.has_more);
+
+        let created = client
+            .checkpoint_permissions()
+            .create(
+                "ft:model/checkpoint",
+                CreateFineTuningCheckpointPermissionRequest::new(["proj_1".to_owned()]),
+            )
+            .await
+            .expect("create checkpoint permission");
+        assert_eq!(created.data[0].project_id, "proj_1");
+
+        let deleted = client
+            .checkpoint_permissions()
+            .delete("ft:model/checkpoint", "perm/1")
+            .await
+            .expect("delete checkpoint permission");
+        assert_eq!(deleted.id, "perm/1");
+        assert!(deleted.deleted);
+
+        let captured = captured.lock().expect("capture lock");
+        assert_eq!(captured.len(), 3);
+        assert_eq!(captured[0].method, Method::GET);
+        assert_eq!(captured[1].method, Method::POST);
+        assert_eq!(captured[2].method, Method::DELETE);
+        let permissions_path = "/v1/fine_tuning/checkpoints/ft:model%2Fcheckpoint/permissions";
+        assert!(captured[0].path_and_query.starts_with(permissions_path));
+        for pair in [
+            "after=perm_previous",
+            "limit=10",
+            "order=descending",
+            "project_id=proj_1",
+        ] {
+            assert!(
+                captured[0].path_and_query.contains(pair),
+                "missing query pair {pair:?} in {:?}",
+                captured[0].path_and_query
+            );
+        }
+        assert_eq!(captured[1].path_and_query, permissions_path);
+        assert_eq!(
+            captured[2].path_and_query,
+            format!("{permissions_path}/perm%2F1")
+        );
+        for request in captured.iter() {
+            assert_eq!(
+                request.authorization.as_deref(),
+                Some("Bearer admin-test-placeholder-key")
+            );
+        }
+        assert!(captured[0].body.is_empty());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captured[1].body).expect("permission JSON")["project_ids"],
+            serde_json::json!(["proj_1"])
+        );
+        assert!(captured[2].body.is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn loopback_errors_are_typed_and_redacted() {
         let (base_url, _captured, task) = spawn_server().await;
         let client = AdminClient::builder(key())
@@ -3340,6 +3417,74 @@ mod tests {
         assert!(!O::REQUEST_TYPE.is_empty());
         assert!(!O::RESPONSE_TYPE.is_empty());
         O::ID
+    }
+
+    #[test]
+    fn checkpoint_permission_manifest_is_exact_and_has_compiling_admin_markers() {
+        assert_eq!(
+            ADMIN_CHECKPOINT_PERMISSION_OPERATION_MANIFEST,
+            &[
+                AdminClientOperationContract {
+                    operation_id: "listFineTuningCheckpointPermissions",
+                    method: "GET",
+                    path: "/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions",
+                    request_mode: "none",
+                    response_mode: "json",
+                    success_statuses: &[200],
+                    response_content_types: &["application/json"],
+                    request_type: "()",
+                    response_type: "ListFineTuningCheckpointPermissionResponse",
+                    request_schema_refs: &[],
+                    response_schema_refs: &[
+                        "#/components/schemas/ListFineTuningCheckpointPermissionResponse",
+                    ],
+                },
+                AdminClientOperationContract {
+                    operation_id: "createFineTuningCheckpointPermission",
+                    method: "POST",
+                    path: "/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions",
+                    request_mode: "json",
+                    response_mode: "json",
+                    success_statuses: &[200],
+                    response_content_types: &["application/json"],
+                    request_type: "CreateFineTuningCheckpointPermissionRequest",
+                    response_type: "ListFineTuningCheckpointPermissionResponse",
+                    request_schema_refs: &[
+                        "#/components/schemas/CreateFineTuningCheckpointPermissionRequest",
+                    ],
+                    response_schema_refs: &[
+                        "#/components/schemas/ListFineTuningCheckpointPermissionResponse",
+                    ],
+                },
+                AdminClientOperationContract {
+                    operation_id: "deleteFineTuningCheckpointPermission",
+                    method: "DELETE",
+                    path: "/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions/{permission_id}",
+                    request_mode: "none",
+                    response_mode: "json",
+                    success_statuses: &[200],
+                    response_content_types: &["application/json"],
+                    request_type: "()",
+                    response_type: "DeleteFineTuningCheckpointPermissionResponse",
+                    request_schema_refs: &[],
+                    response_schema_refs: &[
+                        "#/components/schemas/DeleteFineTuningCheckpointPermissionResponse",
+                    ],
+                },
+            ]
+        );
+        assert_eq!(
+            assert_operation::<operations::OpListFineTuningCheckpointPermissions>(),
+            "listFineTuningCheckpointPermissions"
+        );
+        assert_eq!(
+            assert_operation::<operations::OpCreateFineTuningCheckpointPermission>(),
+            "createFineTuningCheckpointPermission"
+        );
+        assert_eq!(
+            assert_operation::<operations::OpDeleteFineTuningCheckpointPermission>(),
+            "deleteFineTuningCheckpointPermission"
+        );
     }
 
     #[test]

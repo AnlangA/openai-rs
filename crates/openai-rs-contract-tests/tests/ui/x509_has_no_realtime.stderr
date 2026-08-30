@@ -1,0 +1,5 @@
+error[E0599]: no method named `realtime` found for struct `X509Client` in the current scope
+ --> tests/ui/x509_has_no_realtime.rs:4:20
+  |
+4 |     let _ = client.realtime();
+  |                    ^^^^^^^^ method not found in `X509Client`

@@ -13,10 +13,11 @@ use serde_json::{Map, Value};
 use crate::{
     ExtraFields, JsonText, Nullable, Omittable,
     responses::{
-        ConversationObjectReference, ConversationReference, IncompleteDetails, PromptReference,
-        ResponseError, ResponseInputItem, ResponseInstructions, ResponseOutputItem, ResponseStatus,
-        ResponseStreamEvent, ResponseStreamOptions, ResponseTextConfig, ResponseTool,
-        ResponseUsage, ToolChoice, TruncationStrategy, UnknownTaggedObject,
+        ConversationObjectReference, ConversationReference, IncompleteDetails, InputContent,
+        MessageRole, PromptReference, ResponseError, ResponseInputItem, ResponseInstructions,
+        ResponseItemStatus, ResponseOutputItem, ResponseStatus, ResponseStreamEvent,
+        ResponseStreamOptions, ResponseTextConfig, ResponseTool, ResponseUsage, ToolChoice,
+        TruncationStrategy, UnknownTaggedObject,
     },
 };
 
@@ -363,6 +364,165 @@ impl BetaPromptCacheBreakpoint {
         Self {
             mode: PromptCacheBreakpointMode::Explicit,
         }
+    }
+}
+
+/// A stable input-content branch with a typed beta prompt-cache breakpoint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BetaPromptCachedInputContent {
+    core: InputContent,
+    prompt_cache_breakpoint: Omittable<Nullable<BetaPromptCacheBreakpoint>>,
+}
+
+impl BetaPromptCachedInputContent {
+    /// Wraps any stable input content branch.
+    #[must_use]
+    pub fn new(core: impl Into<InputContent>) -> Self {
+        Self {
+            core: core.into(),
+            prompt_cache_breakpoint: Omittable::Omitted,
+        }
+    }
+
+    /// Marks the exact end of a reusable prompt prefix.
+    #[must_use]
+    pub fn prompt_cache_breakpoint(mut self) -> Self {
+        self.prompt_cache_breakpoint =
+            Omittable::Value(Nullable::Value(BetaPromptCacheBreakpoint::explicit()));
+        self
+    }
+
+    /// Borrows the shared stable content codec.
+    #[must_use]
+    pub const fn core(&self) -> &InputContent {
+        &self.core
+    }
+
+    /// Returns the non-null breakpoint when supplied.
+    #[must_use]
+    pub fn breakpoint(&self) -> Option<&BetaPromptCacheBreakpoint> {
+        non_null(&self.prompt_cache_breakpoint)
+    }
+}
+
+impl Serialize for BetaPromptCachedInputContent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        #[derive(Serialize)]
+        struct Overlay<'a> {
+            #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+            prompt_cache_breakpoint: &'a Omittable<Nullable<BetaPromptCacheBreakpoint>>,
+        }
+        merge_serialized(
+            &self.core,
+            &Overlay {
+                prompt_cache_breakpoint: &self.prompt_cache_breakpoint,
+            },
+        )
+        .map_err(serde::ser::Error::custom)?
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BetaPromptCachedInputContent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let prompt_cache_breakpoint = decode_omittable(
+            value
+                .as_object()
+                .and_then(|object| object.get("prompt_cache_breakpoint")),
+        )
+        .map_err(D::Error::custom)?;
+        Ok(Self {
+            core: serde_json::from_value(value).map_err(D::Error::custom)?,
+            prompt_cache_breakpoint,
+        })
+    }
+}
+
+literal_tag!(PromptCachedMessageTag, Message, "message");
+
+/// Message input whose content exposes beta prompt-cache boundaries.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaPromptCachedInputMessage {
+    content: Vec<BetaPromptCachedInputContent>,
+    role: MessageRole,
+    #[serde(
+        rename = "type",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    kind: Omittable<PromptCachedMessageTag>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    agent: Omittable<Nullable<BetaAgent>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    phase: Omittable<Nullable<BetaMessagePhase>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    status: Omittable<Nullable<ResponseItemStatus>>,
+}
+
+impl BetaPromptCachedInputMessage {
+    /// Creates a message from typed content parts.
+    #[must_use]
+    pub fn new(
+        role: MessageRole,
+        content: impl IntoIterator<Item = BetaPromptCachedInputContent>,
+    ) -> Self {
+        Self {
+            content: content.into_iter().collect(),
+            role,
+            kind: Omittable::Omitted,
+            id: Omittable::Omitted,
+            agent: Omittable::Omitted,
+            phase: Omittable::Omitted,
+            status: Omittable::Omitted,
+        }
+    }
+
+    /// Creates a user message.
+    #[must_use]
+    pub fn user(content: impl IntoIterator<Item = BetaPromptCachedInputContent>) -> Self {
+        Self::new(MessageRole::User, content)
+    }
+
+    /// Creates a developer message.
+    #[must_use]
+    pub fn developer(content: impl IntoIterator<Item = BetaPromptCachedInputContent>) -> Self {
+        Self::new(MessageRole::Developer, content)
+    }
+
+    /// Emits the optional `type: "message"` property.
+    #[must_use]
+    pub fn with_type(mut self) -> Self {
+        self.kind = Omittable::Value(PromptCachedMessageTag::Message);
+        self
+    }
+
+    /// Attaches owning-agent metadata.
+    #[must_use]
+    pub fn agent(mut self, agent: BetaAgent) -> Self {
+        self.agent = Omittable::Value(Nullable::Value(agent));
+        self
+    }
+
+    /// Labels an assistant message as commentary or final output.
+    #[must_use]
+    pub fn phase(mut self, phase: BetaMessagePhase) -> Self {
+        self.phase = Omittable::Value(Nullable::Value(phase));
+        self
+    }
+
+    /// Returns content parts in wire order.
+    #[must_use]
+    pub fn content(&self) -> &[BetaPromptCachedInputContent] {
+        &self.content
     }
 }
 
@@ -853,6 +1013,8 @@ impl<'de> Deserialize<'de> for BetaStableInputItem {
 pub enum BetaResponseInputItem {
     /// A branch shared with stable Responses plus typed beta metadata.
     Stable(Box<BetaStableInputItem>),
+    /// A shared message branch with typed prompt-cache boundaries.
+    PromptCachedMessage(Box<BetaPromptCachedInputMessage>),
     /// A message routed between named agents.
     AgentMessage(BetaAgentMessage),
     /// A request to the server-hosted agent runtime.
@@ -868,6 +1030,7 @@ impl Serialize for BetaResponseInputItem {
     {
         match self {
             Self::Stable(value) => value.serialize(serializer),
+            Self::PromptCachedMessage(value) => value.serialize(serializer),
             Self::AgentMessage(value) => value.serialize(serializer),
             Self::MultiAgentCall(value) => value.serialize(serializer),
             Self::MultiAgentCallOutput(value) => value.serialize(serializer),
@@ -891,6 +1054,12 @@ impl<'de> Deserialize<'de> for BetaResponseInputItem {
             Some("multi_agent_call_output") => serde_json::from_value(value)
                 .map(Self::MultiAgentCallOutput)
                 .map_err(D::Error::custom),
+            None | Some("message") if contains_prompt_cache_breakpoint(&value) => {
+                serde_json::from_value(value)
+                    .map(Box::new)
+                    .map(Self::PromptCachedMessage)
+                    .map_err(D::Error::custom)
+            }
             _ => serde_json::from_value(value)
                 .map(Box::new)
                 .map(Self::Stable)
@@ -902,6 +1071,12 @@ impl<'de> Deserialize<'de> for BetaResponseInputItem {
 impl From<ResponseInputItem> for BetaResponseInputItem {
     fn from(value: ResponseInputItem) -> Self {
         Self::Stable(Box::new(BetaStableInputItem::new(value)))
+    }
+}
+
+impl From<BetaPromptCachedInputMessage> for BetaResponseInputItem {
+    fn from(value: BetaPromptCachedInputMessage) -> Self {
+        Self::PromptCachedMessage(Box::new(value))
     }
 }
 
@@ -2735,6 +2910,18 @@ fn optional_discriminator(value: &Value) -> Result<Option<&str>, &'static str> {
         Some(_) => Err("tagged object field `type` must be a string"),
         None => Ok(None),
     }
+}
+
+fn contains_prompt_cache_breakpoint(value: &Value) -> bool {
+    value
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|content| {
+            content.iter().any(|part| {
+                part.as_object()
+                    .is_some_and(|part| part.contains_key("prompt_cache_breakpoint"))
+            })
+        })
 }
 
 fn serialized_object<T: Serialize>(value: &T) -> serde_json::Result<Map<String, Value>> {

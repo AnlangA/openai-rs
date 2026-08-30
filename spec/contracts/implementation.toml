@@ -5,17 +5,17 @@ schema_version = 1
 
 [[operations]]
 operation_id = "createResponse"
-status = "verified"
+status = "partial"
 milestone = "M1-responses-client"
 units = ["CreateResponse", "CreateStreamingResponse"]
-tests = ["openai-rs-client::responses::tests::create_stream_decodes_events_and_stops_at_done", "openai-rs-client::responses::tests::create_stream_surfaces_in_band_error_once"]
+tests = ["openai-rs-client::responses::tests::create_stream_decodes_events_and_stops_at_done", "openai-rs-client::responses::tests::create_stream_surfaces_in_band_error_once", "pending: direct non-streaming createResponse wire test"]
 
 [[operations]]
 operation_id = "getResponse"
-status = "verified"
+status = "partial"
 milestone = "M1-responses-client"
 units = ["RetrieveResponse", "RetrieveResponseStream"]
-tests = ["openai-rs-client::responses::tests::retrieve_stream_encodes_resume_query_and_repeated_include"]
+tests = ["openai-rs-client::responses::tests::retrieve_stream_encodes_resume_query_and_repeated_include", "pending: direct non-streaming getResponse wire test"]
 
 [[operations]]
 operation_id = "deleteResponse"
@@ -40,10 +40,10 @@ tests = ["pending: direct Compactconversation loopback contract test"]
 
 [[operations]]
 operation_id = "listInputItems"
-status = "verified"
+status = "partial"
 milestone = "M1-responses-client"
 units = ["ListInputItems"]
-tests = ["openai-rs-client::responses::tests::input_items_encodes_cursor_query_without_following_a_url"]
+tests = ["openai-rs-client::responses::tests::input_items_encodes_cursor_query_without_following_a_url", "pending: assert listInputItems path independently"]
 
 [[operations]]
 operation_id = "Getinputtokencounts"
@@ -54,10 +54,10 @@ tests = ["openai-rs-client::responses::tests::count_input_tokens_sends_typed_jso
 
 [[operations]]
 operation_id = "listModels"
-status = "verified"
+status = "partial"
 milestone = "M1-core-resources"
 units = ["ListModels"]
-tests = ["openai-rs-client::core_resources::tests::safe_operation_retries_before_delivering_a_response"]
+tests = ["openai-rs-client::core_resources::tests::safe_operation_retries_before_delivering_a_response", "pending: capture and assert listModels route"]
 
 [[operations]]
 operation_id = "retrieveModel"
