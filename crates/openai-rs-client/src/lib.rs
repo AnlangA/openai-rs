@@ -21,6 +21,8 @@ mod retry;
 pub mod sse;
 pub(crate) mod transport;
 mod vector_stores;
+#[cfg(feature = "webhook-verification")]
+mod webhooks;
 
 pub use auth::{ApiKey, ApiKeyError};
 pub use batches::{
@@ -54,3 +56,5 @@ pub use vector_stores::{
     PollCancellationToken, PollError, PollOptions, VectorStoreFileBatches,
     VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream, VectorStores,
 };
+#[cfg(feature = "webhook-verification")]
+pub use webhooks::{WebhookVerificationError, WebhookVerifier};

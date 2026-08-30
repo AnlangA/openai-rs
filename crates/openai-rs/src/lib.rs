@@ -10,15 +10,22 @@ pub use openai_rs_types::{StructuredError, StructuredOutput, TypedFunction};
 pub use openai_rs_client::{
     ApiError, ApiKey, ApiKeyError, ApiResponse, Client, ClientBuilder, DeleteResponseResult,
     AddUploadPartOneShotRequest, ChatCompletionEventStream, ChatCompletionMessages,
-    ChatCompletions, CreateFileOneShotRequest, Embeddings, Error, FileContentStream, Files,
-    InputItems, InputTokens, Models, Moderations, OneShotMultipartSource, ResponseEventStream,
-    ResponseMeta, Responses, RetryPolicy, StreamError, TlsBackend, Uploads,
+    ChatCompletionMessagePageStream, ChatCompletionPageStream, ChatCompletions,
+    BatchPageStream, BatchSubmission, BatchSubmissionError, BatchSubmissionOptions, Batches,
+    CreateFileOneShotRequest, Embeddings, Error, FileContentStream, Files, InputItems,
+    InputTokens, Models, Moderations, OneShotMultipartSource, PollCancellationToken, PollError,
+    PollOptions, ResponseEventStream, ResponseMeta, Responses, RetryPolicy, StreamError,
+    TlsBackend, Uploads, VectorStoreFileBatches, VectorStoreFilePageStream, VectorStoreFiles,
+    VectorStorePageStream, VectorStores,
 };
 
 #[cfg(all(feature = "client", feature = "realtime"))]
 pub use openai_rs_client::{
     ResponsesWebSocket, ResponsesWebSocketConfig, WebSocketReconnectPolicy,
 };
+
+#[cfg(all(feature = "client", feature = "webhook-verification"))]
+pub use openai_rs_client::{WebhookVerificationError, WebhookVerifier};
 
 #[cfg(feature = "codex-app-server")]
 pub use openai_rs_codex as codex;

@@ -120,14 +120,15 @@ until a decision is recorded here and its fixtures pass.
 
 - Status: accepted; live response fixture still requested
 - Reviewed: 2026-08-30
-- Scope: `Batch.errors` and optional lifecycle timestamp fields
+- Scope: `Batch.errors`, `output_file_id`, `error_file_id`, and optional
+  lifecycle timestamp fields
 - Sources: the pinned raw OpenAPI and pinned official SDK types describe these
   fields as optional but non-null; an official Batch example renders some of
   them as explicit `null`.
-- Decision: model `errors` and optional lifecycle timestamps as
-  `Omittable<Nullable<T>>`. This preserves all three states instead of using
-  `Option<T>` and matches the official example's explicit-null behavior while
-  retaining missing-field compatibility.
+- Decision: model `errors`, output/error file ids, and optional lifecycle
+  timestamps as `Omittable<Nullable<T>>`. This preserves all three states
+  instead of using `Option<T>` and matches the official example's explicit-null
+  behavior while retaining missing-field compatibility.
 - Impact: Batch response decoding and fixture quarantine.
 - Overrides: directional handwritten DTO override pending a generated override id.
 - Tests: missing/null/value lifecycle tests; still add a captured Batch response
@@ -147,15 +148,22 @@ until a decision is recorded here and its fixtures pass.
 - Tests: required-nullable unit test; add a captured empty-metadata Vector Store
   response before changing the contract.
 
-## D0011 — Vector Store search query is string-or-array
+## D0011 — Vector Store search query forms are directional unions
 
 - Status: accepted
 - Reviewed: 2026-08-30
-- Scope: `VectorStoreSearchRequest.query`
-- Sources: pinned OpenAPI/official SDK schema branches permit both one string and
-  an array of strings; older examples show only the scalar form.
-- Decision: expose a lossless typed union for scalar and array query forms. Do
-  not normalize a one-element array into a string during roundtrip.
-- Impact: Vector Store search request DTO and builders.
+- Scope: `VectorStoreSearchRequest.query` and
+  `VectorStoreSearchResultsPage.search_query`
+- Sources: the pinned component/official SDK schemas permit scalar-or-array
+  request input and type the returned `search_query` as an array, while the
+  endpoint example returns a scalar string. Older Vector Store endpoint examples
+  are therefore treated as stale evidence rather than silently overriding the
+  current component contract.
+- Decision: expose lossless directional unions for scalar and array forms in
+  both positions. Do not normalize a one-element array into a string, or a
+  scalar response into an array, during roundtrip.
+- Impact: Vector Store search request and response DTOs/builders; legacy example
+  fixtures remain quarantined.
 - Overrides: none.
-- Tests: scalar/array typed and semantic JSON roundtrips.
+- Tests: request and response scalar/array typed and semantic JSON roundtrips,
+  including a known-array malformed-payload rejection.

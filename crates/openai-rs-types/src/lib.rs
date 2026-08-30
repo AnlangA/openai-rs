@@ -2,6 +2,7 @@
 
 pub mod batches;
 pub mod chat;
+pub mod containers;
 pub mod conversations;
 pub mod core;
 pub mod files;
@@ -11,6 +12,7 @@ pub mod media;
 pub mod responses;
 pub mod scalar;
 pub mod secret;
+pub mod skills;
 pub mod vector_stores;
 
 #[cfg(feature = "webhooks")]

@@ -2948,6 +2948,20 @@ mod tests {
             json!({"file_ids": ["file-a"]})
         );
 
+        let null_attributes =
+            CreateVectorStoreFileBatchRequest::from_file_ids(vec![FileId::new("file-a")])
+                .expect("valid batch")
+                .with_attributes_null()
+                .expect("null global attributes");
+        assert!(matches!(
+            null_attributes.attributes(),
+            Omittable::Value(Nullable::Null)
+        ));
+        assert_eq!(
+            serde_json::to_value(null_attributes).expect("encode null attributes"),
+            json!({"file_ids": ["file-a"], "attributes": null})
+        );
+
         let per_file =
             CreateVectorStoreFileBatchRequest::from_files(vec![CreateVectorStoreFileRequest::new(
                 "file-a",

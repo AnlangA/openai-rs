@@ -434,3 +434,160 @@ impl fmt::Debug for CreateSkillVersionRequest {
 /// Raw zip or JSON-text content returned by Skill content endpoints.
 pub type SkillContent = FileContent;
 
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use serde::{Serialize, de::DeserializeOwned};
+    use serde_json::json;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::*;
+
+    assert_impl_all!(SkillResource: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(SkillVersionResource: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(SkillListResource: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(SkillVersionListResource: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(SetDefaultSkillVersionBody: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(DeletedSkillResource: Serialize, DeserializeOwned, Send, Sync);
+    assert_not_impl_any!(CreateSkillRequest: Serialize, DeserializeOwned);
+    assert_not_impl_any!(CreateSkillVersionRequest: Serialize, DeserializeOwned);
+    assert_not_impl_any!(SkillContent: Serialize, DeserializeOwned);
+
+    fn ok<T, E: fmt::Display>(result: Result<T, E>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(error) => panic!("unexpected error: {error}"),
+        }
+    }
+
+    fn source(secret: &[u8]) -> ReplayableMultipartSource {
+        ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(secret))
+    }
+
+    #[test]
+    fn list_params_validate_limit_and_preserve_open_order() {
+        assert_eq!(ok(SkillListLimit::new(0)).get(), 0);
+        assert_eq!(ok(SkillListLimit::new(100)).get(), 100);
+        assert!(SkillListLimit::new(101).is_err());
+        assert!(serde_json::from_str::<SkillListLimit>("101").is_err());
+
+        let fixture = json!({"limit": 20, "order": "future", "after": "skill_1"});
+        let params = ok(serde_json::from_value::<SkillListParams>(fixture.clone()));
+        match &params.order {
+            Omittable::Value(order) => assert_eq!(order.as_str(), "future"),
+            Omittable::Omitted => panic!("fixture must contain order"),
+        }
+        assert_eq!(ok(serde_json::to_value(params)), fixture);
+    }
+
+    #[test]
+    fn skill_and_list_responses_preserve_null_cursors_and_extras() {
+        let fixture = json!({
+            "object": "list",
+            "data": [{
+                "id": "skill_1",
+                "object": "skill",
+                "name": "research",
+                "description": "Search references",
+                "created_at": 1,
+                "default_version": "1",
+                "latest_version": "2",
+                "skill_future": true
+            }],
+            "first_id": "skill_1",
+            "last_id": "skill_1",
+            "has_more": true,
+            "page_future": 1
+        });
+        let page = ok(serde_json::from_value::<SkillListResource>(fixture.clone()));
+        assert_eq!(page.next_after(), Some("skill_1"));
+        assert!(page.data[0].extra().contains_key("skill_future"));
+        assert!(page.extra().contains_key("page_future"));
+        assert_eq!(ok(serde_json::to_value(page)), fixture);
+
+        let empty = json!({
+            "object": "list",
+            "data": [],
+            "first_id": null,
+            "last_id": null,
+            "has_more": false
+        });
+        let page = ok(serde_json::from_value::<SkillListResource>(empty.clone()));
+        assert!(page.first_id.is_null());
+        assert!(page.last_id.is_null());
+        assert_eq!(ok(serde_json::to_value(page)), empty);
+    }
+
+    #[test]
+    fn version_list_update_and_delete_round_trip() {
+        let fixture = json!({
+            "object": "list",
+            "data": [{
+                "object": "skill.version",
+                "id": "skillver_1",
+                "skill_id": "skill_1",
+                "version": "1",
+                "created_at": 1,
+                "name": "research",
+                "description": "v1",
+                "version_future": true
+            }],
+            "first_id": "skillver_1",
+            "last_id": "skillver_1",
+            "has_more": true
+        });
+        let page = ok(serde_json::from_value::<SkillVersionListResource>(
+            fixture.clone(),
+        ));
+        assert_eq!(page.next_after(), Some("skillver_1"));
+        assert!(page.data[0].extra().contains_key("version_future"));
+        assert_eq!(ok(serde_json::to_value(page)), fixture);
+
+        assert_eq!(
+            ok(serde_json::to_value(SetDefaultSkillVersionBody::new("2"))),
+            json!({"default_version": "2"})
+        );
+
+        let deleted = json!({
+            "object": "skill.version.deleted",
+            "deleted": true,
+            "id": "skillver_1",
+            "version": "1",
+            "delete_future": true
+        });
+        let response = ok(serde_json::from_value::<DeletedSkillVersionResource>(
+            deleted.clone(),
+        ));
+        assert!(response.extra().contains_key("delete_future"));
+        assert_eq!(ok(serde_json::to_value(response)), deleted);
+    }
+
+    #[test]
+    fn multipart_skill_uploads_are_bounded_replayable_and_redacted() {
+        assert!(CreateSkillRequest::from_files(Vec::new()).is_err());
+        assert!(CreateSkillRequest::from_files((0..501).map(|_| source(b"file"))).is_err());
+
+        let request = ok(CreateSkillRequest::from_files([
+            source(b"secret-skill-a"),
+            source(b"secret-skill-b"),
+        ]));
+        assert_eq!(request.files().len(), 2);
+        let debug = format!("{request:?}");
+        assert!(!debug.contains("secret-skill"));
+
+        let version = CreateSkillVersionRequest::new(source(b"secret-zip")).set_default(true);
+        assert_eq!(version.files().len(), 1);
+        assert!(matches!(version.default, Omittable::Value(true)));
+        assert!(!format!("{version:?}").contains("secret-zip"));
+    }
+
+    #[test]
+    fn skill_content_is_raw_not_json_and_has_safe_debug() {
+        let content = SkillContent::new(Vec::from(b"PK\x03\x04secret").into_boxed_slice());
+        assert_eq!(content.as_bytes(), b"PK\x03\x04secret");
+        let debug = format!("{content:?}");
+        assert!(debug.contains("len"));
+        assert!(!debug.contains("secret"));
+    }
+}

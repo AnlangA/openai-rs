@@ -16,12 +16,13 @@ use http::{Method, StatusCode};
 use openai_rs_types::{
     CreateVectorStoreFileBatchRequest, CreateVectorStoreFileRequest, CreateVectorStoreRequest,
     DeletedVectorStore, DeletedVectorStoreFile, FileId, ListVectorStoreFilesResponse,
-    ListVectorStoresResponse, UpdateVectorStoreFileAttributesRequest, UpdateVectorStoreRequest,
-    VectorStore, VectorStoreFile, VectorStoreFileBatch, VectorStoreFileBatchId,
-    VectorStoreFileContentResponse, VectorStoreFileListParams, VectorStoreFileStatus,
-    VectorStoreId, VectorStoreListParams, VectorStoreSearchRequest, VectorStoreSearchResultsPage,
-    VectorStoreStatus,
+    ListVectorStoresResponse, Omittable, UpdateVectorStoreFileAttributesRequest,
+    UpdateVectorStoreRequest, VectorStore, VectorStoreFile, VectorStoreFileBatch,
+    VectorStoreFileBatchId, VectorStoreFileContentResponse, VectorStoreFileListParams,
+    VectorStoreFileStatus, VectorStoreId, VectorStoreListParams, VectorStoreSearchRequest,
+    VectorStoreSearchResultsPage, VectorStoreStatus,
 };
+use serde_json::Value;
 use thiserror::Error as ThisError;
 use tokio::sync::Notify;
 
@@ -100,6 +101,9 @@ impl VectorStores {
             }
             let mut params = params;
             let mut seen = HashSet::<String>::new();
+            if let Omittable::Value(cursor) = params.after_cursor() {
+                seen.insert(cursor.as_str().to_owned());
+            }
             loop {
                 let page = stores.list(params.clone()).await?;
                 let next = if page.has_more() {
@@ -260,9 +264,9 @@ impl VectorStoreFiles {
     ) -> VectorStoreFilePageStream {
         let files = self.clone();
         Box::pin(async_stream::try_stream! {
-            reject_before_cursor(&params)?;
             let mut params = params;
             let mut seen = HashSet::<String>::new();
+            seed_file_pagination(&params, &mut seen)?;
             loop {
                 let page = files.list(&vector_store_id, params.clone()).await?;
                 let next = next_file_cursor(&page, &mut seen)?;
@@ -441,9 +445,9 @@ impl VectorStoreFileBatches {
     ) -> VectorStoreFilePageStream {
         let batches = self.clone();
         Box::pin(async_stream::try_stream! {
-            reject_before_cursor(&params)?;
             let mut params = params;
             let mut seen = HashSet::<String>::new();
+            seed_file_pagination(&params, &mut seen)?;
             loop {
                 let page = batches.list_files(&vector_store_id, &batch_id, params.clone()).await?;
                 let next = next_file_cursor(&page, &mut seen)?;
@@ -618,6 +622,13 @@ where
     }
     let started = Instant::now();
     loop {
+        if options
+            .cancellation
+            .as_ref()
+            .is_some_and(PollCancellationToken::is_cancelled)
+        {
+            return Err(PollError::Cancelled);
+        }
         let remaining = options
             .timeout
             .checked_sub(started.elapsed())
@@ -665,15 +676,20 @@ fn is_file_terminal(status: &VectorStoreFileStatus) -> bool {
     )
 }
 
-fn reject_before_cursor(params: &VectorStoreFileListParams) -> Result<(), Error> {
+fn seed_file_pagination(
+    params: &VectorStoreFileListParams,
+    seen: &mut HashSet<String>,
+) -> Result<(), Error> {
     let value = serde_json::to_value(params).map_err(Error::Encode)?;
     if value.get("before").is_some() {
-        Err(Error::InvalidConfiguration(
+        return Err(Error::InvalidConfiguration(
             "automatic vector-store file pagination does not accept a before cursor".into(),
-        ))
-    } else {
-        Ok(())
+        ));
     }
+    if let Some(cursor) = value.get("after").and_then(Value::as_str) {
+        seen.insert(cursor.to_owned());
+    }
+    Ok(())
 }
 
 fn next_file_cursor(
@@ -926,3 +942,559 @@ operation!(
     request_encoding = RequestEncoding::None,
     retry = RetryClass::Safe
 );
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use bytes::Bytes;
+    use futures_util::StreamExt;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use openai_rs_types::{
+        CreateVectorStoreFileBatchRequest, CreateVectorStoreFileRequest, CreateVectorStoreRequest,
+        FileId, UpdateVectorStoreFileAttributesRequest, UpdateVectorStoreRequest,
+        VectorStoreFileBatchId, VectorStoreFileListParams, VectorStoreFileStatus, VectorStoreId,
+        VectorStoreListLimit, VectorStoreListParams, VectorStoreMaxResults,
+        VectorStoreSearchRequest, VectorStoreSortOrder,
+    };
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+    use url::Url;
+
+    use super::*;
+    use crate::{ApiKey, RetryPolicy};
+
+    #[derive(Clone, Debug)]
+    struct CapturedRequest {
+        method: Method,
+        path_and_query: String,
+        authorization: Option<String>,
+        body: Vec<u8>,
+    }
+
+    async fn serve_script(responses: Vec<String>) -> (Client, Arc<Mutex<Vec<CapturedRequest>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind vector-store server");
+        let address = listener.local_addr().expect("vector-store address");
+        let responses = Arc::new(responses);
+        let next_response = Arc::new(AtomicUsize::new(0));
+        let captures = Arc::new(Mutex::new(Vec::new()));
+        let server_captures = Arc::clone(&captures);
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let responses = Arc::clone(&responses);
+                let next_response = Arc::clone(&next_response);
+                let captures = Arc::clone(&server_captures);
+                tokio::spawn(async move {
+                    let service = service_fn(move |request: Request<Incoming>| {
+                        let responses = Arc::clone(&responses);
+                        let next_response = Arc::clone(&next_response);
+                        let captures = Arc::clone(&captures);
+                        async move {
+                            let method = request.method().clone();
+                            let path_and_query = request
+                                .uri()
+                                .path_and_query()
+                                .map(ToString::to_string)
+                                .unwrap_or_default();
+                            let authorization = request
+                                .headers()
+                                .get(http::header::AUTHORIZATION)
+                                .and_then(|value| value.to_str().ok())
+                                .map(ToOwned::to_owned);
+                            let body = request
+                                .into_body()
+                                .collect()
+                                .await
+                                .expect("collect vector-store request")
+                                .to_bytes()
+                                .to_vec();
+                            captures.lock().expect("vector-store capture lock").push(
+                                CapturedRequest {
+                                    method,
+                                    path_and_query,
+                                    authorization,
+                                    body,
+                                },
+                            );
+                            let index = next_response.fetch_add(1, Ordering::SeqCst);
+                            let body = responses.get(index).cloned().unwrap_or_else(|| {
+                                json!({
+                                    "error": {
+                                        "message": "unexpected request",
+                                        "type": "test_error",
+                                        "param": null,
+                                        "code": "unexpected"
+                                    }
+                                })
+                                .to_string()
+                            });
+                            let status = if index < responses.len() {
+                                StatusCode::OK
+                            } else {
+                                StatusCode::INTERNAL_SERVER_ERROR
+                            };
+                            Ok::<_, Infallible>(
+                                hyper::Response::builder()
+                                    .status(status)
+                                    .header(http::header::CONTENT_TYPE, "application/json")
+                                    .header("x-request-id", format!("req_vs_{index}"))
+                                    .body(Full::new(Bytes::from(body)))
+                                    .expect("vector-store response"),
+                            )
+                        }
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("vector-store base URL");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test API key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(RetryPolicy::disabled())
+            .build()
+            .expect("vector-store client");
+        (client, captures)
+    }
+
+    fn store_json(id: &str, status: &str) -> String {
+        json!({
+            "id": id,
+            "object": "vector_store",
+            "created_at": 1,
+            "name": "docs",
+            "usage_bytes": 42,
+            "file_counts": file_counts_json(),
+            "status": status,
+            "last_active_at": null,
+            "metadata": null
+        })
+        .to_string()
+    }
+
+    fn file_counts_json() -> Value {
+        json!({
+            "in_progress": 0,
+            "completed": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "total": 1
+        })
+    }
+
+    fn file_json(file_id: &str, store_id: &str, status: &str) -> String {
+        json!({
+            "id": file_id,
+            "object": "vector_store.file",
+            "usage_bytes": 12,
+            "created_at": 1,
+            "vector_store_id": store_id,
+            "status": status,
+            "last_error": null
+        })
+        .to_string()
+    }
+
+    fn batch_json(batch_id: &str, store_id: &str, status: &str) -> String {
+        json!({
+            "id": batch_id,
+            "object": "vector_store.files_batch",
+            "created_at": 1,
+            "vector_store_id": store_id,
+            "status": status,
+            "file_counts": file_counts_json()
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn store_crud_list_and_search_match_pinned_routes() {
+        let responses = vec![
+            store_json("vs_1", "completed"),
+            json!({
+                "object": "list",
+                "data": [],
+                "first_id": "vs_first",
+                "last_id": "vs_last",
+                "has_more": false
+            })
+            .to_string(),
+            store_json("vs/a b", "completed"),
+            store_json("vs/a b", "completed"),
+            json!({"id":"vs/a b","object":"vector_store.deleted","deleted":true}).to_string(),
+            json!({
+                "object": "vector_store.search_results.page",
+                "search_query": ["rust"],
+                "data": [],
+                "has_more": false,
+                "next_page": null
+            })
+            .to_string(),
+        ];
+        let (client, captures) = serve_script(responses).await;
+        let stores = client.vector_stores();
+        stores
+            .create(CreateVectorStoreRequest::new().with_name("docs"))
+            .await
+            .expect("create store");
+        stores
+            .list(
+                VectorStoreListParams::new()
+                    .with_limit(VectorStoreListLimit::new(2).expect("list limit"))
+                    .with_order(VectorStoreSortOrder::Ascending)
+                    .after(VectorStoreId::new("vs cursor")),
+            )
+            .await
+            .expect("list stores");
+        let id = VectorStoreId::new("vs/a b");
+        stores.retrieve(&id).await.expect("retrieve store");
+        stores
+            .update(&id, UpdateVectorStoreRequest::new().with_name("renamed"))
+            .await
+            .expect("update store");
+        stores.delete(&id).await.expect("delete store");
+        stores
+            .search(
+                &id,
+                VectorStoreSearchRequest::new("rust")
+                    .with_max_results(VectorStoreMaxResults::new(3).expect("search result limit")),
+            )
+            .await
+            .expect("search store");
+
+        let captures = captures.lock().expect("capture lock").clone();
+        assert_eq!(captures.len(), 6);
+        assert_eq!(captures[0].method, Method::POST);
+        assert_eq!(captures[0].path_and_query, "/v1/vector_stores");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captures[0].body).expect("create body"),
+            json!({"name":"docs"})
+        );
+        let list_url = Url::parse(&format!("http://loopback{}", captures[1].path_and_query))
+            .expect("list URL");
+        assert_eq!(list_url.path(), "/v1/vector_stores");
+        let query = list_url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("limit".into(), "2".into())));
+        assert!(query.contains(&("order".into(), "asc".into())));
+        assert!(query.contains(&("after".into(), "vs cursor".into())));
+        assert_eq!(captures[2].path_and_query, "/v1/vector_stores/vs%2Fa%20b");
+        assert_eq!(captures[3].method, Method::POST);
+        assert_eq!(captures[4].method, Method::DELETE);
+        assert_eq!(
+            captures[5].path_and_query,
+            "/v1/vector_stores/vs%2Fa%20b/search"
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captures[5].body).expect("search body"),
+            json!({"query":"rust","max_num_results":3})
+        );
+        assert!(captures.iter().all(|request| {
+            request.authorization.as_deref() == Some("Bearer test-placeholder-key")
+        }));
+    }
+
+    #[tokio::test]
+    async fn attached_file_routes_preserve_ids_query_and_bodies() {
+        let responses = vec![
+            file_json("file_1", "vs/a b", "completed"),
+            json!({
+                "object":"list","data":[],"first_id":"file_first",
+                "last_id":"file_last","has_more":false
+            })
+            .to_string(),
+            file_json("file/x y", "vs/a b", "completed"),
+            file_json("file/x y", "vs/a b", "completed"),
+            json!({"id":"file/x y","object":"vector_store.file.deleted","deleted":true})
+                .to_string(),
+            json!({
+                "object":"vector_store.file_content.page","data":[],
+                "has_more":false,"next_page":null
+            })
+            .to_string(),
+        ];
+        let (client, captures) = serve_script(responses).await;
+        let files = client.vector_stores().files();
+        let store_id = VectorStoreId::new("vs/a b");
+        files
+            .create(&store_id, CreateVectorStoreFileRequest::new("file_1"))
+            .await
+            .expect("attach file");
+        files
+            .list(
+                &store_id,
+                VectorStoreFileListParams::new()
+                    .with_limit(VectorStoreListLimit::new(2).expect("file list limit"))
+                    .with_order(VectorStoreSortOrder::Descending)
+                    .after(FileId::new("file cursor"))
+                    .with_status(VectorStoreFileStatus::Completed),
+            )
+            .await
+            .expect("list attached files");
+        let file_id = FileId::new("file/x y");
+        files
+            .retrieve(&store_id, &file_id)
+            .await
+            .expect("retrieve attached file");
+        files
+            .update_attributes(
+                &store_id,
+                &file_id,
+                UpdateVectorStoreFileAttributesRequest::clear(),
+            )
+            .await
+            .expect("clear attributes");
+        files
+            .delete(&store_id, &file_id)
+            .await
+            .expect("detach file");
+        files
+            .content(&store_id, &file_id)
+            .await
+            .expect("retrieve file content");
+
+        let captures = captures.lock().expect("capture lock").clone();
+        assert_eq!(captures.len(), 6);
+        assert_eq!(
+            captures[0].path_and_query,
+            "/v1/vector_stores/vs%2Fa%20b/files"
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captures[0].body).expect("attach body"),
+            json!({"file_id":"file_1"})
+        );
+        let list_url = Url::parse(&format!("http://loopback{}", captures[1].path_and_query))
+            .expect("file list URL");
+        let query = list_url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("filter".into(), "completed".into())));
+        assert!(query.contains(&("after".into(), "file cursor".into())));
+        assert_eq!(
+            captures[2].path_and_query,
+            "/v1/vector_stores/vs%2Fa%20b/files/file%2Fx%20y"
+        );
+        assert_eq!(captures[3].method, Method::POST);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captures[3].body).expect("attributes body"),
+            json!({"attributes":null})
+        );
+        assert_eq!(captures[4].method, Method::DELETE);
+        assert_eq!(
+            captures[5].path_and_query,
+            "/v1/vector_stores/vs%2Fa%20b/files/file%2Fx%20y/content"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_batch_routes_match_pinned_contract() {
+        let responses = vec![
+            batch_json("vsfb_1", "vs/a b", "in_progress"),
+            batch_json("batch/x y", "vs/a b", "completed"),
+            batch_json("batch/x y", "vs/a b", "cancelled"),
+            json!({
+                "object":"list","data":[],"first_id":"file_first",
+                "last_id":"file_last","has_more":false
+            })
+            .to_string(),
+        ];
+        let (client, captures) = serve_script(responses).await;
+        let batches = client.vector_stores().file_batches();
+        let store_id = VectorStoreId::new("vs/a b");
+        let request = CreateVectorStoreFileBatchRequest::from_file_ids(vec![FileId::new("file_1")])
+            .expect("batch request");
+        batches
+            .create(&store_id, request)
+            .await
+            .expect("create file batch");
+        let batch_id = VectorStoreFileBatchId::new("batch/x y");
+        batches
+            .retrieve(&store_id, &batch_id)
+            .await
+            .expect("retrieve file batch");
+        batches
+            .cancel(&store_id, &batch_id)
+            .await
+            .expect("cancel file batch");
+        batches
+            .list_files(&store_id, &batch_id, VectorStoreFileListParams::new())
+            .await
+            .expect("list file batch files");
+
+        let captures = captures.lock().expect("capture lock").clone();
+        assert_eq!(captures.len(), 4);
+        assert_eq!(
+            captures[0].path_and_query,
+            "/v1/vector_stores/vs%2Fa%20b/file_batches"
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captures[0].body).expect("file batch body"),
+            json!({"file_ids":["file_1"]})
+        );
+        assert_eq!(
+            captures[1].path_and_query,
+            "/v1/vector_stores/vs%2Fa%20b/file_batches/batch%2Fx%20y"
+        );
+        assert_eq!(
+            captures[2].path_and_query,
+            "/v1/vector_stores/vs%2Fa%20b/file_batches/batch%2Fx%20y/cancel"
+        );
+        assert_eq!(captures[2].method, Method::POST);
+        assert_eq!(
+            captures[3].path_and_query,
+            "/v1/vector_stores/vs%2Fa%20b/file_batches/batch%2Fx%20y/files"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_poll_honors_terminal_state_and_cancellation() {
+        let (client, captures) = serve_script(vec![
+            store_json("vs_poll", "in_progress"),
+            store_json("vs_poll", "completed"),
+        ])
+        .await;
+        let response = client
+            .vector_stores()
+            .poll(
+                &VectorStoreId::new("vs_poll"),
+                PollOptions::new()
+                    .with_interval(Duration::from_millis(1))
+                    .with_timeout(Duration::from_secs(1)),
+            )
+            .await
+            .expect("poll completed store");
+        assert!(matches!(response.status(), VectorStoreStatus::Completed));
+        assert_eq!(captures.lock().expect("capture lock").len(), 2);
+
+        let token = PollCancellationToken::new();
+        token.cancel();
+        let result = client
+            .vector_stores()
+            .poll(
+                &VectorStoreId::new("must-not-send"),
+                PollOptions::new().with_cancellation(token),
+            )
+            .await;
+        assert!(matches!(result, Err(PollError::Cancelled)));
+        assert_eq!(captures.lock().expect("capture lock").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_pages_advances_opaque_cursor_and_stops() {
+        let responses = vec![
+            json!({
+                "object":"list","data":[],"first_id":"vs_1",
+                "last_id":"opaque cursor","has_more":true
+            })
+            .to_string(),
+            json!({
+                "object":"list","data":[],"first_id":"vs_2",
+                "last_id":"vs_2","has_more":false
+            })
+            .to_string(),
+        ];
+        let (client, captures) = serve_script(responses).await;
+        let mut pages = client
+            .vector_stores()
+            .list_pages(VectorStoreListParams::new());
+        assert!(pages.next().await.expect("first page").is_ok());
+        assert!(pages.next().await.expect("second page").is_ok());
+        assert!(pages.next().await.is_none());
+
+        let captures = captures.lock().expect("capture lock").clone();
+        assert_eq!(captures.len(), 2);
+        assert_eq!(captures[0].path_and_query, "/v1/vector_stores");
+        let second = Url::parse(&format!("http://loopback{}", captures[1].path_and_query))
+            .expect("second page URL");
+        assert!(
+            second
+                .query_pairs()
+                .any(|(key, value)| key == "after" && value == "opaque cursor")
+        );
+    }
+
+    #[test]
+    fn operation_manifest_covers_every_pinned_vector_store_route() {
+        let contracts = [
+            (
+                CreateVectorStore::META.method,
+                CreateVectorStore::META.route,
+            ),
+            (ListVectorStores::META.method, ListVectorStores::META.route),
+            (
+                RetrieveVectorStore::META.method,
+                RetrieveVectorStore::META.route,
+            ),
+            (
+                UpdateVectorStore::META.method,
+                UpdateVectorStore::META.route,
+            ),
+            (
+                DeleteVectorStore::META.method,
+                DeleteVectorStore::META.route,
+            ),
+            (
+                SearchVectorStore::META.method,
+                SearchVectorStore::META.route,
+            ),
+            (
+                CreateVectorStoreFile::META.method,
+                CreateVectorStoreFile::META.route,
+            ),
+            (
+                ListVectorStoreFiles::META.method,
+                ListVectorStoreFiles::META.route,
+            ),
+            (
+                RetrieveVectorStoreFile::META.method,
+                RetrieveVectorStoreFile::META.route,
+            ),
+            (
+                UpdateVectorStoreFileAttributes::META.method,
+                UpdateVectorStoreFileAttributes::META.route,
+            ),
+            (
+                DeleteVectorStoreFile::META.method,
+                DeleteVectorStoreFile::META.route,
+            ),
+            (
+                RetrieveVectorStoreFileContent::META.method,
+                RetrieveVectorStoreFileContent::META.route,
+            ),
+            (
+                CreateVectorStoreFileBatch::META.method,
+                CreateVectorStoreFileBatch::META.route,
+            ),
+            (
+                RetrieveVectorStoreFileBatch::META.method,
+                RetrieveVectorStoreFileBatch::META.route,
+            ),
+            (
+                CancelVectorStoreFileBatch::META.method,
+                CancelVectorStoreFileBatch::META.route,
+            ),
+            (
+                ListVectorStoreFileBatchFiles::META.method,
+                ListVectorStoreFileBatchFiles::META.route,
+            ),
+        ];
+        assert_eq!(contracts.len(), 16);
+        assert!(
+            contracts
+                .iter()
+                .all(|(_, route)| route.starts_with("/vector_stores"))
+        );
+    }
+}

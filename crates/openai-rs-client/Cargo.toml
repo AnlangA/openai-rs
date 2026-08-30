@@ -24,17 +24,19 @@ native-tls = [
     "dep:native-tls",
 ]
 realtime = ["openai-rs-types/realtime", "dep:tokio-tungstenite"]
-webhook-verification = ["openai-rs-types/webhooks", "dep:sha2"]
+webhook-verification = ["openai-rs-types/webhooks", "dep:base64", "dep:hmac", "dep:sha2"]
 admin = ["openai-rs-types/admin"]
 workload-identity = []
 x509 = ["workload-identity"]
 
 [dependencies]
 async-stream.workspace = true
+base64 = { workspace = true, optional = true }
 bytes.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
 http.workspace = true
+hmac = { workspace = true, optional = true }
 httpdate = "1.0.3"
 native-tls = { version = "0.2.14", optional = true }
 openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0", default-features = false }

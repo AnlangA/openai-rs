@@ -708,11 +708,42 @@ pub struct RealtimeTranscriptionAudio {
     extra: ExtraFields,
 }
 
-/// Output-only audio configuration for one Realtime response.
+/// Output-audio override accepted by `response.create`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct RealtimeResponseAudioConfig {
+pub struct RealtimeResponseCreateAudioOutput {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub output: Omittable<RealtimeAudioOutputConfig>,
+    pub format: Omittable<RealtimeAudioFormat>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub voice: Omittable<RealtimeVoice>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// Audio configuration accepted by `response.create`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeResponseCreateAudio {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub output: Omittable<RealtimeResponseCreateAudioOutput>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// Effective output-audio configuration on a Realtime response.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeResponseAudioOutput {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub format: Omittable<RealtimeAudioFormat>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub voice: Omittable<RealtimeVoiceName>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// Effective audio configuration on a Realtime response.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeResponseAudio {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub output: Omittable<RealtimeResponseAudioOutput>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1224,6 +1255,10 @@ impl From<RealtimeTranscriptionSessionCreateRequest> for RealtimeSessionConfig {
 literal_tag!(RealtimeSessionObjectTag, Session, "realtime.session");
 
 /// Effective GA Realtime session returned by the server.
+///
+/// The pinned OpenAPI response schema requires `id` and `object`. The pinned
+/// generated Node/Python source aliases the request shape for session events;
+/// this type intentionally follows the authoritative GA response schema.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeSession {
     #[serde(rename = "type")]
@@ -1699,6 +1734,93 @@ pub struct RealtimeMcpListTools {
     extra: ExtraFields,
 }
 
+literal_tag!(RealtimeMcpProtocolErrorTag, ProtocolError, "protocol_error");
+literal_tag!(
+    RealtimeMcpToolExecutionErrorTag,
+    ToolExecutionError,
+    "tool_execution_error"
+);
+literal_tag!(RealtimeMcpHttpErrorTag, HttpError, "http_error");
+
+/// MCP protocol-level failure.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeMcpProtocolError {
+    #[serde(rename = "type")]
+    kind: RealtimeMcpProtocolErrorTag,
+    pub code: i64,
+    pub message: String,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// MCP tool execution failure.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeMcpToolExecutionError {
+    #[serde(rename = "type")]
+    kind: RealtimeMcpToolExecutionErrorTag,
+    pub message: String,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// HTTP failure returned by an MCP server.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeMcpHttpError {
+    #[serde(rename = "type")]
+    kind: RealtimeMcpHttpErrorTag,
+    pub code: i64,
+    pub message: String,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// Error attached to a Realtime MCP tool call.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum RealtimeMcpError {
+    Protocol(RealtimeMcpProtocolError),
+    ToolExecution(RealtimeMcpToolExecutionError),
+    Http(RealtimeMcpHttpError),
+    Unknown(UnknownRealtimeObject),
+}
+
+impl Serialize for RealtimeMcpError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Protocol(value) => value.serialize(serializer),
+            Self::ToolExecution(value) => value.serialize(serializer),
+            Self::Http(value) => value.serialize(serializer),
+            Self::Unknown(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RealtimeMcpError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        match object_discriminator(&value).map_err(D::Error::custom)? {
+            "protocol_error" => serde_json::from_value(value)
+                .map(Self::Protocol)
+                .map_err(D::Error::custom),
+            "tool_execution_error" => serde_json::from_value(value)
+                .map(Self::ToolExecution)
+                .map_err(D::Error::custom),
+            "http_error" => serde_json::from_value(value)
+                .map(Self::Http)
+                .map_err(D::Error::custom),
+            _ => UnknownRealtimeObject::from_value(value)
+                .map(Self::Unknown)
+                .map_err(D::Error::custom),
+        }
+    }
+}
+
 /// Realtime MCP tool invocation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeMcpToolCall {
@@ -1713,7 +1835,7 @@ pub struct RealtimeMcpToolCall {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub error: Omittable<Nullable<Value>>,
+    pub error: Omittable<Nullable<RealtimeMcpError>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1860,7 +1982,7 @@ pub struct RealtimeResponseCreateParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub instructions: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub audio: Omittable<RealtimeResponseAudioConfig>,
+    pub audio: Omittable<RealtimeResponseCreateAudio>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tools: Omittable<Vec<RealtimeTool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -1995,15 +2117,15 @@ pub struct RealtimeResponse {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub metadata: Omittable<BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub audio: Omittable<RealtimeResponseAudioConfig>,
+    pub audio: Omittable<RealtimeResponseAudio>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub usage: Omittable<RealtimeResponseUsage>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub conversation_id: Omittable<String>,
+    pub conversation_id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output_modalities: Omittable<Vec<RealtimeOutputModality>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub max_output_tokens: Omittable<RealtimeMaxOutputTokens>,
+    pub max_output_tokens: Omittable<Nullable<RealtimeMaxOutputTokens>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -3523,7 +3645,10 @@ impl_extra_fields!(
     RealtimeAudioOutputConfig,
     RealtimeSessionAudio,
     RealtimeTranscriptionAudio,
-    RealtimeResponseAudioConfig,
+    RealtimeResponseCreateAudioOutput,
+    RealtimeResponseCreateAudio,
+    RealtimeResponseAudioOutput,
+    RealtimeResponseAudio,
     RealtimeReasoning,
     RealtimeTracingConfig,
     RealtimeTruncationTokenLimits,
@@ -3546,6 +3671,9 @@ impl_extra_fields!(
     RealtimeMcpApprovalResponse,
     RealtimeMcpListedTool,
     RealtimeMcpListTools,
+    RealtimeMcpProtocolError,
+    RealtimeMcpToolExecutionError,
+    RealtimeMcpHttpError,
     RealtimeMcpToolCall,
     RealtimeMcpApprovalRequest,
     RealtimeResponseCreateParams,
@@ -3975,11 +4103,29 @@ mod tests {
                 "type": "realtime",
                 "audio": {"input": {"turn_detection": {"type": "server_vad"}}}
             }),
+            json!({"type": "realtime", "tracing": null}),
+            json!({"type": "realtime", "tracing": "auto"}),
+            json!({
+                "type": "realtime",
+                "tracing": {"workflow_name": "voice-agent", "future": true}
+            }),
         ] {
             let decoded: RealtimeSessionCreateRequest =
                 serde_json::from_value(fixture.clone()).expect("session decodes");
             assert_eq!(serde_json::to_value(decoded).expect("encode"), fixture);
         }
+
+        let response_fixture = json!({
+            "conversation_id": null,
+            "max_output_tokens": null,
+            "future": "retained"
+        });
+        let response: RealtimeResponse = serde_json::from_value(response_fixture.clone())
+            .expect("nullable response fields decode");
+        assert_eq!(
+            serde_json::to_value(response).expect("encode response"),
+            response_fixture
+        );
     }
 
     #[test]
@@ -4000,6 +4146,17 @@ mod tests {
             serde_json::from_value::<RealtimeConversationItem>(
                 json!({"type": "message", "role": "future", "content": []})
             )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<RealtimeConversationItem>(json!({
+                "type": "mcp_call",
+                "id": "mcp_1",
+                "server_label": "server",
+                "name": "tool",
+                "arguments": "{}",
+                "error": {"type": "protocol_error"}
+            }))
             .is_err()
         );
     }

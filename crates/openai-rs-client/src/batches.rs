@@ -12,7 +12,7 @@ use http::{Method, StatusCode};
 use openai_rs_types::{
     Batch, BatchEndpoint, BatchFileExpirationAfter, BatchId, BatchJsonlError, BatchJsonlWriter,
     BatchLine, BatchMetadata, CreateBatchRequest, CreateFileRequest, FileObject, FilePurpose,
-    ListBatchesResponse, ReplayableMultipartSource, batches::BatchListParams,
+    ListBatchesResponse, Omittable, ReplayableMultipartSource, batches::BatchListParams,
 };
 use serde::Serialize;
 use thiserror::Error as ThisError;
@@ -81,6 +81,9 @@ impl Batches {
         Box::pin(async_stream::try_stream! {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
+            if let Omittable::Value(cursor) = params.after_cursor() {
+                seen.insert(cursor.as_str().to_owned());
+            }
             loop {
                 let page = batches.list(params.clone()).await?;
                 let next = if page.has_more() {
@@ -293,6 +296,9 @@ pub enum BatchSubmissionError {
     /// The fixed multipart metadata for an input file was rejected.
     #[error("batch input file metadata is invalid")]
     InvalidInputFile,
+    /// A typed batch must contain at least one request line.
+    #[error("batch JSONL input must contain at least one request line")]
+    EmptyInput,
     /// A Platform Files or Batch request failed.
     #[error(transparent)]
     Client(#[from] Error),
@@ -320,6 +326,9 @@ where
                 .into());
             }
             writer.write_line(&line)?;
+        }
+        if writer.line_count() == 0 {
+            return Err(BatchSubmissionError::EmptyInput);
         }
         writer.flush()?;
         let mut buffered = writer.into_inner();
@@ -641,5 +650,13 @@ mod tests {
             error,
             BatchSubmissionError::Jsonl(BatchJsonlError::MixedEndpoints { .. })
         ));
+    }
+
+    #[test]
+    fn typed_submission_rejects_empty_input_before_upload() {
+        let lines = Vec::<BatchLine<CreateResponseRequest>>::new();
+        let error = write_temporary_jsonl(lines, &BatchEndpoint::Responses)
+            .expect_err("empty batch must fail");
+        assert!(matches!(error, BatchSubmissionError::EmptyInput));
     }
 }
