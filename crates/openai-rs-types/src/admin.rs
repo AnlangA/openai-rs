@@ -1946,9 +1946,41 @@ pub struct AdminOperationDto {
     pub response_mode: &'static str,
     pub success_statuses: &'static [u16],
     pub response_content_types: &'static [&'static str],
+    pub request_schema_refs: &'static [&'static str],
+    pub response_schema_refs: &'static [&'static str],
 }
 
 macro_rules! admin_op {
+    ("admin-api-keys-create", $method:literal, $path:literal, $request:literal, $response:literal) => {
+        AdminOperationDto {
+            operation_id: "admin-api-keys-create",
+            method: $method,
+            path: $path,
+            request_schema: $request,
+            response_schema: $response,
+            request_mode: "json",
+            response_mode: "json",
+            success_statuses: &[200],
+            response_content_types: &["application/json"],
+            request_schema_refs: &[],
+            response_schema_refs: &[concat!("#/components/schemas/", $response)],
+        }
+    };
+    ("admin-api-keys-delete", $method:literal, $path:literal, "()", $response:literal) => {
+        AdminOperationDto {
+            operation_id: "admin-api-keys-delete",
+            method: $method,
+            path: $path,
+            request_schema: "()",
+            response_schema: $response,
+            request_mode: "none",
+            response_mode: "json",
+            success_statuses: &[200],
+            response_content_types: &["application/json"],
+            request_schema_refs: &[],
+            response_schema_refs: &[],
+        }
+    };
     ($id:literal, $method:literal, $path:literal, "AdminListParams", $response:literal) => {
         admin_op!($id, $method, $path, "()", $response)
     };
@@ -1969,6 +2001,8 @@ macro_rules! admin_op {
             response_mode: "json",
             success_statuses: &[200],
             response_content_types: &["application/json"],
+            request_schema_refs: &[],
+            response_schema_refs: &[concat!("#/components/schemas/", $response)],
         }
     };
     ($id:literal, $method:literal, $path:literal, $request:literal, $response:literal) => {
@@ -1982,6 +2016,8 @@ macro_rules! admin_op {
             response_mode: "json",
             success_statuses: &[200],
             response_content_types: &["application/json"],
+            request_schema_refs: &[concat!("#/components/schemas/", $request)],
+            response_schema_refs: &[concat!("#/components/schemas/", $response)],
         }
     };
 }
@@ -2865,11 +2901,32 @@ mod tests {
             assert!(operation.path.starts_with('/'));
             assert!(!operation.request_schema.is_empty());
             assert!(!operation.response_schema.is_empty());
+            assert!(matches!(operation.request_mode, "none" | "json"));
+            assert_eq!(operation.response_mode, "json");
+            assert_eq!(operation.success_statuses, &[200]);
+            assert_eq!(operation.response_content_types, &["application/json"]);
+            if operation.request_mode == "none" {
+                assert!(operation.request_schema_refs.is_empty());
+            } else if operation.operation_id == "admin-api-keys-create" {
+                assert!(operation.request_schema_refs.is_empty());
+            } else {
+                assert_eq!(operation.request_schema_refs.len(), 1);
+            }
+            if operation.operation_id == "admin-api-keys-delete" {
+                assert!(operation.response_schema_refs.is_empty());
+            } else {
+                assert_eq!(operation.response_schema_refs.len(), 1);
+            }
         }
         assert!(ids.contains("admin-api-keys-create"));
         assert!(ids.contains("list-audit-logs"));
         assert!(ids.contains("usage-costs"));
         assert!(ids.contains("update-project-hosted-tool-permissions"));
+        let delete_key = ADMIN_OPERATION_MANIFEST
+            .iter()
+            .find(|operation| operation.operation_id == "admin-api-keys-delete")
+            .expect("delete-key contract");
+        assert_eq!(delete_key.response_schema, "AdminApiKeyDeleteResponse");
     }
 
     #[test]

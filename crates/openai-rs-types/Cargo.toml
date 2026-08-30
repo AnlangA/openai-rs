@@ -17,6 +17,7 @@ realtime = []
 webhooks = []
 admin = []
 legacy-completions = []
+custom-voice = []
 
 [dependencies]
 base64.workspace = true

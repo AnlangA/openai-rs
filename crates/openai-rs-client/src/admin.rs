@@ -118,6 +118,8 @@ pub trait AdminOperation: admin_operation_private::Sealed + Send + Sync + 'stati
     const RESPONSE_CONTENT_TYPES: &'static [&'static str];
     const REQUEST_TYPE: &'static str;
     const RESPONSE_TYPE: &'static str;
+    const REQUEST_SCHEMA_REFS: &'static [&'static str];
+    const RESPONSE_SCHEMA_REFS: &'static [&'static str];
 }
 
 mod admin_operation_private {
@@ -140,7 +142,7 @@ macro_rules! admin_query {
 admin_query!(AdminListParams, AuditLogListParams, UsageQueryParams);
 
 macro_rules! admin_operation {
-    ($name:ident, $id:literal, $method:ident, $route:literal, $request:ty, $response:ty, $encoding:ident, $mode:ident) => {
+    ($name:ident, $id:literal, $method:ident, $route:literal, $request:ty, $response:ty, $encoding:ident, $mode:ident, $request_refs:expr, $response_refs:expr) => {
         #[derive(Clone, Copy, Debug)]
         pub struct $name;
         impl admin_operation_private::Sealed for $name {}
@@ -156,6 +158,8 @@ macro_rules! admin_operation {
             const RESPONSE_CONTENT_TYPES: &'static [&'static str] = &["application/json"];
             const REQUEST_TYPE: &'static str = stringify!($request);
             const RESPONSE_TYPE: &'static str = stringify!($response);
+            const REQUEST_SCHEMA_REFS: &'static [&'static str] = $request_refs;
+            const RESPONSE_SCHEMA_REFS: &'static [&'static str] = $response_refs;
         }
         impl $name {
             pub const CONTRACT: AdminClientOperationContract = AdminClientOperationContract {
@@ -168,6 +172,8 @@ macro_rules! admin_operation {
                 response_content_types: &["application/json"],
                 request_type: stringify!($request),
                 response_type: stringify!($response),
+                request_schema_refs: $request_refs,
+                response_schema_refs: $response_refs,
             };
         }
     };
@@ -227,6 +233,8 @@ pub struct AdminClientOperationContract {
     pub response_content_types: &'static [&'static str],
     pub request_type: &'static str,
     pub response_type: &'static str,
+    pub request_schema_refs: &'static [&'static str],
+    pub response_schema_refs: &'static [&'static str],
 }
 
 /// Sealed Administration operation markers generated from the frozen manifest.
@@ -247,7 +255,9 @@ pub mod operations {
         CreateProjectServiceAccountApiKeyBody,
         ServiceAccountApiKeyBody,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/CreateProjectServiceAccountApiKeyBody"],
+        &["#/components/schemas/ServiceAccountApiKeyBody"]
     );
     admin_operation!(
         OpDeleteorganizationspendlimit,
@@ -257,7 +267,9 @@ pub mod operations {
         (),
         OrganizationSpendLimitDeletedResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/OrganizationSpendLimitDeletedResource"]
     );
     admin_operation!(
         OpDeleteprojectspendlimit,
@@ -267,7 +279,9 @@ pub mod operations {
         (),
         ProjectSpendLimitDeletedResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectSpendLimitDeletedResource"]
     );
     admin_operation!(
         OpGetorganizationspendlimit,
@@ -277,7 +291,9 @@ pub mod operations {
         (),
         OrganizationSpendLimitResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/OrganizationSpendLimitResource"]
     );
     admin_operation!(
         OpGetprojectspendlimit,
@@ -287,7 +303,9 @@ pub mod operations {
         (),
         ProjectSpendLimitResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectSpendLimitResource"]
     );
     admin_operation!(
         OpUpdateorganizationspendlimit,
@@ -297,7 +315,9 @@ pub mod operations {
         UpdateOrganizationSpendLimitBody,
         OrganizationSpendLimitResource,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/UpdateOrganizationSpendLimitBody"],
+        &["#/components/schemas/OrganizationSpendLimitResource"]
     );
     admin_operation!(
         OpUpdateprojectspendlimit,
@@ -307,7 +327,9 @@ pub mod operations {
         UpdateProjectSpendLimitBody,
         ProjectSpendLimitResource,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/UpdateProjectSpendLimitBody"],
+        &["#/components/schemas/ProjectSpendLimitResource"]
     );
     admin_operation!(
         OpActivateOrganizationCertificates,
@@ -317,7 +339,9 @@ pub mod operations {
         ToggleCertificatesRequest,
         OrganizationCertificateActivationResponse,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ToggleCertificatesRequest"],
+        &["#/components/schemas/OrganizationCertificateActivationResponse"]
     );
     admin_operation!(
         OpActivateProjectCertificates,
@@ -327,7 +351,9 @@ pub mod operations {
         ToggleCertificatesRequest,
         OrganizationProjectCertificateActivationResponse,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ToggleCertificatesRequest"],
+        &["#/components/schemas/OrganizationProjectCertificateActivationResponse"]
     );
     admin_operation!(
         OpAddGroupUser,
@@ -337,7 +363,9 @@ pub mod operations {
         CreateGroupUserBody,
         GroupUserAssignment,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/CreateGroupUserBody"],
+        &["#/components/schemas/GroupUserAssignment"]
     );
     admin_operation!(
         OpAddProjectGroup,
@@ -347,7 +375,9 @@ pub mod operations {
         InviteProjectGroupBody,
         ProjectGroup,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/InviteProjectGroupBody"],
+        &["#/components/schemas/ProjectGroup"]
     );
     admin_operation!(
         OpAdminApiKeysCreate,
@@ -357,7 +387,9 @@ pub mod operations {
         AdminApiKeyCreateRequest,
         AdminApiKeyCreateResponse,
         Json,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/AdminApiKeyCreateResponse"]
     );
     admin_operation!(
         OpAdminApiKeysDelete,
@@ -367,7 +399,9 @@ pub mod operations {
         (),
         AdminApiKeyDeleteResponse,
         None,
-        Json
+        Json,
+        &[],
+        &[]
     );
     admin_operation!(
         OpAdminApiKeysGet,
@@ -377,7 +411,9 @@ pub mod operations {
         (),
         AdminApiKey,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/AdminApiKey"]
     );
     admin_operation!(
         OpAdminApiKeysList,
@@ -387,7 +423,9 @@ pub mod operations {
         (),
         ApiKeyList,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ApiKeyList"]
     );
     admin_operation!(
         OpArchiveProject,
@@ -397,7 +435,9 @@ pub mod operations {
         (),
         Project,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/Project"]
     );
     admin_operation!(
         OpAssignGroupRole,
@@ -407,7 +447,9 @@ pub mod operations {
         PublicAssignOrganizationGroupRoleBody,
         GroupRoleAssignment,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/PublicAssignOrganizationGroupRoleBody"],
+        &["#/components/schemas/GroupRoleAssignment"]
     );
     admin_operation!(
         OpAssignProjectGroupRole,
@@ -417,7 +459,9 @@ pub mod operations {
         PublicAssignOrganizationGroupRoleBody,
         GroupRoleAssignment,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/PublicAssignOrganizationGroupRoleBody"],
+        &["#/components/schemas/GroupRoleAssignment"]
     );
     admin_operation!(
         OpAssignProjectUserRole,
@@ -427,7 +471,9 @@ pub mod operations {
         PublicAssignOrganizationGroupRoleBody,
         UserRoleAssignment,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/PublicAssignOrganizationGroupRoleBody"],
+        &["#/components/schemas/UserRoleAssignment"]
     );
     admin_operation!(
         OpAssignUserRole,
@@ -437,7 +483,9 @@ pub mod operations {
         PublicAssignOrganizationGroupRoleBody,
         UserRoleAssignment,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/PublicAssignOrganizationGroupRoleBody"],
+        &["#/components/schemas/UserRoleAssignment"]
     );
     admin_operation!(
         OpCreateGroup,
@@ -447,7 +495,9 @@ pub mod operations {
         CreateGroupBody,
         GroupResponse,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/CreateGroupBody"],
+        &["#/components/schemas/GroupResponse"]
     );
     admin_operation!(
         OpCreateOrganizationSpendAlert,
@@ -457,7 +507,9 @@ pub mod operations {
         CreateSpendAlertBody,
         OrganizationSpendAlert,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/CreateSpendAlertBody"],
+        &["#/components/schemas/OrganizationSpendAlert"]
     );
     admin_operation!(
         OpCreateProject,
@@ -467,7 +519,9 @@ pub mod operations {
         ProjectCreateRequest,
         Project,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ProjectCreateRequest"],
+        &["#/components/schemas/Project"]
     );
     admin_operation!(
         OpCreateProjectRole,
@@ -477,7 +531,9 @@ pub mod operations {
         PublicCreateOrganizationRoleBody,
         Role,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/PublicCreateOrganizationRoleBody"],
+        &["#/components/schemas/Role"]
     );
     admin_operation!(
         OpCreateProjectServiceAccount,
@@ -487,7 +543,9 @@ pub mod operations {
         ProjectServiceAccountCreateRequest,
         ProjectServiceAccountCreateResponse,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ProjectServiceAccountCreateRequest"],
+        &["#/components/schemas/ProjectServiceAccountCreateResponse"]
     );
     admin_operation!(
         OpCreateProjectSpendAlert,
@@ -497,7 +555,9 @@ pub mod operations {
         CreateSpendAlertBody,
         ProjectSpendAlert,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/CreateSpendAlertBody"],
+        &["#/components/schemas/ProjectSpendAlert"]
     );
     admin_operation!(
         OpCreateProjectUser,
@@ -507,7 +567,9 @@ pub mod operations {
         ProjectUserCreateRequest,
         ProjectUser,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ProjectUserCreateRequest"],
+        &["#/components/schemas/ProjectUser"]
     );
     admin_operation!(
         OpCreateRole,
@@ -517,7 +579,9 @@ pub mod operations {
         PublicCreateOrganizationRoleBody,
         Role,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/PublicCreateOrganizationRoleBody"],
+        &["#/components/schemas/Role"]
     );
     admin_operation!(
         OpDeactivateOrganizationCertificates,
@@ -527,7 +591,9 @@ pub mod operations {
         ToggleCertificatesRequest,
         OrganizationCertificateDeactivationResponse,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ToggleCertificatesRequest"],
+        &["#/components/schemas/OrganizationCertificateDeactivationResponse"]
     );
     admin_operation!(
         OpDeactivateProjectCertificates,
@@ -537,7 +603,9 @@ pub mod operations {
         ToggleCertificatesRequest,
         OrganizationProjectCertificateDeactivationResponse,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ToggleCertificatesRequest"],
+        &["#/components/schemas/OrganizationProjectCertificateDeactivationResponse"]
     );
     admin_operation!(
         OpDeleteGroup,
@@ -547,7 +615,9 @@ pub mod operations {
         (),
         GroupDeletedResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/GroupDeletedResource"]
     );
     admin_operation!(
         OpDeleteInvite,
@@ -557,7 +627,9 @@ pub mod operations {
         (),
         InviteDeleteResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/InviteDeleteResponse"]
     );
     admin_operation!(
         OpDeleteOrganizationSpendAlert,
@@ -567,7 +639,9 @@ pub mod operations {
         (),
         OrganizationSpendAlertDeletedResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/OrganizationSpendAlertDeletedResource"]
     );
     admin_operation!(
         OpDeleteProjectApiKey,
@@ -577,7 +651,9 @@ pub mod operations {
         (),
         ProjectApiKeyDeleteResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectApiKeyDeleteResponse"]
     );
     admin_operation!(
         OpDeleteProjectModelPermissions,
@@ -587,7 +663,9 @@ pub mod operations {
         (),
         ProjectModelPermissionsDeleteResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectModelPermissionsDeleteResponse"]
     );
     admin_operation!(
         OpDeleteProjectRole,
@@ -597,7 +675,9 @@ pub mod operations {
         (),
         RoleDeletedResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/RoleDeletedResource"]
     );
     admin_operation!(
         OpDeleteProjectServiceAccount,
@@ -607,7 +687,9 @@ pub mod operations {
         (),
         ProjectServiceAccountDeleteResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectServiceAccountDeleteResponse"]
     );
     admin_operation!(
         OpDeleteProjectSpendAlert,
@@ -617,7 +699,9 @@ pub mod operations {
         (),
         ProjectSpendAlertDeletedResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectSpendAlertDeletedResource"]
     );
     admin_operation!(
         OpDeleteProjectUser,
@@ -627,7 +711,9 @@ pub mod operations {
         (),
         ProjectUserDeleteResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectUserDeleteResponse"]
     );
     admin_operation!(
         OpDeleteRole,
@@ -637,7 +723,9 @@ pub mod operations {
         (),
         RoleDeletedResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/RoleDeletedResource"]
     );
     admin_operation!(
         OpDeleteUser,
@@ -647,7 +735,9 @@ pub mod operations {
         (),
         UserDeleteResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UserDeleteResponse"]
     );
     admin_operation!(
         OpDeleteCertificate,
@@ -657,7 +747,9 @@ pub mod operations {
         (),
         DeleteCertificateResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/DeleteCertificateResponse"]
     );
     admin_operation!(
         OpGetCertificate,
@@ -667,7 +759,9 @@ pub mod operations {
         (),
         Certificate,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/Certificate"]
     );
     admin_operation!(
         OpInviteUser,
@@ -677,7 +771,9 @@ pub mod operations {
         InviteRequest,
         Invite,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/InviteRequest"],
+        &["#/components/schemas/Invite"]
     );
     admin_operation!(
         OpListAuditLogs,
@@ -687,7 +783,9 @@ pub mod operations {
         (),
         ListAuditLogsResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ListAuditLogsResponse"]
     );
     admin_operation!(
         OpListGroupRoleAssignments,
@@ -697,7 +795,9 @@ pub mod operations {
         (),
         RoleListResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/RoleListResource"]
     );
     admin_operation!(
         OpListGroupUsers,
@@ -707,7 +807,9 @@ pub mod operations {
         (),
         UserListResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UserListResource"]
     );
     admin_operation!(
         OpListGroups,
@@ -717,7 +819,9 @@ pub mod operations {
         (),
         GroupListResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/GroupListResource"]
     );
     admin_operation!(
         OpListInvites,
@@ -727,7 +831,9 @@ pub mod operations {
         (),
         InviteListResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/InviteListResponse"]
     );
     admin_operation!(
         OpListOrganizationSpendAlerts,
@@ -737,7 +843,9 @@ pub mod operations {
         (),
         OrganizationSpendAlertListResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/OrganizationSpendAlertListResource"]
     );
     admin_operation!(
         OpListProjectApiKeys,
@@ -747,7 +855,9 @@ pub mod operations {
         (),
         ProjectApiKeyListResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectApiKeyListResponse"]
     );
     admin_operation!(
         OpListProjectGroupRoleAssignments,
@@ -757,7 +867,9 @@ pub mod operations {
         (),
         RoleListResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/RoleListResource"]
     );
     admin_operation!(
         OpListProjectGroups,
@@ -767,7 +879,9 @@ pub mod operations {
         (),
         ProjectGroupListResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectGroupListResource"]
     );
     admin_operation!(
         OpListProjectRateLimits,
@@ -777,7 +891,9 @@ pub mod operations {
         (),
         ProjectRateLimitListResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectRateLimitListResponse"]
     );
     admin_operation!(
         OpListProjectRoles,
@@ -787,7 +903,9 @@ pub mod operations {
         (),
         PublicRoleListResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/PublicRoleListResource"]
     );
     admin_operation!(
         OpListProjectServiceAccounts,
@@ -797,7 +915,9 @@ pub mod operations {
         (),
         ProjectServiceAccountListResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectServiceAccountListResponse"]
     );
     admin_operation!(
         OpListProjectSpendAlerts,
@@ -807,7 +927,9 @@ pub mod operations {
         (),
         ProjectSpendAlertListResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectSpendAlertListResource"]
     );
     admin_operation!(
         OpListProjectUserRoleAssignments,
@@ -817,7 +939,9 @@ pub mod operations {
         (),
         RoleListResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/RoleListResource"]
     );
     admin_operation!(
         OpListProjectUsers,
@@ -827,7 +951,9 @@ pub mod operations {
         (),
         ProjectUserListResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectUserListResponse"]
     );
     admin_operation!(
         OpListProjects,
@@ -837,7 +963,9 @@ pub mod operations {
         (),
         ProjectListResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectListResponse"]
     );
     admin_operation!(
         OpListRoles,
@@ -847,7 +975,9 @@ pub mod operations {
         (),
         PublicRoleListResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/PublicRoleListResource"]
     );
     admin_operation!(
         OpListUserRoleAssignments,
@@ -857,7 +987,9 @@ pub mod operations {
         (),
         RoleListResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/RoleListResource"]
     );
     admin_operation!(
         OpListUsers,
@@ -867,7 +999,9 @@ pub mod operations {
         (),
         UserListResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UserListResponse"]
     );
     admin_operation!(
         OpListOrganizationCertificates,
@@ -877,7 +1011,9 @@ pub mod operations {
         (),
         ListCertificatesResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ListCertificatesResponse"]
     );
     admin_operation!(
         OpListProjectCertificates,
@@ -887,7 +1023,9 @@ pub mod operations {
         (),
         ListProjectCertificatesResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ListProjectCertificatesResponse"]
     );
     admin_operation!(
         OpModifyProject,
@@ -897,7 +1035,9 @@ pub mod operations {
         ProjectUpdateRequest,
         Project,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ProjectUpdateRequest"],
+        &["#/components/schemas/Project"]
     );
     admin_operation!(
         OpModifyProjectUser,
@@ -907,7 +1047,9 @@ pub mod operations {
         ProjectUserUpdateRequest,
         ProjectUser,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ProjectUserUpdateRequest"],
+        &["#/components/schemas/ProjectUser"]
     );
     admin_operation!(
         OpModifyUser,
@@ -917,7 +1059,9 @@ pub mod operations {
         UserRoleUpdateRequest,
         User,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/UserRoleUpdateRequest"],
+        &["#/components/schemas/User"]
     );
     admin_operation!(
         OpModifyCertificate,
@@ -927,7 +1071,9 @@ pub mod operations {
         ModifyCertificateRequest,
         Certificate,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ModifyCertificateRequest"],
+        &["#/components/schemas/Certificate"]
     );
     admin_operation!(
         OpRemoveGroupUser,
@@ -937,7 +1083,9 @@ pub mod operations {
         (),
         GroupUserDeletedResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/GroupUserDeletedResource"]
     );
     admin_operation!(
         OpRemoveProjectGroup,
@@ -947,7 +1095,9 @@ pub mod operations {
         (),
         ProjectGroupDeletedResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectGroupDeletedResource"]
     );
     admin_operation!(
         OpRetrieveGroup,
@@ -957,7 +1107,9 @@ pub mod operations {
         (),
         GroupResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/GroupResponse"]
     );
     admin_operation!(
         OpRetrieveGroupRole,
@@ -967,7 +1119,9 @@ pub mod operations {
         (),
         AssignedRoleDetails,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/AssignedRoleDetails"]
     );
     admin_operation!(
         OpRetrieveGroupUser,
@@ -977,7 +1131,9 @@ pub mod operations {
         (),
         GroupMemberUser,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/GroupMemberUser"]
     );
     admin_operation!(
         OpRetrieveInvite,
@@ -987,7 +1143,9 @@ pub mod operations {
         (),
         Invite,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/Invite"]
     );
     admin_operation!(
         OpRetrieveOrganizationDataRetention,
@@ -997,7 +1155,9 @@ pub mod operations {
         (),
         OrganizationDataRetention,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/OrganizationDataRetention"]
     );
     admin_operation!(
         OpRetrieveOrganizationSpendAlert,
@@ -1007,7 +1167,9 @@ pub mod operations {
         (),
         OrganizationSpendAlert,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/OrganizationSpendAlert"]
     );
     admin_operation!(
         OpRetrieveProject,
@@ -1017,7 +1179,9 @@ pub mod operations {
         (),
         Project,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/Project"]
     );
     admin_operation!(
         OpRetrieveProjectApiKey,
@@ -1027,7 +1191,9 @@ pub mod operations {
         (),
         ProjectApiKey,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectApiKey"]
     );
     admin_operation!(
         OpRetrieveProjectDataRetention,
@@ -1037,7 +1203,9 @@ pub mod operations {
         (),
         ProjectDataRetention,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectDataRetention"]
     );
     admin_operation!(
         OpRetrieveProjectGroup,
@@ -1047,7 +1215,9 @@ pub mod operations {
         (),
         ProjectGroup,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectGroup"]
     );
     admin_operation!(
         OpRetrieveProjectGroupRole,
@@ -1057,7 +1227,9 @@ pub mod operations {
         (),
         AssignedRoleDetails,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/AssignedRoleDetails"]
     );
     admin_operation!(
         OpRetrieveProjectHostedToolPermissions,
@@ -1067,7 +1239,9 @@ pub mod operations {
         (),
         ProjectHostedToolPermissions,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectHostedToolPermissions"]
     );
     admin_operation!(
         OpRetrieveProjectModelPermissions,
@@ -1077,7 +1251,9 @@ pub mod operations {
         (),
         ProjectModelPermissions,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectModelPermissions"]
     );
     admin_operation!(
         OpRetrieveProjectRole,
@@ -1087,7 +1263,9 @@ pub mod operations {
         (),
         Role,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/Role"]
     );
     admin_operation!(
         OpRetrieveProjectServiceAccount,
@@ -1097,7 +1275,9 @@ pub mod operations {
         (),
         ProjectServiceAccount,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectServiceAccount"]
     );
     admin_operation!(
         OpRetrieveProjectSpendAlert,
@@ -1107,7 +1287,9 @@ pub mod operations {
         (),
         ProjectSpendAlert,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectSpendAlert"]
     );
     admin_operation!(
         OpRetrieveProjectUser,
@@ -1117,7 +1299,9 @@ pub mod operations {
         (),
         ProjectUser,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/ProjectUser"]
     );
     admin_operation!(
         OpRetrieveProjectUserRole,
@@ -1127,7 +1311,9 @@ pub mod operations {
         (),
         AssignedRoleDetails,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/AssignedRoleDetails"]
     );
     admin_operation!(
         OpRetrieveRole,
@@ -1137,7 +1323,9 @@ pub mod operations {
         (),
         Role,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/Role"]
     );
     admin_operation!(
         OpRetrieveUser,
@@ -1147,7 +1335,9 @@ pub mod operations {
         (),
         User,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/User"]
     );
     admin_operation!(
         OpRetrieveUserRole,
@@ -1157,7 +1347,9 @@ pub mod operations {
         (),
         AssignedRoleDetails,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/AssignedRoleDetails"]
     );
     admin_operation!(
         OpUnassignGroupRole,
@@ -1167,7 +1359,9 @@ pub mod operations {
         (),
         DeletedRoleAssignmentResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/DeletedRoleAssignmentResource"]
     );
     admin_operation!(
         OpUnassignProjectGroupRole,
@@ -1177,7 +1371,9 @@ pub mod operations {
         (),
         DeletedRoleAssignmentResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/DeletedRoleAssignmentResource"]
     );
     admin_operation!(
         OpUnassignProjectUserRole,
@@ -1187,7 +1383,9 @@ pub mod operations {
         (),
         DeletedRoleAssignmentResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/DeletedRoleAssignmentResource"]
     );
     admin_operation!(
         OpUnassignUserRole,
@@ -1197,7 +1395,9 @@ pub mod operations {
         (),
         DeletedRoleAssignmentResource,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/DeletedRoleAssignmentResource"]
     );
     admin_operation!(
         OpUpdateGroup,
@@ -1207,7 +1407,9 @@ pub mod operations {
         UpdateGroupBody,
         GroupResourceWithSuccess,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/UpdateGroupBody"],
+        &["#/components/schemas/GroupResourceWithSuccess"]
     );
     admin_operation!(
         OpUpdateOrganizationDataRetention,
@@ -1217,7 +1419,9 @@ pub mod operations {
         UpdateOrganizationDataRetentionBody,
         OrganizationDataRetention,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/UpdateOrganizationDataRetentionBody"],
+        &["#/components/schemas/OrganizationDataRetention"]
     );
     admin_operation!(
         OpUpdateOrganizationSpendAlert,
@@ -1227,7 +1431,9 @@ pub mod operations {
         CreateSpendAlertBody,
         OrganizationSpendAlert,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/CreateSpendAlertBody"],
+        &["#/components/schemas/OrganizationSpendAlert"]
     );
     admin_operation!(
         OpUpdateProjectDataRetention,
@@ -1237,7 +1443,9 @@ pub mod operations {
         UpdateProjectDataRetentionBody,
         ProjectDataRetention,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/UpdateProjectDataRetentionBody"],
+        &["#/components/schemas/ProjectDataRetention"]
     );
     admin_operation!(
         OpUpdateProjectHostedToolPermissions,
@@ -1247,7 +1455,9 @@ pub mod operations {
         ProjectHostedToolPermissionsUpdateRequest,
         ProjectHostedToolPermissions,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ProjectHostedToolPermissionsUpdateRequest"],
+        &["#/components/schemas/ProjectHostedToolPermissions"]
     );
     admin_operation!(
         OpUpdateProjectModelPermissions,
@@ -1257,7 +1467,9 @@ pub mod operations {
         ProjectModelPermissionsUpdateRequest,
         ProjectModelPermissions,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ProjectModelPermissionsUpdateRequest"],
+        &["#/components/schemas/ProjectModelPermissions"]
     );
     admin_operation!(
         OpUpdateProjectRateLimits,
@@ -1267,7 +1479,9 @@ pub mod operations {
         ProjectRateLimitUpdateRequest,
         ProjectRateLimit,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/ProjectRateLimitUpdateRequest"],
+        &["#/components/schemas/ProjectRateLimit"]
     );
     admin_operation!(
         OpUpdateProjectRole,
@@ -1277,7 +1491,9 @@ pub mod operations {
         PublicUpdateOrganizationRoleBody,
         Role,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/PublicUpdateOrganizationRoleBody"],
+        &["#/components/schemas/Role"]
     );
     admin_operation!(
         OpUpdateProjectServiceAccount,
@@ -1287,7 +1503,9 @@ pub mod operations {
         UpdateProjectServiceAccountBody,
         ProjectServiceAccount,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/UpdateProjectServiceAccountBody"],
+        &["#/components/schemas/ProjectServiceAccount"]
     );
     admin_operation!(
         OpUpdateProjectSpendAlert,
@@ -1297,7 +1515,9 @@ pub mod operations {
         CreateSpendAlertBody,
         ProjectSpendAlert,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/CreateSpendAlertBody"],
+        &["#/components/schemas/ProjectSpendAlert"]
     );
     admin_operation!(
         OpUpdateRole,
@@ -1307,7 +1527,9 @@ pub mod operations {
         PublicUpdateOrganizationRoleBody,
         Role,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/PublicUpdateOrganizationRoleBody"],
+        &["#/components/schemas/Role"]
     );
     admin_operation!(
         OpUploadCertificate,
@@ -1317,7 +1539,9 @@ pub mod operations {
         UploadCertificateRequest,
         Certificate,
         Json,
-        Json
+        Json,
+        &["#/components/schemas/UploadCertificateRequest"],
+        &["#/components/schemas/Certificate"]
     );
     admin_operation!(
         OpUsageAudioSpeeches,
@@ -1327,7 +1551,9 @@ pub mod operations {
         (),
         UsageResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UsageResponse"]
     );
     admin_operation!(
         OpUsageAudioTranscriptions,
@@ -1337,7 +1563,9 @@ pub mod operations {
         (),
         UsageResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UsageResponse"]
     );
     admin_operation!(
         OpUsageCodeInterpreterSessions,
@@ -1347,7 +1575,9 @@ pub mod operations {
         (),
         UsageResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UsageResponse"]
     );
     admin_operation!(
         OpUsageCompletions,
@@ -1357,7 +1587,9 @@ pub mod operations {
         (),
         UsageResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UsageResponse"]
     );
     admin_operation!(
         OpUsageCosts,
@@ -1367,7 +1599,9 @@ pub mod operations {
         (),
         UsageResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UsageResponse"]
     );
     admin_operation!(
         OpUsageEmbeddings,
@@ -1377,7 +1611,9 @@ pub mod operations {
         (),
         UsageResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UsageResponse"]
     );
     admin_operation!(
         OpUsageFileSearchCalls,
@@ -1387,7 +1623,9 @@ pub mod operations {
         (),
         UsageResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UsageResponse"]
     );
     admin_operation!(
         OpUsageImages,
@@ -1397,7 +1635,9 @@ pub mod operations {
         (),
         UsageResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UsageResponse"]
     );
     admin_operation!(
         OpUsageModerations,
@@ -1407,7 +1647,9 @@ pub mod operations {
         (),
         UsageResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UsageResponse"]
     );
     admin_operation!(
         OpUsageVectorStores,
@@ -1417,7 +1659,9 @@ pub mod operations {
         (),
         UsageResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UsageResponse"]
     );
     admin_operation!(
         OpUsageWebSearchCalls,
@@ -1427,7 +1671,9 @@ pub mod operations {
         (),
         UsageResponse,
         None,
-        Json
+        Json,
+        &[],
+        &["#/components/schemas/UsageResponse"]
     );
 }
 
@@ -2761,6 +3007,11 @@ mod tests {
                                 )
                             } else if path_and_query == "/v1/organization/admin_api_keys/key_204" {
                                 (StatusCode::NO_CONTENT, "")
+                            } else if path_and_query == "/v1/organization/admin_api_keys/key_text" {
+                                (
+                                    StatusCode::OK,
+                                    r#"{"id":"key_text","object":"organization.admin_api_key.deleted","deleted":true}"#,
+                                )
                             } else if path_and_query == "/v1/organization/admin_api_keys" {
                                 (
                                     StatusCode::OK,
@@ -2774,9 +3025,14 @@ mod tests {
                             } else {
                                 (StatusCode::NOT_FOUND, r#"{"error":{"message":"missing"}}"#)
                             };
+                            let content_type = if path_and_query.ends_with("/key_text") {
+                                "text/plain"
+                            } else {
+                                "application/json"
+                            };
                             let response = Response::builder()
                                 .status(status)
-                                .header(header::CONTENT_TYPE, "application/json")
+                                .header(header::CONTENT_TYPE, content_type)
                                 .header("x-request-id", "req_admin_test")
                                 .body(Full::new(Bytes::copy_from_slice(response_body.as_bytes())))
                                 .expect("response");
@@ -2950,6 +3206,14 @@ mod tests {
             .await
             .expect_err("204 is not the pinned 200 JSON contract");
         assert_eq!(error.status(), Some(StatusCode::NO_CONTENT));
+
+        let error = client
+            .api_keys()
+            .delete("key_text")
+            .await
+            .expect_err("non-JSON success MIME violates the pinned contract");
+        assert!(matches!(error, Error::UnexpectedContentType { .. }));
+        assert_eq!(error.status(), Some(StatusCode::OK));
         task.abort();
     }
 
@@ -3165,6 +3429,16 @@ mod tests {
             assert_eq!(
                 actual.response_type, expected.response_schema,
                 "{} response type",
+                actual.operation_id
+            );
+            assert_eq!(
+                actual.request_schema_refs, expected.request_schema_refs,
+                "{} request schema refs",
+                actual.operation_id
+            );
+            assert_eq!(
+                actual.response_schema_refs, expected.response_schema_refs,
+                "{} response schema refs",
                 actual.operation_id
             );
         }

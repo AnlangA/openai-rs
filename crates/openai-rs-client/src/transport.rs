@@ -152,6 +152,31 @@ impl Transport {
         self.decode_json(response).await
     }
 
+    /// Executes a JSON operation with one operation-owned static header.
+    /// Callers cannot use this to override authentication or codec headers.
+    pub(crate) async fn execute_json_with_static_header<O, Q>(
+        &self,
+        path: &[PathSegment<'_>],
+        query: Option<&Q>,
+        body: Option<&O::Request>,
+        name: &'static str,
+        value: &'static str,
+    ) -> Result<ApiResponse<O::Response>, Error>
+    where
+        O: Operation,
+        Q: Serialize + ?Sized,
+    {
+        if O::META.response_mode != crate::operation::ResponseMode::Json {
+            return Err(Error::InvalidConfiguration(
+                "JSON decoder used for a non-JSON operation".into(),
+            ));
+        }
+        let response = self
+            .send_with_static_header::<O, Q>(path, query, body, Some((name, value)))
+            .await?;
+        self.decode_json(response).await
+    }
+
     pub(crate) async fn execute_optional_json<O, Q>(
         &self,
         path: &[PathSegment<'_>],
@@ -206,6 +231,21 @@ impl Transport {
         O: Operation,
         Q: Serialize + ?Sized,
     {
+        self.send_with_static_header::<O, Q>(path, query, body, None)
+            .await
+    }
+
+    async fn send_with_static_header<O, Q>(
+        &self,
+        path: &[PathSegment<'_>],
+        query: Option<&Q>,
+        body: Option<&O::Request>,
+        static_header: Option<(&'static str, &'static str)>,
+    ) -> Result<reqwest::Response, Error>
+    where
+        O: Operation,
+        Q: Serialize + ?Sized,
+    {
         let meta = &O::META;
         if meta.id.is_empty() || !meta.route.starts_with('/') {
             return Err(Error::InvalidConfiguration(
@@ -248,6 +288,9 @@ impl Transport {
             .map(serde_json::to_vec)
             .transpose()
             .map_err(Error::Encode)?;
+        let static_header = static_header
+            .map(validate_static_operation_header)
+            .transpose()?;
         let started = Instant::now();
         let mut retries = 0;
         let mut auth_refreshed = false;
@@ -270,6 +313,9 @@ impl Transport {
             }
             if let Some(project) = &self.project {
                 request = request.header("OpenAI-Project", project.clone());
+            }
+            if let Some((name, value)) = &static_header {
+                request = request.header(name.clone(), value.clone());
             }
             if let Some(encoded) = &encoded_body {
                 request = request
@@ -577,6 +623,28 @@ fn same_origin(left: &Url, right: &Url) -> bool {
         && left.port_or_known_default() == right.port_or_known_default()
 }
 
+fn validate_static_operation_header(
+    (name, value): (&'static str, &'static str),
+) -> Result<(http::header::HeaderName, HeaderValue), Error> {
+    let name = http::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+        Error::InvalidConfiguration("operation static header has an invalid name".into())
+    })?;
+    if matches!(
+        name,
+        header::AUTHORIZATION | header::ACCEPT | header::CONTENT_TYPE | header::HOST
+    ) || name.as_str().eq_ignore_ascii_case("openai-organization")
+        || name.as_str().eq_ignore_ascii_case("openai-project")
+    {
+        return Err(Error::InvalidConfiguration(
+            "operation static header cannot override a protected header".into(),
+        ));
+    }
+    let value = HeaderValue::from_str(value).map_err(|_| {
+        Error::InvalidConfiguration("operation static header has an invalid value".into())
+    })?;
+    Ok((name, value))
+}
+
 pub(crate) struct JsonDecodeFailure {
     pub source: serde_json::Error,
     pub path: Option<Box<str>>,
@@ -830,6 +898,21 @@ mod tests {
         append_query(&mut url, &serde_json::json!({})).expect("empty query");
         assert_eq!(url.as_str(), "https://api.openai.com/v1/responses/resp_1");
         assert!(url.query().is_none());
+    }
+
+    #[test]
+    fn operation_static_headers_cannot_override_security_or_codec_headers() {
+        assert!(validate_static_operation_header(("OpenAI-Beta", "chatkit_beta=v1")).is_ok());
+        for name in [
+            "Authorization",
+            "Accept",
+            "Content-Type",
+            "Host",
+            "OpenAI-Organization",
+            "OpenAI-Project",
+        ] {
+            assert!(validate_static_operation_header((name, "forbidden")).is_err());
+        }
     }
 
     #[test]

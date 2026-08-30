@@ -2420,7 +2420,11 @@ pub struct RealtimeTranslationSecretLifetimeError {
     pub seconds: u16,
 }
 
-literal_tag!(RealtimeTranslationExpirationAnchorTag, CreatedAt, "created_at");
+literal_tag!(
+    RealtimeTranslationExpirationAnchorTag,
+    CreatedAt,
+    "created_at"
+);
 
 /// Expiration configuration for a Realtime translation client secret.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -2806,7 +2810,6 @@ impl RealtimeCallCreateRequest {
         self.session = Omittable::Omitted;
         self
     }
-
 }
 
 /// JSON request accepted when attaching a session to an incoming call.
@@ -2834,7 +2837,6 @@ impl RealtimeCallReferRequest {
     pub fn parse(target_uri: &str) -> Result<Self, url::ParseError> {
         url::Url::parse(target_uri).map(Self::new)
     }
-
 }
 
 /// Request to reject an incoming SIP call.
@@ -2866,7 +2868,6 @@ impl RealtimeCallRejectRequest {
         self.status_code = Omittable::Omitted;
         self
     }
-
 }
 
 /// Marker for the body-less Realtime call hangup operation.
@@ -4668,8 +4669,8 @@ mod tests {
             json!({"sdp": "v=0\r\n", "session": {"type": "realtime"}})
         );
 
-        let refer = RealtimeCallReferRequest::parse("sip:agent@example.com")
-            .expect("absolute SIP URI");
+        let refer =
+            RealtimeCallReferRequest::parse("sip:agent@example.com").expect("absolute SIP URI");
         assert_eq!(
             serde_json::to_value(refer).expect("encode refer"),
             json!({"target_uri": "sip:agent@example.com"})
@@ -4726,8 +4727,7 @@ mod tests {
             );
         let request = RealtimeTranslationClientSecretCreateRequest::new(session)
             .with_expires_after(
-                RealtimeTranslationClientSecretExpiration::new(600)
-                    .expect("translation lifetime"),
+                RealtimeTranslationClientSecretExpiration::new(600).expect("translation lifetime"),
             );
         assert_eq!(
             serde_json::to_value(request).expect("encode translation request"),

@@ -43,6 +43,16 @@ pub use openai_rs_client::{
 #[cfg(all(feature = "client", feature = "legacy-completions"))]
 pub use openai_rs_client::{CompletionEventStream, Completions};
 
+#[cfg(all(feature = "client", feature = "custom-voice"))]
+pub use openai_rs_client::{VoiceConsentPageStream, VoiceConsents, Voices};
+
+/// Explicitly unstable and access-controlled API surfaces.
+#[cfg(feature = "alpha-graders")]
+pub mod experimental {
+    pub use openai_rs_client::AlphaGraders;
+    pub use openai_rs_types::evals::experimental::*;
+}
+
 #[cfg(all(feature = "client", feature = "realtime"))]
 pub use openai_rs_client::{
     Realtime, RealtimeCallCreated, RealtimeWebSocket, RealtimeWebSocketConfig,

@@ -13,6 +13,7 @@ use openai_rs_types::realtime::{
     RealtimeCallRejectRequest, RealtimeClientEvent, RealtimeClientEventInputAudioBufferAppend,
     RealtimeClientEventResponseCancel, RealtimeCreateClientSecretRequest,
     RealtimeCreateClientSecretResponse, RealtimeSdp, RealtimeServerEvent,
+    RealtimeTranslationClientSecretCreateRequest, RealtimeTranslationClientSecretCreateResponse,
 };
 use openai_rs_types::{ModelId, Omittable};
 use reqwest::multipart::{Form, Part};
@@ -79,6 +80,22 @@ impl Realtime {
         self.client
             .transport()
             .execute_json::<CreateClientSecret, ()>(&path, None, Some(&request))
+            .await
+    }
+
+    /// Creates a short-lived client secret for a typed translation session.
+    pub async fn create_translation_client_secret(
+        &self,
+        request: RealtimeTranslationClientSecretCreateRequest,
+    ) -> Result<ApiResponse<RealtimeTranslationClientSecretCreateResponse>, Error> {
+        let path = [
+            PathSegment::literal("realtime"),
+            PathSegment::literal("translations"),
+            PathSegment::literal("client_secrets"),
+        ];
+        self.client
+            .transport()
+            .execute_json::<CreateTranslationClientSecret, ()>(&path, None, Some(&request))
             .await
     }
 
@@ -614,6 +631,14 @@ operation!(
     ResponseMode::Json
 );
 operation!(
+    CreateTranslationClientSecret,
+    RealtimeTranslationClientSecretCreateRequest,
+    RealtimeTranslationClientSecretCreateResponse,
+    "/realtime/translations/client_secrets",
+    RequestEncoding::Json,
+    ResponseMode::Json
+);
+operation!(
     AcceptCall,
     RealtimeCallAcceptRequest,
     (),
@@ -665,7 +690,11 @@ mod tests {
     use http_body_util::{BodyExt, Full};
     use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
     use hyper_util::rt::TokioIo;
-    use openai_rs_types::realtime::RealtimeSessionCreateRequest;
+    use openai_rs_types::realtime::{
+        RealtimeSessionCreateRequest, RealtimeTranslationAudio, RealtimeTranslationAudioInput,
+        RealtimeTranslationAudioOutput, RealtimeTranslationClientSecretCreateRequest,
+        RealtimeTranslationClientSecretExpiration, RealtimeTranslationSessionCreateRequest,
+    };
     use serde_json::{Value, json};
     use tokio::{net::TcpListener, sync::oneshot};
     use tokio_tungstenite::{accept_hdr_async, tungstenite::handshake::server};
@@ -911,6 +940,48 @@ mod tests {
         assert_eq!(captured.method, reqwest::Method::POST);
         assert_eq!(captured.path, "/v1/realtime/client_secrets");
         assert_eq!(captured.body, b"{}");
+    }
+
+    #[tokio::test]
+    async fn translation_client_secret_uses_fixed_typed_route_and_redacts_secret() {
+        let (client, captured) = http_server(
+            StatusCode::OK,
+            "application/json",
+            r#"{"value":"ek_translation_private","expires_at":123,"session":{"id":"sess_translation","type":"translation","expires_at":123,"model":"gpt-realtime-translate","audio":{"input":{"transcription":null,"noise_reduction":null},"output":{"language":"es"}}}}"#,
+            None,
+        )
+        .await;
+        let session = RealtimeTranslationSessionCreateRequest::new("gpt-realtime-translate")
+            .with_audio(
+                RealtimeTranslationAudio::default()
+                    .with_input(RealtimeTranslationAudioInput::default().with_transcription_null())
+                    .with_output(RealtimeTranslationAudioOutput::new("es")),
+            );
+        let request = RealtimeTranslationClientSecretCreateRequest::new(session)
+            .with_expires_after(
+                RealtimeTranslationClientSecretExpiration::new(600)
+                    .expect("valid translation secret lifetime"),
+            );
+        let response = client
+            .realtime()
+            .create_translation_client_secret(request)
+            .await
+            .expect("translation client secret");
+        assert!(!format!("{:?}", response.body()).contains("ek_translation_private"));
+        assert_eq!(response.session.model, "gpt-realtime-translate");
+        assert_eq!(response.request_id(), Some("req_realtime_http"));
+
+        let captured = captured.await.expect("captured translation secret request");
+        assert_eq!(captured.method, reqwest::Method::POST);
+        assert_eq!(captured.path, "/v1/realtime/translations/client_secrets");
+        let body: Value = serde_json::from_slice(&captured.body).expect("translation JSON");
+        assert_eq!(body["expires_after"]["anchor"], "created_at");
+        assert_eq!(body["expires_after"]["seconds"], 600);
+        assert_eq!(body["session"]["model"], "gpt-realtime-translate");
+        assert_eq!(
+            body["session"]["audio"]["input"]["transcription"],
+            Value::Null
+        );
     }
 
     #[tokio::test]

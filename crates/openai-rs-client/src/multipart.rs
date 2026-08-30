@@ -991,6 +991,12 @@ enum PreparedSourceInner {
 }
 
 impl PreparedReplayableSource {
+    /// Length frozen during bytes/path preparation.
+    #[cfg(feature = "custom-voice")]
+    pub(crate) const fn length(&self) -> u64 {
+        self.length
+    }
+
     pub(crate) async fn prepare(source: &ReplayableMultipartSource) -> Result<Self, Error> {
         match source {
             ReplayableMultipartSource::Bytes {

@@ -29,6 +29,9 @@ pub mod realtime;
 #[cfg(feature = "legacy-completions")]
 pub mod legacy;
 
+#[cfg(feature = "custom-voice")]
+pub mod voices;
+
 #[cfg(feature = "structured-output")]
 pub mod structured;
 
@@ -51,6 +54,9 @@ pub use realtime::*;
 
 #[cfg(feature = "legacy-completions")]
 pub use legacy::*;
+
+#[cfg(feature = "custom-voice")]
+pub use voices::*;
 
 #[cfg(feature = "structured-output")]
 pub use structured::{StructuredError, StructuredOutput, TypedFunction, normalize_strict_schema};

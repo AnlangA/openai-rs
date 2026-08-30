@@ -29,6 +29,8 @@ admin = ["openai-rs-types/admin"]
 workload-identity = []
 x509 = ["workload-identity", "rustls-tls"]
 legacy-completions = ["openai-rs-types/legacy-completions"]
+custom-voice = ["openai-rs-types/custom-voice"]
+alpha-graders = []
 
 [dependencies]
 async-stream.workspace = true

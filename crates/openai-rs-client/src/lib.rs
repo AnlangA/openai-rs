@@ -5,6 +5,8 @@
 
 #[cfg(feature = "admin")]
 mod admin;
+#[cfg(feature = "alpha-graders")]
+mod alpha_graders;
 mod auth;
 mod batches;
 mod chat_completions;
@@ -34,6 +36,8 @@ mod skills;
 pub mod sse;
 pub(crate) mod transport;
 mod vector_stores;
+#[cfg(feature = "custom-voice")]
+mod voices;
 #[cfg(feature = "webhook-verification")]
 mod webhooks;
 #[cfg(feature = "workload-identity")]
@@ -43,6 +47,8 @@ mod x509;
 
 #[cfg(feature = "admin")]
 pub use admin::*;
+#[cfg(feature = "alpha-graders")]
+pub use alpha_graders::AlphaGraders;
 pub use auth::{ApiKey, ApiKeyError};
 pub use batches::{
     BatchPageStream, BatchSubmission, BatchSubmissionError, BatchSubmissionOptions, Batches,
@@ -102,6 +108,8 @@ pub use vector_stores::{
     PollCancellationToken, PollError, PollOptions, VectorStoreFileBatches,
     VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream, VectorStores,
 };
+#[cfg(feature = "custom-voice")]
+pub use voices::{VoiceConsentPageStream, VoiceConsents, Voices};
 #[cfg(feature = "webhook-verification")]
 pub use webhooks::{WebhookVerificationError, WebhookVerifier};
 #[cfg(feature = "workload-identity")]

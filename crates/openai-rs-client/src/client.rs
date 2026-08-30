@@ -7,6 +7,10 @@ use url::{Host, Url};
 use crate::Realtime;
 #[cfg(feature = "legacy-completions")]
 use crate::Completions;
+#[cfg(feature = "custom-voice")]
+use crate::Voices;
+#[cfg(feature = "alpha-graders")]
+use crate::AlphaGraders;
 use crate::{
     ApiKey, Audio, Batches, ChatCompletions, Containers, ContentProvenanceChecks, Conversations,
     Embeddings, Error, Evals, Files, FineTuning, Images, Models, Moderations, Responses,
@@ -83,6 +87,20 @@ impl Client {
     #[must_use]
     pub fn completions(&self) -> Completions {
         Completions::new(self.clone())
+    }
+
+    /// Returns access-controlled custom voice operations.
+    #[cfg(feature = "custom-voice")]
+    #[must_use]
+    pub fn voices(&self) -> Voices {
+        Voices::new(self.clone())
+    }
+
+    /// Returns access-controlled experimental grader operations.
+    #[cfg(feature = "alpha-graders")]
+    #[must_use]
+    pub fn alpha_graders(&self) -> AlphaGraders {
+        AlphaGraders::new(self.clone())
     }
 
     /// Returns the GA Realtime API facade.
