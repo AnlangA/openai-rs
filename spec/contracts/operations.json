@@ -3160,7 +3160,7 @@
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
-        "registry_group": "evals-shared-or-manifest-only"
+        "registry_group": "evals-wire-verified"
       },
       "manual_overrides": []
     },
@@ -3278,7 +3278,7 @@
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
-        "registry_group": "evals-shared-or-manifest-only"
+        "registry_group": "evals-wire-verified"
       },
       "manual_overrides": []
     },
@@ -3357,7 +3357,7 @@
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
-        "registry_group": "evals-shared-or-manifest-only"
+        "registry_group": "evals-wire-verified"
       },
       "manual_overrides": []
     },
@@ -3516,7 +3516,7 @@
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
-        "registry_group": "evals-shared-or-manifest-only"
+        "registry_group": "evals-wire-verified"
       },
       "manual_overrides": []
     },
@@ -3595,7 +3595,7 @@
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
-        "registry_group": "evals-shared-or-manifest-only"
+        "registry_group": "evals-wire-verified"
       },
       "manual_overrides": []
     },
@@ -3676,7 +3676,7 @@
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
-        "registry_group": "evals-shared-or-manifest-only"
+        "registry_group": "evals-wire-verified"
       },
       "manual_overrides": []
     },
@@ -3757,7 +3757,7 @@
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
-        "registry_group": "evals-shared-or-manifest-only"
+        "registry_group": "evals-wire-verified"
       },
       "manual_overrides": []
     },
@@ -3836,7 +3836,7 @@
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
-        "registry_group": "evals-shared-or-manifest-only"
+        "registry_group": "evals-wire-verified"
       },
       "manual_overrides": []
     },
@@ -3957,7 +3957,7 @@
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
-        "registry_group": "evals-shared-or-manifest-only"
+        "registry_group": "evals-wire-verified"
       },
       "manual_overrides": []
     },
@@ -4048,7 +4048,7 @@
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error"
         ],
-        "registry_group": "evals-shared-or-manifest-only"
+        "registry_group": "evals-wire-verified"
       },
       "manual_overrides": []
     },
