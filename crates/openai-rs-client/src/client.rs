@@ -3,7 +3,7 @@ use std::{fmt, sync::Arc, time::Duration};
 use http::HeaderValue;
 use url::{Host, Url};
 
-use crate::{ApiKey, Error, Responses, transport::Transport};
+use crate::{ApiKey, Embeddings, Error, Models, Moderations, Responses, transport::Transport};
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -37,6 +37,24 @@ impl Client {
     #[must_use]
     pub fn responses(&self) -> Responses {
         Responses::new(self.clone())
+    }
+
+    /// Returns the Models resource facade.
+    #[must_use]
+    pub fn models(&self) -> Models {
+        Models::new(self.clone())
+    }
+
+    /// Returns the Embeddings resource facade.
+    #[must_use]
+    pub fn embeddings(&self) -> Embeddings {
+        Embeddings::new(self.clone())
+    }
+
+    /// Returns the Moderations resource facade.
+    #[must_use]
+    pub fn moderations(&self) -> Moderations {
+        Moderations::new(self.clone())
     }
 
     /// The configured API base URL.

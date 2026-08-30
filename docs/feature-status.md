@@ -19,7 +19,7 @@ Status terms:
 | `client` | Yes | MVP | Enables the Platform API client facade. Initial coverage is Responses-first. |
 | `rustls-tls` | Yes | MVP | Rustls-backed Platform transport. Implies `client`. |
 | `native-tls` | No | Scaffold | Native TLS transport selection. Implies `client`. |
-| `structured-output` | Yes | Scaffold | Typed schema support; strict-subset normalization must pass contract tests before release. |
+| `structured-output` | Yes | MVP | Typed schema generation and strict-subset normalization are implemented; keyword/limit coverage remains pre-release. |
 | `realtime` | No | Planned | Reserves Realtime types and transport boundaries; it does not imply GA Realtime coverage today. |
 | `webhook-verification` | No | Planned | Reserves webhook models and verification support. |
 | `admin` | No | Planned | Administration operations require a separate credential and client boundary. |
@@ -47,7 +47,7 @@ tools; applications must explicitly register or allowlist tools.
 
 | Feature | Status | Notes |
 |---|---|---|
-| `codex-app-server` | Experimental | Client for a pinned Codex app-server runtime/schema. App-server itself is an experimental Codex interface. |
+| `codex-app-server` | Experimental scaffold | JSON-RPC client and exact artifact/schema mapping support exist, but the repository currently ships no audited runtime mapping, so no runtime is accepted out of the box. App-server itself is experimental. |
 | `codex-access-token` | Experimental | Trusted local Business/Enterprise automation only. The runtime receives `CODEX_ACCESS_TOKEN` or a prior `codex login --with-access-token` login; this is not an `account/login/start` variant. |
 | `experimental-codex-direct` | Experimental | Direct, host-locked access to the private Codex Responses backend. Not a public OpenAI API contract. |
 | `experimental-codex-direct-device` | Experimental | Adds device-code UX to the direct backend and has an independent beta boundary. |
@@ -65,8 +65,8 @@ specification. Until then:
 
 - The REST MVP covers Responses create, retrieve, delete, cancel, compact,
   input-item listing, and input-token counting.
-- Responses SSE decoding exists, while the public streaming resource method and
-  its full event contract are still being completed.
+- Responses SSE create-stream and bounded decoding exist; only a major-event
+  subset is typed today, so the full stable event contract remains incomplete.
 - Additional operations are added only with typed request/response and error
   fixtures.
 - Other resource families remain incomplete even if their feature boundary is

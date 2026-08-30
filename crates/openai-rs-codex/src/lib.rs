@@ -30,4 +30,4 @@ pub use credentials::{CodexCredentialMarker, ManagedAppServerCredential};
 pub use direct::DirectCodexResponsesClient;
 pub use error::{ConnectionFailure, ConnectionFailureKind, Error, RpcError, RpcId};
 pub use protocol::*;
-pub use runtime::{RuntimeCompatibility, RuntimeIdentity};
+pub use runtime::{COMPILED_APP_SERVER_SCHEMA_SHA256, RuntimeCompatibility, RuntimeIdentity};

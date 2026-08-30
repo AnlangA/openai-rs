@@ -32,6 +32,10 @@ tracks the [official Codex app-server
 documentation](https://learn.chatgpt.com/docs/app-server) and an exact audited
 runtime artifact; a moving documentation page alone is not a schema pin.
 
+The M0 repository does not yet ship an audited runtime-to-schema mapping.
+Consequently, the app-server feature is a protocol/client scaffold rather than
+an out-of-the-box supported runtime integration; unknown runtimes fail closed.
+
 The client must complete the `initialize` request and then send exactly one
 `initialized` notification before other methods. Runtime artifacts must map to
 the checked-in schema by exact audited identity; a loose version range is not a

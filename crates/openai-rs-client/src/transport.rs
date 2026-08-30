@@ -207,7 +207,9 @@ impl Transport {
             Ok(response)
         } else {
             let response_meta = ResponseMeta::from_headers(response.status(), response.headers());
-            let (body, truncated) = read_up_to(response, self.max_error_body_bytes).await?;
+            let (body, truncated) = read_up_to(response, self.max_error_body_bytes)
+                .await
+                .map_err(|error| Error::from_response_body(error, &response_meta))?;
             Err(ApiError::from_body(response_meta, &body, truncated).into())
         }
     }
@@ -315,7 +317,9 @@ async fn read_success(
             request_id: meta.request_id().map(Box::<str>::from),
         });
     }
-    let (body, truncated) = read_up_to(response, limit).await?;
+    let (body, truncated) = read_up_to(response, limit)
+        .await
+        .map_err(|error| Error::from_response_body(error, meta))?;
     if truncated {
         Err(Error::BodyTooLarge {
             limit,
@@ -327,11 +331,14 @@ async fn read_success(
     }
 }
 
-async fn read_up_to(response: reqwest::Response, limit: usize) -> Result<(Vec<u8>, bool), Error> {
+async fn read_up_to(
+    response: reqwest::Response,
+    limit: usize,
+) -> Result<(Vec<u8>, bool), reqwest::Error> {
     let mut stream = response.bytes_stream();
     let mut body = Vec::with_capacity(limit.min(16 * 1024));
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(Error::from_reqwest)?;
+        let chunk = chunk?;
         let remaining = limit.saturating_sub(body.len());
         if chunk.len() > remaining {
             body.extend_from_slice(&chunk[..remaining]);

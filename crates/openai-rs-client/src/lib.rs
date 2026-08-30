@@ -5,6 +5,7 @@
 
 mod auth;
 mod client;
+mod core_resources;
 mod error;
 mod operation;
 mod response_stream;
@@ -14,7 +15,10 @@ pub(crate) mod transport;
 
 pub use auth::{ApiKey, ApiKeyError};
 pub use client::{Client, ClientBuilder};
+pub use core_resources::{Embeddings, Models, Moderations};
 pub use error::{ApiError, BodyPreview, Error, StreamError};
 pub use operation::{ApiResponse, RateLimitMetadata, ResponseMeta};
 pub use response_stream::ResponseEventStream;
-pub use responses::{DeleteResponseResult, InputItems, InputTokens, Responses};
+pub use responses::{
+    DeleteResponseResult, InputItems, InputTokens, Responses, RetrieveResponseParams,
+};

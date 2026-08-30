@@ -2,6 +2,11 @@ use std::collections::HashSet;
 
 use crate::Error;
 
+/// SHA-256 of the combined app-server protocol schema compiled into this
+/// crate's DTO layer.
+pub const COMPILED_APP_SERVER_SCHEMA_SHA256: &str =
+    "95f68321313fc4d64c8781737abf60657d6d100e2f516a036253ca936f4d73a2";
+
 /// Immutable identity of one audited Codex runtime and its frozen app-server
 /// schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -38,6 +43,11 @@ impl RuntimeIdentity {
                 "app-server schema SHA-256 must be 64 non-zero hexadecimal characters".to_owned(),
             )
         })?;
+        if schema_sha256 != COMPILED_APP_SERVER_SCHEMA_SHA256 {
+            return Err(Error::InvalidConfiguration(format!(
+                "runtime schema SHA-256 {schema_sha256} does not match compiled protocol schema {COMPILED_APP_SERVER_SCHEMA_SHA256}"
+            )));
+        }
 
         Ok(Self {
             released_version: released_version.to_owned(),
@@ -118,23 +128,31 @@ fn normalize_sha256(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeCompatibility, RuntimeIdentity};
+    use super::{COMPILED_APP_SERVER_SCHEMA_SHA256, RuntimeCompatibility, RuntimeIdentity};
 
     const HASH_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const HASH_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     #[test]
     fn rejects_unknown_or_placeholder_identity() {
-        assert!(RuntimeIdentity::new("0.0.0", HASH_A, HASH_B).is_err());
-        assert!(RuntimeIdentity::new("1.2.3", "", HASH_B).is_err());
-        assert!(RuntimeIdentity::new("1.2.3", "0".repeat(64), HASH_B).is_err());
+        assert!(RuntimeIdentity::new("0.0.0", HASH_A, COMPILED_APP_SERVER_SCHEMA_SHA256).is_err());
+        assert!(RuntimeIdentity::new("1.2.3", "", COMPILED_APP_SERVER_SCHEMA_SHA256).is_err());
+        assert!(
+            RuntimeIdentity::new("1.2.3", "0".repeat(64), COMPILED_APP_SERVER_SCHEMA_SHA256)
+                .is_err()
+        );
         assert!(RuntimeCompatibility::new(Vec::new()).is_err());
     }
 
     #[test]
+    fn rejects_schema_that_is_not_compiled_into_dtos() {
+        assert!(RuntimeIdentity::new("1.2.3", HASH_A, HASH_B).is_err());
+    }
+
+    #[test]
     fn rejects_ambiguous_artifact_mapping() -> Result<(), crate::Error> {
-        let first = RuntimeIdentity::new("1.2.3", HASH_A, HASH_B)?;
-        let second = RuntimeIdentity::new("1.2.4", HASH_A, HASH_A)?;
+        let first = RuntimeIdentity::new("1.2.3", HASH_A, COMPILED_APP_SERVER_SCHEMA_SHA256)?;
+        let second = RuntimeIdentity::new("1.2.4", HASH_A, COMPILED_APP_SERVER_SCHEMA_SHA256)?;
         assert!(RuntimeCompatibility::new([first, second]).is_err());
         Ok(())
     }

@@ -439,98 +439,6 @@ where
         self.inner.events_rx.lock().await.recv().await
     }
 
-    pub async fn account_login_browser(
-        &self,
-        options: BrowserLoginOptions,
-    ) -> Result<BrowserLogin, Error> {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Params {
-            #[serde(rename = "type")]
-            kind: &'static str,
-            #[serde(flatten)]
-            options: BrowserLoginOptions,
-        }
-
-        let response: LoginAccountResponse = self
-            .request(
-                "account/login/start",
-                Some(Params {
-                    kind: "chatgpt",
-                    options,
-                }),
-            )
-            .await?;
-        if response.kind != "chatgpt" {
-            return Err(Error::UnexpectedResponse(format!(
-                "browser login returned type {:?}",
-                response.kind
-            )));
-        }
-        Ok(BrowserLogin {
-            login_id: response.login_id.ok_or_else(|| {
-                Error::UnexpectedResponse("browser login response omitted loginId".to_owned())
-            })?,
-            auth_url: response.auth_url.ok_or_else(|| {
-                Error::UnexpectedResponse("browser login response omitted authUrl".to_owned())
-            })?,
-        })
-    }
-
-    pub async fn account_login_device(&self) -> Result<DeviceCodeLogin, Error> {
-        #[derive(Serialize)]
-        struct Params {
-            #[serde(rename = "type")]
-            kind: &'static str,
-        }
-
-        let response: LoginAccountResponse = self
-            .request(
-                "account/login/start",
-                Some(Params {
-                    kind: "chatgptDeviceCode",
-                }),
-            )
-            .await?;
-        if response.kind != "chatgptDeviceCode" {
-            return Err(Error::UnexpectedResponse(format!(
-                "device login returned type {:?}",
-                response.kind
-            )));
-        }
-        Ok(DeviceCodeLogin {
-            login_id: response.login_id.ok_or_else(|| {
-                Error::UnexpectedResponse("device login response omitted loginId".to_owned())
-            })?,
-            verification_url: response.verification_url.ok_or_else(|| {
-                Error::UnexpectedResponse(
-                    "device login response omitted verificationUrl".to_owned(),
-                )
-            })?,
-            user_code: response.user_code.ok_or_else(|| {
-                Error::UnexpectedResponse("device login response omitted userCode".to_owned())
-            })?,
-        })
-    }
-
-    pub async fn account_login_cancel(
-        &self,
-        login_id: impl Into<String>,
-    ) -> Result<CancelLoginResponse, Error> {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Params {
-            login_id: String,
-        }
-        self.request(
-            "account/login/cancel",
-            Some(Params {
-                login_id: login_id.into(),
-            }),
-        )
-        .await
-    }
-
     pub async fn account_read(&self, refresh_token: bool) -> Result<AccountReadResponse, Error> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -743,6 +651,103 @@ where
             return Err(Error::Connection(failure));
         }
         Ok(())
+    }
+}
+
+// Managed login methods exist only on the managed-credential client. A client
+// whose access token was injected into the child cannot call
+// account/login/start through its typed API.
+impl AppServerClient<ManagedAppServerCredential> {
+    pub async fn account_login_browser(
+        &self,
+        options: BrowserLoginOptions,
+    ) -> Result<BrowserLogin, Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Params {
+            #[serde(rename = "type")]
+            kind: &'static str,
+            #[serde(flatten)]
+            options: BrowserLoginOptions,
+        }
+
+        let response: LoginAccountResponse = self
+            .request(
+                "account/login/start",
+                Some(Params {
+                    kind: "chatgpt",
+                    options,
+                }),
+            )
+            .await?;
+        if response.kind != "chatgpt" {
+            return Err(Error::UnexpectedResponse(format!(
+                "browser login returned type {:?}",
+                response.kind
+            )));
+        }
+        Ok(BrowserLogin {
+            login_id: response.login_id.ok_or_else(|| {
+                Error::UnexpectedResponse("browser login response omitted loginId".to_owned())
+            })?,
+            auth_url: response.auth_url.ok_or_else(|| {
+                Error::UnexpectedResponse("browser login response omitted authUrl".to_owned())
+            })?,
+        })
+    }
+
+    pub async fn account_login_device(&self) -> Result<DeviceCodeLogin, Error> {
+        #[derive(Serialize)]
+        struct Params {
+            #[serde(rename = "type")]
+            kind: &'static str,
+        }
+
+        let response: LoginAccountResponse = self
+            .request(
+                "account/login/start",
+                Some(Params {
+                    kind: "chatgptDeviceCode",
+                }),
+            )
+            .await?;
+        if response.kind != "chatgptDeviceCode" {
+            return Err(Error::UnexpectedResponse(format!(
+                "device login returned type {:?}",
+                response.kind
+            )));
+        }
+        Ok(DeviceCodeLogin {
+            login_id: response.login_id.ok_or_else(|| {
+                Error::UnexpectedResponse("device login response omitted loginId".to_owned())
+            })?,
+            verification_url: response.verification_url.ok_or_else(|| {
+                Error::UnexpectedResponse(
+                    "device login response omitted verificationUrl".to_owned(),
+                )
+            })?,
+            user_code: response.user_code.ok_or_else(|| {
+                Error::UnexpectedResponse("device login response omitted userCode".to_owned())
+            })?,
+        })
+    }
+
+    pub async fn account_login_cancel(
+        &self,
+        login_id: impl Into<String>,
+    ) -> Result<CancelLoginResponse, Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Params {
+            login_id: String,
+        }
+        self.request(
+            "account/login/cancel",
+            Some(Params {
+                login_id: login_id.into(),
+            }),
+        )
+        .await
     }
 }
 
@@ -1113,14 +1118,14 @@ mod tests {
     };
     use crate::{ClientInfo, Error, Notification, RuntimeCompatibility, RuntimeIdentity};
 
-    const TEST_SCHEMA_SHA256: &str =
-        "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899";
-
     fn fake_runtime(executable: &Path) -> Result<RuntimeCompatibility, Box<dyn std::error::Error>> {
         let executable = executable.canonicalize()?;
         let executable_sha256 = sha256_file(&executable)?;
-        let identity =
-            RuntimeIdentity::new("test-shell-1.0.0", executable_sha256, TEST_SCHEMA_SHA256)?;
+        let identity = RuntimeIdentity::new(
+            "test-shell-1.0.0",
+            executable_sha256,
+            crate::COMPILED_APP_SERVER_SCHEMA_SHA256,
+        )?;
         Ok(RuntimeCompatibility::new([identity])?)
     }
 
@@ -1211,7 +1216,7 @@ mod tests {
         let wrong_identity = RuntimeIdentity::new(
             "test-shell-1.0.0",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            TEST_SCHEMA_SHA256,
+            crate::COMPILED_APP_SERVER_SCHEMA_SHA256,
         )?;
         let compatibility = RuntimeCompatibility::new([wrong_identity])?;
         let config = AppServerConfig::new("/bin/sh", profile.path(), compatibility)

@@ -7,6 +7,7 @@ use openai_rs_types::{
         ListResponseInputItemsParams, Response, ResponseInputItemList, ResponseStreamEvent,
     },
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{
     ApiResponse, Client, Error, ResponseEventStream,
@@ -18,6 +19,28 @@ use crate::{
 
 const OK: &[StatusCode] = &[StatusCode::OK];
 const OK_OR_NO_CONTENT: &[StatusCode] = &[StatusCode::OK, StatusCode::NO_CONTENT];
+
+/// Optional fields to include while retrieving a non-streaming Response.
+/// Streaming-only query parameters are intentionally exposed by separate
+/// streaming methods instead of weakening this method's return type.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetrieveResponseParams {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    include: Vec<String>,
+}
+
+impl RetrieveResponseParams {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn include(mut self, value: impl Into<String>) -> Self {
+        self.include.push(value.into());
+        self
+    }
+}
 
 /// Responses API resource methods.
 #[derive(Clone, Debug)]
@@ -58,10 +81,20 @@ impl Responses {
 
     /// Retrieves a stored response by its opaque identifier.
     pub async fn retrieve(&self, response_id: &ResponseId) -> Result<ApiResponse<Response>, Error> {
+        self.retrieve_with(response_id, RetrieveResponseParams::new())
+            .await
+    }
+
+    /// Retrieves a stored response with explicitly selected optional fields.
+    pub async fn retrieve_with(
+        &self,
+        response_id: &ResponseId,
+        params: RetrieveResponseParams,
+    ) -> Result<ApiResponse<Response>, Error> {
         let path = response_path(response_id)?;
         self.client
             .transport()
-            .execute_json::<RetrieveResponse, ()>(&path, None, None)
+            .execute_json::<RetrieveResponse, _>(&path, Some(&params), None)
             .await
     }
 
@@ -556,10 +589,10 @@ mod tests {
     async fn create_stream_decodes_events_and_stops_at_done() {
         let body = concat!(
             "event: response.output_text.delta\n",
-            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\",\"sequence_number\":1}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\",\"sequence_number\":1,\"logprobs\":[]}\n\n",
             "data: [DONE]\n\n",
             "event: response.output_text.delta\n",
-            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"must-not-parse\",\"sequence_number\":2}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"must-not-parse\",\"sequence_number\":2,\"logprobs\":[]}\n\n",
         );
         let (base_url, captured) =
             serve_once_with_content_type(StatusCode::OK, "text/event-stream; charset=utf-8", body)

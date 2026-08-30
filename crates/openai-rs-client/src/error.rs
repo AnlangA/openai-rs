@@ -26,7 +26,7 @@ impl BodyPreview {
                 serde_json::to_string(&value)
                     .unwrap_or_else(|_| "<unavailable JSON body>".to_owned())
             }
-            Err(_) => redact_inline(&String::from_utf8_lossy(bytes)),
+            Err(_) => redact_inline(&String::from_utf8_lossy(preview_bytes)),
         };
         Self {
             text: text.into_boxed_str(),
@@ -51,7 +51,7 @@ impl fmt::Debug for BodyPreview {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("BodyPreview")
-            .field("text", &self.text)
+            .field("text", &"[REDACTED]")
             .field("truncated", &self.truncated)
             .finish()
     }
@@ -93,6 +93,18 @@ fn is_sensitive_key(key: &str) -> bool {
         "prompt",
         "input",
         "content",
+        "output",
+        "text",
+        "delta",
+        "arguments",
+        "after",
+        "before",
+        "cursor",
+        "url",
+        "uri",
+        "metadata",
+        "user",
+        "email",
     ]
     .iter()
     .any(|sensitive| normalized == *sensitive || normalized.ends_with(sensitive))
@@ -123,7 +135,7 @@ fn redact_inline(input: &str) -> String {
 }
 
 /// A typed error returned by the OpenAI API.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ApiError {
     meta: ResponseMeta,
     message: Box<str>,
@@ -208,19 +220,35 @@ impl ApiError {
 
 impl fmt::Display for ApiError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "OpenAI API error ({}): {}",
-            self.status(),
-            self.message
-        )
+        write!(formatter, "OpenAI API error ({})", self.status())?;
+        if let Some(code) = self.code() {
+            write!(formatter, ", code {code}")?;
+        }
+        if let Some(request_id) = self.request_id() {
+            write!(formatter, ", request {request_id}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for ApiError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ApiError")
+            .field("status", &self.status())
+            .field("request_id", &self.request_id())
+            .field("kind", &self.kind())
+            .field("code", &self.code())
+            .field("message", &"[REDACTED]")
+            .field("body", &"[REDACTED]")
+            .finish()
     }
 }
 
 impl std::error::Error for ApiError {}
 
 /// A typed error delivered inside an otherwise successful Responses stream.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct StreamError {
     request_id: Option<Box<str>>,
     message: Box<str>,
@@ -279,7 +307,26 @@ impl StreamError {
 
 impl fmt::Display for StreamError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "OpenAI Responses stream error: {}", self.message)
+        formatter.write_str("OpenAI Responses stream error")?;
+        if let Some(code) = self.code() {
+            write!(formatter, ", code {code}")?;
+        }
+        if let Some(request_id) = self.request_id() {
+            write!(formatter, ", request {request_id}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for StreamError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StreamError")
+            .field("request_id", &self.request_id())
+            .field("code", &self.code())
+            .field("message", &"[REDACTED]")
+            .field("body", &"[REDACTED]")
+            .finish()
     }
 }
 
@@ -332,6 +379,14 @@ pub enum Error {
 
     #[error("HTTP request timed out: {0}")]
     Timeout(#[source] reqwest::Error),
+
+    #[error("failed while reading HTTP response body (status {status}): {source}")]
+    ResponseBody {
+        #[source]
+        source: reqwest::Error,
+        status: StatusCode,
+        request_id: Option<Box<str>>,
+    },
 
     #[error("failed to encode request JSON: {0}")]
     Encode(#[source] serde_json::Error),
@@ -409,12 +464,21 @@ impl Error {
         }
     }
 
+    pub(crate) fn from_response_body(error: reqwest::Error, meta: &ResponseMeta) -> Self {
+        Self::ResponseBody {
+            source: error.without_url(),
+            status: meta.status(),
+            request_id: meta.request_id().map(Box::<str>::from),
+        }
+    }
+
     #[must_use]
     pub fn status(&self) -> Option<StatusCode> {
         match self {
             Self::Api(error) => Some(error.status()),
             Self::Decode { meta_status, .. } => Some(*meta_status),
             Self::BodyTooLarge { status, .. } => Some(*status),
+            Self::ResponseBody { status, .. } => Some(*status),
             Self::UnexpectedContentType { status, .. } => Some(*status),
             Self::Transport(_)
             | Self::Timeout(_)
@@ -433,6 +497,7 @@ impl Error {
             Self::Api(error) => error.request_id(),
             Self::Decode { request_id, .. }
             | Self::BodyTooLarge { request_id, .. }
+            | Self::ResponseBody { request_id, .. }
             | Self::UnexpectedContentType { request_id, .. } => request_id.as_deref(),
             Self::Sse { request_id, .. } => request_id.as_deref(),
             Self::Stream(error) => error.request_id(),

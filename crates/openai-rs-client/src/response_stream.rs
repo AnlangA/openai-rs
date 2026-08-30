@@ -53,7 +53,7 @@ impl ResponseEventStream {
                 let chunk = match chunk {
                     Ok(chunk) => chunk,
                     Err(error) => {
-                        yield Err(Error::from_reqwest(error));
+                        yield Err(Error::from_response_body(error, &stream_meta));
                         return;
                     }
                 };

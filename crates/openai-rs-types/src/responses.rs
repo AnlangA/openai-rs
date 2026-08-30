@@ -685,10 +685,9 @@ pub struct FunctionTool {
     kind: FunctionToolTag,
     name: String,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    description: Omittable<String>,
+    description: Omittable<Nullable<String>>,
     parameters: Value,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    strict: Omittable<bool>,
+    strict: Nullable<bool>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     defer_loading: Omittable<bool>,
 }
@@ -705,7 +704,7 @@ impl FunctionTool {
             name: name.into(),
             description: Omittable::Omitted,
             parameters: Value::Object(parameters),
-            strict: Omittable::Omitted,
+            strict: Nullable::Null,
             defer_loading: Omittable::Omitted,
         }
     }
@@ -713,7 +712,7 @@ impl FunctionTool {
     /// Sets the human-readable tool description.
     #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
-        self.description = Omittable::Value(description.into());
+        self.description = Omittable::Value(Nullable::Value(description.into()));
         self
     }
 
@@ -736,7 +735,7 @@ impl FunctionTool {
     /// Enables or disables strict schema adherence.
     #[must_use]
     pub fn strict(mut self, strict: bool) -> Self {
-        self.strict = Omittable::Value(strict);
+        self.strict = Nullable::Value(strict);
         self
     }
 
@@ -757,8 +756,8 @@ impl FunctionTool {
     #[must_use]
     pub fn description_ref(&self) -> Option<&str> {
         match &self.description {
-            Omittable::Value(value) => Some(value),
-            Omittable::Omitted => None,
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
     }
 
@@ -772,8 +771,8 @@ impl FunctionTool {
     #[must_use]
     pub fn is_strict(&self) -> Option<bool> {
         match self.strict {
-            Omittable::Value(value) => Some(value),
-            Omittable::Omitted => None,
+            Nullable::Value(value) => Some(value),
+            Nullable::Null => None,
         }
     }
 }
@@ -1047,11 +1046,13 @@ impl From<McpTool> for ResponseTool {
 pub struct FunctionCall {
     #[serde(rename = "type")]
     kind: FunctionCallTag,
-    id: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    id: Omittable<String>,
     call_id: String,
     name: String,
     arguments: JsonText,
-    status: ResponseItemStatus,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    status: Omittable<ResponseItemStatus>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1068,19 +1069,22 @@ impl FunctionCall {
     ) -> Self {
         Self {
             kind: FunctionCallTag::FunctionCall,
-            id: id.into(),
+            id: Omittable::Value(id.into()),
             call_id: call_id.into(),
             name: name.into(),
             arguments,
-            status,
+            status: Omittable::Value(status),
             extra: ExtraFields::new(),
         }
     }
 
     /// Returns the item id.
     #[must_use]
-    pub fn id(&self) -> &str {
-        &self.id
+    pub fn id(&self) -> Option<&str> {
+        match &self.id {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 
     /// Returns the call id used by the matching output item.
@@ -1103,8 +1107,11 @@ impl FunctionCall {
 
     /// Returns the item status.
     #[must_use]
-    pub const fn status(&self) -> &ResponseItemStatus {
-        &self.status
+    pub fn status(&self) -> Option<&ResponseItemStatus> {
+        match &self.status {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 
     /// Returns future fields retained while decoding.
@@ -1251,7 +1258,8 @@ pub struct McpCall {
     server_label: String,
     name: String,
     arguments: JsonText,
-    status: ResponseItemStatus,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    status: Omittable<ResponseItemStatus>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     approval_request_id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -1389,10 +1397,8 @@ pub struct OutputText {
     #[serde(rename = "type")]
     kind: OutputTextTag,
     text: String,
-    #[serde(default)]
     annotations: Vec<Value>,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    logprobs: Omittable<Vec<Value>>,
+    logprobs: Vec<Value>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1405,7 +1411,7 @@ impl OutputText {
             kind: OutputTextTag::OutputText,
             text: text.into(),
             annotations: Vec::new(),
-            logprobs: Omittable::Omitted,
+            logprobs: Vec::new(),
             extra: ExtraFields::new(),
         }
     }
@@ -3304,7 +3310,6 @@ pub struct OutputTextDeltaEvent {
     content_index: u64,
     delta: String,
     sequence_number: u64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     logprobs: Vec<Value>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -3352,7 +3357,6 @@ pub struct OutputTextDoneEvent {
     content_index: u64,
     text: String,
     sequence_number: u64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     logprobs: Vec<Value>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -3482,6 +3486,7 @@ pub struct FunctionCallArgumentsDoneEvent {
     kind: FunctionCallArgumentsDoneEventTag,
     item_id: String,
     output_index: u64,
+    name: String,
     arguments: JsonText,
     sequence_number: u64,
     #[serde(flatten)]
@@ -3658,8 +3663,7 @@ pub struct StreamErrorEvent {
     kind: StreamErrorEventTag,
     code: String,
     message: String,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    param: Omittable<Nullable<String>>,
+    param: Nullable<String>,
     sequence_number: u64,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -3762,6 +3766,417 @@ impl ResponseStreamEvent {
         }
     }
 }
+
+// The following records complete the frozen stable union inventory. Complex
+// nested payloads remain semantic `Value`s where their own schema family is
+// outside this first Responses slice, but every required property and every
+// discriminator is enforced here. Optional properties are retained through
+// `ExtraFields`, so decoding and re-encoding stays lossless.
+
+macro_rules! required_tagged_record {
+    ($name:ident, $tag_name:ident, $tag_variant:ident, $wire:literal, {
+        $($field:ident: $ty:ty),* $(,)?
+    }) => {
+        literal_tag!($tag_name, $tag_variant, $wire);
+
+        #[doc = concat!("Wire record for the `", $wire, "` Responses item.")]
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        pub struct $name {
+            #[serde(rename = "type")]
+            kind: $tag_name,
+            $($field: $ty,)*
+            #[serde(flatten)]
+            extra: ExtraFields,
+        }
+
+        impl $name {
+            /// Returns future optional fields retained while decoding.
+            #[must_use]
+            pub const fn extra_fields(&self) -> &ExtraFields {
+                &self.extra
+            }
+        }
+    };
+}
+
+required_tagged_record!(
+    CompactionTrigger,
+    CompactionTriggerTag,
+    CompactionTrigger,
+    "compaction_trigger",
+    {}
+);
+
+/// A stored-item reference accepted without a `type` discriminator.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ItemReference {
+    id: String,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ItemReference {
+    /// Creates a reference to a stored item.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Returns the stored item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+required_tagged_record!(ProgramItem, ProgramItemTag, Program, "program", {
+    id: String,
+    call_id: String,
+    code: String,
+    fingerprint: String
+});
+required_tagged_record!(ProgramOutputItem, ProgramOutputItemTag, ProgramOutput, "program_output", {
+    id: String,
+    call_id: String,
+    result: String,
+    status: String
+});
+required_tagged_record!(FileSearchCall, FileSearchCallTag, FileSearchCall, "file_search_call", {
+    id: String,
+    status: ResponseItemStatus,
+    queries: Vec<String>
+});
+required_tagged_record!(ComputerCall, ComputerCallTag, ComputerCall, "computer_call", {
+    id: String,
+    call_id: String,
+    pending_safety_checks: Vec<Value>,
+    status: ResponseItemStatus
+});
+required_tagged_record!(
+    ComputerCallOutput,
+    ComputerCallOutputTag,
+    ComputerCallOutput,
+    "computer_call_output",
+    {
+        call_id: String,
+        output: Value
+    }
+);
+required_tagged_record!(
+    ComputerCallOutputResource,
+    ComputerCallOutputResourceTag,
+    ComputerCallOutputResource,
+    "computer_call_output",
+    {
+        id: String,
+        call_id: String,
+        output: Value,
+        status: ResponseItemStatus
+    }
+);
+required_tagged_record!(WebSearchCall, WebSearchCallTag, WebSearchCall, "web_search_call", {
+    id: String,
+    status: ResponseItemStatus,
+    action: Value
+});
+required_tagged_record!(
+    FunctionCallOutputResource,
+    FunctionCallOutputResourceTag,
+    FunctionCallOutputResource,
+    "function_call_output",
+    {
+        id: String,
+        output: Value,
+        status: ResponseItemStatus
+    }
+);
+required_tagged_record!(
+    ToolSearchCallInput,
+    ToolSearchCallInputTag,
+    ToolSearchCall,
+    "tool_search_call",
+    { arguments: Value }
+);
+required_tagged_record!(ToolSearchCall, ToolSearchCallTag, ToolSearchCall, "tool_search_call", {
+    id: String,
+    call_id: Nullable<String>,
+    execution: String,
+    arguments: Value,
+    status: ResponseItemStatus
+});
+required_tagged_record!(
+    ToolSearchOutputInput,
+    ToolSearchOutputInputTag,
+    ToolSearchOutput,
+    "tool_search_output",
+    { tools: Vec<Value> }
+);
+required_tagged_record!(ToolSearchOutput, ToolSearchOutputTag, ToolSearchOutput, "tool_search_output", {
+    id: String,
+    call_id: Nullable<String>,
+    execution: String,
+    tools: Vec<Value>,
+    status: ResponseItemStatus
+});
+required_tagged_record!(
+    AdditionalToolsInput,
+    AdditionalToolsInputTag,
+    AdditionalTools,
+    "additional_tools",
+    {
+        role: MessageRole,
+        tools: Vec<ResponseTool>
+    }
+);
+required_tagged_record!(AdditionalTools, AdditionalToolsTag, AdditionalTools, "additional_tools", {
+    id: String,
+    role: MessageRole,
+    tools: Vec<ResponseTool>
+});
+required_tagged_record!(ReasoningItem, ReasoningItemTag, Reasoning, "reasoning", {
+    id: String,
+    summary: Vec<Value>
+});
+required_tagged_record!(
+    CompactionSummaryInput,
+    CompactionSummaryInputTag,
+    Compaction,
+    "compaction",
+    { encrypted_content: String }
+);
+required_tagged_record!(CompactionItem, CompactionItemTag, Compaction, "compaction", {
+    id: String,
+    encrypted_content: String
+});
+required_tagged_record!(
+    ImageGenerationCall,
+    ImageGenerationCallTag,
+    ImageGenerationCall,
+    "image_generation_call",
+    {
+        id: String,
+        status: ResponseItemStatus,
+        result: Nullable<String>
+    }
+);
+required_tagged_record!(
+    CodeInterpreterCall,
+    CodeInterpreterCallTag,
+    CodeInterpreterCall,
+    "code_interpreter_call",
+    {
+        id: String,
+        status: ResponseItemStatus,
+        container_id: String,
+        code: Nullable<String>,
+        outputs: Nullable<Vec<Value>>
+    }
+);
+required_tagged_record!(LocalShellCall, LocalShellCallTag, LocalShellCall, "local_shell_call", {
+    id: String,
+    call_id: String,
+    action: Value,
+    status: ResponseItemStatus
+});
+required_tagged_record!(
+    LocalShellCallOutput,
+    LocalShellCallOutputTag,
+    LocalShellCallOutput,
+    "local_shell_call_output",
+    {
+        id: String,
+        call_id: String,
+        output: String
+    }
+);
+required_tagged_record!(
+    FunctionShellCallInput,
+    FunctionShellCallInputTag,
+    FunctionShellCall,
+    "shell_call",
+    {
+        call_id: String,
+        action: Value
+    }
+);
+required_tagged_record!(FunctionShellCall, FunctionShellCallTag, FunctionShellCall, "shell_call", {
+    id: String,
+    call_id: String,
+    action: Value,
+    status: ResponseItemStatus,
+    environment: Nullable<Value>
+});
+required_tagged_record!(
+    FunctionShellCallOutputInput,
+    FunctionShellCallOutputInputTag,
+    FunctionShellCallOutput,
+    "shell_call_output",
+    {
+        call_id: String,
+        output: Vec<Value>
+    }
+);
+required_tagged_record!(
+    FunctionShellCallOutput,
+    FunctionShellCallOutputTag,
+    FunctionShellCallOutput,
+    "shell_call_output",
+    {
+        id: String,
+        call_id: String,
+        status: ResponseItemStatus,
+        output: Vec<Value>,
+        max_output_length: Nullable<u64>
+    }
+);
+required_tagged_record!(
+    ApplyPatchCallInput,
+    ApplyPatchCallInputTag,
+    ApplyPatchCall,
+    "apply_patch_call",
+    {
+        call_id: String,
+        status: String,
+        operation: Value
+    }
+);
+required_tagged_record!(ApplyPatchCall, ApplyPatchCallTag, ApplyPatchCall, "apply_patch_call", {
+    id: String,
+    call_id: String,
+    status: String,
+    operation: Value
+});
+required_tagged_record!(
+    ApplyPatchCallOutputInput,
+    ApplyPatchCallOutputInputTag,
+    ApplyPatchCallOutput,
+    "apply_patch_call_output",
+    {
+        call_id: String,
+        status: String
+    }
+);
+required_tagged_record!(
+    ApplyPatchCallOutput,
+    ApplyPatchCallOutputTag,
+    ApplyPatchCallOutput,
+    "apply_patch_call_output",
+    {
+        id: String,
+        call_id: String,
+        status: String
+    }
+);
+required_tagged_record!(
+    McpApprovalResponseResource,
+    McpApprovalResponseResourceTag,
+    McpApprovalResponse,
+    "mcp_approval_response",
+    {
+        id: String,
+        request_id: String,
+        approval_request_id: String,
+        approve: bool
+    }
+);
+required_tagged_record!(CustomToolCall, CustomToolCallTag, CustomToolCall, "custom_tool_call", {
+    call_id: String,
+    name: String,
+    input: String
+});
+required_tagged_record!(
+    CustomToolCallOutput,
+    CustomToolCallOutputTag,
+    CustomToolCallOutput,
+    "custom_tool_call_output",
+    {
+        call_id: String,
+        output: Value
+    }
+);
+required_tagged_record!(
+    CustomToolCallOutputResource,
+    CustomToolCallOutputResourceTag,
+    CustomToolCallOutputResource,
+    "custom_tool_call_output",
+    {
+        id: String,
+        call_id: String,
+        output: Value,
+        status: ResponseItemStatus
+    }
+);
+
+/// Frozen schema-name inventory for the 32 expanded stable input branches.
+pub const STABLE_RESPONSE_INPUT_SCHEMAS: [&str; 32] = [
+    "EasyInputMessage",
+    "CompactionTriggerItemParam",
+    "ItemReferenceParam",
+    "ProgramItemParam",
+    "ProgramOutputItemParam",
+    "InputMessage",
+    "OutputMessage",
+    "FileSearchToolCall",
+    "ComputerToolCall",
+    "ComputerCallOutputItemParam",
+    "WebSearchToolCall",
+    "FunctionToolCall",
+    "FunctionCallOutputItemParam",
+    "ToolSearchCallItemParam",
+    "ToolSearchOutputItemParam",
+    "AdditionalToolsItemParam",
+    "ReasoningItem",
+    "CompactionSummaryItemParam",
+    "ImageGenToolCall",
+    "CodeInterpreterToolCall",
+    "LocalShellToolCall",
+    "LocalShellToolCallOutput",
+    "FunctionShellCallItemParam",
+    "FunctionShellCallOutputItemParam",
+    "ApplyPatchToolCallItemParam",
+    "ApplyPatchToolCallOutputItemParam",
+    "MCPListTools",
+    "MCPApprovalRequest",
+    "MCPApprovalResponse",
+    "MCPToolCall",
+    "CustomToolCallOutput",
+    "CustomToolCall",
+];
+
+/// Frozen schema-name inventory for the 28 stable output branches.
+pub const STABLE_RESPONSE_OUTPUT_SCHEMAS: [&str; 28] = [
+    "OutputMessage",
+    "FileSearchToolCall",
+    "FunctionToolCall",
+    "FunctionToolCallOutputResource",
+    "WebSearchToolCall",
+    "ComputerToolCall",
+    "ComputerToolCallOutputResource",
+    "ReasoningItem",
+    "Program",
+    "ProgramOutput",
+    "ToolSearchCall",
+    "ToolSearchOutput",
+    "AdditionalTools",
+    "CompactionBody",
+    "ImageGenToolCall",
+    "CodeInterpreterToolCall",
+    "LocalShellToolCall",
+    "LocalShellToolCallOutput",
+    "FunctionShellCall",
+    "FunctionShellCallOutput",
+    "ApplyPatchToolCall",
+    "ApplyPatchToolCallOutput",
+    "MCPToolCall",
+    "MCPListTools",
+    "MCPApprovalRequest",
+    "MCPApprovalResponseResource",
+    "CustomToolCall",
+    "CustomToolCallOutputResource",
+];
 
 #[cfg(test)]
 mod tests {
@@ -4022,12 +4437,14 @@ mod tests {
                             "type": "output_text",
                             "text": "Hello ",
                             "annotations": [],
+                            "logprobs": [],
                             "future_part_field": 1
                         },
                         {
                             "type": "output_text",
                             "text": "world",
-                            "annotations": []
+                            "annotations": [],
+                            "logprobs": []
                         }
                     ],
                     "future_message_field": {"ok": true}
@@ -4136,6 +4553,7 @@ mod tests {
             "content_index": 0,
             "delta": "Hi",
             "sequence_number": 7,
+            "logprobs": [],
             "future_delta_field": true
         }))
         .expect("decode text delta");
@@ -4167,6 +4585,7 @@ mod tests {
             "type": "error",
             "code": "server_error",
             "message": "retry later",
+            "param": null,
             "sequence_number": 9
         }))
         .expect("decode stream error");

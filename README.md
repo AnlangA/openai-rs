@@ -14,18 +14,19 @@ Responses API.
 The workspace, crate boundaries, feature flags, MSRV policy, and initial
 contract-test infrastructure are present. The pre-release MVP includes typed
 Responses create, retrieve, delete, cancel, compact, input-item listing, and
-input-token counting operations. Streaming resource wiring, broader resource
-families, and most optional features remain in progress, scaffolded, or planned.
+input-token counting operations and a public SSE create-stream path. Complete
+stable event coverage, broader resource families, and most optional features
+remain in progress, scaffolded, or planned.
 
 | Area | Status |
 |---|---|
 | Lossless Serde primitives | Implemented for the MVP; still pre-release |
 | Typed Responses REST slice | Implemented for the MVP; contract coverage is still growing |
-| Responses SSE streaming | MVP implementation in progress |
+| Responses SSE streaming | Public MVP path implemented; full event coverage is incomplete |
 | Full OpenAPI resource coverage | Not implemented |
 | Realtime, administration, and webhook helpers | Feature boundaries reserved; not complete |
 | RMCP bridge | Optional scaffold; not production-ready |
-| Codex app-server integration | Optional and experimental |
+| Codex app-server integration | Experimental scaffold; no audited runtime mapping ships yet |
 | Direct Codex Responses transport | Experimental, private-backend compatibility work only |
 
 See [feature status](docs/feature-status.md) for the exact Cargo feature matrix
@@ -128,6 +129,7 @@ cargo check -p openai-rs-sdk --all-targets --no-default-features
 cargo check --workspace --all-targets --all-features
 cargo +1.88.0 check --workspace --all-targets
 cargo run -p xtask -- check
+cargo deny --all-features check
 ```
 
 See [development.md](docs/development.md) for the full local quality contract.
