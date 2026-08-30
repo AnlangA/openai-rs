@@ -12,7 +12,7 @@ const MAX_JWT_BYTES: usize = 64 * 1024;
 pub struct ChatGptAccountId(String);
 
 impl ChatGptAccountId {
-    fn parse(value: String) -> Result<Self, DirectError> {
+    pub(crate) fn parse(value: String) -> Result<Self, DirectError> {
         if value.is_empty()
             || value.len() > 256
             || !value

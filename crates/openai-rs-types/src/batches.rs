@@ -14,6 +14,7 @@ use std::{
 };
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
@@ -646,31 +647,31 @@ pub struct Batch {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     model: Omittable<ModelId>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    errors: Omittable<BatchErrors>,
+    errors: Omittable<Nullable<BatchErrors>>,
     input_file_id: FileId,
     completion_window: BatchCompletionWindow,
     status: BatchStatus,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    output_file_id: Omittable<FileId>,
+    output_file_id: Omittable<Nullable<FileId>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    error_file_id: Omittable<FileId>,
+    error_file_id: Omittable<Nullable<FileId>>,
     created_at: i64,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    in_progress_at: Omittable<i64>,
+    in_progress_at: Omittable<Nullable<i64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    expires_at: Omittable<i64>,
+    expires_at: Omittable<Nullable<i64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    finalizing_at: Omittable<i64>,
+    finalizing_at: Omittable<Nullable<i64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    completed_at: Omittable<i64>,
+    completed_at: Omittable<Nullable<i64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    failed_at: Omittable<i64>,
+    failed_at: Omittable<Nullable<i64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    expired_at: Omittable<i64>,
+    expired_at: Omittable<Nullable<i64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    cancelling_at: Omittable<i64>,
+    cancelling_at: Omittable<Nullable<i64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    cancelled_at: Omittable<i64>,
+    cancelled_at: Omittable<Nullable<i64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     request_counts: Omittable<BatchRequestCounts>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -731,27 +732,45 @@ impl Batch {
     #[must_use]
     pub fn errors(&self) -> Option<&BatchErrors> {
         match &self.errors {
-            Omittable::Omitted => None,
-            Omittable::Value(value) => Some(value),
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
+    }
+
+    /// Exact optional-nullable validation-error state.
+    #[must_use]
+    pub const fn errors_state(&self) -> &Omittable<Nullable<BatchErrors>> {
+        &self.errors
     }
 
     /// Output file identifier when available.
     #[must_use]
     pub fn output_file_id(&self) -> Option<&FileId> {
         match &self.output_file_id {
-            Omittable::Omitted => None,
-            Omittable::Value(value) => Some(value),
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
+    }
+
+    /// Exact optional-nullable output-file state.
+    #[must_use]
+    pub const fn output_file_id_state(&self) -> &Omittable<Nullable<FileId>> {
+        &self.output_file_id
     }
 
     /// Error file identifier when available.
     #[must_use]
     pub fn error_file_id(&self) -> Option<&FileId> {
         match &self.error_file_id {
-            Omittable::Omitted => None,
-            Omittable::Value(value) => Some(value),
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
+    }
+
+    /// Exact optional-nullable error-file state.
+    #[must_use]
+    pub const fn error_file_id_state(&self) -> &Omittable<Nullable<FileId>> {
+        &self.error_file_id
     }
 
     /// Creation timestamp in Unix seconds.
@@ -760,10 +779,10 @@ impl Batch {
         self.created_at
     }
 
-    fn optional_timestamp(value: &Omittable<i64>) -> Option<i64> {
+    fn optional_timestamp(value: &Omittable<Nullable<i64>>) -> Option<i64> {
         match value {
-            Omittable::Omitted => None,
-            Omittable::Value(value) => Some(*value),
+            Omittable::Value(Nullable::Value(value)) => Some(*value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
     }
 
@@ -773,10 +792,22 @@ impl Batch {
         Self::optional_timestamp(&self.in_progress_at)
     }
 
+    /// Exact optional-nullable processing-start state.
+    #[must_use]
+    pub const fn in_progress_at_state(&self) -> &Omittable<Nullable<i64>> {
+        &self.in_progress_at
+    }
+
     /// Scheduled expiration timestamp.
     #[must_use]
     pub fn expires_at(&self) -> Option<i64> {
         Self::optional_timestamp(&self.expires_at)
+    }
+
+    /// Exact optional-nullable expiration state.
+    #[must_use]
+    pub const fn expires_at_state(&self) -> &Omittable<Nullable<i64>> {
+        &self.expires_at
     }
 
     /// Finalization-start timestamp.
@@ -785,10 +816,22 @@ impl Batch {
         Self::optional_timestamp(&self.finalizing_at)
     }
 
+    /// Exact optional-nullable finalization-start state.
+    #[must_use]
+    pub const fn finalizing_at_state(&self) -> &Omittable<Nullable<i64>> {
+        &self.finalizing_at
+    }
+
     /// Completion timestamp.
     #[must_use]
     pub fn completed_at(&self) -> Option<i64> {
         Self::optional_timestamp(&self.completed_at)
+    }
+
+    /// Exact optional-nullable completion state.
+    #[must_use]
+    pub const fn completed_at_state(&self) -> &Omittable<Nullable<i64>> {
+        &self.completed_at
     }
 
     /// Failure timestamp.
@@ -797,10 +840,22 @@ impl Batch {
         Self::optional_timestamp(&self.failed_at)
     }
 
+    /// Exact optional-nullable failure state.
+    #[must_use]
+    pub const fn failed_at_state(&self) -> &Omittable<Nullable<i64>> {
+        &self.failed_at
+    }
+
     /// Expired-state timestamp.
     #[must_use]
     pub fn expired_at(&self) -> Option<i64> {
         Self::optional_timestamp(&self.expired_at)
+    }
+
+    /// Exact optional-nullable expired state.
+    #[must_use]
+    pub const fn expired_at_state(&self) -> &Omittable<Nullable<i64>> {
+        &self.expired_at
     }
 
     /// Cancellation-start timestamp.
@@ -809,10 +864,22 @@ impl Batch {
         Self::optional_timestamp(&self.cancelling_at)
     }
 
+    /// Exact optional-nullable cancellation-start state.
+    #[must_use]
+    pub const fn cancelling_at_state(&self) -> &Omittable<Nullable<i64>> {
+        &self.cancelling_at
+    }
+
     /// Cancellation-complete timestamp.
     #[must_use]
     pub fn cancelled_at(&self) -> Option<i64> {
         Self::optional_timestamp(&self.cancelled_at)
+    }
+
+    /// Exact optional-nullable cancelled state.
+    #[must_use]
+    pub const fn cancelled_at_state(&self) -> &Omittable<Nullable<i64>> {
+        &self.cancelled_at
     }
 
     /// Request counters when populated.
@@ -1091,13 +1158,23 @@ impl<O> BatchLine<O> {
     }
 }
 
-/// Successful HTTP result embedded in a batch output line.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Status-aware body embedded in a Batch HTTP response envelope.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum BatchLineResponseBody<O> {
+    /// A `2xx` response decoded into the endpoint's success DTO.
+    Success(O),
+    /// A non-`2xx` response retained as semantic JSON for later typed error
+    /// decoding without making the complete result file unreadable.
+    Error(Value),
+}
+
+/// HTTP result embedded in a batch output line.
+#[derive(Clone, Debug, PartialEq)]
 pub struct BatchLineResponse<O> {
     status_code: u16,
     request_id: String,
-    body: O,
-    #[serde(default, flatten)]
+    body: BatchLineResponseBody<O>,
     extra: ExtraFields,
 }
 
@@ -1108,7 +1185,18 @@ impl<O> BatchLineResponse<O> {
         Self {
             status_code,
             request_id: request_id.into(),
-            body,
+            body: BatchLineResponseBody::Success(body),
+            extra: ExtraFields::default(),
+        }
+    }
+
+    /// Creates a non-success HTTP result while retaining the error body.
+    #[must_use]
+    pub fn error(status_code: u16, request_id: impl Into<String>, body: Value) -> Self {
+        Self {
+            status_code,
+            request_id: request_id.into(),
+            body: BatchLineResponseBody::Error(body),
             extra: ExtraFields::default(),
         }
     }
@@ -1127,14 +1215,102 @@ impl<O> BatchLineResponse<O> {
 
     /// Typed endpoint response body.
     #[must_use]
-    pub const fn body(&self) -> &O {
+    pub const fn body(&self) -> &BatchLineResponseBody<O> {
         &self.body
+    }
+
+    /// Returns the typed endpoint body for a successful status.
+    #[must_use]
+    pub const fn success_body(&self) -> Option<&O> {
+        match &self.body {
+            BatchLineResponseBody::Success(value) => Some(value),
+            BatchLineResponseBody::Error(_) => None,
+        }
+    }
+
+    /// Returns the retained non-success body.
+    #[must_use]
+    pub const fn error_body(&self) -> Option<&Value> {
+        match &self.body {
+            BatchLineResponseBody::Error(value) => Some(value),
+            BatchLineResponseBody::Success(_) => None,
+        }
     }
 
     /// Unknown response-envelope properties.
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
+    }
+}
+
+#[derive(Serialize)]
+struct BatchLineResponseRef<'a, B> {
+    status_code: u16,
+    request_id: &'a str,
+    body: &'a B,
+    #[serde(flatten)]
+    extra: &'a ExtraFields,
+}
+
+impl<O> Serialize for BatchLineResponse<O>
+where
+    O: Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match &self.body {
+            BatchLineResponseBody::Success(body) => BatchLineResponseRef {
+                status_code: self.status_code,
+                request_id: &self.request_id,
+                body,
+                extra: &self.extra,
+            }
+            .serialize(serializer),
+            BatchLineResponseBody::Error(body) => BatchLineResponseRef {
+                status_code: self.status_code,
+                request_id: &self.request_id,
+                body,
+                extra: &self.extra,
+            }
+            .serialize(serializer),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct BatchLineResponseWire {
+    status_code: u16,
+    request_id: String,
+    body: Value,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl<'de, O> Deserialize<'de> for BatchLineResponse<O>
+where
+    O: DeserializeOwned,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = BatchLineResponseWire::deserialize(deserializer)?;
+        let body = if (200..300).contains(&wire.status_code) {
+            serde_json::from_value(wire.body)
+                .map(BatchLineResponseBody::Success)
+                .map_err(serde::de::Error::custom)?
+        } else {
+            BatchLineResponseBody::Error(wire.body)
+        };
+        Ok(Self {
+            status_code: wire.status_code,
+            request_id: wire.request_id,
+            body,
+            extra: wire.extra,
+        })
     }
 }
 
@@ -1193,6 +1369,7 @@ pub struct BatchResultLine<O> {
     id: BatchRequestId,
     custom_id: BatchCustomId,
     outcome: BatchLineOutcome<O>,
+    extra: ExtraFields,
 }
 
 /// Alias emphasizing that [`BatchResultLine`] is the wire output-line type.
@@ -1210,6 +1387,7 @@ impl<O> BatchResultLine<O> {
             id: id.into(),
             custom_id,
             outcome: BatchLineOutcome::Response(response),
+            extra: ExtraFields::default(),
         }
     }
 
@@ -1224,6 +1402,7 @@ impl<O> BatchResultLine<O> {
             id: id.into(),
             custom_id,
             outcome: BatchLineOutcome::Error(error),
+            extra: ExtraFields::default(),
         }
     }
 
@@ -1244,6 +1423,12 @@ impl<O> BatchResultLine<O> {
     pub const fn outcome(&self) -> &BatchLineOutcome<O> {
         &self.outcome
     }
+
+    /// Unknown output-line properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 #[derive(Serialize)]
@@ -1252,6 +1437,8 @@ struct BatchResultLineRef<'a, O> {
     custom_id: &'a BatchCustomId,
     response: Option<&'a BatchLineResponse<O>>,
     error: Option<&'a BatchLineError>,
+    #[serde(flatten)]
+    extra: &'a ExtraFields,
 }
 
 impl<O> Serialize for BatchResultLine<O>
@@ -1271,23 +1458,26 @@ where
             custom_id: &self.custom_id,
             response,
             error,
+            extra: &self.extra,
         }
         .serialize(serializer)
     }
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(bound(deserialize = "O: DeserializeOwned"))]
 struct BatchResultLineWire<O> {
     id: BatchRequestId,
     custom_id: BatchCustomId,
     response: Nullable<BatchLineResponse<O>>,
     error: Nullable<BatchLineError>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl<'de, O> Deserialize<'de> for BatchResultLine<O>
 where
-    O: Deserialize<'de>,
+    O: DeserializeOwned,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1312,6 +1502,7 @@ where
             id: wire.id,
             custom_id: wire.custom_id,
             outcome,
+            extra: wire.extra,
         })
     }
 }
@@ -1739,10 +1930,24 @@ mod tests {
     }
 
     #[test]
-    fn raw_schema_optional_timestamp_rejects_explicit_null() {
+    fn lifecycle_fields_preserve_missing_null_and_value() {
         let mut value = minimal_batch();
         value["completed_at"] = serde_json::Value::Null;
-        assert!(serde_json::from_value::<Batch>(value).is_err());
+        value["failed_at"] = json!(456);
+        value["errors"] = serde_json::Value::Null;
+        value["output_file_id"] = serde_json::Value::Null;
+        let decoded: Batch = serde_json::from_value(value.clone()).expect("decode null states");
+        assert!(matches!(
+            decoded.completed_at_state(),
+            Omittable::Value(Nullable::Null)
+        ));
+        assert_eq!(decoded.failed_at(), Some(456));
+        assert!(matches!(
+            decoded.errors_state(),
+            Omittable::Value(Nullable::Null)
+        ));
+        assert!(decoded.output_file_id().is_none());
+        assert_eq!(serde_json::to_value(decoded).expect("re-encode"), value);
     }
 
     #[test]
@@ -1751,10 +1956,15 @@ mod tests {
             "id": "batch_req_1",
             "custom_id": "line-1",
             "response": {"status_code": 200, "request_id": "req_1", "body": {"ok": true}},
-            "error": null
+            "error": null,
+            "future": {"retained": true}
         }))
         .expect("decode result");
         assert!(matches!(success.outcome(), BatchLineOutcome::Response(_)));
+        assert_eq!(
+            serde_json::to_value(&success).expect("re-encode result")["future"],
+            json!({"retained": true})
+        );
 
         assert!(
             serde_json::from_value::<BatchResultLine<serde_json::Value>>(json!({

@@ -828,6 +828,9 @@ pub struct FineTuneDpoHyperparameters {
     extra: ExtraFields,
 }
 
+/// Alias matching the frozen `FineTuneDPOHyperparameters` schema name.
+pub type FineTuneDPOHyperparameters = FineTuneDpoHyperparameters;
+
 impl FineTuneDpoHyperparameters {
     /// Future fields retained during decode.
     #[must_use]
@@ -874,6 +877,9 @@ pub struct FineTuneSupervisedMethodConfig {
     extra: ExtraFields,
 }
 
+/// Alias matching the frozen `FineTuneSupervisedMethod` schema name.
+pub type FineTuneSupervisedMethod = FineTuneSupervisedMethodConfig;
+
 impl FineTuneSupervisedMethodConfig {
     /// Future fields retained during decode.
     #[must_use]
@@ -890,6 +896,9 @@ pub struct FineTuneDpoMethodConfig {
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
+
+/// Alias matching the frozen `FineTuneDPOMethod` schema name.
+pub type FineTuneDPOMethod = FineTuneDpoMethodConfig;
 
 impl FineTuneDpoMethodConfig {
     /// Future fields retained during decode.
@@ -909,6 +918,9 @@ pub struct FineTuneReinforcementMethodConfig {
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
+
+/// Alias matching the frozen `FineTuneReinforcementMethod` schema name.
+pub type FineTuneReinforcementMethod = FineTuneReinforcementMethodConfig;
 
 impl FineTuneReinforcementMethodConfig {
     /// Construct a reinforcement configuration from an experimental grader.
@@ -1726,9 +1738,11 @@ mod tests {
             batch_size: Omittable::Value(AutoOrInteger::Auto(FineTuneAuto::Auto)),
             learning_rate_multiplier: Omittable::Value(AutoOrNumber::Value(0.2)),
             n_epochs: Omittable::Value(AutoOrInteger::Value(3)),
+            ..FineTuneSupervisedHyperparameters::default()
         };
         let method = SupervisedFineTuneMethod::new().with_config(FineTuneSupervisedMethodConfig {
             hyperparameters: Omittable::Value(hyperparameters),
+            ..FineTuneSupervisedMethodConfig::default()
         });
         let request = CreateFineTuningJobRequest::new("gpt-4o-mini", "file_train")
             .with_validation_file("file_valid")
@@ -1759,7 +1773,9 @@ mod tests {
                 batch_size: Omittable::Omitted,
                 learning_rate_multiplier: Omittable::Value(AutoOrNumber::Auto(FineTuneAuto::Auto)),
                 n_epochs: Omittable::Omitted,
+                ..FineTuneDpoHyperparameters::default()
             }),
+            ..FineTuneDpoMethodConfig::default()
         });
         let value = ok(serde_json::to_value(FineTuneMethod::from(method)));
         assert_eq!(value["type"], "dpo");

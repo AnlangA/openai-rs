@@ -3006,6 +3006,287 @@ impl ChatCompletionChunk {
     }
 }
 
+crate::open_string_enum! {
+    /// Sort order for stored Chat completions and messages.
+    pub enum ChatListOrder {
+        Ascending = "asc",
+        Descending = "desc"
+    }
+}
+
+/// Query parameters for listing stored Chat completions.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionListParams {
+    /// Filter by model.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub model: Omittable<ModelId>,
+    /// Deep-object metadata filter, preserving missing versus explicit null.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub metadata: Omittable<Nullable<BTreeMap<String, String>>>,
+    /// Cursor from the preceding page.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub after: Omittable<String>,
+    /// Requested page size.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub limit: Omittable<u64>,
+    /// Timestamp sort order.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub order: Omittable<ChatListOrder>,
+}
+
+/// Required JSON body for updating stored completion metadata.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UpdateChatCompletionRequest {
+    /// Replacement metadata, or explicit null to clear metadata.
+    pub metadata: Nullable<BTreeMap<String, String>>,
+}
+
+impl UpdateChatCompletionRequest {
+    /// Replace stored metadata.
+    #[must_use]
+    pub fn new(metadata: BTreeMap<String, String>) -> Self {
+        Self {
+            metadata: Nullable::Value(metadata),
+        }
+    }
+
+    /// Clear stored metadata with an explicit JSON null.
+    #[must_use]
+    pub const fn clear() -> Self {
+        Self {
+            metadata: Nullable::Null,
+        }
+    }
+}
+
+crate::open_string_enum! {
+    /// Object discriminator returned after deleting a stored Chat completion.
+    pub enum ChatCompletionDeletedObject {
+        Deleted = "chat.completion.deleted"
+    }
+}
+
+/// Confirmation returned after deleting a stored Chat completion.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionDeleted {
+    /// Deleted completion identifier.
+    pub id: String,
+    /// Whether deletion completed.
+    pub deleted: bool,
+    /// Object discriminator.
+    pub object: ChatCompletionDeletedObject,
+    /// Future response fields.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ChatCompletionDeleted {
+    /// Future fields retained while decoding.
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+crate::open_string_enum! {
+    /// Stored Chat collection discriminator.
+    pub enum ChatCompletionListObject {
+        List = "list"
+    }
+}
+
+/// Page of stored Chat completions.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionList {
+    /// Collection discriminator.
+    pub object: ChatCompletionListObject,
+    /// Stored completions.
+    pub data: Vec<ChatCompletion>,
+    /// First completion identifier in this page.
+    pub first_id: String,
+    /// Last completion identifier in this page.
+    pub last_id: String,
+    /// Whether another page is available.
+    pub has_more: bool,
+    /// Future response fields.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ChatCompletionList {
+    /// Cursor for the next page when `has_more` is true.
+    #[must_use]
+    pub fn next_after(&self) -> Option<&str> {
+        self.has_more.then_some(self.last_id.as_str())
+    }
+
+    /// Future fields retained while decoding.
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Query parameters for listing messages of a stored Chat completion.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionMessageListParams {
+    /// Cursor from the preceding page.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub after: Omittable<String>,
+    /// Requested page size.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub limit: Omittable<u64>,
+    /// Timestamp sort order.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub order: Omittable<ChatListOrder>,
+}
+
+/// Text content part retained on a stored message.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionStoreTextContentPart {
+    #[serde(rename = "type")]
+    kind: TextContentTag,
+    /// Stored text.
+    pub text: String,
+    /// Optional cache breakpoint from the original request.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub prompt_cache_breakpoint: Omittable<ChatPromptCacheBreakpoint>,
+    /// Future response fields.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ChatCompletionStoreTextContentPart {
+    /// Future fields retained while decoding.
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Image URL retained on a stored message.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionStoreImageUrl {
+    /// Image URL or data URL.
+    pub url: String,
+    /// Requested detail.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub detail: Omittable<ChatImageDetail>,
+    /// Future response fields.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ChatCompletionStoreImageUrl {
+    /// Future fields retained while decoding.
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Image content part retained on a stored message.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionStoreImageContentPart {
+    #[serde(rename = "type")]
+    kind: ImageContentTag,
+    /// Stored image URL and detail.
+    pub image_url: ChatCompletionStoreImageUrl,
+    /// Optional cache breakpoint from the original request.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub prompt_cache_breakpoint: Omittable<ChatPromptCacheBreakpoint>,
+    /// Future response fields.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ChatCompletionStoreImageContentPart {
+    /// Future fields retained while decoding.
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+strict_tagged_union! {
+    /// Content part retained on a stored Chat message.
+    pub enum ChatCompletionStoreMessageContentPart {
+        Text(ChatCompletionStoreTextContentPart) = "text",
+        Image(ChatCompletionStoreImageContentPart) = "image_url"
+    }
+}
+
+/// Assistant message returned from a stored completion's message collection.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionStoreMessage {
+    /// Stored message identifier.
+    pub id: String,
+    /// Generated text or explicit null.
+    pub content: Nullable<String>,
+    /// Refusal text or explicit null.
+    pub refusal: Nullable<String>,
+    /// Tool calls generated by the model.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub tool_calls: Omittable<Vec<ChatToolCall>>,
+    /// Search and other annotations.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub annotations: Omittable<Vec<ChatAnnotation>>,
+    /// Message role. Future strings are retained.
+    pub role: ChatRole,
+    /// Deprecated function call.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub function_call: Omittable<ChatLegacyFunctionCall>,
+    /// Generated audio or explicit null.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub audio: Omittable<Nullable<ChatResponseAudio>>,
+    /// Original text/image content parts, or explicit null.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub content_parts: Omittable<Nullable<Vec<ChatCompletionStoreMessageContentPart>>>,
+    /// Future response fields.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ChatCompletionStoreMessage {
+    /// Future fields retained while decoding.
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Page of messages belonging to a stored Chat completion.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionMessageList {
+    /// Collection discriminator.
+    pub object: ChatCompletionListObject,
+    /// Stored assistant messages.
+    pub data: Vec<ChatCompletionStoreMessage>,
+    /// First message identifier in this page.
+    pub first_id: String,
+    /// Last message identifier in this page.
+    pub last_id: String,
+    /// Whether another page is available.
+    pub has_more: bool,
+    /// Future response fields.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ChatCompletionMessageList {
+    /// Cursor for the next page when `has_more` is true.
+    #[must_use]
+    pub fn next_after(&self) -> Option<&str> {
+        self.has_more.then_some(self.last_id.as_str())
+    }
+
+    /// Future fields retained while decoding.
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -3019,6 +3300,12 @@ mod tests {
     assert_impl_all!(ChatToolCall: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(ChatCompletion: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(ChatCompletionChunk: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ChatCompletionListParams: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(UpdateChatCompletionRequest: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ChatCompletionDeleted: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ChatCompletionList: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ChatCompletionStoreMessage: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ChatCompletionMessageList: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(
         CreateChatCompletionRequest<ChatNonStreaming>:
             Serialize, DeserializeOwned, Send, Sync
@@ -3407,5 +3694,154 @@ mod tests {
         assert!(message.content.is_null());
         assert!(message.refusal.is_null());
         assert_eq!(ok(serde_json::to_value(message)), valid);
+    }
+
+    #[test]
+    fn stored_completion_params_and_update_preserve_nullability() {
+        let missing = ok(serde_json::from_value::<ChatCompletionListParams>(
+            json!({}),
+        ));
+        assert!(missing.metadata.is_omitted());
+
+        let params_fixture = json!({
+            "model": "gpt-future",
+            "metadata": null,
+            "after": "chatcmpl_prev",
+            "limit": 20,
+            "order": "future_order"
+        });
+        let params = ok(serde_json::from_value::<ChatCompletionListParams>(
+            params_fixture.clone(),
+        ));
+        assert!(matches!(params.metadata, Omittable::Value(Nullable::Null)));
+        match &params.order {
+            Omittable::Value(order) => assert_eq!(order.as_str(), "future_order"),
+            Omittable::Omitted => panic!("fixture must contain order"),
+        }
+        assert_eq!(ok(serde_json::to_value(params)), params_fixture);
+
+        assert!(serde_json::from_value::<UpdateChatCompletionRequest>(json!({})).is_err());
+        assert_eq!(
+            ok(serde_json::to_value(UpdateChatCompletionRequest::clear())),
+            json!({"metadata": null})
+        );
+        assert_eq!(
+            ok(serde_json::to_value(UpdateChatCompletionRequest::new(
+                BTreeMap::from([("team".to_owned(), "sdk".to_owned())])
+            ))),
+            json!({"metadata": {"team": "sdk"}})
+        );
+    }
+
+    #[test]
+    fn stored_completion_list_and_delete_are_lossless() {
+        let completion = json!({
+            "id": "chatcmpl_1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-5.6",
+            "choices": [],
+            "completion_future": true
+        });
+        let page_fixture = json!({
+            "object": "list",
+            "data": [completion],
+            "first_id": "chatcmpl_1",
+            "last_id": "chatcmpl_1",
+            "has_more": true,
+            "page_future": 7
+        });
+        let page = ok(serde_json::from_value::<ChatCompletionList>(
+            page_fixture.clone(),
+        ));
+        assert_eq!(page.next_after(), Some("chatcmpl_1"));
+        assert!(page.data[0].extra().contains_key("completion_future"));
+        assert!(page.extra().contains_key("page_future"));
+        assert_eq!(ok(serde_json::to_value(page)), page_fixture);
+
+        let deleted_fixture = json!({
+            "object": "chat.completion.deleted",
+            "id": "chatcmpl_1",
+            "deleted": true,
+            "delete_future": "kept"
+        });
+        let deleted = ok(serde_json::from_value::<ChatCompletionDeleted>(
+            deleted_fixture.clone(),
+        ));
+        assert!(deleted.extra().contains_key("delete_future"));
+        assert_eq!(ok(serde_json::to_value(deleted)), deleted_fixture);
+    }
+
+    #[test]
+    fn stored_message_list_content_parts_are_strict_and_lossless() {
+        let fixture = json!({
+            "object": "list",
+            "data": [{
+                "id": "msg_1",
+                "role": "assistant",
+                "content": "A cat",
+                "refusal": null,
+                "content_parts": [
+                    {"type": "text", "text": "A cat", "part_future": true},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.test/cat.png", "detail": "high"}
+                    }
+                ],
+                "message_future": {"x": 1}
+            }],
+            "first_id": "msg_1",
+            "last_id": "msg_1",
+            "has_more": true,
+            "list_future": true
+        });
+        let page = ok(serde_json::from_value::<ChatCompletionMessageList>(
+            fixture.clone(),
+        ));
+        assert_eq!(page.next_after(), Some("msg_1"));
+        assert!(page.data[0].extra().contains_key("message_future"));
+        assert!(page.extra().contains_key("list_future"));
+        match &page.data[0].content_parts {
+            Omittable::Value(Nullable::Value(parts)) => match &parts[0] {
+                ChatCompletionStoreMessageContentPart::Text(text) => {
+                    assert_eq!(text.text, "A cat");
+                    assert!(text.extra().contains_key("part_future"));
+                }
+                _ => panic!("expected text content part"),
+            },
+            _ => panic!("fixture must contain content parts"),
+        }
+        let encoded = ok(serde_json::to_value(page));
+        assert_eq!(encoded, fixture);
+
+        assert!(
+            serde_json::from_value::<ChatCompletionStoreMessageContentPart>(json!({
+                "type": "image_url",
+                "image_url": {}
+            }))
+            .is_err()
+        );
+
+        let null_parts = json!({
+            "object": "list",
+            "data": [{
+                "id": "msg_2",
+                "role": "assistant",
+                "content": null,
+                "refusal": null,
+                "content_parts": null
+            }],
+            "first_id": "msg_2",
+            "last_id": "msg_2",
+            "has_more": false
+        });
+        let decoded = ok(serde_json::from_value::<ChatCompletionMessageList>(
+            null_parts.clone(),
+        ));
+        assert!(matches!(
+            decoded.data[0].content_parts,
+            Omittable::Value(Nullable::Null)
+        ));
+        assert_eq!(ok(serde_json::to_value(decoded)), null_parts);
     }
 }

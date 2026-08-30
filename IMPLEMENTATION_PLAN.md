@@ -175,6 +175,7 @@ openai-rs facade -> types + client + optional codex/rmcp
 | `codex-access-token` | 否 | 依赖 `codex-app-server`；可信本地自动化的 Codex workspace access token |
 | `experimental-codex-direct` | 否 | 纯 Rust、OpenCode 风格的订阅 Responses transport；依赖 `rustls-tls`，非公共 `/v1` contract |
 | `experimental-codex-direct-device` | 否 | 依赖 `experimental-codex-direct`；device-code flow 的独立 beta gate |
+| `experimental-codex-direct-keyring` | 否 | 依赖 `experimental-codex-direct`；用系统 keyring 持久化 direct session，默认 direct 仍可显式选择 ephemeral/custom store |
 | `rmcp` | 否 | `openai-rs-rmcp/client` 基础 bridge |
 | `rmcp-stdio` / `rmcp-http-rustls` / `rmcp-http-native-tls` / `rmcp-server*` / `rmcp-auth*` | 否 | 精确转发第 10.2 节 adapter features |
 | `beta-chatkit` / `beta-responses-multi-agent` / `alpha-graders` | 否 | 不稳定面，独立 namespace |

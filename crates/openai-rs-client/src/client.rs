@@ -4,8 +4,8 @@ use http::HeaderValue;
 use url::{Host, Url};
 
 use crate::{
-    ApiKey, Embeddings, Error, Files, Models, Moderations, Responses, RetryPolicy, Uploads,
-    multipart::MultipartTransport, sse::SseLimits, transport::Transport,
+    ApiKey, ChatCompletions, Embeddings, Error, Files, Models, Moderations, Responses, RetryPolicy,
+    Uploads, multipart::MultipartTransport, sse::SseLimits, transport::Transport,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
@@ -55,6 +55,12 @@ impl Client {
     #[must_use]
     pub fn responses(&self) -> Responses {
         Responses::new(self.clone())
+    }
+
+    /// Returns the Chat Completions resource facade.
+    #[must_use]
+    pub fn chat_completions(&self) -> ChatCompletions {
+        ChatCompletions::new(self.clone())
     }
 
     /// Returns the Models resource facade.

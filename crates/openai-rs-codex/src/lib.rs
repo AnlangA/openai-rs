@@ -26,6 +26,8 @@ pub use app_server::{
 #[cfg(feature = "access-token")]
 pub use credentials::CodexAccessTokenCredential;
 pub use credentials::{CodexCredentialMarker, ManagedAppServerCredential};
+#[cfg(feature = "experimental-direct-keyring")]
+pub use direct::KeyringStore as DirectKeyringStore;
 #[cfg(feature = "experimental-direct")]
 pub use direct::{
     BrowserLogin as DirectBrowserLogin, CODEX_RESPONSES_ENDPOINT, CancellationToken,

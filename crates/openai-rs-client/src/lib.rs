@@ -4,6 +4,8 @@
 //! live in the separate `openai-rs-codex` crate and cannot cross this boundary.
 
 mod auth;
+mod chat_completions;
+mod chat_stream;
 mod client;
 mod core_resources;
 mod error;
@@ -19,6 +21,8 @@ pub mod sse;
 pub(crate) mod transport;
 
 pub use auth::{ApiKey, ApiKeyError};
+pub use chat_completions::ChatCompletions;
+pub use chat_stream::ChatCompletionEventStream;
 pub use client::{Client, ClientBuilder, TlsBackend};
 pub use core_resources::{Embeddings, Models, Moderations};
 pub use error::{ApiError, BodyPreview, Error, StreamError};

@@ -2,6 +2,7 @@
 
 pub mod batches;
 pub mod chat;
+pub mod conversations;
 pub mod core;
 pub mod files;
 pub mod fine_tuning;
@@ -15,11 +16,15 @@ pub mod vector_stores;
 #[cfg(feature = "webhooks")]
 pub mod webhooks;
 
+#[cfg(feature = "realtime")]
+pub mod realtime;
+
 #[cfg(feature = "structured-output")]
 pub mod structured;
 
 pub use kernel::{ExtraFields, ExtraFieldsConflict, Nullable, Omittable};
 pub use batches::*;
+pub use conversations::*;
 pub use responses::*;
 pub use core::*;
 pub use files::*;
@@ -31,6 +36,9 @@ pub use vector_stores::*;
 
 #[cfg(feature = "webhooks")]
 pub use webhooks::*;
+
+#[cfg(feature = "realtime")]
+pub use realtime::*;
 
 #[cfg(feature = "structured-output")]
 pub use structured::{StructuredError, StructuredOutput, TypedFunction, normalize_strict_schema};

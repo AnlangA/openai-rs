@@ -47,11 +47,11 @@ const ERROR_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><ti
 /// allocations and never implements Serde or Display.
 #[derive(Clone)]
 pub struct StoredCodexSession {
-    access_token: Arc<SecretString>,
-    refresh_token: Arc<SecretString>,
-    expires_at: u64,
-    account_id: ChatGptAccountId,
-    generation: u64,
+    pub(crate) access_token: Arc<SecretString>,
+    pub(crate) refresh_token: Arc<SecretString>,
+    pub(crate) expires_at: u64,
+    pub(crate) account_id: ChatGptAccountId,
+    pub(crate) generation: u64,
 }
 
 impl StoredCodexSession {
@@ -73,7 +73,7 @@ impl StoredCodexSession {
         self.generation
     }
 
-    fn refresh_token(&self) -> &str {
+    pub(crate) fn refresh_token(&self) -> &str {
         self.refresh_token.expose_secret()
     }
 
@@ -1006,6 +1006,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn browser_callback_has_deadline_and_cancellation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut auth = DirectAuthClient::new()?;
+        auth.callback_timeout = Duration::from_millis(20);
+        let store = EphemeralStore::default();
+        let login = auth.begin_browser_login().await?;
+        assert!(matches!(
+            login
+                .complete(&store, &super::CancellationToken::default())
+                .await,
+            Err(super::DirectError::Timeout)
+        ));
+
+        let login = auth.begin_browser_login().await?;
+        let cancellation = super::CancellationToken::default();
+        cancellation.cancel();
+        assert!(matches!(
+            login.complete(&store, &cancellation).await,
+            Err(super::DirectError::Cancelled)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn ephemeral_store_round_trip_empty() -> Result<(), super::DirectError> {
         let store = EphemeralStore::default();
         assert!(super::CredentialStore::load(&store).await?.is_none());
@@ -1047,6 +1071,13 @@ mod tests {
         )
         .await?;
         assert!(duplicate.is_err());
+
+        let duplicate_state = callback_request(
+            "GET /auth/callback?code=one&state=s&state=t HTTP/1.1\r\nHost: 127.0.0.1:1234\r\n\r\n",
+            "127.0.0.1:1234",
+        )
+        .await?;
+        assert!(duplicate_state.is_err());
 
         let wrong_host = callback_request(
             "GET /auth/callback?code=one&state=s HTTP/1.1\r\nHost: attacker.test\r\n\r\n",

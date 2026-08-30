@@ -28,6 +28,7 @@ codex-app-server = ["dep:openai-rs-codex", "openai-rs-codex/app-server"]
 codex-access-token = ["codex-app-server", "openai-rs-codex/access-token"]
 experimental-codex-direct = ["dep:openai-rs-codex", "openai-rs-codex/experimental-direct", "rustls-tls"]
 experimental-codex-direct-device = ["experimental-codex-direct", "openai-rs-codex/experimental-direct-device"]
+experimental-codex-direct-keyring = ["experimental-codex-direct", "openai-rs-codex/experimental-direct-keyring"]
 rmcp = ["dep:openai-rs-rmcp", "openai-rs-rmcp/client"]
 rmcp-stdio = ["rmcp", "openai-rs-rmcp/stdio"]
 rmcp-http-rustls = ["rmcp", "openai-rs-rmcp/http-rustls"]
@@ -45,4 +46,3 @@ openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0", default-fea
 
 [lints]
 workspace = true
-

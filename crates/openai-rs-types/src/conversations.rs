@@ -146,7 +146,9 @@ pub enum ConversationValidationError {
     },
 }
 
-fn validate_item_count(items: &[responses::ResponseInputItem]) -> Result<(), ConversationValidationError> {
+fn validate_item_count(
+    items: &[responses::ResponseInputItem],
+) -> Result<(), ConversationValidationError> {
     if items.len() > MAX_CONVERSATION_ITEMS_PER_REQUEST {
         return Err(ConversationValidationError::TooManyItems {
             actual: items.len(),
@@ -300,9 +302,7 @@ pub struct UpdateConversationRequest {
 
 impl UpdateConversationRequest {
     /// Replaces conversation metadata.
-    pub fn new(
-        metadata: ConversationMetadata,
-    ) -> Result<Self, ConversationValidationError> {
+    pub fn new(metadata: ConversationMetadata) -> Result<Self, ConversationValidationError> {
         validate_metadata(&metadata)?;
         Ok(Self {
             metadata: Nullable::Value(metadata),
@@ -439,7 +439,11 @@ fn discriminator(value: &Value) -> Result<String, &'static str> {
 
 literal_tag!(ConversationTextTag, Text, "text");
 literal_tag!(ConversationSummaryTextTag, SummaryText, "summary_text");
-literal_tag!(ConversationReasoningTextTag, ReasoningText, "reasoning_text");
+literal_tag!(
+    ConversationReasoningTextTag,
+    ReasoningText,
+    "reasoning_text"
+);
 
 macro_rules! text_content {
     ($name:ident, $tag:ident, $variant:ident) => {
@@ -479,8 +483,16 @@ macro_rules! text_content {
 }
 
 text_content!(ConversationText, ConversationTextTag, Text);
-text_content!(ConversationSummaryText, ConversationSummaryTextTag, SummaryText);
-text_content!(ConversationReasoningText, ConversationReasoningTextTag, ReasoningText);
+text_content!(
+    ConversationSummaryText,
+    ConversationSummaryTextTag,
+    SummaryText
+);
+text_content!(
+    ConversationReasoningText,
+    ConversationReasoningTextTag,
+    ReasoningText
+);
 
 literal_tag!(ConversationInputImageTag, InputImage, "input_image");
 
@@ -523,7 +535,9 @@ impl ConversationInputImage {
         }
     }
 
-    fn to_response_content(&self) -> Result<responses::InputContent, ConversationItemConversionError> {
+    fn to_response_content(
+        &self,
+    ) -> Result<responses::InputContent, ConversationItemConversionError> {
         let value = match (&self.image_url, &self.file_id) {
             (Omittable::Value(Nullable::Value(url)), _) => {
                 responses::InputImage::from_url(url.clone()).detail(self.detail.clone())
@@ -543,7 +557,11 @@ impl ConversationInputImage {
     }
 }
 
-literal_tag!(ConversationComputerScreenshotTag, ComputerScreenshot, "computer_screenshot");
+literal_tag!(
+    ConversationComputerScreenshotTag,
+    ComputerScreenshot,
+    "computer_screenshot"
+);
 
 /// Persisted computer screenshot content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -649,8 +667,15 @@ impl ConversationInputFile {
         self
     }
 
-    fn to_response_content(&self) -> Result<responses::InputContent, ConversationItemConversionError> {
-        let value = match (&self.file_id, &self.file_url, &self.file_data, &self.filename) {
+    fn to_response_content(
+        &self,
+    ) -> Result<responses::InputContent, ConversationItemConversionError> {
+        let value = match (
+            &self.file_id,
+            &self.file_url,
+            &self.file_data,
+            &self.filename,
+        ) {
             (Omittable::Value(Nullable::Value(file_id)), _, _, _) => {
                 responses::InputFile::from_file_id(file_id.clone())
             }
@@ -796,7 +821,7 @@ impl From<ConversationInputFile> for ConversationMessageContent {
 open_string_enum! {
     /// Role carried by a persisted conversation message.
     pub enum ConversationMessageRole {
-        Unknown = "unknown",
+        UnknownRole = "unknown",
         User = "user",
         Assistant = "assistant",
         System = "system",
@@ -881,28 +906,21 @@ impl ConversationMessage {
     ) -> Result<responses::ResponseInputItem, ConversationItemConversionError> {
         match &self.role {
             ConversationMessageRole::Assistant => {
-                let content = self
-                    .content
-                    .iter()
-                    .map(|part| match part {
-                        ConversationMessageContent::OutputText(value) => {
-                            Ok(responses::OutputContent::Text(value.clone()))
-                        }
-                        ConversationMessageContent::Refusal(value) => {
-                            Ok(responses::OutputContent::Refusal(value.clone()))
-                        }
-                        _ => Err(ConversationItemConversionError::ContentRoleMismatch {
+                for part in &self.content {
+                    if !matches!(
+                        part,
+                        ConversationMessageContent::OutputText(_)
+                            | ConversationMessageContent::Refusal(_)
+                    ) {
+                        return Err(ConversationItemConversionError::ContentRoleMismatch {
                             role: self.role.as_str().to_owned(),
                             content_type: content_discriminator(part).to_owned(),
-                        }),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(responses::OutputMessage::new(
-                    self.id.as_str(),
-                    self.status.clone(),
-                    content,
-                )
-                .into())
+                        });
+                    }
+                }
+                let value = serde_json::to_value(self)?;
+                let output = serde_json::from_value::<responses::OutputMessage>(value)?;
+                Ok(output.into())
             }
             ConversationMessageRole::User
             | ConversationMessageRole::System
@@ -913,9 +931,11 @@ impl ConversationMessage {
                     ConversationMessageRole::Developer => {
                         responses::StoredInputMessageRole::Developer
                     }
-                    _ => return Err(ConversationItemConversionError::UnsupportedMessageRole {
-                        role: self.role.as_str().to_owned(),
-                    }),
+                    _ => {
+                        return Err(ConversationItemConversionError::UnsupportedMessageRole {
+                            role: self.role.as_str().to_owned(),
+                        });
+                    }
                 };
                 let content = self
                     .content
@@ -927,9 +947,7 @@ impl ConversationMessage {
                         ConversationMessageContent::InputImage(value) => {
                             value.to_response_content()
                         }
-                        ConversationMessageContent::InputFile(value) => {
-                            value.to_response_content()
-                        }
+                        ConversationMessageContent::InputFile(value) => value.to_response_content(),
                         _ => Err(ConversationItemConversionError::ContentRoleMismatch {
                             role: self.role.as_str().to_owned(),
                             content_type: content_discriminator(part).to_owned(),
@@ -1030,44 +1048,6 @@ impl ConversationFunctionCall {
     }
 }
 
-literal_tag!(ConversationCustomToolCallTag, CustomToolCall, "custom_tool_call");
-
-/// Persisted custom-tool call with required resource id and status.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConversationCustomToolCall {
-    #[serde(rename = "type")]
-    kind: ConversationCustomToolCallTag,
-    id: ConversationItemId,
-    call_id: String,
-    name: String,
-    input: String,
-    status: responses::ResponseItemStatus,
-    #[serde(flatten)]
-    extra: ExtraFields,
-}
-
-impl ConversationCustomToolCall {
-    /// Creates a persisted custom-tool call.
-    #[must_use]
-    pub fn new(
-        id: impl Into<ConversationItemId>,
-        call_id: impl Into<String>,
-        name: impl Into<String>,
-        input: impl Into<String>,
-        status: responses::ResponseItemStatus,
-    ) -> Self {
-        Self {
-            kind: ConversationCustomToolCallTag::CustomToolCall,
-            id: id.into(),
-            call_id: call_id.into(),
-            name: name.into(),
-            input: input.into(),
-            status,
-            extra: ExtraFields::new(),
-        }
-    }
-}
-
 /// One persisted item in a Conversation.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -1124,8 +1104,8 @@ pub enum ConversationItem {
     McpApprovalResponse(responses::McpApprovalResponseResource),
     /// MCP tool call.
     McpCall(responses::McpCall),
-    /// Custom-tool call resource.
-    CustomToolCall(ConversationCustomToolCall),
+    /// Custom-tool call.
+    CustomToolCall(responses::CustomToolCall),
     /// Custom-tool output.
     CustomToolCallOutput(responses::CustomToolCallOutput),
     /// Future item retained verbatim.
@@ -1286,33 +1266,21 @@ impl TryFrom<responses::ResponseOutputItem> for ConversationItem {
     type Error = ConversationItemConversionError;
 
     fn try_from(value: responses::ResponseOutputItem) -> Result<Self, Self::Error> {
-        if let responses::ResponseOutputItem::Message(message) = value {
-            let content = message
-                .content()
-                .iter()
-                .map(|part| match part {
-                    responses::OutputContent::Text(value) => {
-                        Ok(ConversationMessageContent::OutputText(value.clone()))
-                    }
-                    responses::OutputContent::Refusal(value) => {
-                        Ok(ConversationMessageContent::Refusal(value.clone()))
-                    }
-                    responses::OutputContent::Unknown(value) => {
-                        Ok(ConversationMessageContent::Unknown(value.clone()))
-                    }
-                })
-                .collect::<Result<Vec<_>, ConversationItemConversionError>>()?;
-            return Ok(Self::Message(ConversationMessage::new(
-                message.id(),
-                message.status().clone(),
-                ConversationMessageRole::Assistant,
-                content,
-            )));
+        match value {
+            responses::ResponseOutputItem::Message(message) => {
+                let value = serde_json::to_value(message)?;
+                serde_json::from_value(value).map_err(ConversationItemConversionError::from)
+            }
+            value => {
+                let value = serde_json::to_value(value)?;
+                serde_json::from_value(value).map_err(ConversationItemConversionError::from)
+            }
         }
-        let value = serde_json::to_value(value)?;
-        serde_json::from_value(value).map_err(ConversationItemConversionError::from)
     }
 }
+
+/// Conversation-specific name for the shared custom-tool call wire shape.
+pub type ConversationCustomToolCall = responses::CustomToolCall;
 
 /// Failure converting between persisted Conversation and Responses item schemas.
 #[derive(Debug, Error)]
@@ -1371,7 +1339,7 @@ pub const CONVERSATION_ITEM_SCHEMAS: [&str; 28] = [
     "MCPApprovalRequest",
     "MCPApprovalResponseResource",
     "MCPToolCall",
-    "CustomToolCallResource",
+    "CustomToolCall",
     "CustomToolCallOutput",
 ];
 
@@ -1406,3 +1374,591 @@ pub const CONVERSATION_ITEM_DISCRIMINATORS: [&str; 28] = [
     "custom_tool_call",
     "custom_tool_call_output",
 ];
+
+open_string_enum! {
+    /// Optional fields that Conversations item endpoints may include.
+    pub enum ConversationItemInclude {
+        FileSearchResults = "file_search_call.results",
+        WebSearchResults = "web_search_call.results",
+        WebSearchSources = "web_search_call.action.sources",
+        InputImageUrl = "message.input_image.image_url",
+        ComputerOutputImageUrl = "computer_call_output.output.image_url",
+        CodeInterpreterOutputs = "code_interpreter_call.outputs",
+        ReasoningEncryptedContent = "reasoning.encrypted_content",
+        OutputTextLogprobs = "message.output_text.logprobs",
+    }
+}
+
+open_string_enum! {
+    /// Sort order for listing conversation items.
+    pub enum ConversationItemOrder {
+        Ascending = "asc",
+        Descending = "desc",
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct CreateConversationItemsRequestWire {
+    items: Vec<responses::ResponseInputItem>,
+}
+
+/// Body for `POST /conversations/{conversation_id}/items`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CreateConversationItemsRequest {
+    items: Vec<responses::ResponseInputItem>,
+}
+
+impl<'de> Deserialize<'de> for CreateConversationItemsRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = CreateConversationItemsRequestWire::deserialize(deserializer)?;
+        validate_item_count(&wire.items).map_err(D::Error::custom)?;
+        Ok(Self { items: wire.items })
+    }
+}
+
+impl CreateConversationItemsRequest {
+    /// Creates a validated body containing up to twenty items.
+    pub fn new(
+        items: impl IntoIterator<Item = responses::ResponseInputItem>,
+    ) -> Result<Self, ConversationValidationError> {
+        let items = items.into_iter().collect::<Vec<_>>();
+        validate_item_count(&items)?;
+        Ok(Self { items })
+    }
+
+    /// Creates a body containing one item.
+    #[must_use]
+    pub fn one(item: impl Into<responses::ResponseInputItem>) -> Self {
+        Self {
+            items: vec![item.into()],
+        }
+    }
+
+    /// Appends an item while enforcing the per-request maximum.
+    pub fn item(
+        mut self,
+        item: impl Into<responses::ResponseInputItem>,
+    ) -> Result<Self, ConversationValidationError> {
+        self.items.push(item.into());
+        validate_item_count(&self.items)?;
+        Ok(self)
+    }
+
+    /// Returns request items.
+    #[must_use]
+    pub fn items(&self) -> &[responses::ResponseInputItem] {
+        &self.items
+    }
+}
+
+/// Query parameters used while adding items.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CreateConversationItemsParams {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    include: Omittable<Vec<ConversationItemInclude>>,
+}
+
+impl CreateConversationItemsParams {
+    /// Creates empty query parameters.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds one optional field family.
+    #[must_use]
+    pub fn include(mut self, include: ConversationItemInclude) -> Self {
+        let mut values = match std::mem::take(&mut self.include) {
+            Omittable::Value(values) => values,
+            Omittable::Omitted => Vec::new(),
+        };
+        values.push(include);
+        self.include = Omittable::Value(values);
+        self
+    }
+}
+
+/// Query parameters for retrieving one item.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RetrieveConversationItemParams {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    include: Omittable<Vec<ConversationItemInclude>>,
+}
+
+impl RetrieveConversationItemParams {
+    /// Creates empty query parameters.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds one optional field family.
+    #[must_use]
+    pub fn include(mut self, include: ConversationItemInclude) -> Self {
+        let mut values = match std::mem::take(&mut self.include) {
+            Omittable::Value(values) => values,
+            Omittable::Omitted => Vec::new(),
+        };
+        values.push(include);
+        self.include = Omittable::Value(values);
+        self
+    }
+}
+
+/// Query parameters for listing persisted conversation items.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ListConversationItemsParams {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    limit: Omittable<u32>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    order: Omittable<ConversationItemOrder>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    after: Omittable<ConversationItemId>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    include: Omittable<Vec<ConversationItemInclude>>,
+}
+
+impl ListConversationItemsParams {
+    /// Creates empty list parameters.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets a validated page size.
+    pub fn limit(mut self, limit: u32) -> Result<Self, ConversationValidationError> {
+        if !(1..=100).contains(&limit) {
+            return Err(ConversationValidationError::InvalidListLimit { limit });
+        }
+        self.limit = Omittable::Value(limit);
+        Ok(self)
+    }
+
+    /// Sets item ordering.
+    #[must_use]
+    pub fn order(mut self, order: ConversationItemOrder) -> Self {
+        self.order = Omittable::Value(order);
+        self
+    }
+
+    /// Starts after an opaque item id.
+    #[must_use]
+    pub fn after(mut self, after: impl Into<ConversationItemId>) -> Self {
+        self.after = Omittable::Value(after.into());
+        self
+    }
+
+    /// Adds one optional field family.
+    #[must_use]
+    pub fn include(mut self, include: ConversationItemInclude) -> Self {
+        let mut values = match std::mem::take(&mut self.include) {
+            Omittable::Value(values) => values,
+            Omittable::Omitted => Vec::new(),
+        };
+        values.push(include);
+        self.include = Omittable::Value(values);
+        self
+    }
+
+    /// Returns the opaque pagination cursor.
+    #[must_use]
+    pub fn after_ref(&self) -> Option<&ConversationItemId> {
+        match &self.after {
+            Omittable::Value(after) => Some(after),
+            Omittable::Omitted => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum ConversationItemListObjectTag {
+    #[serde(rename = "list")]
+    List,
+}
+
+/// Cursor page returned by item create/list endpoints.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationItemList {
+    #[serde(rename = "object")]
+    object: ConversationItemListObjectTag,
+    data: Vec<ConversationItem>,
+    has_more: bool,
+    first_id: Nullable<ConversationItemId>,
+    last_id: Nullable<ConversationItemId>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ConversationItemList {
+    /// Returns page items.
+    #[must_use]
+    pub fn data(&self) -> &[ConversationItem] {
+        &self.data
+    }
+
+    /// Returns whether another page exists.
+    #[must_use]
+    pub const fn has_more(&self) -> bool {
+        self.has_more
+    }
+
+    /// Returns the first id when the page is non-empty.
+    #[must_use]
+    pub fn first_id(&self) -> Option<&ConversationItemId> {
+        match &self.first_id {
+            Nullable::Value(id) => Some(id),
+            Nullable::Null => None,
+        }
+    }
+
+    /// Returns the last id for cursor pagination.
+    #[must_use]
+    pub fn last_id(&self) -> Option<&ConversationItemId> {
+        match &self.last_id {
+            Nullable::Value(id) => Some(id),
+            Nullable::Null => None,
+        }
+    }
+
+    /// Returns future response properties retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::{Serialize, de::DeserializeOwned};
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    fn assert_json_dto<T>()
+    where
+        T: Serialize + DeserializeOwned + Send + Sync,
+    {
+    }
+
+    #[test]
+    fn public_wire_types_are_owned_and_bidirectional() {
+        assert_json_dto::<ConversationId>();
+        assert_json_dto::<ConversationItemId>();
+        assert_json_dto::<CreateConversationRequest>();
+        assert_json_dto::<UpdateConversationRequest>();
+        assert_json_dto::<Conversation>();
+        assert_json_dto::<DeletedConversation>();
+        assert_json_dto::<ConversationText>();
+        assert_json_dto::<ConversationSummaryText>();
+        assert_json_dto::<ConversationReasoningText>();
+        assert_json_dto::<ConversationInputImage>();
+        assert_json_dto::<ConversationComputerScreenshot>();
+        assert_json_dto::<ConversationInputFile>();
+        assert_json_dto::<ConversationMessageContent>();
+        assert_json_dto::<ConversationMessageRole>();
+        assert_json_dto::<ConversationMessage>();
+        assert_json_dto::<ConversationFunctionCall>();
+        assert_json_dto::<ConversationItem>();
+        assert_json_dto::<ConversationItemInclude>();
+        assert_json_dto::<ConversationItemOrder>();
+        assert_json_dto::<CreateConversationItemsRequest>();
+        assert_json_dto::<CreateConversationItemsParams>();
+        assert_json_dto::<RetrieveConversationItemParams>();
+        assert_json_dto::<ListConversationItemsParams>();
+        assert_json_dto::<ConversationItemList>();
+    }
+
+    #[test]
+    fn create_request_preserves_missing_null_empty_and_typed_items() {
+        let omitted: CreateConversationRequest =
+            serde_json::from_value(json!({})).expect("decode omitted request");
+        assert_eq!(
+            serde_json::to_value(omitted).expect("encode omitted request"),
+            json!({})
+        );
+
+        let null: CreateConversationRequest = serde_json::from_value(json!({
+            "metadata": null,
+            "items": null
+        }))
+        .expect("decode explicit nulls");
+        assert_eq!(
+            serde_json::to_value(null).expect("encode explicit nulls"),
+            json!({"metadata": null, "items": null})
+        );
+
+        let empty: CreateConversationRequest = serde_json::from_value(json!({
+            "metadata": {},
+            "items": []
+        }))
+        .expect("decode explicit empty values");
+        assert_eq!(
+            serde_json::to_value(empty).expect("encode explicit empty values"),
+            json!({"metadata": {}, "items": []})
+        );
+
+        let request = CreateConversationRequest::new()
+            .metadata_entry("topic", "demo")
+            .expect("valid metadata")
+            .item(responses::InputMessage::user("Hello!"))
+            .expect("one item");
+        assert_eq!(
+            serde_json::to_value(request).expect("encode typed request"),
+            json!({
+                "metadata": {"topic": "demo"},
+                "items": [{"role": "user", "content": "Hello!"}]
+            })
+        );
+    }
+
+    #[test]
+    fn request_validation_enforces_item_metadata_and_page_limits() {
+        let item: responses::ResponseInputItem = responses::InputMessage::user("x").into();
+        let items = vec![item; MAX_CONVERSATION_ITEMS_PER_REQUEST + 1];
+        let request = CreateConversationItemsRequest::new(items.clone());
+        assert!(matches!(
+            request,
+            Err(ConversationValidationError::TooManyItems { actual: 21, .. })
+        ));
+        assert!(
+            serde_json::from_value::<CreateConversationRequest>(json!({"items": items})).is_err()
+        );
+
+        let mut metadata = ConversationMetadata::new();
+        for index in 0..=MAX_CONVERSATION_METADATA_PROPERTIES {
+            metadata.insert(format!("key_{index}"), String::from("value"));
+        }
+        assert!(matches!(
+            UpdateConversationRequest::new(metadata),
+            Err(ConversationValidationError::TooManyMetadataProperties { .. })
+        ));
+
+        assert!(matches!(
+            ListConversationItemsParams::new().limit(0),
+            Err(ConversationValidationError::InvalidListLimit { limit: 0 })
+        ));
+        assert!(ListConversationItemsParams::new().limit(100).is_ok());
+    }
+
+    #[test]
+    fn update_requires_metadata_but_allows_explicit_null() {
+        assert!(serde_json::from_value::<UpdateConversationRequest>(json!({})).is_err());
+        let clear: UpdateConversationRequest =
+            serde_json::from_value(json!({"metadata": null})).expect("decode clear metadata");
+        assert!(clear.metadata().is_none());
+        assert_eq!(
+            serde_json::to_value(clear).expect("encode clear metadata"),
+            json!({"metadata": null})
+        );
+    }
+
+    #[test]
+    fn conversation_resources_preserve_nullable_metadata_and_extra_fields() {
+        let fixture = json!({
+            "id": "conv_123",
+            "object": "conversation",
+            "created_at": 1741900000,
+            "metadata": null,
+            "future_resource_field": {"kept": true}
+        });
+        let conversation: Conversation =
+            serde_json::from_value(fixture.clone()).expect("decode conversation");
+        assert_eq!(conversation.id().as_str(), "conv_123");
+        assert!(conversation.metadata().is_none());
+        assert_eq!(
+            conversation.extra_fields().get("future_resource_field"),
+            Some(&json!({"kept": true}))
+        );
+        assert_eq!(
+            serde_json::to_value(conversation).expect("round-trip conversation"),
+            fixture
+        );
+
+        let deleted: DeletedConversation = serde_json::from_value(json!({
+            "id": "conv_123",
+            "object": "conversation.deleted",
+            "deleted": true,
+            "future": 1
+        }))
+        .expect("decode deleted conversation");
+        assert!(deleted.is_deleted());
+        assert_eq!(deleted.extra_fields().get("future"), Some(&json!(1)));
+    }
+
+    fn user_message_fixture() -> Value {
+        json!({
+            "type": "message",
+            "id": "msg_user",
+            "status": "completed",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Hello!", "future_content": 1},
+                {
+                    "type": "input_image",
+                    "detail": "auto",
+                    "image_url": null,
+                    "file_id": "file_123"
+                }
+            ],
+            "future_message": true
+        })
+    }
+
+    fn assistant_message_fixture() -> Value {
+        json!({
+            "type": "message",
+            "id": "msg_assistant",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": "Hi there",
+                "annotations": [],
+                "logprobs": []
+            }],
+            "phase": "final_answer"
+        })
+    }
+
+    #[test]
+    fn ambiguous_message_resource_decodes_once_then_converts_by_role() {
+        let user: ConversationItem = serde_json::from_value(user_message_fixture())
+            .expect("decode general user message resource");
+        let ConversationItem::Message(user) = user else {
+            panic!("expected conversation message");
+        };
+        assert_eq!(user.role(), &ConversationMessageRole::User);
+        let input = user
+            .to_response_input_item()
+            .expect("convert user resource to Responses input");
+        assert!(matches!(
+            &input,
+            responses::ResponseInputItem::StoredMessage(_)
+        ));
+
+        let assistant: ConversationItem = serde_json::from_value(assistant_message_fixture())
+            .expect("decode general assistant message resource");
+        let ConversationItem::Message(assistant) = assistant else {
+            panic!("expected conversation message");
+        };
+        let input = assistant
+            .to_response_input_item()
+            .expect("convert assistant resource to Responses input");
+        assert!(matches!(
+            input,
+            responses::ResponseInputItem::OutputMessage(_)
+        ));
+        assert_eq!(
+            serde_json::to_value(input).expect("serialize converted assistant item")["phase"],
+            "final_answer"
+        );
+    }
+
+    #[test]
+    fn output_message_converts_to_conversation_and_back_without_json_authorship() {
+        let output = responses::OutputMessage::new(
+            "msg_1",
+            responses::ResponseItemStatus::Completed,
+            [responses::OutputText::new("answer")],
+        );
+        let item = ConversationItem::try_from(responses::ResponseOutputItem::Message(output))
+            .expect("convert output resource");
+        let input = item
+            .to_response_input_item()
+            .expect("convert persisted output back to input");
+        let responses::ResponseInputItem::OutputMessage(message) = input else {
+            panic!("assistant conversation item must remain output message");
+        };
+        assert_eq!(message.id(), "msg_1");
+        assert_eq!(message.text_parts().collect::<String>(), "answer");
+    }
+
+    #[test]
+    fn incompatible_content_role_is_a_typed_conversion_error() {
+        let message = ConversationMessage::new(
+            "msg_bad",
+            responses::ResponseItemStatus::Completed,
+            ConversationMessageRole::Assistant,
+            [ConversationMessageContent::InputText(
+                responses::InputText::new("not assistant output"),
+            )],
+        );
+        assert!(matches!(
+            message.to_response_input_item(),
+            Err(ConversationItemConversionError::ContentRoleMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn known_item_tags_are_strict_and_future_items_round_trip() {
+        assert_eq!(CONVERSATION_ITEM_SCHEMAS.len(), 28);
+        assert_eq!(CONVERSATION_ITEM_DISCRIMINATORS.len(), 28);
+        for discriminator in CONVERSATION_ITEM_DISCRIMINATORS {
+            assert!(
+                serde_json::from_value::<ConversationItem>(json!({"type": discriminator})).is_err(),
+                "known item tag {discriminator} must validate required fields"
+            );
+        }
+
+        let malformed_content = serde_json::from_value::<ConversationMessageContent>(json!({
+            "type": "input_text"
+        }));
+        assert!(malformed_content.is_err());
+
+        let fixture = json!({
+            "type": "future_conversation_item",
+            "id": "future_1",
+            "payload": {"nested": true}
+        });
+        let item: ConversationItem =
+            serde_json::from_value(fixture.clone()).expect("decode future item");
+        let ConversationItem::Unknown(unknown) = &item else {
+            panic!("future item must remain unknown");
+        };
+        assert_eq!(unknown.discriminator(), "future_conversation_item");
+        assert_eq!(
+            serde_json::to_value(item).expect("round-trip future item"),
+            fixture
+        );
+    }
+
+    #[test]
+    fn item_pages_and_query_builders_are_typed_and_lossless() {
+        let fixture = json!({
+            "object": "list",
+            "data": [user_message_fixture()],
+            "has_more": false,
+            "first_id": null,
+            "last_id": null,
+            "future_page": "kept"
+        });
+        let page: ConversationItemList =
+            serde_json::from_value(fixture.clone()).expect("decode empty-cursor page");
+        assert_eq!(page.data().len(), 1);
+        assert!(page.first_id().is_none());
+        assert!(page.last_id().is_none());
+        assert_eq!(
+            serde_json::to_value(page).expect("round-trip page"),
+            fixture
+        );
+
+        let params = ListConversationItemsParams::new()
+            .limit(25)
+            .expect("valid limit")
+            .order(ConversationItemOrder::Ascending)
+            .after("msg_cursor")
+            .include(ConversationItemInclude::ReasoningEncryptedContent);
+        assert_eq!(
+            serde_json::to_value(params).expect("encode list params"),
+            json!({
+                "limit": 25,
+                "order": "asc",
+                "after": "msg_cursor",
+                "include": ["reasoning.encrypted_content"]
+            })
+        );
+    }
+}

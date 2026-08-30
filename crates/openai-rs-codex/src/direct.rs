@@ -5,6 +5,8 @@
 
 mod auth;
 mod jwt;
+#[cfg(feature = "experimental-direct-keyring")]
+mod keyring_store;
 mod sse;
 mod transport;
 
@@ -16,6 +18,8 @@ pub use auth::{
     StoredCodexSession, TokenManager,
 };
 pub use jwt::ChatGptAccountId;
+#[cfg(feature = "experimental-direct-keyring")]
+pub use keyring_store::KeyringStore;
 pub use transport::{DirectCodexResponsesClient, DirectResponseStream};
 
 /// The only model endpoint reachable by the direct backend.
