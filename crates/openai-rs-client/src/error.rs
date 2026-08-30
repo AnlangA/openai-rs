@@ -219,6 +219,72 @@ impl fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+/// A typed error delivered inside an otherwise successful Responses stream.
+#[derive(Clone, Debug)]
+pub struct StreamError {
+    request_id: Option<Box<str>>,
+    message: Box<str>,
+    code: Option<Box<str>>,
+    param: Option<Box<str>>,
+    body: BodyPreview,
+}
+
+impl StreamError {
+    pub(crate) fn from_body(request_id: Option<&str>, body: &[u8]) -> Self {
+        let typed = serde_json::from_slice::<StreamErrorBody>(body).ok();
+        let message = typed
+            .as_ref()
+            .and_then(|error| error.message.as_deref())
+            .map(redact_inline)
+            .unwrap_or_else(|| "OpenAI returned an in-band stream error".to_owned())
+            .into_boxed_str();
+        Self {
+            request_id: request_id.map(Box::<str>::from),
+            message,
+            code: typed
+                .as_ref()
+                .and_then(|error| value_string(error.code.as_ref())),
+            param: typed
+                .as_ref()
+                .and_then(|error| value_string(error.param.as_ref())),
+            body: BodyPreview::from_bytes(body, false),
+        }
+    }
+
+    #[must_use]
+    pub fn request_id(&self) -> Option<&str> {
+        self.request_id.as_deref()
+    }
+
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    #[must_use]
+    pub fn code(&self) -> Option<&str> {
+        self.code.as_deref()
+    }
+
+    #[must_use]
+    pub fn param(&self) -> Option<&str> {
+        self.param.as_deref()
+    }
+
+    #[must_use]
+    pub const fn body_preview(&self) -> &BodyPreview {
+        &self.body
+    }
+}
+
+impl fmt::Display for StreamError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "OpenAI Responses stream error: {}", self.message)
+    }
+}
+
+impl std::error::Error for StreamError {}
+
 #[derive(Debug, Deserialize)]
 struct ApiErrorEnvelope {
     error: ApiErrorBody,
@@ -234,6 +300,16 @@ struct ApiErrorBody {
     param: Option<Value>,
     #[serde(default)]
     code: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamErrorBody {
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    code: Option<Value>,
+    #[serde(default)]
+    param: Option<Value>,
 }
 
 fn value_string(value: Option<&Value>) -> Option<Box<str>> {
@@ -262,6 +338,24 @@ pub enum Error {
 
     #[error("failed to encode request query: {0}")]
     EncodeQuery(Box<str>),
+
+    #[error("failed to decode an SSE stream: {source}")]
+    Sse {
+        #[source]
+        source: crate::sse::SseDecodeError,
+        request_id: Option<Box<str>>,
+    },
+
+    #[error(transparent)]
+    Stream(Box<StreamError>),
+
+    #[error("unexpected response content type; expected {expected}, received {actual:?}")]
+    UnexpectedContentType {
+        expected: &'static str,
+        actual: Option<Box<str>>,
+        status: StatusCode,
+        request_id: Option<Box<str>>,
+    },
 
     #[error("failed to decode response JSON (status {meta_status}): {source}")]
     Decode {
@@ -295,6 +389,12 @@ impl From<ApiError> for Error {
     }
 }
 
+impl From<StreamError> for Error {
+    fn from(error: StreamError) -> Self {
+        Self::Stream(Box::new(error))
+    }
+}
+
 impl Error {
     pub(crate) fn from_reqwest(error: reqwest::Error) -> Self {
         let is_timeout = error.is_timeout();
@@ -315,10 +415,13 @@ impl Error {
             Self::Api(error) => Some(error.status()),
             Self::Decode { meta_status, .. } => Some(*meta_status),
             Self::BodyTooLarge { status, .. } => Some(*status),
+            Self::UnexpectedContentType { status, .. } => Some(*status),
             Self::Transport(_)
             | Self::Timeout(_)
             | Self::Encode(_)
             | Self::EncodeQuery(_)
+            | Self::Sse { .. }
+            | Self::Stream(_)
             | Self::InvalidConfiguration(_)
             | Self::InvalidPathParameter { .. } => None,
         }
@@ -328,9 +431,11 @@ impl Error {
     pub fn request_id(&self) -> Option<&str> {
         match self {
             Self::Api(error) => error.request_id(),
-            Self::Decode { request_id, .. } | Self::BodyTooLarge { request_id, .. } => {
-                request_id.as_deref()
-            }
+            Self::Decode { request_id, .. }
+            | Self::BodyTooLarge { request_id, .. }
+            | Self::UnexpectedContentType { request_id, .. } => request_id.as_deref(),
+            Self::Sse { request_id, .. } => request_id.as_deref(),
+            Self::Stream(error) => error.request_id(),
             Self::Transport(_)
             | Self::Timeout(_)
             | Self::Encode(_)

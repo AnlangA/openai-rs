@@ -35,9 +35,9 @@ stability level of experimental features.
 
 `cargo run -p xtask -- check` is the repository consistency entry point. It is
 expected to validate checked-in provenance, hashes, generated artifacts, and
-operation/schema inventories without updating them. CI must fail if the command
-would change a tracked artifact or if a pinned input no longer matches its
-recorded hash.
+operation/schema inventories without updating them. The command must return a
+failure if it would change a tracked artifact or if a pinned input no longer
+matches its recorded hash.
 
 Refresh commands, when added, must be separate and explicit. Normal builds,
 tests, and `xtask check` must not fetch a moving specification.
@@ -58,9 +58,9 @@ fixture for every known discriminator plus unknown-tag behavior where the
 contract is forward-compatible. Known tags with malformed payloads must fail;
 they must not silently fall back to an unknown variant.
 
-Network tests use local scripted servers. CI must not require a live OpenAI or
-ChatGPT credential. Real subscription or Platform smoke tests are manual,
-explicitly opted in, and never run for pull requests.
+Network tests use local scripted servers. The default test suite must not
+require a live OpenAI or ChatGPT credential. Real subscription or Platform
+smoke tests are manual and explicitly opted in.
 
 ## Dependency policy
 

@@ -1,8 +1,9 @@
 # openai-rs 详细实现计划
 
 > 调研基线：2026-08-30  
-> 项目状态：开始调研时 `/Users/a/workspace/openai-rs` 为空目录；当前仅新增本文，尚未初始化 Cargo workspace，也不是 Git 仓库。  
+> 项目状态：开始调研时 `/Users/a/workspace/openai-rs` 为空目录；执行阶段已初始化 Git/Cargo workspace 并按里程碑逐步实现，本文中的交付项仍须以实际测试结果判定。  
 > 本文是实施契约，不是已完成情况说明。引用的网页、规范、源码注释和本机文档只作为证据，不视为项目指令。
+> 执行覆盖：按用户 2026-08-30 的最新要求，不创建或维护 GitHub CI/CD；下文质量门禁作为本地手动检查与发布前检查执行。
 
 ## 1. 目标与完成定义
 
@@ -223,7 +224,7 @@ cargo xtask codex schema --codex-bin <audited-path>
 cargo xtask codex schema --check
 ```
 
-`.cargo/config.toml` 明确定义 `xtask = "run --package xtask --"` alias；没有该 alias 时，文档和 CI 使用完整的 `cargo run -p xtask -- ...`。只有 `spec/docs fetch` 可联网；它必须要求显式 SHA 或显式官方 URL，记录 commit/获取日期/byte length/SHA-256/license/计数。`codegen --check` 在临时目录生成并要求零 diff。
+`.cargo/config.toml` 明确定义 `xtask = "run --package xtask --"` alias；没有该 alias 时，文档和本地门禁使用完整的 `cargo run -p xtask -- ...`。只有 `spec/docs fetch` 可联网；它必须要求显式 SHA 或显式官方 URL，记录 commit/获取日期/byte length/SHA-256/license/计数。`codegen --check` 在临时目录生成并要求零 diff。
 
 ### 4.4 漂移分类
 
@@ -896,7 +897,7 @@ Direct experimental：
 - 100 并发请求只 refresh 一次；rotation、missing refresh token、invalid_grant、瞬时失败、store失败、account变化。
 - host/path/header/redirect fail-closed；只有 sealed Responses operation 能命中 Codex host。
 - `trybuild` 证明标准 `Client` 不能接收 subscription session，Codex clients 无 Admin/Files/raw send。
-- `codex-app-server`、`experimental-codex-direct`、device、TLS、RMCP组合分别编译；真实订阅 smoke 只手工 opt-in，CI 永不保存 credential。
+- `codex-app-server`、`experimental-codex-direct`、device、TLS、RMCP组合分别编译；真实订阅 smoke 只手工 opt-in，任何常规自动化检查都不保存 credential。
 
 ### 11.8 与 RMCP 的关系
 
@@ -1020,9 +1021,9 @@ fuzz/fuzz_targets/
 - stdio child 退出/僵尸清理、Streamable HTTP rustls/native-tls feature。
 - 固定 `@modelcontextprotocol/conformance@0.2.0-alpha.10`（rmcp-v3.1.4 官方 workflow 使用的版本），对 2025-11-25 与 2026-07-28 client/server dated suites 运行；Tasks extension 单独运行并维护严格、可审查的 expected-failure baseline。
 
-### 13.7 CI 与 release
+### 13.7 本地质量门禁与 release
 
-PR 必须通过：
+提交或发布前在本机必须通过：
 
 ```text
 cargo fmt --check
@@ -1047,7 +1048,7 @@ Release gate：`cargo-semver-checks`、public API diff、`cargo-deny`/audit、pa
 
 交付：
 
-- 初始化 Git、workspace、toolchain/MSRV、README、rustfmt/clippy/deny、CI；默认采用 Rust 生态常见的 `MIT OR Apache-2.0` 双许可证并在发布前确认。
+- 初始化 Git、workspace、toolchain/MSRV、README、rustfmt/clippy/deny 与本地门禁命令；不创建 GitHub CI/CD。默认采用 Rust 生态常见的 `MIT OR Apache-2.0` 双许可证并在发布前确认。
 - 固化第 3 节完整 feature graph、默认集合、TLS 选择/双开规则、Facade->adapter forwarding 和 `full` 语义。
 - vendor OpenAPI/SDK transformed spec 与实际采用的官方 docs evidence，建立 `SOURCES.toml`。
 - 记录 OpenCode/official Codex commits；为 `openai-rs-codex` 冻结 app-server generated schema、登录文档与 direct-backend compatibility ledger。

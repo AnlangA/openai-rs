@@ -63,11 +63,13 @@ The repository does not claim full OpenAPI coverage until generated operation
 inventory, public bindings, fixtures, and contract tests agree with a pinned
 specification. Until then:
 
-- `POST /responses` non-streaming and SSE form the first vertical slice.
-- Other Responses operations are added only with typed request/response and
-  error fixtures.
+- The REST MVP covers Responses create, retrieve, delete, cancel, compact,
+  input-item listing, and input-token counting.
+- Responses SSE decoding exists, while the public streaming resource method and
+  its full event contract are still being completed.
+- Additional operations are added only with typed request/response and error
+  fixtures.
 - Other resource families remain incomplete even if their feature boundary is
   already named.
 - Unknown response fields and events are retained only where the wire contract
   is intentionally forward-compatible.
-

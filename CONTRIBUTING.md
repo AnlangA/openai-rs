@@ -29,7 +29,7 @@ scripted servers and synthetic secret markers.
 
 ## Required checks
 
-Run the same checks as CI:
+Run the local quality checks:
 
 ```console
 cargo fmt --all -- --check

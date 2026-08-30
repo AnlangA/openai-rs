@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AnlangA/openai-rs/blob/main/spec/contracts/codex-compatibility.schema.json",
+  "title": "Audited Codex app-server runtime compatibility",
+  "description": "An allowlist mapping exact released Codex executables to the exact app-server schema generated from those bytes. Unknown runtimes are unsupported.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "runtime"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "runtime": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/runtime"
+      }
+    }
+  },
+  "$defs": {
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "target",
+        "executable_sha256",
+        "app_server_schema_sha256"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^(?!0\\.0\\.0$)(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
+        },
+        "executable_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "app_server_schema_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

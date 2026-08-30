@@ -117,6 +117,7 @@ pub fn verify(repository_root: &Path) -> Result<()> {
     let sources_path = repository_root.join(SOURCES_PATH);
     let manifest = load_manifest(&sources_path)?;
     verify_manifest(&manifest, &summary)?;
+    crate::codex_compat::verify(repository_root)?;
 
     println!(
         "verified OpenAPI {} ({} bytes, {} paths, {} client operations, {} webhook operations, {} schemas)",

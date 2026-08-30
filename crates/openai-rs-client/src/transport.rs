@@ -12,6 +12,7 @@ use crate::{
 };
 
 const JSON_MIME: &str = "application/json";
+const SSE_MIME: &str = "text/event-stream";
 const DECODE_PREVIEW_BYTES: usize = 8 * 1024;
 
 /// One safely encoded component in an operation route.
@@ -166,11 +167,17 @@ impl Transport {
         if let Some(query) = query {
             append_query(&mut url, query)?;
         }
+        let accept = match meta.response_mode {
+            crate::operation::ResponseMode::Json | crate::operation::ResponseMode::EmptyOrJson => {
+                JSON_MIME
+            }
+            crate::operation::ResponseMode::Sse => SSE_MIME,
+        };
         let mut request = self
             .http
             .request(meta.method.clone(), url)
             .header(header::AUTHORIZATION, self.authorization.clone())
-            .header(header::ACCEPT, JSON_MIME);
+            .header(header::ACCEPT, accept);
         if let Some(organization) = &self.organization {
             request = request.header("OpenAI-Organization", organization.clone());
         }

@@ -80,6 +80,28 @@ impl private::Sealed for CodexAccessTokenCredential {
 #[cfg(feature = "access-token")]
 impl CodexCredentialMarker for CodexAccessTokenCredential {}
 
+#[cfg(feature = "app-server")]
 pub(crate) fn apply_credential<C: CodexCredentialMarker>(credential: &C, command: &mut Command) {
     credential.apply_to_child(command);
+}
+
+#[cfg(all(test, feature = "access-token"))]
+mod tests {
+    use super::{CodexAccessTokenCredential, CodexCredentialMarker};
+
+    static_assertions::assert_not_impl_any!(
+        CodexAccessTokenCredential: serde::Serialize, std::fmt::Display, Clone
+    );
+
+    fn assert_codex_marker<T: CodexCredentialMarker>() {}
+
+    #[test]
+    fn access_token_is_redacted_and_codex_only() {
+        assert_codex_marker::<CodexAccessTokenCredential>();
+        let credential =
+            CodexAccessTokenCredential::new(secrecy::SecretString::from("unit-secret".to_owned()));
+        let debug = format!("{credential:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("unit-secret"));
+    }
 }

@@ -1,5 +1,6 @@
 mod cli;
 mod codegen;
+mod codex_compat;
 mod error;
 mod spec;
 

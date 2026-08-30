@@ -21,6 +21,7 @@ pub(crate) enum RequestEncoding {
 pub(crate) enum ResponseMode {
     Json,
     EmptyOrJson,
+    Sse,
 }
 
 /// Static wire contract for one generated or handwritten operation.

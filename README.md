@@ -1,7 +1,5 @@
 # openai-rs
 
-[![CI](https://github.com/AnlangA/openai-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/AnlangA/openai-rs/actions/workflows/ci.yml)
-
 A typed Rust SDK for the OpenAI API, built around lossless wire types and the
 Responses API.
 
@@ -132,7 +130,7 @@ cargo +1.88.0 check --workspace --all-targets
 cargo run -p xtask -- check
 ```
 
-See [development.md](docs/development.md) for the full local and CI contract.
+See [development.md](docs/development.md) for the full local quality contract.
 
 ## Security
 

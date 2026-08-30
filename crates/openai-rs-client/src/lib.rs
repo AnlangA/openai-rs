@@ -7,12 +7,14 @@ mod auth;
 mod client;
 mod error;
 mod operation;
+mod response_stream;
 mod responses;
 pub mod sse;
 pub(crate) mod transport;
 
 pub use auth::{ApiKey, ApiKeyError};
 pub use client::{Client, ClientBuilder};
-pub use error::{ApiError, BodyPreview, Error};
+pub use error::{ApiError, BodyPreview, Error, StreamError};
 pub use operation::{ApiResponse, RateLimitMetadata, ResponseMeta};
+pub use response_stream::ResponseEventStream;
 pub use responses::{DeleteResponseResult, InputItems, InputTokens, Responses};

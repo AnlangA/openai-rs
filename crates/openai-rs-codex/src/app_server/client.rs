@@ -151,7 +151,8 @@ where
             .debug_struct("AppServerConfig")
             .field("executable", &self.executable)
             .field("codex_home", &self.codex_home)
-            .field("arguments", &self.arguments)
+            .field("arguments", &"<redacted>")
+            .field("argument_count", &self.arguments.len())
             .field("limits", &self.limits)
             .field("compatibility", &self.compatibility)
             .field("credential", &self.credential)
@@ -308,12 +309,11 @@ where
         let executable = config.executable.canonicalize().map_err(Error::Spawn)?;
         validate_executable(&executable)?;
         let executable_for_hash = executable.clone();
-        let executable_sha256 = tokio::task::spawn_blocking(move || {
-            sha256_file(&executable_for_hash)
-        })
-        .await
-        .map_err(|error| Error::RuntimeHashTask(error.to_string()))?
-        .map_err(Error::RuntimeArtifact)?;
+        let executable_sha256 =
+            tokio::task::spawn_blocking(move || sha256_file(&executable_for_hash))
+                .await
+                .map_err(|error| Error::RuntimeHashTask(error.to_string()))?
+                .map_err(Error::RuntimeArtifact)?;
         let runtime_identity = config
             .compatibility
             .resolve(&executable_sha256)
@@ -776,6 +776,47 @@ where
     Ok(())
 }
 
+fn validate_executable(path: &Path) -> Result<(), Error> {
+    let metadata = std::fs::metadata(path).map_err(Error::RuntimeArtifact)?;
+    if !metadata.is_file() {
+        return Err(Error::InvalidConfiguration(
+            "canonical app-server executable is not a regular file".to_owned(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(Error::InvalidConfiguration(
+                "canonical app-server artifact is not executable".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn sha256_file(path: &Path) -> Result<String, std::io::Error> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&chunk[..read]);
+    }
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    Ok(encoded)
+}
+
 fn prepare_codex_home(path: &Path) -> Result<(), Error> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -1063,11 +1104,25 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+    use std::path::Path;
 
     use serde_json::{Value, json};
 
-    use super::{AppServerClient, AppServerConfig, AppServerEvent, AppServerLimits, StderrTail};
-    use crate::{ClientInfo, Notification};
+    use super::{
+        AppServerClient, AppServerConfig, AppServerEvent, AppServerLimits, StderrTail, sha256_file,
+    };
+    use crate::{ClientInfo, Error, Notification, RuntimeCompatibility, RuntimeIdentity};
+
+    const TEST_SCHEMA_SHA256: &str =
+        "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899";
+
+    fn fake_runtime(executable: &Path) -> Result<RuntimeCompatibility, Box<dyn std::error::Error>> {
+        let executable = executable.canonicalize()?;
+        let executable_sha256 = sha256_file(&executable)?;
+        let identity =
+            RuntimeIdentity::new("test-shell-1.0.0", executable_sha256, TEST_SCHEMA_SHA256)?;
+        Ok(RuntimeCompatibility::new([identity])?)
+    }
 
     #[test]
     fn stderr_tail_is_bounded() {
@@ -1103,7 +1158,8 @@ mod tests {
             shutdown_timeout: std::time::Duration::from_secs(2),
             ..AppServerLimits::default()
         };
-        let config = AppServerConfig::new("/bin/sh", profile.path())
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let config = AppServerConfig::new("/bin/sh", profile.path(), compatibility)
             .with_arguments([
                 OsString::from("-c"),
                 OsString::from(script),
@@ -1112,6 +1168,16 @@ mod tests {
             .with_limits(limits);
         let client = AppServerClient::spawn(config, ClientInfo::new("test", "0.0.0")).await?;
         assert_eq!(client.initialize_response().user_agent, "fake/1");
+        assert_eq!(
+            client.runtime_identity().released_version(),
+            "test-shell-1.0.0"
+        );
+
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(profile.path())?.permissions().mode() & 0o777,
+            0o700
+        );
 
         let (first, second) = tokio::join!(
             client.request_value("test/first", None),
@@ -1134,6 +1200,53 @@ mod tests {
 
         client.close().await?;
         assert!(client.is_closed());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn refuses_runtime_hash_mismatch_before_spawn() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let profile = tempfile::tempdir()?;
+        let wrong_identity = RuntimeIdentity::new(
+            "test-shell-1.0.0",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            TEST_SCHEMA_SHA256,
+        )?;
+        let compatibility = RuntimeCompatibility::new([wrong_identity])?;
+        let config = AppServerConfig::new("/bin/sh", profile.path(), compatibility)
+            .with_arguments([OsString::from("-c"), OsString::from("exit 99")]);
+
+        let result = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await;
+        assert!(matches!(result, Err(Error::RuntimeArtifactMismatch { .. })));
+        Ok(())
+    }
+
+    #[cfg(all(unix, feature = "access-token"))]
+    #[tokio::test]
+    async fn access_token_is_injected_only_into_dedicated_child_environment()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            test "$CODEX_ACCESS_TOKEN" = "unit-secret" || exit 21
+            test -z "${OPENAI_API_KEY+x}" || exit 22
+            IFS= read -r init || exit 23
+            case "$init" in *'"method":"initialize"'*) ;; *) exit 24 ;; esac
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 25
+            case "$initialized" in *'"method":"initialized"'*) ;; *) exit 26 ;; esac
+            case "$initialized" in *'account/login/start'*) exit 27 ;; esac
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let credential = crate::CodexAccessTokenCredential::new(secrecy::SecretString::from(
+            "unit-secret".to_owned(),
+        ));
+        let config = AppServerConfig::new("/bin/sh", profile.path(), compatibility)
+            .with_arguments([OsString::from("-c"), OsString::from(script)])
+            .with_access_token(credential);
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+        client.close().await?;
         Ok(())
     }
 }

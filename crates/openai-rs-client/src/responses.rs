@@ -3,13 +3,13 @@ use openai_rs_types::{
     ResponseId,
     responses::{
         CompactResponseRequest, CompactedResponse, CountInputTokensRequest, CreateResponseRequest,
-        DeletedResponse, InputTokenCountResponse, ListResponseInputItemsParams, Response,
-        ResponseInputItemList,
+        CreateStreamingResponseRequest, DeletedResponse, InputTokenCountResponse,
+        ListResponseInputItemsParams, Response, ResponseInputItemList, ResponseStreamEvent,
     },
 };
 
 use crate::{
-    ApiResponse, Client, Error,
+    ApiResponse, Client, Error, ResponseEventStream,
     operation::{
         AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, private::Sealed,
     },
@@ -40,6 +40,20 @@ impl Responses {
             .transport()
             .execute_json::<CreateResponse, ()>(&path, None, Some(&request))
             .await
+    }
+
+    /// Creates a model response and incrementally decodes its SSE events.
+    pub async fn create_stream(
+        &self,
+        request: CreateStreamingResponseRequest,
+    ) -> Result<ResponseEventStream, Error> {
+        let path = [PathSegment::literal("responses")];
+        let response = self
+            .client
+            .transport()
+            .send::<CreateStreamingResponse, ()>(&path, None, Some(&request))
+            .await?;
+        ResponseEventStream::from_response(response)
     }
 
     /// Retrieves a stored response by its opaque identifier.
@@ -245,6 +259,17 @@ operation!(
 );
 
 operation!(
+    CreateStreamingResponse,
+    request = CreateStreamingResponseRequest,
+    response = ResponseStreamEvent,
+    method = Method::POST,
+    route = "/responses",
+    request_encoding = RequestEncoding::Json,
+    response_mode = ResponseMode::Sse,
+    success = OK,
+);
+
+operation!(
     RetrieveResponse,
     request = (),
     response = Response,
@@ -318,6 +343,7 @@ mod tests {
     };
 
     use bytes::Bytes;
+    use futures_util::StreamExt;
     use http_body_util::{BodyExt, Full};
     use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
     use hyper_util::rt::TokioIo;
@@ -338,6 +364,14 @@ mod tests {
 
     async fn serve_once(
         status: StatusCode,
+        body: &'static str,
+    ) -> (Url, oneshot::Receiver<CapturedRequest>) {
+        serve_once_with_content_type(status, "application/json", body).await
+    }
+
+    async fn serve_once_with_content_type(
+        status: StatusCode,
+        content_type: &'static str,
         body: &'static str,
     ) -> (Url, oneshot::Receiver<CapturedRequest>) {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -382,7 +416,7 @@ mod tests {
 
                     let response = hyper::Response::builder()
                         .status(status)
-                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .header(http::header::CONTENT_TYPE, content_type)
                         .header("x-request-id", "req_loopback")
                         .body(Full::new(Bytes::from_static(body.as_bytes())))
                         .expect("build loopback response");
@@ -516,5 +550,75 @@ mod tests {
         assert_eq!(api_error.code(), Some("invalid_api_key"));
         assert!(!api_error.message().contains("private-token"));
         assert!(!api_error.body_preview().as_str().contains("sk-private"));
+    }
+
+    #[tokio::test]
+    async fn create_stream_decodes_events_and_stops_at_done() {
+        let body = concat!(
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\",\"sequence_number\":1}\n\n",
+            "data: [DONE]\n\n",
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"must-not-parse\",\"sequence_number\":2}\n\n",
+        );
+        let (base_url, captured) =
+            serve_once_with_content_type(StatusCode::OK, "text/event-stream; charset=utf-8", body)
+                .await;
+        let request = CreateResponseRequest::new("test-model", "hello").into_streaming();
+
+        let mut stream = client(base_url)
+            .responses()
+            .create_stream(request)
+            .await
+            .expect("stream handshake");
+        assert_eq!(stream.request_id(), Some("req_loopback"));
+        let event = stream
+            .next()
+            .await
+            .expect("one event")
+            .expect("typed event");
+        match event {
+            ResponseStreamEvent::OutputTextDelta(event) => assert_eq!(event.delta(), "hello"),
+            other => panic!("unexpected stream event: {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+
+        let captured = captured.await.expect("captured request");
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/responses");
+        let request_json: Value = serde_json::from_slice(&captured.body).expect("request JSON");
+        assert_eq!(request_json["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn create_stream_surfaces_in_band_error_once() {
+        let body = concat!(
+            "event: error\n",
+            "data: {\"type\":\"error\",\"code\":\"stream_failed\",\"message\":\"bad Bearer private\",\"param\":null,\"sequence_number\":1}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base_url, _captured) =
+            serve_once_with_content_type(StatusCode::OK, "text/event-stream", body).await;
+        let request = CreateResponseRequest::empty().into_streaming();
+
+        let mut stream = client(base_url)
+            .responses()
+            .create_stream(request)
+            .await
+            .expect("stream handshake");
+        let error = stream
+            .next()
+            .await
+            .expect("remote error item")
+            .expect_err("remote stream error");
+        assert_eq!(error.request_id(), Some("req_loopback"));
+        match error {
+            Error::Stream(error) => {
+                assert_eq!(error.code(), Some("stream_failed"));
+                assert!(!error.message().contains("private"));
+            }
+            other => panic!("expected stream error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
     }
 }

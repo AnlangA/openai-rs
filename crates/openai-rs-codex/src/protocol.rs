@@ -553,6 +553,7 @@ pub enum Notification {
     Unknown(Box<RawNotification>),
 }
 
+#[cfg(any(feature = "app-server", test))]
 pub(crate) fn decode_notification(
     method: String,
     params: Option<Value>,

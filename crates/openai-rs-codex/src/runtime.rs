@@ -30,8 +30,7 @@ impl RuntimeIdentity {
         }
         let executable_sha256 = normalize_sha256(executable_sha256.as_ref()).ok_or_else(|| {
             Error::InvalidConfiguration(
-                "runtime executable SHA-256 must be 64 non-zero hexadecimal characters"
-                    .to_owned(),
+                "runtime executable SHA-256 must be 64 non-zero hexadecimal characters".to_owned(),
             )
         })?;
         let schema_sha256 = normalize_sha256(schema_sha256.as_ref()).ok_or_else(|| {
@@ -86,8 +85,7 @@ impl RuntimeCompatibility {
         for identity in &identities {
             if !executable_hashes.insert(identity.executable_sha256.clone()) {
                 return Err(Error::InvalidConfiguration(
-                    "runtime compatibility set contains a duplicate executable SHA-256"
-                        .to_owned(),
+                    "runtime compatibility set contains a duplicate executable SHA-256".to_owned(),
                 ));
             }
         }
@@ -99,6 +97,7 @@ impl RuntimeCompatibility {
         &self.identities
     }
 
+    #[cfg(feature = "app-server")]
     pub(crate) fn resolve(&self, executable_sha256: &str) -> Option<&RuntimeIdentity> {
         self.identities
             .iter()
