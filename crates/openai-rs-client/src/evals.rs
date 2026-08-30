@@ -2,14 +2,6 @@
 
 use std::{collections::HashSet, pin::Pin};
 
-use futures_core::Stream;
-use http::{Method, StatusCode};
-use openai_rs_types::{
-    CreateEvalRequest, CreateEvalRunRequest, DeletedEval, DeletedEvalRun, Eval, EvalId, EvalList,
-    EvalRun, EvalRunId, EvalRunList, EvalRunOutputItem, EvalRunOutputItemId, EvalRunOutputItemList,
-    EvalRunStatus, ListEvalRunOutputItemsParams, ListEvalRunsParams, ListEvalsParams,
-    UpdateEvalRequest,
-};
 use crate::{
     ApiResponse, Client, Error, PollError, PollOptions,
     operation::{
@@ -18,6 +10,14 @@ use crate::{
     },
     poll,
     transport::PathSegment,
+};
+use futures_core::Stream;
+use http::{Method, StatusCode};
+use openai_rs_types::{
+    CreateEvalRequest, CreateEvalRunRequest, DeletedEval, DeletedEvalRun, Eval, EvalId, EvalList,
+    EvalRun, EvalRunId, EvalRunList, EvalRunOutputItem, EvalRunOutputItemId, EvalRunOutputItemList,
+    EvalRunStatus, ListEvalRunOutputItemsParams, ListEvalRunsParams, ListEvalsParams,
+    UpdateEvalRequest,
 };
 
 const OK: &[StatusCode] = &[StatusCode::OK];

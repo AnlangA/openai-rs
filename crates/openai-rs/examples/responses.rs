@@ -1,6 +1,6 @@
 use openai_rs::{
     ApiKey, Client,
-    responses::{CreateResponseRequest, FunctionCallOutput, FunctionTool, ResponseInput},
+    responses::{CreateResponseRequest, FunctionCallOutput, FunctionTool},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -23,8 +23,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tool = FunctionTool::for_type::<WeatherArgs>("get_weather", "Return current weather")?;
 
-    let request = CreateResponseRequest::new("gpt-5.4", "What is the weather in Shenzhen?")
-        .with_tool(tool);
+    let request =
+        CreateResponseRequest::new("gpt-5.4", "What is the weather in Shenzhen?").with_tool(tool);
 
     let response = client.responses().create(request).await?;
 
@@ -38,14 +38,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         )?;
 
-        let mut follow_up_items = response.to_input_items();
-        follow_up_items.push(output.into());
-
+        // Official continuation path: send only the tool output with previous_response_id
+        // (Alternatively, use response.to_input_items() for local stateless multi-turn replay)
         let follow_up = client
             .responses()
-            .create(CreateResponseRequest::new(
-                "gpt-5.4",
-                ResponseInput::items(follow_up_items),
+            .create(CreateResponseRequest::follow_up(
+                &response,
+                vec![output.into()],
             ))
             .await?;
 

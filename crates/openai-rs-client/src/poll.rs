@@ -193,7 +193,9 @@ impl From<SharedPollError> for PollError {
     fn from(error: SharedPollError) -> Self {
         match error {
             SharedPollError::InvalidConfiguration => Self::InvalidConfiguration,
-            SharedPollError::DeadlineExceeded { last_status } => Self::DeadlineExceeded { last_status },
+            SharedPollError::DeadlineExceeded { last_status } => {
+                Self::DeadlineExceeded { last_status }
+            }
             SharedPollError::Cancelled => Self::Cancelled,
             SharedPollError::Client(error) => Self::Client(error),
         }
@@ -313,14 +315,9 @@ mod tests {
         let options = PollOptions::new()
             .with_interval(Duration::from_millis(10))
             .with_timeout(Duration::from_millis(30));
-        let error = poll_resource_with_status(
-            fetch,
-            |s| s == "completed",
-            |s| s.clone(),
-            options,
-        )
-        .await
-        .expect_err("should time out");
+        let error = poll_resource_with_status(fetch, |s| s == "completed", |s| s.clone(), options)
+            .await
+            .expect_err("should time out");
 
         match error {
             PollError::DeadlineExceeded { last_status } => {

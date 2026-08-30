@@ -4,13 +4,7 @@
 //! OpenAI API.  It never silently drops a schema keyword: unsupported input is
 //! returned as an error with a JSON Pointer-like path.
 
-use std::{
-    collections::HashMap,
-    future::Future,
-    marker::PhantomData,
-    pin::Pin,
-    sync::Arc,
-};
+use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin, sync::Arc};
 
 use schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
@@ -327,12 +321,13 @@ where
                 let fut = self.call(args, ToolContext::new(call_id));
                 Box::pin(async move {
                     let output = fut.await?;
-                    serde_json::to_string(&output).map_err(|e| ToolExecutionError::Custom(e.to_string()))
+                    serde_json::to_string(&output)
+                        .map_err(|e| ToolExecutionError::Custom(e.to_string()))
                 })
             }
-            Err(err) => Box::pin(async move {
-                Err(ToolExecutionError::InvalidArguments(err.to_string()))
-            }),
+            Err(err) => {
+                Box::pin(async move { Err(ToolExecutionError::InvalidArguments(err.to_string())) })
+            }
         }
     }
 }
@@ -699,7 +694,7 @@ mod tests {
         );
         let out = registry.execute(&call).await.expect("execute");
         assert_eq!(
-            serde_json::to_value(out).unwrap()["output"],
+            serde_json::to_value(out).expect("serialize out")["output"],
             "{\"temperature\":22.5}"
         );
 
@@ -715,7 +710,7 @@ mod tests {
         );
         let err_out = registry.execute(&err_call).await.expect("execute error");
         assert_eq!(
-            serde_json::to_value(err_out).unwrap()["output"],
+            serde_json::to_value(err_out).expect("serialize err_out")["output"],
             "{\"error\":\"tool execution failed: city not found\"}"
         );
     }

@@ -1585,6 +1585,7 @@ dependencies = [
  "schemars",
  "serde",
  "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

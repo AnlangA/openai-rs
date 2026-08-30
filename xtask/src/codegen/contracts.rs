@@ -495,10 +495,7 @@ fn load_implementation_registry(repository_root: &Path) -> Result<Implementation
     let input = fs::read_to_string(&path)
         .map_err(|source| Error::io("read implementation registry", &path, source))?;
     let toml_data: ImplementationToml = toml::from_str(&input).map_err(|source| {
-        Error::message(format!(
-            "invalid TOML in {}: {source}",
-            path.display()
-        ))
+        Error::message(format!("invalid TOML in {}: {source}", path.display()))
     })?;
 
     if toml_data.schema_version != 1 {
@@ -1097,11 +1094,9 @@ fn build_schema_ir(document: &Value) -> Result<SchemaIrArtifact> {
     }
 
     for schema_name in selected_names {
-        let schema = schemas.get(&schema_name).ok_or_else(|| {
-            Error::message(format!(
-                "selected schema `{schema_name}` is missing"
-            ))
-        })?;
+        let schema = schemas
+            .get(&schema_name)
+            .ok_or_else(|| Error::message(format!("selected schema `{schema_name}` is missing")))?;
         let pointer = format!("#/components/schemas/{}", escape_json_pointer(&schema_name));
         let mut metrics = SchemaMetrics::default();
         collect_metrics(schema, 0, &mut metrics);
@@ -1129,7 +1124,11 @@ fn is_schema_ir_target(name: &str, schema: &Value) -> bool {
     let mut has_discriminator = false;
     let pointer = format!("#/components/schemas/{}", escape_json_pointer(name));
     walk_schema_nodes(schema, &pointer, &mut |node, _| {
-        if node.get("discriminator").and_then(Value::as_object).is_some() {
+        if node
+            .get("discriminator")
+            .and_then(Value::as_object)
+            .is_some()
+        {
             has_discriminator = true;
         }
     });

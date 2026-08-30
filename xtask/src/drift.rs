@@ -68,10 +68,7 @@ impl DriftReport {
         }
         println!();
 
-        println!(
-            "--- Breaking Changes ({}) ---",
-            self.breaking_changes.len()
-        );
+        println!("--- Breaking Changes ({}) ---", self.breaking_changes.len());
         if self.breaking_changes.is_empty() {
             println!("  (none)");
         } else {
@@ -119,13 +116,17 @@ fn resolve_path(repository_root: &Path, path_str: &str) -> PathBuf {
 pub fn compute_drift(from_path: &Path, to_path: &Path) -> Result<DriftReport> {
     let from_bytes = fs::read(from_path)
         .map_err(|source| Error::io("read from-spec for drift", from_path, source))?;
-    let to_bytes = fs::read(to_path)
-        .map_err(|source| Error::io("read to-spec for drift", to_path, source))?;
+    let to_bytes =
+        fs::read(to_path).map_err(|source| Error::io("read to-spec for drift", to_path, source))?;
 
-    let from_doc: Value = serde_json::from_slice(&from_bytes)
-        .map_err(|source| Error::Json { path: from_path.to_path_buf(), source })?;
-    let to_doc: Value = serde_json::from_slice(&to_bytes)
-        .map_err(|source| Error::Json { path: to_path.to_path_buf(), source })?;
+    let from_doc: Value = serde_json::from_slice(&from_bytes).map_err(|source| Error::Json {
+        path: from_path.to_path_buf(),
+        source,
+    })?;
+    let to_doc: Value = serde_json::from_slice(&to_bytes).map_err(|source| Error::Json {
+        path: to_path.to_path_buf(),
+        source,
+    })?;
 
     let from_ops = extract_operations(&from_doc)?;
     let to_ops = extract_operations(&to_doc)?;
@@ -179,7 +180,9 @@ pub fn compute_drift(from_path: &Path, to_path: &Path) -> Result<DriftReport> {
 
                 // Check added optional parameters (additive)
                 for opt in &to_op.optional_params {
-                    if !from_op.optional_params.contains(opt) && !from_op.required_params.contains(opt) {
+                    if !from_op.optional_params.contains(opt)
+                        && !from_op.required_params.contains(opt)
+                    {
                         report.additive_changes.push(format!(
                             "operation `{op_id}` added optional parameter `{opt}`"
                         ));
@@ -225,7 +228,9 @@ pub fn compute_drift(from_path: &Path, to_path: &Path) -> Result<DriftReport> {
     // Analyze schemas
     for schema_name in &to_schemas {
         if !from_schemas.contains(schema_name) {
-            report.additive_changes.push(format!("new schema `{schema_name}`"));
+            report
+                .additive_changes
+                .push(format!("new schema `{schema_name}`"));
         }
     }
 
@@ -236,7 +241,9 @@ pub fn compute_drift(from_path: &Path, to_path: &Path) -> Result<DriftReport> {
                     "schema `{schema_name}` removed under sunset policy"
                 ));
             } else {
-                report.breaking_changes.push(format!("schema `{schema_name}` was removed"));
+                report
+                    .breaking_changes
+                    .push(format!("schema `{schema_name}` was removed"));
             }
         }
     }
@@ -279,7 +286,10 @@ fn extract_operations(doc: &Value) -> Result<BTreeMap<String, OperationMeta>> {
             let Some(op_id) = op.get("operationId").and_then(Value::as_str) else {
                 continue;
             };
-            let deprecated = op.get("deprecated").and_then(Value::as_bool).unwrap_or(false);
+            let deprecated = op
+                .get("deprecated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
 
             let mut required_params = BTreeSet::new();
             let mut optional_params = BTreeSet::new();
@@ -314,7 +324,10 @@ fn extract_operations(doc: &Value) -> Result<BTreeMap<String, OperationMeta>> {
 
 fn extract_schema_names(doc: &Value) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    if let Some(schemas) = doc.pointer("/components/schemas").and_then(Value::as_object) {
+    if let Some(schemas) = doc
+        .pointer("/components/schemas")
+        .and_then(Value::as_object)
+    {
         for name in schemas.keys() {
             names.insert(name.clone());
         }
@@ -328,9 +341,11 @@ mod tests {
 
     #[test]
     fn drift_same_spec_is_zero_diff() {
-        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("repo root");
         let snapshot = repo_root.join(SNAPSHOT_PATH);
-        let report = compute_drift(&snapshot, &snapshot).unwrap();
+        let report = compute_drift(&snapshot, &snapshot).expect("compute drift");
         assert!(report.is_empty());
         assert_eq!(report.from_operations_count, report.to_operations_count);
         assert_eq!(report.from_schemas_count, report.to_schemas_count);

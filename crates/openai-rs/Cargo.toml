@@ -56,10 +56,27 @@ openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0", default-fea
 schemars.workspace = true
 serde.workspace = true
 tokio.workspace = true
+tokio-stream.workspace = true
 
 [[example]]
 name = "responses"
 required-features = ["client", "structured-output"]
+
+[[example]]
+name = "responses_stream"
+required-features = ["client"]
+
+[[example]]
+name = "chat_completions"
+required-features = ["client"]
+
+[[example]]
+name = "structured_output"
+required-features = ["client", "structured-output"]
+
+[[example]]
+name = "conversations"
+required-features = ["client"]
 
 [lints]
 workspace = true

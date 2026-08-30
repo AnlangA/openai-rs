@@ -644,6 +644,7 @@ impl SseEndpointPolicy {
             .with_terminal_event("response.completed")
             .with_terminal_event("response.failed")
             .with_terminal_event("response.incomplete")
+            .with_terminal_event("response.cancelled")
             .with_consumed_data_sentinel("[DONE]")
             .with_remote_error_event("error")
     }
@@ -1163,6 +1164,7 @@ mod tests {
             "response.completed",
             "response.failed",
             "response.incomplete",
+            "response.cancelled",
         ] {
             let mut decoder = SseStreamDecoder::with_default_limits(SseEndpointPolicy::responses());
             let input = format!("event: {terminal}\ndata: {{\"type\":\"{terminal}\"}}\n\n");

@@ -108,7 +108,7 @@ The typed tool-call and follow-up inference loop requires no raw JSON or manual 
 ```rust
 use openai_rs::{
     ApiKey, Client,
-    responses::{CreateResponseRequest, FunctionCallOutput, FunctionTool, ResponseInput},
+    responses::{CreateResponseRequest, FunctionCallOutput, FunctionTool},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -147,14 +147,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         )?;
 
-        let mut follow_up_items = response.to_input_items();
-        follow_up_items.push(output.into());
-
+        // Official continuation path: send only the tool output with previous_response_id
+        // (Alternatively, use response.to_input_items() for local stateless multi-turn replay)
         let follow_up = client
             .responses()
-            .create(CreateResponseRequest::new(
-                "gpt-5.4",
-                ResponseInput::items(follow_up_items),
+            .create(CreateResponseRequest::follow_up(
+                &response,
+                vec![output.into()],
             ))
             .await?;
 
@@ -170,7 +169,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 The shape follows the [official OpenAI Responses
 contract](https://developers.openai.com/api/reference/resources/responses/methods/create):
 `POST /responses` accepts typed input and returns an ordered array of output
-items. Do not assume that the first output item is always an assistant text
+items. Multi-turn continuation uses `previous_response_id` (via `CreateResponseRequest::follow_up`),
+while `response.to_input_items()` is available when full local conversation history replay is needed.
+Do not assume that the first output item is always an assistant text
 message. The same code is checked as the executable
 [`responses` example](crates/openai-rs/examples/responses.rs).
 

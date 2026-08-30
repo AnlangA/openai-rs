@@ -11,6 +11,8 @@ use crate::BetaResponses;
 use crate::ChatKit;
 #[cfg(feature = "legacy-completions")]
 use crate::Completions;
+#[cfg(feature = "legacy-evals")]
+use crate::Evals;
 #[cfg(feature = "legacy-realtime")]
 #[allow(deprecated)]
 use crate::LegacyRealtimeSessions;
@@ -18,12 +20,10 @@ use crate::LegacyRealtimeSessions;
 use crate::Realtime;
 #[cfg(feature = "custom-voice")]
 use crate::Voices;
-#[cfg(feature = "legacy-evals")]
-use crate::Evals;
 use crate::{
     ApiKey, Audio, Batches, ChatCompletions, Containers, ContentProvenanceChecks, Conversations,
-    Embeddings, Error, Files, FineTuning, Images, Models, Moderations, Responses,
-    RetryPolicy, Skills, Uploads, VectorStores, auth::AuthProvider, multipart::MultipartTransport,
+    Embeddings, Error, Files, FineTuning, Images, Models, Moderations, Responses, RetryPolicy,
+    Skills, Uploads, VectorStores, auth::AuthProvider, multipart::MultipartTransport,
     sse::SseLimits, transport::Transport,
 };
 #[cfg(feature = "workload-identity")]

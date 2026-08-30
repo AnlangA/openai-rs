@@ -423,8 +423,7 @@ mod tests {
             }
         });
 
-        let base_url =
-            Url::parse(&format!("http://{address}/v1/")).expect("file base URL");
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("file base URL");
         let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
             .base_url(base_url)
             .allow_insecure_loopback(true)
