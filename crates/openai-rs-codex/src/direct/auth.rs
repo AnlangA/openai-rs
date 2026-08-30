@@ -6,7 +6,9 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
 use secrecy::{ExposeSecret, SecretString};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+#[cfg(feature = "experimental-direct-device")]
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -211,6 +213,25 @@ impl DirectAuthClient {
     fn with_test_token_endpoint(token: Url) -> Result<Self, DirectError> {
         let mut client = Self::new()?;
         client.endpoints.token = token;
+        Ok(client)
+    }
+
+    #[cfg(all(test, feature = "experimental-direct-device"))]
+    fn with_test_device_base(base: &Url, deadline: Duration) -> Result<Self, DirectError> {
+        let mut client = Self::new()?;
+        client.endpoints.device_code = base
+            .join("deviceauth/usercode")
+            .map_err(|error| DirectError::Configuration(error.to_string()))?;
+        client.endpoints.device_token = base
+            .join("deviceauth/token")
+            .map_err(|error| DirectError::Configuration(error.to_string()))?;
+        client.endpoints.device_verification = base
+            .join("codex/device")
+            .map_err(|error| DirectError::Configuration(error.to_string()))?;
+        client.endpoints.device_redirect = base
+            .join("deviceauth/callback")
+            .map_err(|error| DirectError::Configuration(error.to_string()))?;
+        client.device_deadline = deadline;
         Ok(client)
     }
 
@@ -523,6 +544,16 @@ impl DeviceCodeLogin {
             let status = response.status();
             if status.is_success() {
                 let code: DeviceCodeSuccess = decode_auth_response(response).await?;
+                let expected_challenge =
+                    URL_SAFE_NO_PAD.encode(Sha256::digest(code.code_verifier.as_bytes()));
+                if !secure_equal(
+                    expected_challenge.as_bytes(),
+                    code.code_challenge.as_bytes(),
+                ) {
+                    return Err(DirectError::OAuth(
+                        "device PKCE challenge mismatch".to_owned(),
+                    ));
+                }
                 let tokens = self
                     .auth
                     .exchange_code(
@@ -915,6 +946,7 @@ struct DevicePollRequest<'a> {
 #[derive(Deserialize)]
 struct DeviceCodeSuccess {
     authorization_code: String,
+    code_challenge: String,
     code_verifier: String,
 }
 
@@ -1081,6 +1113,63 @@ mod tests {
             assert_eq!(task.await??.access_token(), "new-access");
         }
         assert_eq!(server.await??, 1);
+        Ok(())
+    }
+
+    #[cfg(feature = "experimental-direct-device")]
+    #[tokio::test]
+    async fn device_poll_is_bounded_and_cancellable() -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            for response in [
+                Some(
+                    br#"{"device_auth_id":"device-1","user_code":"ABCD-1234","interval":"1"}"#
+                        .as_slice(),
+                ),
+                None,
+            ] {
+                let (mut stream, _) = listener.accept().await?;
+                let mut request = vec![0_u8; 8 * 1024];
+                let _ = stream.readable().await;
+                let _ = stream.try_read(&mut request);
+                match response {
+                    Some(body) => {
+                        let headers = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        stream.write_all(headers.as_bytes()).await?;
+                        stream.write_all(body).await?;
+                    }
+                    None => {
+                        stream
+                            .write_all(
+                                b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                            )
+                            .await?;
+                    }
+                }
+            }
+            Ok::<_, std::io::Error>(())
+        });
+        let base = Url::parse(&format!("http://{address}/"))?;
+        let auth = DirectAuthClient::with_test_device_base(&base, Duration::from_secs(5))?;
+        let login = auth.begin_device_login().await?;
+        let store = Arc::new(EphemeralStore::default());
+        let cancellation = super::CancellationToken::default();
+        let task_cancellation = cancellation.clone();
+        let task_store = Arc::clone(&store);
+        let task = tokio::spawn(async move {
+            login
+                .complete(task_store.as_ref(), &task_cancellation)
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancellation.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(2), task).await??;
+        assert!(matches!(result, Err(super::DirectError::Cancelled)));
+        server.await??;
         Ok(())
     }
 }

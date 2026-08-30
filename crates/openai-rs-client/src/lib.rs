@@ -7,6 +7,8 @@ mod auth;
 mod client;
 mod core_resources;
 mod error;
+mod files;
+mod multipart;
 mod operation;
 mod response_stream;
 mod responses;
@@ -20,6 +22,11 @@ pub use auth::{ApiKey, ApiKeyError};
 pub use client::{Client, ClientBuilder, TlsBackend};
 pub use core_resources::{Embeddings, Models, Moderations};
 pub use error::{ApiError, BodyPreview, Error, StreamError};
+pub use files::{Files, Uploads};
+pub use multipart::{
+    AddUploadPartOneShotRequest, CreateFileOneShotRequest, FileContentStream,
+    OneShotMultipartSource,
+};
 pub use operation::{ApiResponse, RateLimitMetadata, ResponseMeta};
 pub use response_stream::ResponseEventStream;
 pub use responses::{

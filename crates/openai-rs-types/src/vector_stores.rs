@@ -1076,6 +1076,18 @@ impl CreateVectorStoreRequest {
         self.metadata = Omittable::Value(Nullable::Null);
         self
     }
+
+    /// Exact initial-file presence state.
+    #[must_use]
+    pub const fn file_ids(&self) -> &Omittable<VectorStoreInitialFileIds> {
+        &self.file_ids
+    }
+
+    /// Exact metadata presence/nullability state.
+    #[must_use]
+    pub const fn metadata(&self) -> &Omittable<Nullable<VectorStoreMetadata>> {
+        &self.metadata
+    }
 }
 
 /// Body for `POST /vector_stores/{vector_store_id}`.
@@ -1137,6 +1149,24 @@ impl UpdateVectorStoreRequest {
     pub fn with_metadata_null(mut self) -> Self {
         self.metadata = Omittable::Value(Nullable::Null);
         self
+    }
+
+    /// Exact name patch state.
+    #[must_use]
+    pub const fn name(&self) -> &Omittable<Nullable<String>> {
+        &self.name
+    }
+
+    /// Exact expiration patch state.
+    #[must_use]
+    pub const fn expires_after(&self) -> &Omittable<Nullable<VectorStoreExpirationAfter>> {
+        &self.expires_after
+    }
+
+    /// Exact metadata patch state.
+    #[must_use]
+    pub const fn metadata(&self) -> &Omittable<Nullable<VectorStoreMetadata>> {
+        &self.metadata
     }
 }
 
@@ -1407,6 +1437,30 @@ impl VectorStoreListParams {
             Omittable::Omitted => DEFAULT_VECTOR_STORE_LIST_LIMIT,
             Omittable::Value(value) => value.get(),
         }
+    }
+
+    /// Exact page-limit state.
+    #[must_use]
+    pub const fn limit(&self) -> &Omittable<VectorStoreListLimit> {
+        &self.limit
+    }
+
+    /// Exact order state.
+    #[must_use]
+    pub const fn order(&self) -> &Omittable<VectorStoreSortOrder> {
+        &self.order
+    }
+
+    /// Exact forward cursor state.
+    #[must_use]
+    pub const fn after_cursor(&self) -> &Omittable<VectorStoreId> {
+        &self.after
+    }
+
+    /// Exact backward cursor state.
+    #[must_use]
+    pub const fn before_cursor(&self) -> &Omittable<VectorStoreId> {
+        &self.before
     }
 }
 
@@ -1758,6 +1812,18 @@ impl VectorStoreFileListParams {
         self.filter = Omittable::Value(status);
         self
     }
+
+    /// Exact page-limit state.
+    #[must_use]
+    pub const fn limit(&self) -> &Omittable<VectorStoreListLimit> {
+        &self.limit
+    }
+
+    /// Exact status-filter state.
+    #[must_use]
+    pub const fn status_filter(&self) -> &Omittable<VectorStoreFileStatus> {
+        &self.filter
+    }
 }
 
 /// Response from an attached-file list endpoint.
@@ -2001,6 +2067,18 @@ impl VectorStoreFileBatch {
         &self.id
     }
 
+    /// Object discriminator.
+    #[must_use]
+    pub const fn object(&self) -> &VectorStoreFileBatchObjectType {
+        &self.object
+    }
+
+    /// Creation timestamp in Unix seconds.
+    #[must_use]
+    pub const fn created_at(&self) -> i64 {
+        self.created_at
+    }
+
     /// Parent vector store.
     #[must_use]
     pub const fn vector_store_id(&self) -> &VectorStoreId {
@@ -2017,6 +2095,12 @@ impl VectorStoreFileBatch {
     #[must_use]
     pub const fn file_counts(&self) -> &VectorStoreFileCounts {
         &self.file_counts
+    }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -2173,6 +2257,18 @@ impl VectorStoreRankingOptions {
         self.score_threshold = Omittable::Value(threshold);
         self
     }
+
+    /// Exact ranker state.
+    #[must_use]
+    pub const fn ranker(&self) -> &Omittable<VectorStoreRanker> {
+        &self.ranker
+    }
+
+    /// Exact score-threshold state.
+    #[must_use]
+    pub const fn score_threshold(&self) -> &Omittable<VectorStoreScore> {
+        &self.score_threshold
+    }
 }
 
 /// Body for `POST /vector_stores/{vector_store_id}/search`.
@@ -2239,6 +2335,24 @@ impl VectorStoreSearchRequest {
             Omittable::Value(value) => value.get(),
         }
     }
+
+    /// Search query.
+    #[must_use]
+    pub const fn query(&self) -> &VectorStoreSearchQuery {
+        &self.query
+    }
+
+    /// Exact query-rewrite state.
+    #[must_use]
+    pub const fn rewrite_query(&self) -> &Omittable<bool> {
+        &self.rewrite_query
+    }
+
+    /// Exact filter state.
+    #[must_use]
+    pub const fn filter(&self) -> &Omittable<VectorStoreFilter> {
+        &self.filters
+    }
 }
 
 /// One text chunk returned by vector-store search.
@@ -2262,6 +2376,12 @@ impl VectorStoreSearchContent {
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -2307,6 +2427,12 @@ impl VectorStoreSearchResult {
     pub fn content(&self) -> &[VectorStoreSearchContent] {
         &self.content
     }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Page returned by vector-store search.
@@ -2322,6 +2448,12 @@ pub struct VectorStoreSearchResultsPage {
 }
 
 impl VectorStoreSearchResultsPage {
+    /// Page object discriminator.
+    #[must_use]
+    pub const fn object(&self) -> &VectorStoreSearchPageObjectType {
+        &self.object
+    }
+
     /// Query or rewritten queries actually searched.
     #[must_use]
     pub fn search_query(&self) -> &[String] {
@@ -2344,6 +2476,12 @@ impl VectorStoreSearchResultsPage {
     #[must_use]
     pub const fn next_page(&self) -> &Nullable<String> {
         &self.next_page
+    }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -2380,6 +2518,12 @@ impl VectorStoreFileContent {
             Omittable::Value(value) => Some(value),
         }
     }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Parsed-content page for one attached file.
@@ -2394,6 +2538,12 @@ pub struct VectorStoreFileContentResponse {
 }
 
 impl VectorStoreFileContentResponse {
+    /// Page object discriminator.
+    #[must_use]
+    pub const fn object(&self) -> &VectorStoreFileContentPageObjectType {
+        &self.object
+    }
+
     /// Parsed content items.
     #[must_use]
     pub fn data(&self) -> &[VectorStoreFileContent] {
@@ -2410,6 +2560,12 @@ impl VectorStoreFileContentResponse {
     #[must_use]
     pub const fn next_page(&self) -> &Nullable<String> {
         &self.next_page
+    }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -2453,7 +2609,8 @@ mod tests {
 
     #[test]
     fn store_required_nullable_fields_remain_distinct() {
-        let value = minimal_store();
+        let mut value = minimal_store();
+        value["future_field"] = json!({"retained": true});
         let store: VectorStore = serde_json::from_value(value.clone()).expect("decode store");
         assert!(store.last_active_at().is_null());
         assert!(store.metadata().is_null());
@@ -2575,6 +2732,42 @@ mod tests {
             }))
             .is_err()
         );
+
+        let future = json!({"type": "starts_with", "key": "tenant", "value": "blue"});
+        let decoded: VectorStoreFilter =
+            serde_json::from_value(future.clone()).expect("future filter");
+        assert!(matches!(decoded, VectorStoreFilter::Unknown(_)));
+        assert_eq!(serde_json::to_value(decoded).expect("re-encode"), future);
+    }
+
+    #[test]
+    fn attached_file_keeps_required_null_and_optional_attribute_states() {
+        let base = json!({
+            "id": "file-abc",
+            "object": "vector_store.file",
+            "usage_bytes": 12,
+            "created_at": 100,
+            "vector_store_id": "vs-abc",
+            "status": "completed",
+            "last_error": null
+        });
+        let omitted: VectorStoreFile = serde_json::from_value(base.clone()).expect("omitted attrs");
+        assert!(omitted.attributes().is_omitted());
+
+        let mut null = base.clone();
+        null["attributes"] = Value::Null;
+        let null: VectorStoreFile = serde_json::from_value(null).expect("null attrs");
+        assert!(matches!(
+            null.attributes(),
+            Omittable::Value(Nullable::Null)
+        ));
+
+        let mut missing_error = base;
+        missing_error
+            .as_object_mut()
+            .expect("object")
+            .remove("last_error");
+        assert!(serde_json::from_value::<VectorStoreFile>(missing_error).is_err());
     }
 
     #[test]

@@ -275,3 +275,212 @@ operation!(
     request_encoding = RequestEncoding::None,
     retry = RetryClass::Replayable,
 );
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        sync::{Arc, Mutex},
+    };
+
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use openai_rs_types::{
+        CompleteUploadRequest, CreateUploadRequest, FileListLimit, FileListParams, FilePurpose,
+        FileSortOrder, UploadId, UploadPartId,
+    };
+    use serde_json::{Value, json};
+    use tokio::{net::TcpListener, sync::oneshot};
+    use url::Url;
+
+    use super::*;
+    use crate::{ApiKey, RetryPolicy};
+
+    #[derive(Debug)]
+    struct CapturedRequest {
+        method: Method,
+        path_and_query: String,
+        authorization: Option<String>,
+        content_type: Option<String>,
+        body: Vec<u8>,
+    }
+
+    async fn serve_once(
+        response_body: &'static str,
+    ) -> (Client, oneshot::Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind file contract server");
+        let address = listener.local_addr().expect("file contract address");
+        let (sender, receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept file request");
+            let sender = Arc::new(Mutex::new(Some(sender)));
+            let service = service_fn(move |request: Request<Incoming>| {
+                let sender = Arc::clone(&sender);
+                async move {
+                    let method = request.method().clone();
+                    let path_and_query = request
+                        .uri()
+                        .path_and_query()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    let authorization = request
+                        .headers()
+                        .get(http::header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                        .map(ToOwned::to_owned);
+                    let content_type = request
+                        .headers()
+                        .get(http::header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok())
+                        .map(ToOwned::to_owned);
+                    let body = request
+                        .into_body()
+                        .collect()
+                        .await
+                        .expect("collect file request")
+                        .to_bytes()
+                        .to_vec();
+                    if let Some(sender) = sender.lock().expect("capture sender lock").take() {
+                        let _ = sender.send(CapturedRequest {
+                            method,
+                            path_and_query,
+                            authorization,
+                            content_type,
+                            body,
+                        });
+                    }
+                    Ok::<_, Infallible>(
+                        hyper::Response::builder()
+                            .status(StatusCode::OK)
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .header("x-request-id", "req_files")
+                            .body(Full::new(Bytes::from_static(response_body.as_bytes())))
+                            .expect("file contract response"),
+                    )
+                }
+            });
+            http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await
+                .expect("serve file contract request");
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("file contract base URL");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test API key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(RetryPolicy::disabled())
+            .build()
+            .expect("file contract client");
+        (client, receiver)
+    }
+
+    #[tokio::test]
+    async fn list_files_encodes_typed_query_and_platform_auth() {
+        let (client, captured) = serve_once(
+            r#"{"object":"list","data":[],"first_id":"","last_id":"","has_more":false}"#,
+        )
+        .await;
+        let params = FileListParams::new()
+            .with_purpose(FilePurpose::UserData)
+            .with_limit(FileListLimit::new(2).expect("valid file limit"))
+            .with_order(FileSortOrder::Ascending)
+            .after("file cursor");
+
+        let response = client
+            .files()
+            .list(params)
+            .await
+            .expect("file list response");
+        assert!(response.data().is_empty());
+        assert_eq!(response.request_id(), Some("req_files"));
+
+        let captured = captured.await.expect("captured list request");
+        assert_eq!(captured.method, Method::GET);
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
+            .expect("captured list URL");
+        assert_eq!(url.path(), "/v1/files");
+        let query = url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("purpose".into(), "user_data".into())));
+        assert!(query.contains(&("limit".into(), "2".into())));
+        assert!(query.contains(&("order".into(), "asc".into())));
+        assert!(query.contains(&("after".into(), "file cursor".into())));
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_upload_sends_exact_json_contract() {
+        let upload_json = r#"{"id":"upload_1","bytes":5000000000,"created_at":1,"expires_at":3601,"filename":"large.jsonl","purpose":"batch","status":"pending","object":"upload"}"#;
+        let (client, captured) = serve_once(upload_json).await;
+        let request = CreateUploadRequest::new(
+            "large.jsonl",
+            FilePurpose::Batch,
+            5_000_000_000,
+            "application/jsonl",
+        );
+
+        let response = client
+            .uploads()
+            .create(request)
+            .await
+            .expect("create upload response");
+        assert_eq!(response.bytes(), 5_000_000_000);
+
+        let captured = captured.await.expect("captured create upload request");
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/uploads");
+        assert_eq!(captured.content_type.as_deref(), Some("application/json"));
+        let body: Value = serde_json::from_slice(&captured.body).expect("create upload JSON");
+        assert_eq!(
+            body,
+            json!({
+                "filename": "large.jsonl",
+                "purpose": "batch",
+                "bytes": 5_000_000_000_i64,
+                "mime_type": "application/jsonl"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_upload_encodes_id_as_one_segment_and_preserves_part_order() {
+        let upload_json = r#"{"id":"upload/a b","bytes":2,"created_at":1,"expires_at":3601,"filename":"x.bin","purpose":"user_data","status":"completed","object":"upload","file":null}"#;
+        let (client, captured) = serve_once(upload_json).await;
+        let upload_id = UploadId::new("upload/a b");
+        let request = CompleteUploadRequest::new([
+            UploadPartId::new("part_second"),
+            UploadPartId::new("part_first"),
+        ])
+        .with_md5("opaque-checksum");
+
+        let response = client
+            .uploads()
+            .complete(&upload_id, request)
+            .await
+            .expect("complete upload response");
+        assert_eq!(response.id().as_str(), "upload/a b");
+
+        let captured = captured.await.expect("captured complete upload request");
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(
+            captured.path_and_query,
+            "/v1/uploads/upload%2Fa%20b/complete"
+        );
+        let body: Value = serde_json::from_slice(&captured.body).expect("complete upload JSON");
+        assert_eq!(
+            body,
+            json!({
+                "part_ids": ["part_second", "part_first"],
+                "md5": "opaque-checksum"
+            })
+        );
+    }
+}

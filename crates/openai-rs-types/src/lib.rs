@@ -4,6 +4,7 @@ pub mod batches;
 pub mod chat;
 pub mod core;
 pub mod files;
+pub mod fine_tuning;
 pub mod kernel;
 pub mod media;
 pub mod responses;

@@ -9,8 +9,14 @@ pub use openai_rs_types::{StructuredError, StructuredOutput, TypedFunction};
 #[cfg(feature = "client")]
 pub use openai_rs_client::{
     ApiError, ApiKey, ApiKeyError, ApiResponse, Client, ClientBuilder, DeleteResponseResult,
-    Embeddings, Error, InputItems, InputTokens, Models, Moderations, ResponseEventStream,
-    ResponseMeta, Responses, RetryPolicy, StreamError, TlsBackend,
+    AddUploadPartOneShotRequest, CreateFileOneShotRequest, Embeddings, Error, FileContentStream,
+    Files, InputItems, InputTokens, Models, Moderations, OneShotMultipartSource,
+    ResponseEventStream, ResponseMeta, Responses, RetryPolicy, StreamError, TlsBackend, Uploads,
+};
+
+#[cfg(all(feature = "client", feature = "realtime"))]
+pub use openai_rs_client::{
+    ResponsesWebSocket, ResponsesWebSocketConfig, WebSocketReconnectPolicy,
 };
 
 #[cfg(feature = "codex-app-server")]

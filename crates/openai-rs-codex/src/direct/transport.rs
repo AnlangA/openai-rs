@@ -13,6 +13,7 @@ use openai_rs_types::responses::{
 use serde_json::Value;
 use tokio::sync::mpsc;
 use url::Url;
+use zeroize::Zeroizing;
 
 use super::auth::{CredentialStore, StoredCodexSession, TokenManager};
 use super::sse::{SseDecoder, SseItem};
@@ -95,10 +96,10 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
-        if !content_type
+        if content_type
             .split(';')
             .next()
-            .is_some_and(|value| value.trim() == "text/event-stream")
+            .is_none_or(|value| value.trim() != "text/event-stream")
         {
             return Err(DirectError::Sse(
                 "response content type was not text/event-stream".to_owned(),
@@ -153,14 +154,23 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
         } else {
             "application/json"
         };
+        let bearer = Zeroizing::new(format!("Bearer {}", session.access_token()));
+        let mut authorization = reqwest::header::HeaderValue::from_str(&bearer).map_err(|_| {
+            DirectError::Configuration("access token could not be encoded as a header".to_owned())
+        })?;
+        authorization.set_sensitive(true);
+        let mut account_id = reqwest::header::HeaderValue::from_str(session.account_id().as_str())
+            .map_err(|_| {
+                DirectError::Configuration(
+                    "account identifier could not be encoded as a header".to_owned(),
+                )
+            })?;
+        account_id.set_sensitive(true);
         Ok(self
             .http
             .post(self.endpoint.clone())
-            .header(
-                reqwest::header::AUTHORIZATION,
-                format!("Bearer {}", session.access_token()),
-            )
-            .header("ChatGPT-Account-Id", session.account_id().as_str())
+            .header(reqwest::header::AUTHORIZATION, authorization)
+            .header("ChatGPT-Account-Id", account_id)
             .header("originator", "openai-rs")
             .header("session_id", session_id)
             .header(reqwest::header::ACCEPT, accept)
@@ -281,6 +291,13 @@ async fn status_error(response: reqwest::Response) -> DirectError {
                 .cloned()
         })
         .and_then(|value| value.as_str().map(str::to_owned))
+        .filter(|code| {
+            !code.is_empty()
+                && code.len() <= 64
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        })
         .unwrap_or_else(|| "request failed".to_owned());
     DirectError::HttpStatus { status, message }
 }
@@ -289,7 +306,7 @@ async fn status_error(response: reqwest::Response) -> DirectError {
 mod tests {
     use std::sync::Arc;
 
-    use openai_rs_types::responses::{CreateResponseRequest, ResponseInput};
+    use openai_rs_types::responses::{CreateResponseRequest, ResponseInput, ResponseStreamEvent};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -335,6 +352,80 @@ mod tests {
         assert!(lower.contains("chatgpt-account-id: acct-123"));
         assert!(lower.contains("originator: openai-rs"));
         assert!(!captured.contains("refresh-secret"));
+        Ok(())
+    }
+
+    async fn test_client(
+        endpoint: url::Url,
+    ) -> Result<DirectCodexResponsesClient<EphemeralStore>, Box<dyn std::error::Error>> {
+        let store = Arc::new(EphemeralStore::default());
+        let session = StoredCodexSession::fixture(
+            "access-secret",
+            "refresh-secret",
+            u64::MAX,
+            ChatGptAccountId::fixture("acct-123")?,
+        );
+        store.save(&session).await?;
+        let manager = Arc::new(TokenManager::new(store, DirectAuthClient::new()?));
+        Ok(DirectCodexResponsesClient::with_test_endpoint(
+            manager, endpoint,
+        )?)
+    }
+
+    #[tokio::test]
+    async fn typed_create_decodes_response() -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = vec![0_u8; 16 * 1024];
+            let _ = stream.read(&mut request).await?;
+            let body = br#"{"id":"resp_1","created_at":1,"error":null,"incomplete_details":null,"instructions":null,"metadata":null,"model":"gpt-test","object":"response","output":[],"parallel_tool_calls":true,"temperature":null,"tool_choice":"auto","tools":[],"top_p":null}"#;
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(headers.as_bytes()).await?;
+            stream.write_all(body).await?;
+            Ok::<_, std::io::Error>(())
+        });
+        let endpoint = url::Url::parse(&format!("http://{address}/backend-api/codex/responses"))?;
+        let client = test_client(endpoint).await?;
+        let request = CreateResponseRequest::new("gpt-test", ResponseInput::Text("hello".into()));
+        assert_eq!(client.create(&request).await?.id(), "resp_1");
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn typed_stream_decodes_sse() -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = vec![0_u8; 16 * 1024];
+            let _ = stream.read(&mut request).await?;
+            let body = b"data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hi\",\"sequence_number\":1,\"logprobs\":[]}\n\ndata: [DONE]\n\n";
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(headers.as_bytes()).await?;
+            stream.write_all(body).await?;
+            Ok::<_, std::io::Error>(())
+        });
+        let endpoint = url::Url::parse(&format!("http://{address}/backend-api/codex/responses"))?;
+        let client = test_client(endpoint).await?;
+        let request = CreateResponseRequest::new("gpt-test", ResponseInput::Text("hello".into()))
+            .into_streaming();
+        let mut stream = client.stream(&request).await?;
+        let event = stream.next_event().await.ok_or("missing SSE event")??;
+        match event {
+            ResponseStreamEvent::OutputTextDelta(delta) => assert_eq!(delta.delta(), "Hi"),
+            other => return Err(format!("unexpected SSE event: {other:?}").into()),
+        }
+        assert!(stream.next_event().await.is_none());
+        server.await??;
         Ok(())
     }
 }

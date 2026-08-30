@@ -115,3 +115,33 @@ until a decision is recorded here and its fixtures pass.
 - Impact: request/output DTO split and schema anomaly tracking.
 - Tests: input compile/serde test, output requiredness test, then input/output wire
   fixtures.
+
+## D0009 — Batch nullable examples remain quarantined
+
+- Status: provisional; live response fixture pending
+- Reviewed: 2026-08-30
+- Scope: `Batch.errors` and optional lifecycle timestamp fields
+- Sources: the pinned raw OpenAPI and pinned official SDK types describe these
+  fields as optional but non-null; an official Batch example renders some of
+  them as explicit `null`.
+- Decision: retain the stricter machine-contract interpretation for now. Do not
+  silently widen every optional timestamp/error field to nullable from an
+  example alone.
+- Impact: Batch response decoding and fixture quarantine.
+- Overrides: none until a current wire fixture establishes service behavior.
+- Tests: current strict missing/non-null tests; add a captured Batch response
+  before accepting or rejecting a nullability override.
+
+## D0010 — Vector-store metadata example omission remains quarantined
+
+- Status: provisional; live response fixture pending
+- Reviewed: 2026-08-30
+- Scope: `VectorStoreObject.metadata`
+- Sources: the pinned raw OpenAPI and official SDK types require the nullable
+  field, while an official example omits it entirely.
+- Decision: keep `metadata` required-nullable so missing and explicit null are
+  not collapsed. Do not relax requiredness without a current service fixture.
+- Impact: Vector Store response decoding and fixture quarantine.
+- Overrides: none.
+- Tests: required-nullable unit test; add a captured empty-metadata Vector Store
+  response before changing the contract.

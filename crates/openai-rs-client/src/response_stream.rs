@@ -7,7 +7,7 @@ use std::{
 use futures_core::Stream;
 use futures_util::StreamExt;
 use http::{StatusCode, header};
-use openai_rs_types::responses::ResponseStreamEvent;
+use openai_rs_types::responses::{Response, ResponseAccumulator, ResponseStreamEvent};
 
 use crate::{
     BodyPreview, Error, ResponseMeta, StreamError,
@@ -150,6 +150,23 @@ impl ResponseEventStream {
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.meta.request_id()
+    }
+
+    /// Reduces all events into the terminal [`Response`].
+    pub async fn collect_final(self) -> Result<Response, Error> {
+        self.collect_with(ResponseAccumulator::new()).await
+    }
+
+    /// Continues reduction with a caller-supplied accumulator, which is useful
+    /// after explicitly validated stream resumption.
+    pub async fn collect_with(
+        mut self,
+        mut accumulator: ResponseAccumulator,
+    ) -> Result<Response, Error> {
+        while let Some(event) = self.next().await {
+            accumulator.push(event?)?;
+        }
+        accumulator.finish().map_err(Error::from)
     }
 }
 

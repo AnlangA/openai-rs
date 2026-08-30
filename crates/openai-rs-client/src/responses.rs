@@ -808,4 +808,24 @@ mod tests {
         assert!(query.contains(&("include_obfuscation".into(), "false".into())));
         assert_eq!(query.iter().filter(|(key, _)| key == "include").count(), 2);
     }
+
+    #[tokio::test]
+    async fn collect_final_reduces_terminal_response() {
+        let body = concat!(
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_final\",\"created_at\":1,\"error\":null,\"incomplete_details\":null,\"instructions\":null,\"metadata\":null,\"model\":\"test-model\",\"object\":\"response\",\"output\":[],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[],\"top_p\":1.0,\"status\":\"completed\"},\"sequence_number\":1}\n\n",
+        );
+        let (base_url, _captured) =
+            serve_once_with_content_type(StatusCode::OK, "text/event-stream", body).await;
+
+        let response = client(base_url)
+            .responses()
+            .create_stream(CreateResponseRequest::empty().into_streaming())
+            .await
+            .expect("stream handshake")
+            .collect_final()
+            .await
+            .expect("terminal response");
+        assert_eq!(response.id(), "resp_final");
+    }
 }

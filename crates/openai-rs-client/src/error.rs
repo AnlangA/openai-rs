@@ -466,6 +466,9 @@ pub enum Error {
         reason: &'static str,
     },
 
+    #[error(transparent)]
+    Accumulator(Box<openai_rs_types::responses::ResponseAccumulatorError>),
+
     #[cfg(feature = "realtime")]
     #[error("WebSocket handshake failed with HTTP {status}")]
     WebSocketHandshake {
@@ -491,6 +494,12 @@ impl From<ApiError> for Error {
 impl From<StreamError> for Error {
     fn from(error: StreamError) -> Self {
         Self::Stream(Box::new(error))
+    }
+}
+
+impl From<openai_rs_types::responses::ResponseAccumulatorError> for Error {
+    fn from(error: openai_rs_types::responses::ResponseAccumulatorError) -> Self {
+        Self::Accumulator(Box::new(error))
     }
 }
 
@@ -534,6 +543,7 @@ impl Error {
             | Self::Sse { .. }
             | Self::Stream(_)
             | Self::StreamProtocol { .. }
+            | Self::Accumulator(_)
             | Self::InvalidConfiguration(_)
             | Self::InvalidPathParameter { .. } => None,
             #[cfg(feature = "realtime")]
@@ -559,6 +569,7 @@ impl Error {
             | Self::DeadlineExceeded
             | Self::Encode(_)
             | Self::EncodeQuery(_)
+            | Self::Accumulator(_)
             | Self::InvalidConfiguration(_)
             | Self::InvalidPathParameter { .. } => None,
             #[cfg(feature = "realtime")]

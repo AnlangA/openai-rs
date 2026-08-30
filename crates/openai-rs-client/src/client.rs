@@ -4,8 +4,8 @@ use http::HeaderValue;
 use url::{Host, Url};
 
 use crate::{
-    ApiKey, Embeddings, Error, Models, Moderations, Responses, RetryPolicy, sse::SseLimits,
-    transport::Transport,
+    ApiKey, Embeddings, Error, Files, Models, Moderations, Responses, RetryPolicy, Uploads,
+    multipart::MultipartTransport, sse::SseLimits, transport::Transport,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
@@ -36,6 +36,7 @@ pub struct Client {
 
 struct Inner {
     transport: Transport,
+    multipart: MultipartTransport,
 }
 
 impl Client {
@@ -74,6 +75,18 @@ impl Client {
         Moderations::new(self.clone())
     }
 
+    /// Returns the Files resource facade.
+    #[must_use]
+    pub fn files(&self) -> Files {
+        Files::new(self.clone())
+    }
+
+    /// Returns the multipart Uploads resource facade.
+    #[must_use]
+    pub fn uploads(&self) -> Uploads {
+        Uploads::new(self.clone())
+    }
+
     /// The configured API base URL.
     #[must_use]
     pub fn base_url(&self) -> &Url {
@@ -82,6 +95,10 @@ impl Client {
 
     pub(crate) fn transport(&self) -> &Transport {
         &self.inner.transport
+    }
+
+    pub(crate) fn multipart_transport(&self) -> &MultipartTransport {
+        &self.inner.multipart
     }
 }
 
@@ -262,6 +279,17 @@ impl ClientBuilder {
         .build()
         .map_err(Error::from_reqwest)?;
 
+        let multipart = MultipartTransport::new(
+            http.clone(),
+            base_url.clone(),
+            authorization.clone(),
+            organization.clone(),
+            project.clone(),
+            self.max_json_body_bytes,
+            self.max_error_body_bytes,
+            self.retry_policy,
+            self.request_timeout,
+        );
         Ok(Client {
             inner: Arc::new(Inner {
                 transport: Transport::new(
@@ -277,6 +305,7 @@ impl ClientBuilder {
                     self.sse_limits,
                     self.tls_backend,
                 ),
+                multipart,
             }),
         })
     }

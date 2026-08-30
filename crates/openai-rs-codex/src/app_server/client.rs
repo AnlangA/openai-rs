@@ -1358,4 +1358,26 @@ mod tests {
         client.close().await?;
         Ok(())
     }
+
+    /// Explicit local smoke test. It never prints account data and uses a
+    /// throwaway CODEX_HOME. Run with `OPENAI_RS_CODEX_BIN=/absolute/path`.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires an explicitly selected audited local Codex binary"]
+    async fn real_app_server_initialize_account_read_close_smoke()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let executable =
+            std::env::var_os("OPENAI_RS_CODEX_BIN").ok_or("OPENAI_RS_CODEX_BIN is not set")?;
+        let profile = tempfile::tempdir()?;
+        let compatibility = RuntimeCompatibility::bundled()?;
+        let config = AppServerConfig::new(executable, profile.path(), compatibility);
+        let client = AppServerClient::spawn(
+            config,
+            ClientInfo::new("openai-rs-smoke", env!("CARGO_PKG_VERSION")),
+        )
+        .await?;
+        let _account_state = client.account_read(false).await?;
+        client.close().await?;
+        Ok(())
+    }
 }

@@ -1802,6 +1802,19 @@ mod tests {
     }
 
     #[test]
+    fn writer_rejects_mixed_endpoints() {
+        let first = BatchLine::new("one", BatchEndpoint::Responses, json!({})).expect("first line");
+        let second =
+            BatchLine::new("two", BatchEndpoint::Embeddings, json!({})).expect("second line");
+        let mut writer = BatchJsonlWriter::new(Vec::new());
+        writer.write_line(&first).expect("write first");
+        assert!(matches!(
+            writer.write_line(&second),
+            Err(BatchJsonlError::MixedEndpoints { .. })
+        ));
+    }
+
+    #[test]
     fn reader_accepts_crlf_and_unterminated_final_line() {
         let bytes = b"{\"custom_id\":\"a\",\"method\":\"POST\",\"url\":\"/v1/responses\",\"body\":{}}\r\n{\"custom_id\":\"b\",\"method\":\"POST\",\"url\":\"/v1/responses\",\"body\":{}}";
         let values =

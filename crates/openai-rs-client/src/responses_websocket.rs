@@ -6,7 +6,7 @@ use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use http::{HeaderValue, header};
 use openai_rs_types::responses::{
-    CreateResponseRequest, ResponsesClientEvent, ResponsesServerEvent,
+    CreateResponseRequest, ResponseAccumulator, ResponsesClientEvent, ResponsesServerEvent,
 };
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
@@ -314,6 +314,21 @@ impl ResponsesWebSocket {
         }
     }
 
+    /// Receives one event and also feeds a caller-owned single-lane
+    /// accumulator. Multiplexed callers should use [`Self::recv`], route by
+    /// [`ResponsesServerEvent::stream_id`], then push into the matching lane's
+    /// accumulator.
+    pub async fn recv_into(
+        &mut self,
+        accumulator: &mut ResponseAccumulator,
+    ) -> Result<Option<ResponsesServerEvent>, Error> {
+        let event = self.recv().await?;
+        if let Some(event) = &event {
+            accumulator.push(event.event().clone())?;
+        }
+        Ok(event)
+    }
+
     /// Initiates the WebSocket close handshake.
     pub async fn close(&mut self) -> Result<(), Error> {
         if !self.closed {
@@ -601,15 +616,18 @@ mod tests {
             .send_create_on_stream("lane_1", CreateResponseRequest::new("test-model", "hello"))
             .await
             .expect("send response.create");
+        let mut accumulator = ResponseAccumulator::new();
         let event = socket
-            .recv()
+            .recv_into(&mut accumulator)
             .await
             .expect("receive event")
             .expect("one event");
+        assert_eq!(event.stream_id(), Some("lane_1"));
         match event.event() {
             ResponseStreamEvent::OutputTextDelta(delta) => assert_eq!(delta.delta(), "hello"),
             other => panic!("unexpected server event: {other:?}"),
         }
+        assert_eq!(accumulator.output_text(), "hello");
 
         let handshake = handshake.await.expect("captured handshake");
         assert_eq!(handshake.path, "/v1/responses");

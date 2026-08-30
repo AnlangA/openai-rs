@@ -24,7 +24,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::io::ReaderStream;
 use url::Url;
 
-use crate::transport::PathSegment;
+use crate::transport::{PathSegment, deserialize_json};
 use crate::{ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy};
 
 const JSON_MIME: &str = "application/json";
@@ -395,7 +395,7 @@ impl MultipartTransport {
         request: &CreateFileRequest,
     ) -> Result<ApiResponse<FileObject>, Error> {
         let source = PreparedReplayableSource::prepare(request.file()).await?;
-        let fields = CreateFileFields::new(request.purpose(), request.expires_after());
+        let fields = CreateFileFields::new(request.purpose(), request.expires_after())?;
         let prepared = PreparedMultipartRequest::create_file(source, fields);
         let url = self.operation_url(&[PathSegment::literal("files")])?;
         let response = self.send_replayable(url, &prepared).await?;
@@ -408,7 +408,7 @@ impl MultipartTransport {
     ) -> Result<ApiResponse<FileObject>, Error> {
         let url = self.operation_url(&[PathSegment::literal("files")])?;
         let (source, purpose, expires_after) = request.into_parts();
-        let fields = CreateFileFields::new(&purpose, &expires_after);
+        let fields = CreateFileFields::new(&purpose, &expires_after)?;
         let form = fields.apply(Form::new()).part("file", source.into_part()?);
         let response = self.send_one_shot(url, form).await?;
         self.decode_json(response).await
@@ -641,8 +641,9 @@ impl MultipartTransport {
     {
         let meta = ResponseMeta::from_headers(response.status(), response.headers());
         let body = read_success(response, self.max_json_body_bytes, &meta).await?;
-        let decoded = serde_json::from_slice(&body).map_err(|source| Error::Decode {
-            source,
+        let decoded = deserialize_json(&body).map_err(|error| Error::Decode {
+            source: error.source,
+            path: error.path,
             meta_status: meta.status(),
             request_id: meta.request_id().map(Box::<str>::from),
             body: BodyPreview::from_bytes(
@@ -721,18 +722,26 @@ struct CreateFileFields {
 }
 
 impl CreateFileFields {
-    fn new(purpose: &FilePurpose, expires_after: &Omittable<FileExpirationAfter>) -> Self {
+    fn new(
+        purpose: &FilePurpose,
+        expires_after: &Omittable<FileExpirationAfter>,
+    ) -> Result<Self, Error> {
         let expiration = match expires_after {
             Omittable::Omitted => None,
             Omittable::Value(value) => Some((
                 value.anchor().as_str().to_owned(),
                 value.seconds().to_string(),
             )),
+            _ => {
+                return Err(Error::InvalidConfiguration(
+                    "unsupported file expiration presence state".into(),
+                ));
+            }
         };
-        Self {
+        Ok(Self {
             purpose: purpose.as_str().to_owned(),
             expiration,
-        }
+        })
     }
 
     fn apply(&self, mut form: Form) -> Form {
@@ -773,7 +782,7 @@ impl PreparedReplayableSource {
                 Ok(Self {
                     inner: PreparedSourceInner::Bytes(Arc::clone(data)),
                     file_name: explicit_or_default_file_name(file_name, None)?,
-                    media_type: optional_media_type(media_type),
+                    media_type: optional_media_type(media_type)?,
                     length,
                 })
             }
@@ -789,7 +798,7 @@ impl PreparedReplayableSource {
                         snapshot: snapshot.clone(),
                     },
                     file_name: explicit_or_default_file_name(file_name, Some(path))?,
-                    media_type: optional_media_type(media_type),
+                    media_type: optional_media_type(media_type)?,
                     length: snapshot.len,
                 })
             }
@@ -899,13 +908,21 @@ fn explicit_or_default_file_name(
             }
             None => MultipartFileName::new(DEFAULT_PART_FILE_NAME).map_err(|_| source_error()),
         },
+        _ => Err(Error::InvalidConfiguration(
+            "unsupported multipart filename presence state".into(),
+        )),
     }
 }
 
-fn optional_media_type(value: &Omittable<MultipartMediaType>) -> Option<MultipartMediaType> {
+fn optional_media_type(
+    value: &Omittable<MultipartMediaType>,
+) -> Result<Option<MultipartMediaType>, Error> {
     match value {
-        Omittable::Omitted => None,
-        Omittable::Value(value) => Some(value.clone()),
+        Omittable::Omitted => Ok(None),
+        Omittable::Value(value) => Ok(Some(value.clone())),
+        _ => Err(Error::InvalidConfiguration(
+            "unsupported multipart media type presence state".into(),
+        )),
     }
 }
 
@@ -1250,6 +1267,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_part_uses_data_field_and_unmodified_binary_bytes() {
+        let response = Bytes::from_static(
+            br#"{"id":"part_1","object":"upload.part","created_at":1,"upload_id":"upload/a b"}"#,
+        );
+        let (transport, captured) =
+            serve_once(StatusCode::OK, JSON_MIME, response, RetryPolicy::disabled()).await;
+        let raw = Arc::<[u8]>::from(&b"\0\x01\xfe\xffraw"[..]);
+        let request =
+            AddUploadPartRequest::new(ReplayableMultipartSource::from_bytes(Arc::clone(&raw)));
+
+        let response = transport
+            .add_upload_part(&UploadId::new("upload/a b"), &request)
+            .await
+            .expect("add upload part response");
+        assert_eq!(response.id().as_str(), "part_1");
+
+        let captured = captured.await.expect("captured upload part request");
+        assert_eq!(captured.method, http::Method::POST);
+        assert_eq!(captured.path, "/v1/uploads/upload%2Fa%20b/parts");
+        let text = String::from_utf8_lossy(&captured.body);
+        assert!(text.contains("name=\"data\"; filename=\"file\""));
+        assert!(
+            captured
+                .body
+                .windows(raw.len())
+                .any(|window| window == raw.as_ref())
+        );
+        assert!(!text.contains("AAH+/3Jhdw=="));
+    }
+
+    #[tokio::test]
     async fn path_replacement_after_prepare_fails_closed() {
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -1273,6 +1321,62 @@ mod tests {
         tokio::fs::remove_file(&path)
             .await
             .expect("remove test source");
+    }
+
+    #[tokio::test]
+    async fn one_shot_source_is_not_retried_after_server_error() {
+        let error_body = Bytes::from_static(
+            br#"{"error":{"message":"retry","type":"server_error","param":null,"code":"temporary"}}"#,
+        );
+        let (transport, captured) = serve_once(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            JSON_MIME,
+            error_body,
+            RetryPolicy::openai_compatible(),
+        )
+        .await;
+        let source = OneShotMultipartSource::from_reader(tokio::io::empty())
+            .try_with_file_name("empty.bin")
+            .expect("safe one-shot filename")
+            .with_length(0);
+        let request = CreateFileOneShotRequest::new(source, FilePurpose::UserData);
+
+        let error = transport
+            .create_file_one_shot(request)
+            .await
+            .expect_err("one-shot request must surface the first response");
+        assert_eq!(error.status(), Some(StatusCode::INTERNAL_SERVER_ERROR));
+        let captured = captured.await.expect("captured one-shot request");
+        assert_eq!(captured.path, "/v1/files");
+    }
+
+    #[tokio::test]
+    async fn path_preflight_failure_does_not_poll_one_shot_stream() {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let stream_polls = Arc::clone(&polls);
+        let stream = futures_util::stream::poll_fn(move |_context| {
+            stream_polls.fetch_add(1, Ordering::SeqCst);
+            Poll::Ready(None::<io::Result<Bytes>>)
+        });
+        let source = OneShotMultipartSource::from_stream(stream);
+        let request = AddUploadPartOneShotRequest::new(source);
+        let transport = MultipartTransport::new(
+            reqwest::Client::new(),
+            Url::parse("https://api.openai.com/v1/").expect("test base URL"),
+            HeaderValue::from_static("Bearer test-placeholder-key"),
+            None,
+            None,
+            1024,
+            1024,
+            RetryPolicy::openai_compatible(),
+            Duration::from_secs(1),
+        );
+
+        let result = transport
+            .add_upload_part_one_shot(&UploadId::new(""), request)
+            .await;
+        assert!(matches!(result, Err(Error::InvalidPathParameter { .. })));
+        assert_eq!(polls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
