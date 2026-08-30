@@ -372,6 +372,30 @@ impl fmt::Debug for AdminApiKeyCreateResponse {
     }
 }
 
+crate::open_string_enum! {
+    /// Deleted Admin API key discriminator.
+    pub enum AdminApiKeyDeleteObject {
+        Deleted = "organization.admin_api_key.deleted"
+    }
+}
+
+/// JSON confirmation returned by `admin-api-keys-delete`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AdminApiKeyDeleteResponse {
+    pub id: String,
+    pub object: AdminApiKeyDeleteObject,
+    pub deleted: bool,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl AdminApiKeyDeleteResponse {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 pub type ApiKeyList = AdminCursorPage<AdminApiKey>;
 
 crate::open_string_enum! {
@@ -1918,9 +1942,35 @@ pub struct AdminOperationDto {
     pub path: &'static str,
     pub request_schema: &'static str,
     pub response_schema: &'static str,
+    pub request_mode: &'static str,
+    pub response_mode: &'static str,
+    pub success_statuses: &'static [u16],
+    pub response_content_types: &'static [&'static str],
 }
 
 macro_rules! admin_op {
+    ($id:literal, $method:literal, $path:literal, "AdminListParams", $response:literal) => {
+        admin_op!($id, $method, $path, "()", $response)
+    };
+    ($id:literal, $method:literal, $path:literal, "AuditLogListParams", $response:literal) => {
+        admin_op!($id, $method, $path, "()", $response)
+    };
+    ($id:literal, $method:literal, $path:literal, "UsageQueryParams", $response:literal) => {
+        admin_op!($id, $method, $path, "()", $response)
+    };
+    ($id:literal, $method:literal, $path:literal, "()", $response:literal) => {
+        AdminOperationDto {
+            operation_id: $id,
+            method: $method,
+            path: $path,
+            request_schema: "()",
+            response_schema: $response,
+            request_mode: "none",
+            response_mode: "json",
+            success_statuses: &[200],
+            response_content_types: &["application/json"],
+        }
+    };
     ($id:literal, $method:literal, $path:literal, $request:literal, $response:literal) => {
         AdminOperationDto {
             operation_id: $id,
@@ -1928,6 +1978,10 @@ macro_rules! admin_op {
             path: $path,
             request_schema: $request,
             response_schema: $response,
+            request_mode: "json",
+            response_mode: "json",
+            success_statuses: &[200],
+            response_content_types: &["application/json"],
         }
     };
 }
@@ -2023,7 +2077,7 @@ pub const ADMIN_OPERATION_MANIFEST: &[AdminOperationDto] = &[
         "DELETE",
         "/organization/admin_api_keys/{key_id}",
         "()",
-        "()"
+        "AdminApiKeyDeleteResponse"
     ),
     admin_op!(
         "admin-api-keys-get",

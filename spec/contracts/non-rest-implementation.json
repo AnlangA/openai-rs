@@ -15,10 +15,10 @@
       "status": "verified",
       "milestone": "M4a-codex-app-server",
       "units": [
-        "CodexAppServerClient",
-        "AppServerClient",
         "bounded JSONL codec",
-        "typed account/thread/turn protocol"
+        "initialize/initialized handshake",
+        "minimal typed account/read + thread/start + turn/start slice",
+        "unknown notification/raw request preservation"
       ],
       "tests": [
         "openai-rs-codex::app_server::client::tests::fake_child_handshake_correlation_and_unknown_notification",
@@ -65,7 +65,8 @@
       "units": [
         "ResponsesWebSocket",
         "ResponsesWebSocketConfig",
-        "response.create/inject/close typed frames"
+        "response.create typed client frame",
+        "typed server-event codec"
       ],
       "tests": [
         "openai-rs-client::responses_websocket::tests::persistent_connection_sends_and_receives_typed_events",
@@ -76,19 +77,18 @@
     {
       "id": "rmcp-tool-bridge",
       "status": "verified",
-      "milestone": "M5-rmcp-bridge",
+      "milestone": "M4b-rmcp-bridge-core",
       "units": [
-        "ResponsesToolBridge",
-        "RmcpExecutor",
-        "ToolCatalog",
-        "ExecutionControl",
-        "ToolResultEnvelope"
+        "ResponsesToolBridge::dispatch",
+        "parse_function_arguments",
+        "typed function-call roundtrip through a supplied executor",
+        "safe compact result encoding subset"
       ],
       "tests": [
-        "openai-rs-rmcp::e2e_tests::in_process_full_typed_round_trip_preserves_all_content_order",
-        "openai-rs-rmcp::e2e_tests::invalid_arguments_never_reach_the_real_server",
-        "openai-rs-rmcp::e2e_tests::timeout_and_cancellation_reach_the_server_request_context",
-        "openai-rs-rmcp::e2e_tests::tool_errors_stay_in_band_while_protocol_and_transport_errors_do_not"
+        "openai-rs-rmcp::bridge::tests::typed_function_call_round_trips_through_fake_executor",
+        "openai-rs-rmcp::bridge::tests::tool_error_stays_in_band",
+        "openai-rs-rmcp::arguments::tests::arguments_must_be_a_complete_json_object",
+        "openai-rs-rmcp::e2e_tests::invalid_arguments_never_reach_the_real_server"
       ]
     },
     {

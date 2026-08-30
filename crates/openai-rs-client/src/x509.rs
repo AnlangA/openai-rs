@@ -516,10 +516,18 @@ impl X509TokenManager {
         }
     }
 
-    async fn lease(&self) -> Result<TokenLease, X509Error> {
+    async fn lease(self: &Arc<Self>) -> Result<TokenLease, X509Error> {
+        enum Action {
+            Wait(u64),
+            Start {
+                attempt: u64,
+                generation: u64,
+                fallback: Option<(SecretString, u64, Instant)>,
+            },
+        }
+
         loop {
-            let notified = self.notify.notified();
-            let (attempt, generation, fallback) = {
+            let action = {
                 let mut state = self.state.lock().await;
                 if let Some(cached) = &state.cached
                     && Instant::now() < cached.refresh_at
@@ -527,98 +535,134 @@ impl X509TokenManager {
                     return token_lease(cached);
                 }
                 if let Some(attempt) = state.active_attempt {
-                    drop(state);
-                    notified.await;
-                    let state = self.state.lock().await;
-                    if let Some((completed, result)) = &state.completed_attempt
-                        && *completed == attempt
-                    {
-                        match result {
-                            Ok(lease) => return Ok(lease.clone()),
-                            Err(X509Error::Invalidated) => continue,
-                            Err(error) => return Err(error.clone()),
-                        }
+                    Action::Wait(attempt)
+                } else {
+                    state.next_attempt = state.next_attempt.wrapping_add(1);
+                    let attempt = state.next_attempt;
+                    state.active_attempt = Some(attempt);
+                    state.completed_attempt = None;
+                    let fallback = state.cached.as_ref().and_then(|cached| {
+                        (Instant::now() < cached.expires_at)
+                            .then(|| (cached.token.clone(), cached.generation, cached.expires_at))
+                    });
+                    Action::Start {
+                        attempt,
+                        generation: state.generation,
+                        fallback,
                     }
-                    continue;
                 }
-                state.next_attempt = state.next_attempt.wrapping_add(1);
-                let attempt = state.next_attempt;
-                state.active_attempt = Some(attempt);
-                state.completed_attempt = None;
-                let fallback = state.cached.as_ref().and_then(|cached| {
-                    (Instant::now() < cached.expires_at)
-                        .then(|| (cached.token.clone(), cached.generation, cached.expires_at))
-                });
-                (attempt, state.generation, fallback)
             };
 
-            let exchanged = self.exchange.exchange().await;
-            let mut state = self.state.lock().await;
-            let result = if state.generation != generation || state.active_attempt != Some(attempt)
-            {
-                Err(X509Error::Invalidated)
-            } else {
-                match exchanged {
-                    Ok(exchanged) => {
-                        let now = Instant::now();
-                        let expires_at = exchanged.started_at + exchanged.lifetime;
-                        if now >= expires_at {
-                            state.cached = None;
-                            Err(X509Error::InvalidTokenLifetime)
-                        } else {
-                            state.generation = state.generation.wrapping_add(1);
-                            let generation = state.generation;
-                            let refresh_buffer =
-                                self.refresh_buffer.min(exchanged.lifetime.div_f64(2.0));
-                            let refresh_at = expires_at - refresh_buffer;
-                            state.cached = Some(CachedToken {
-                                token: exchanged.token,
-                                generation,
-                                expires_at,
-                                refresh_at,
-                            });
-                            match state.cached.as_ref() {
-                                Some(cached) => token_lease(cached),
-                                None => Err(X509Error::Invalidated),
-                            }
-                        }
-                    }
-                    Err(error) if error.is_retryable() => {
-                        if let Some((token, generation, expires_at)) = fallback
-                            && Instant::now() < expires_at
-                        {
-                            let refresh_at = Instant::now()
-                                .checked_add(Duration::from_millis(500))
-                                .unwrap_or(expires_at)
-                                .min(expires_at);
-                            state.cached = Some(CachedToken {
-                                token,
-                                generation,
-                                expires_at,
-                                refresh_at,
-                            });
-                            match state.cached.as_ref() {
-                                Some(cached) => token_lease(cached),
-                                None => Err(X509Error::Invalidated),
-                            }
-                        } else {
-                            Err(error)
-                        }
-                    }
-                    Err(error) => Err(error),
+            let attempt = match action {
+                Action::Wait(attempt) => attempt,
+                Action::Start {
+                    attempt,
+                    generation,
+                    fallback,
+                } => {
+                    let manager = Arc::clone(self);
+                    tokio::spawn(async move {
+                        let exchanged = manager.exchange.exchange().await;
+                        manager
+                            .complete_attempt(attempt, generation, fallback, exchanged)
+                            .await;
+                    });
+                    attempt
                 }
             };
-            if state.active_attempt == Some(attempt) {
-                state.active_attempt = None;
-            }
-            state.completed_attempt = Some((attempt, result.clone()));
-            drop(state);
-            self.notify.notify_waiters();
-            match result {
+            match self.wait_for_attempt(attempt).await {
+                Ok(lease) => return Ok(lease),
                 Err(X509Error::Invalidated) => continue,
-                result => return result,
+                Err(error) => return Err(error),
             }
         }
+    }
+
+    async fn wait_for_attempt(&self, attempt: u64) -> Result<TokenLease, X509Error> {
+        loop {
+            let notified = self.notify.notified();
+            {
+                let state = self.state.lock().await;
+                if let Some((completed, result)) = &state.completed_attempt
+                    && *completed == attempt
+                {
+                    return result.clone();
+                }
+                if state.active_attempt != Some(attempt) {
+                    return Err(X509Error::Invalidated);
+                }
+            }
+            notified.await;
+        }
+    }
+
+    async fn complete_attempt(
+        &self,
+        attempt: u64,
+        generation: u64,
+        fallback: Option<(SecretString, u64, Instant)>,
+        exchanged: Result<ExchangedToken, X509Error>,
+    ) {
+        let mut state = self.state.lock().await;
+        let result = if state.generation != generation || state.active_attempt != Some(attempt) {
+            Err(X509Error::Invalidated)
+        } else {
+            match exchanged {
+                Ok(exchanged) => {
+                    let now = Instant::now();
+                    let expires_at = exchanged.started_at + exchanged.lifetime;
+                    if now >= expires_at {
+                        state.cached = None;
+                        Err(X509Error::InvalidTokenLifetime)
+                    } else {
+                        state.generation = state.generation.wrapping_add(1);
+                        let generation = state.generation;
+                        let refresh_buffer =
+                            self.refresh_buffer.min(exchanged.lifetime.div_f64(2.0));
+                        let refresh_at = expires_at - refresh_buffer;
+                        state.cached = Some(CachedToken {
+                            token: exchanged.token,
+                            generation,
+                            expires_at,
+                            refresh_at,
+                        });
+                        match state.cached.as_ref() {
+                            Some(cached) => token_lease(cached),
+                            None => Err(X509Error::Invalidated),
+                        }
+                    }
+                }
+                Err(error) if error.is_retryable() => {
+                    if let Some((token, generation, expires_at)) = fallback
+                        && Instant::now() < expires_at
+                    {
+                        let refresh_at = Instant::now()
+                            .checked_add(Duration::from_millis(500))
+                            .unwrap_or(expires_at)
+                            .min(expires_at);
+                        state.cached = Some(CachedToken {
+                            token,
+                            generation,
+                            expires_at,
+                            refresh_at,
+                        });
+                        match state.cached.as_ref() {
+                            Some(cached) => token_lease(cached),
+                            None => Err(X509Error::Invalidated),
+                        }
+                    } else {
+                        Err(error)
+                    }
+                }
+                Err(error) => Err(error),
+            }
+        };
+        if state.active_attempt == Some(attempt) {
+            state.active_attempt = None;
+        }
+        state.completed_attempt = Some((attempt, result));
+        drop(state);
+        self.notify.notify_waiters();
     }
 
     async fn invalidate_if_generation(&self, generation: u64) -> bool {
@@ -1163,6 +1207,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelling_first_waiter_does_not_poison_singleflight() {
+        let exchange = Arc::new(FakeExchange::new(
+            Duration::from_millis(50),
+            [Ok(("token-one", Duration::from_secs(3_600)))],
+        ));
+        let manager = Arc::new(X509TokenManager::new(exchange.clone(), Duration::ZERO));
+        let first_manager = Arc::clone(&manager);
+        let first = tokio::spawn(async move { first_manager.lease().await });
+        while exchange.calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        first.abort();
+
+        let replacement = tokio::time::timeout(Duration::from_secs(1), manager.lease())
+            .await
+            .expect("singleflight must not hang")
+            .expect("shared exchange succeeds");
+        assert!(replacement.generation > 0);
+        assert_eq!(exchange.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn stale_generation_cannot_invalidate_replacement_token() {
         let exchange = Arc::new(FakeExchange::new(
             Duration::ZERO,
@@ -1171,7 +1237,7 @@ mod tests {
                 Ok(("token-two", Duration::from_secs(3_600))),
             ],
         ));
-        let manager = X509TokenManager::new(exchange.clone(), Duration::ZERO);
+        let manager = Arc::new(X509TokenManager::new(exchange.clone(), Duration::ZERO));
         let first = manager.lease().await.expect("first lease");
         assert!(manager.invalidate_if_generation(first.generation).await);
         let second = manager.lease().await.expect("replacement lease");

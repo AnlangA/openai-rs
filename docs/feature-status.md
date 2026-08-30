@@ -25,6 +25,7 @@ Status terms:
 | `admin` | No | Planned | Administration operations require a separate credential and client boundary. |
 | `workload-identity` | No | Planned | Platform workload identity only; not a Codex subscription credential. |
 | `x509` | No | Planned | Extends workload identity with X.509/mTLS support. |
+| `legacy-completions` | No | Legacy | Default-off typed JSON/SSE support for only `POST /completions`; Responses is preferred. |
 | `full` | No | Scaffold | Convenience bundle for the non-Codex client path. It intentionally excludes experimental Codex, admin, workload identity, X.509, and RMCP server features. |
 
 ## RMCP features

@@ -9,10 +9,11 @@
     "webhook": 18,
     "total": 306,
     "implementation_statuses": {
+      "partial": 159,
       "planned": 62,
-      "verified": 226
+      "verified": 67
     },
-    "verified_units": 253
+    "verified_units": 86
   },
   "client_operations": [
     {
@@ -847,13 +848,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M6-batches-client",
         "units": [
           "RetrieveBatch"
         ],
         "tests": [
-          "openai-rs-client Batch route manifest test"
+          "pending: direct retrieveBatch client route test"
         ]
       },
       "manual_overrides": []
@@ -981,13 +982,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M5-chat-client",
         "units": [
           "ListChatCompletions"
         ],
         "tests": [
-          "openai-rs-client::chat_completions::tests::stored_list_encodes_deep_object_metadata_and_typed_cursor"
+          "openai-rs-client::chat_completions::tests::stored_list_encodes_deep_object_metadata_and_typed_cursor",
+          "pending: assert the collection path independently"
         ]
       },
       "manual_overrides": []
@@ -1074,13 +1076,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M5-chat-client",
         "units": [
           "GetChatCompletion"
         ],
         "tests": [
-          "openai-rs-client stored Chat route manifest test"
+          "pending: direct getChatCompletion client route test"
         ]
       },
       "manual_overrides": []
@@ -1698,29 +1700,22 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-containers-client",
         "units": [
-          "CreateContainer",
           "ListContainers",
-          "RetrieveContainer",
           "DeleteContainer",
-          "CreateContainerFile",
-          "CreateContainerFileUpload",
           "ListContainerFiles",
-          "RetrieveContainerFile",
           "DeleteContainerFile",
-          "RetrieveContainerFileContent"
+          "ContainerPageStream"
         ],
         "tests": [
-          "openai-rs-client::containers::tests::container_create_sends_typed_json_and_auth",
           "openai-rs-client::containers::tests::container_list_retrieve_and_delete_use_typed_routes",
           "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor",
           "openai-rs-client::containers::tests::container_file_attach_list_retrieve_and_delete_match_contract",
-          "openai-rs-client::containers::tests::container_file_upload_reuses_replayable_multipart_transport",
-          "openai-rs-client::containers::tests::container_file_content_streams_and_collects_with_a_bound"
+          "pending: add independent collection/delete path assertions"
         ],
-        "registry_group": "containers-files"
+        "registry_group": "containers-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -1760,14 +1755,10 @@
         "milestone": "M7-containers-client",
         "units": [
           "CreateContainer",
-          "ListContainers",
           "RetrieveContainer",
-          "DeleteContainer",
           "CreateContainerFile",
           "CreateContainerFileUpload",
-          "ListContainerFiles",
           "RetrieveContainerFile",
-          "DeleteContainerFile",
           "RetrieveContainerFileContent"
         ],
         "tests": [
@@ -1821,14 +1812,10 @@
         "milestone": "M7-containers-client",
         "units": [
           "CreateContainer",
-          "ListContainers",
           "RetrieveContainer",
-          "DeleteContainer",
           "CreateContainerFile",
           "CreateContainerFileUpload",
-          "ListContainerFiles",
           "RetrieveContainerFile",
-          "DeleteContainerFile",
           "RetrieveContainerFileContent"
         ],
         "tests": [
@@ -1874,29 +1861,22 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-containers-client",
         "units": [
-          "CreateContainer",
           "ListContainers",
-          "RetrieveContainer",
           "DeleteContainer",
-          "CreateContainerFile",
-          "CreateContainerFileUpload",
           "ListContainerFiles",
-          "RetrieveContainerFile",
           "DeleteContainerFile",
-          "RetrieveContainerFileContent"
+          "ContainerPageStream"
         ],
         "tests": [
-          "openai-rs-client::containers::tests::container_create_sends_typed_json_and_auth",
           "openai-rs-client::containers::tests::container_list_retrieve_and_delete_use_typed_routes",
           "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor",
           "openai-rs-client::containers::tests::container_file_attach_list_retrieve_and_delete_match_contract",
-          "openai-rs-client::containers::tests::container_file_upload_reuses_replayable_multipart_transport",
-          "openai-rs-client::containers::tests::container_file_content_streams_and_collects_with_a_bound"
+          "pending: add independent collection/delete path assertions"
         ],
-        "registry_group": "containers-files"
+        "registry_group": "containers-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -1965,29 +1945,22 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-containers-client",
         "units": [
-          "CreateContainer",
           "ListContainers",
-          "RetrieveContainer",
           "DeleteContainer",
-          "CreateContainerFile",
-          "CreateContainerFileUpload",
           "ListContainerFiles",
-          "RetrieveContainerFile",
           "DeleteContainerFile",
-          "RetrieveContainerFileContent"
+          "ContainerPageStream"
         ],
         "tests": [
-          "openai-rs-client::containers::tests::container_create_sends_typed_json_and_auth",
           "openai-rs-client::containers::tests::container_list_retrieve_and_delete_use_typed_routes",
           "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor",
           "openai-rs-client::containers::tests::container_file_attach_list_retrieve_and_delete_match_contract",
-          "openai-rs-client::containers::tests::container_file_upload_reuses_replayable_multipart_transport",
-          "openai-rs-client::containers::tests::container_file_content_streams_and_collects_with_a_bound"
+          "pending: add independent collection/delete path assertions"
         ],
-        "registry_group": "containers-files"
+        "registry_group": "containers-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -2039,14 +2012,10 @@
         "milestone": "M7-containers-client",
         "units": [
           "CreateContainer",
-          "ListContainers",
           "RetrieveContainer",
-          "DeleteContainer",
           "CreateContainerFile",
           "CreateContainerFileUpload",
-          "ListContainerFiles",
           "RetrieveContainerFile",
-          "DeleteContainerFile",
           "RetrieveContainerFileContent"
         ],
         "tests": [
@@ -2110,14 +2079,10 @@
         "milestone": "M7-containers-client",
         "units": [
           "CreateContainer",
-          "ListContainers",
           "RetrieveContainer",
-          "DeleteContainer",
           "CreateContainerFile",
           "CreateContainerFileUpload",
-          "ListContainerFiles",
           "RetrieveContainerFile",
-          "DeleteContainerFile",
           "RetrieveContainerFileContent"
         ],
         "tests": [
@@ -2173,29 +2138,22 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-containers-client",
         "units": [
-          "CreateContainer",
           "ListContainers",
-          "RetrieveContainer",
           "DeleteContainer",
-          "CreateContainerFile",
-          "CreateContainerFileUpload",
           "ListContainerFiles",
-          "RetrieveContainerFile",
           "DeleteContainerFile",
-          "RetrieveContainerFileContent"
+          "ContainerPageStream"
         ],
         "tests": [
-          "openai-rs-client::containers::tests::container_create_sends_typed_json_and_auth",
           "openai-rs-client::containers::tests::container_list_retrieve_and_delete_use_typed_routes",
           "openai-rs-client::containers::tests::container_page_stream_advances_the_opaque_cursor",
           "openai-rs-client::containers::tests::container_file_attach_list_retrieve_and_delete_match_contract",
-          "openai-rs-client::containers::tests::container_file_upload_reuses_replayable_multipart_transport",
-          "openai-rs-client::containers::tests::container_file_content_streams_and_collects_with_a_bound"
+          "pending: add independent collection/delete path assertions"
         ],
-        "registry_group": "containers-files"
+        "registry_group": "containers-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -2244,14 +2202,10 @@
         "milestone": "M7-containers-client",
         "units": [
           "CreateContainer",
-          "ListContainers",
           "RetrieveContainer",
-          "DeleteContainer",
           "CreateContainerFile",
           "CreateContainerFileUpload",
-          "ListContainerFiles",
           "RetrieveContainerFile",
-          "DeleteContainerFile",
           "RetrieveContainerFileContent"
         ],
         "tests": [
@@ -2350,13 +2304,8 @@
         "units": [
           "CreateConversation",
           "RetrieveConversation",
-          "UpdateConversation",
-          "DeleteConversation",
           "CreateConversationItems",
-          "RetrieveConversationItem",
-          "DeleteConversationItem",
-          "ListConversationItems",
-          "ConversationItemPageStream"
+          "RetrieveConversationItem"
         ],
         "tests": [
           "openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible",
@@ -2409,13 +2358,8 @@
         "units": [
           "CreateConversation",
           "RetrieveConversation",
-          "UpdateConversation",
-          "DeleteConversation",
           "CreateConversationItems",
-          "RetrieveConversationItem",
-          "DeleteConversationItem",
-          "ListConversationItems",
-          "ConversationItemPageStream"
+          "RetrieveConversationItem"
         ],
         "tests": [
           "openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible",
@@ -2471,27 +2415,22 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-conversations-client",
         "units": [
-          "CreateConversation",
-          "RetrieveConversation",
           "UpdateConversation",
           "DeleteConversation",
-          "CreateConversationItems",
-          "RetrieveConversationItem",
           "DeleteConversationItem",
           "ListConversationItems",
           "ConversationItemPageStream"
         ],
         "tests": [
           "openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible",
-          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor",
-          "openai-rs-client::conversations::tests::rate_limit_errors_remain_typed_and_bounded",
           "openai-rs-client::conversations::tests::operation_metadata_matches_the_pinned_contract",
-          "openai-rs-client::conversations::tests::item_fixture_uses_the_general_message_role_union"
+          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor",
+          "pending: add independent path assertions for each listed operation"
         ],
-        "registry_group": "conversations-items"
+        "registry_group": "conversations-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -2530,27 +2469,22 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-conversations-client",
         "units": [
-          "CreateConversation",
-          "RetrieveConversation",
           "UpdateConversation",
           "DeleteConversation",
-          "CreateConversationItems",
-          "RetrieveConversationItem",
           "DeleteConversationItem",
           "ListConversationItems",
           "ConversationItemPageStream"
         ],
         "tests": [
           "openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible",
-          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor",
-          "openai-rs-client::conversations::tests::rate_limit_errors_remain_typed_and_bounded",
           "openai-rs-client::conversations::tests::operation_metadata_matches_the_pinned_contract",
-          "openai-rs-client::conversations::tests::item_fixture_uses_the_general_message_role_union"
+          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor",
+          "pending: add independent path assertions for each listed operation"
         ],
-        "registry_group": "conversations-items"
+        "registry_group": "conversations-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -2631,27 +2565,22 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-conversations-client",
         "units": [
-          "CreateConversation",
-          "RetrieveConversation",
           "UpdateConversation",
           "DeleteConversation",
-          "CreateConversationItems",
-          "RetrieveConversationItem",
           "DeleteConversationItem",
           "ListConversationItems",
           "ConversationItemPageStream"
         ],
         "tests": [
           "openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible",
-          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor",
-          "openai-rs-client::conversations::tests::rate_limit_errors_remain_typed_and_bounded",
           "openai-rs-client::conversations::tests::operation_metadata_matches_the_pinned_contract",
-          "openai-rs-client::conversations::tests::item_fixture_uses_the_general_message_role_union"
+          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor",
+          "pending: add independent path assertions for each listed operation"
         ],
-        "registry_group": "conversations-items"
+        "registry_group": "conversations-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -2715,13 +2644,8 @@
         "units": [
           "CreateConversation",
           "RetrieveConversation",
-          "UpdateConversation",
-          "DeleteConversation",
           "CreateConversationItems",
-          "RetrieveConversationItem",
-          "DeleteConversationItem",
-          "ListConversationItems",
-          "ConversationItemPageStream"
+          "RetrieveConversationItem"
         ],
         "tests": [
           "openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible",
@@ -2796,13 +2720,8 @@
         "units": [
           "CreateConversation",
           "RetrieveConversation",
-          "UpdateConversation",
-          "DeleteConversation",
           "CreateConversationItems",
-          "RetrieveConversationItem",
-          "DeleteConversationItem",
-          "ListConversationItems",
-          "ConversationItemPageStream"
+          "RetrieveConversationItem"
         ],
         "tests": [
           "openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible",
@@ -2860,27 +2779,22 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-conversations-client",
         "units": [
-          "CreateConversation",
-          "RetrieveConversation",
           "UpdateConversation",
           "DeleteConversation",
-          "CreateConversationItems",
-          "RetrieveConversationItem",
           "DeleteConversationItem",
           "ListConversationItems",
           "ConversationItemPageStream"
         ],
         "tests": [
           "openai-rs-client::conversations::tests::crud_and_item_routes_are_fixed_typed_and_convertible",
-          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor",
-          "openai-rs-client::conversations::tests::rate_limit_errors_remain_typed_and_bounded",
           "openai-rs-client::conversations::tests::operation_metadata_matches_the_pinned_contract",
-          "openai-rs-client::conversations::tests::item_fixture_uses_the_general_message_role_union"
+          "openai-rs-client::conversations::tests::page_stream_advances_once_then_rejects_a_repeated_cursor",
+          "pending: add independent path assertions for each listed operation"
         ],
-        "registry_group": "conversations-items"
+        "registry_group": "conversations-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -2994,14 +2908,12 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
-          "CreateEval",
           "RetrieveEval",
           "UpdateEval",
-          "DeleteEval",
           "ListEvalRuns",
           "CreateEvalRun",
           "RetrieveEvalRun",
@@ -3014,14 +2926,12 @@
         ],
         "tests": [
           "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
-          "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments",
-          "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"
+          "pending: add independent path/body assertions for each listed operation"
         ],
-        "registry_group": "evals-stable"
+        "registry_group": "evals-shared-or-manifest-only"
       },
       "manual_overrides": []
     },
@@ -3060,29 +2970,13 @@
         "status": "verified",
         "milestone": "M7-evals-client",
         "units": [
-          "ListEvals",
           "CreateEval",
-          "RetrieveEval",
-          "UpdateEval",
-          "DeleteEval",
-          "ListEvalRuns",
-          "CreateEvalRun",
-          "RetrieveEvalRun",
-          "DeleteEvalRun",
-          "CancelEvalRun",
-          "ListEvalRunOutputItems",
-          "RetrieveEvalRunOutputItem",
-          "EvalPageStream",
-          "EvalRunPoller"
+          "DeleteEval"
         ],
         "tests": [
           "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
           "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201",
-          "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
-          "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
-          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments",
-          "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"
+          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments"
         ],
         "registry_group": "evals-stable"
       },
@@ -3123,14 +3017,12 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
-          "CreateEval",
           "RetrieveEval",
           "UpdateEval",
-          "DeleteEval",
           "ListEvalRuns",
           "CreateEvalRun",
           "RetrieveEvalRun",
@@ -3143,14 +3035,12 @@
         ],
         "tests": [
           "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
-          "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments",
-          "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"
+          "pending: add independent path/body assertions for each listed operation"
         ],
-        "registry_group": "evals-stable"
+        "registry_group": "evals-shared-or-manifest-only"
       },
       "manual_overrides": []
     },
@@ -3197,14 +3087,12 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
-          "CreateEval",
           "RetrieveEval",
           "UpdateEval",
-          "DeleteEval",
           "ListEvalRuns",
           "CreateEvalRun",
           "RetrieveEvalRun",
@@ -3217,14 +3105,12 @@
         ],
         "tests": [
           "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
-          "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments",
-          "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"
+          "pending: add independent path/body assertions for each listed operation"
         ],
-        "registry_group": "evals-stable"
+        "registry_group": "evals-shared-or-manifest-only"
       },
       "manual_overrides": []
     },
@@ -3264,29 +3150,13 @@
         "status": "verified",
         "milestone": "M7-evals-client",
         "units": [
-          "ListEvals",
           "CreateEval",
-          "RetrieveEval",
-          "UpdateEval",
-          "DeleteEval",
-          "ListEvalRuns",
-          "CreateEvalRun",
-          "RetrieveEvalRun",
-          "DeleteEvalRun",
-          "CancelEvalRun",
-          "ListEvalRunOutputItems",
-          "RetrieveEvalRunOutputItem",
-          "EvalPageStream",
-          "EvalRunPoller"
+          "DeleteEval"
         ],
         "tests": [
           "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
           "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201",
-          "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
-          "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
-          "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments",
-          "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"
+          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments"
         ],
         "registry_group": "evals-stable"
       },
@@ -3367,14 +3237,12 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
-          "CreateEval",
           "RetrieveEval",
           "UpdateEval",
-          "DeleteEval",
           "ListEvalRuns",
           "CreateEvalRun",
           "RetrieveEvalRun",
@@ -3387,14 +3255,12 @@
         ],
         "tests": [
           "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
-          "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments",
-          "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"
+          "pending: add independent path/body assertions for each listed operation"
         ],
-        "registry_group": "evals-stable"
+        "registry_group": "evals-shared-or-manifest-only"
       },
       "manual_overrides": []
     },
@@ -3441,14 +3307,12 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
-          "CreateEval",
           "RetrieveEval",
           "UpdateEval",
-          "DeleteEval",
           "ListEvalRuns",
           "CreateEvalRun",
           "RetrieveEvalRun",
@@ -3461,14 +3325,12 @@
         ],
         "tests": [
           "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
-          "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments",
-          "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"
+          "pending: add independent path/body assertions for each listed operation"
         ],
-        "registry_group": "evals-stable"
+        "registry_group": "evals-shared-or-manifest-only"
       },
       "manual_overrides": []
     },
@@ -3517,14 +3379,12 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
-          "CreateEval",
           "RetrieveEval",
           "UpdateEval",
-          "DeleteEval",
           "ListEvalRuns",
           "CreateEvalRun",
           "RetrieveEvalRun",
@@ -3537,14 +3397,12 @@
         ],
         "tests": [
           "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
-          "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments",
-          "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"
+          "pending: add independent path/body assertions for each listed operation"
         ],
-        "registry_group": "evals-stable"
+        "registry_group": "evals-shared-or-manifest-only"
       },
       "manual_overrides": []
     },
@@ -3593,14 +3451,12 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
-          "CreateEval",
           "RetrieveEval",
           "UpdateEval",
-          "DeleteEval",
           "ListEvalRuns",
           "CreateEvalRun",
           "RetrieveEvalRun",
@@ -3613,14 +3469,12 @@
         ],
         "tests": [
           "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
-          "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments",
-          "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"
+          "pending: add independent path/body assertions for each listed operation"
         ],
-        "registry_group": "evals-stable"
+        "registry_group": "evals-shared-or-manifest-only"
       },
       "manual_overrides": []
     },
@@ -3667,14 +3521,12 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
-          "CreateEval",
           "RetrieveEval",
           "UpdateEval",
-          "DeleteEval",
           "ListEvalRuns",
           "CreateEvalRun",
           "RetrieveEvalRun",
@@ -3687,14 +3539,12 @@
         ],
         "tests": [
           "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
-          "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments",
-          "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"
+          "pending: add independent path/body assertions for each listed operation"
         ],
-        "registry_group": "evals-stable"
+        "registry_group": "evals-shared-or-manifest-only"
       },
       "manual_overrides": []
     },
@@ -3783,14 +3633,12 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
-          "CreateEval",
           "RetrieveEval",
           "UpdateEval",
-          "DeleteEval",
           "ListEvalRuns",
           "CreateEvalRun",
           "RetrieveEvalRun",
@@ -3803,14 +3651,12 @@
         ],
         "tests": [
           "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
-          "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments",
-          "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"
+          "pending: add independent path/body assertions for each listed operation"
         ],
-        "registry_group": "evals-stable"
+        "registry_group": "evals-shared-or-manifest-only"
       },
       "manual_overrides": []
     },
@@ -3869,14 +3715,12 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-evals-client",
         "units": [
           "ListEvals",
-          "CreateEval",
           "RetrieveEval",
           "UpdateEval",
-          "DeleteEval",
           "ListEvalRuns",
           "CreateEvalRun",
           "RetrieveEvalRun",
@@ -3889,14 +3733,12 @@
         ],
         "tests": [
           "openai-rs-client::evals::tests::operation_manifest_matches_all_twelve_stable_endpoints",
-          "openai-rs-client::evals::tests::create_eval_sends_typed_json_and_accepts_201",
           "openai-rs-client::evals::tests::list_pages_advances_opaque_cursor_and_encodes_query",
           "openai-rs-client::evals::tests::run_poll_stops_at_terminal_status",
           "openai-rs-client::evals::tests::platform_429_is_decoded_as_typed_api_error",
-          "openai-rs-client::evals::tests::opaque_path_ids_are_single_percent_encoded_segments",
-          "openai-rs-client::evals::tests::cursor_guard_rejects_missing_empty_and_repeated_values"
+          "pending: add independent path/body assertions for each listed operation"
         ],
-        "registry_group": "evals-stable"
+        "registry_group": "evals-shared-or-manifest-only"
       },
       "manual_overrides": []
     },
@@ -4060,14 +3902,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M5-files-client",
         "units": [
           "RetrieveFile"
         ],
         "tests": [
-          "openai-rs-client Files route manifest test",
-          "openai-rs-types::files::tests::file_object_preserves_unknown_enums_and_extra_fields"
+          "openai-rs-types::files::tests::file_object_preserves_unknown_enums_and_extra_fields",
+          "pending: direct retrieveFile client route test"
         ]
       },
       "manual_overrides": []
@@ -4107,14 +3949,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M5-files-client",
         "units": [
           "DeleteFile"
         ],
         "tests": [
-          "openai-rs-client Files route manifest test",
-          "openai-rs-types::files::tests::list_page_and_delete_response_keep_future_fields"
+          "openai-rs-types::files::tests::list_page_and_delete_response_keep_future_fields",
+          "pending: direct deleteFile client route test"
         ]
       },
       "manual_overrides": []
@@ -4489,14 +4331,12 @@
         "units": [
           "CreateFineTuningJob",
           "ListFineTuningJobs",
-          "RetrieveFineTuningJob",
           "CancelFineTuningJob",
           "PauseFineTuningJob",
           "ResumeFineTuningJob",
           "ListFineTuningEvents",
           "ListFineTuningJobCheckpoints",
-          "FineTuningJobPageStream",
-          "FineTuningJobPoller"
+          "FineTuningJobPageStream"
         ],
         "tests": [
           "openai-rs-client::fine_tuning::tests::operation_manifest_matches_pinned_routes_and_excludes_admin_and_alpha",
@@ -4548,14 +4388,12 @@
         "units": [
           "CreateFineTuningJob",
           "ListFineTuningJobs",
-          "RetrieveFineTuningJob",
           "CancelFineTuningJob",
           "PauseFineTuningJob",
           "ResumeFineTuningJob",
           "ListFineTuningEvents",
           "ListFineTuningJobCheckpoints",
-          "FineTuningJobPageStream",
-          "FineTuningJobPoller"
+          "FineTuningJobPageStream"
         ],
         "tests": [
           "openai-rs-client::fine_tuning::tests::operation_manifest_matches_pinned_routes_and_excludes_admin_and_alpha",
@@ -4605,30 +4443,18 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-fine-tuning-client",
         "units": [
-          "CreateFineTuningJob",
-          "ListFineTuningJobs",
           "RetrieveFineTuningJob",
-          "CancelFineTuningJob",
-          "PauseFineTuningJob",
-          "ResumeFineTuningJob",
-          "ListFineTuningEvents",
-          "ListFineTuningJobCheckpoints",
-          "FineTuningJobPageStream",
           "FineTuningJobPoller"
         ],
         "tests": [
           "openai-rs-client::fine_tuning::tests::operation_manifest_matches_pinned_routes_and_excludes_admin_and_alpha",
-          "openai-rs-client::fine_tuning::tests::create_job_sends_typed_json_and_preserves_response_metadata",
-          "openai-rs-client::fine_tuning::tests::jobs_list_encodes_deep_object_metadata_and_cursor",
-          "openai-rs-client::fine_tuning::tests::lifecycle_methods_encode_one_id_segment_and_no_body",
-          "openai-rs-client::fine_tuning::tests::events_and_checkpoints_encode_typed_queries",
           "openai-rs-client::fine_tuning::tests::polling_is_bounded_cancellable_and_stops_on_terminal_status",
-          "openai-rs-client::fine_tuning::tests::repeated_job_cursor_fails_closed"
+          "pending: assert the retrieve path independently"
         ],
-        "registry_group": "fine-tuning-stable"
+        "registry_group": "fine-tuning-retrieve"
       },
       "manual_overrides": []
     },
@@ -4672,14 +4498,12 @@
         "units": [
           "CreateFineTuningJob",
           "ListFineTuningJobs",
-          "RetrieveFineTuningJob",
           "CancelFineTuningJob",
           "PauseFineTuningJob",
           "ResumeFineTuningJob",
           "ListFineTuningEvents",
           "ListFineTuningJobCheckpoints",
-          "FineTuningJobPageStream",
-          "FineTuningJobPoller"
+          "FineTuningJobPageStream"
         ],
         "tests": [
           "openai-rs-client::fine_tuning::tests::operation_manifest_matches_pinned_routes_and_excludes_admin_and_alpha",
@@ -4754,14 +4578,12 @@
         "units": [
           "CreateFineTuningJob",
           "ListFineTuningJobs",
-          "RetrieveFineTuningJob",
           "CancelFineTuningJob",
           "PauseFineTuningJob",
           "ResumeFineTuningJob",
           "ListFineTuningEvents",
           "ListFineTuningJobCheckpoints",
-          "FineTuningJobPageStream",
-          "FineTuningJobPoller"
+          "FineTuningJobPageStream"
         ],
         "tests": [
           "openai-rs-client::fine_tuning::tests::operation_manifest_matches_pinned_routes_and_excludes_admin_and_alpha",
@@ -4836,14 +4658,12 @@
         "units": [
           "CreateFineTuningJob",
           "ListFineTuningJobs",
-          "RetrieveFineTuningJob",
           "CancelFineTuningJob",
           "PauseFineTuningJob",
           "ResumeFineTuningJob",
           "ListFineTuningEvents",
           "ListFineTuningJobCheckpoints",
-          "FineTuningJobPageStream",
-          "FineTuningJobPoller"
+          "FineTuningJobPageStream"
         ],
         "tests": [
           "openai-rs-client::fine_tuning::tests::operation_manifest_matches_pinned_routes_and_excludes_admin_and_alpha",
@@ -4898,14 +4718,12 @@
         "units": [
           "CreateFineTuningJob",
           "ListFineTuningJobs",
-          "RetrieveFineTuningJob",
           "CancelFineTuningJob",
           "PauseFineTuningJob",
           "ResumeFineTuningJob",
           "ListFineTuningEvents",
           "ListFineTuningJobCheckpoints",
-          "FineTuningJobPageStream",
-          "FineTuningJobPoller"
+          "FineTuningJobPageStream"
         ],
         "tests": [
           "openai-rs-client::fine_tuning::tests::operation_manifest_matches_pinned_routes_and_excludes_admin_and_alpha",
@@ -4960,14 +4778,12 @@
         "units": [
           "CreateFineTuningJob",
           "ListFineTuningJobs",
-          "RetrieveFineTuningJob",
           "CancelFineTuningJob",
           "PauseFineTuningJob",
           "ResumeFineTuningJob",
           "ListFineTuningEvents",
           "ListFineTuningJobCheckpoints",
-          "FineTuningJobPageStream",
-          "FineTuningJobPoller"
+          "FineTuningJobPageStream"
         ],
         "tests": [
           "openai-rs-client::fine_tuning::tests::operation_manifest_matches_pinned_routes_and_excludes_admin_and_alpha",
@@ -5263,13 +5079,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M1-core-resources",
         "units": [
           "DeleteModel"
         ],
         "tests": [
-          "openai-rs-client::core_resources operation metadata suite"
+          "pending: direct deleteModel loopback contract test"
         ]
       },
       "manual_overrides": []
@@ -5372,7 +5188,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::admin-api-keys-list",
@@ -5383,7 +5199,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -5419,7 +5236,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::admin-api-keys-create",
@@ -5430,7 +5247,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -5471,7 +5289,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::admin-api-keys-get",
@@ -5482,7 +5300,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -5521,7 +5340,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::admin-api-keys-delete",
@@ -5532,7 +5351,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -5665,7 +5485,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-audit-logs",
@@ -5676,7 +5496,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -5737,7 +5558,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::listOrganizationCertificates",
@@ -5748,7 +5569,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -5786,7 +5608,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::uploadCertificate",
@@ -5797,7 +5619,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -5835,7 +5658,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::activateOrganizationCertificates",
@@ -5846,7 +5669,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -5884,7 +5708,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::deactivateOrganizationCertificates",
@@ -5895,7 +5719,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -5946,7 +5771,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::getCertificate",
@@ -5957,7 +5782,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6006,7 +5832,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::modifyCertificate",
@@ -6017,7 +5843,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6058,7 +5885,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::deleteCertificate",
@@ -6069,7 +5896,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6180,7 +6008,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::usage-costs",
@@ -6191,7 +6019,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6221,7 +6050,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-organization-data-retention",
@@ -6232,7 +6061,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6270,7 +6100,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::update-organization-data-retention",
@@ -6281,7 +6111,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6342,7 +6173,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-groups",
@@ -6353,7 +6184,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6391,7 +6223,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::create-group",
@@ -6402,7 +6234,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6443,7 +6276,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-group",
@@ -6454,7 +6287,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6503,7 +6337,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::update-group",
@@ -6514,7 +6348,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6555,7 +6390,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::delete-group",
@@ -6566,7 +6401,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6637,7 +6473,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-group-role-assignments",
@@ -6648,7 +6484,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6697,7 +6534,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::assign-group-role",
@@ -6708,7 +6545,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6759,7 +6597,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-group-role",
@@ -6770,7 +6608,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6821,7 +6660,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::unassign-group-role",
@@ -6832,7 +6671,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6903,7 +6743,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-group-users",
@@ -6914,7 +6754,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -6963,7 +6804,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::add-group-user",
@@ -6974,7 +6815,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7025,7 +6867,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-group-user",
@@ -7036,7 +6878,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7087,7 +6930,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::remove-group-user",
@@ -7098,7 +6941,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7149,7 +6993,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-invites",
@@ -7160,7 +7004,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7198,7 +7043,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::inviteUser",
@@ -7209,7 +7054,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7250,7 +7096,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-invite",
@@ -7261,7 +7107,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7302,7 +7149,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::delete-invite",
@@ -7313,7 +7160,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7374,7 +7222,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-projects",
@@ -7385,7 +7233,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7423,7 +7272,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::create-project",
@@ -7434,7 +7283,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7475,7 +7325,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-project",
@@ -7486,7 +7336,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7535,7 +7386,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::modify-project",
@@ -7546,7 +7397,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7617,7 +7469,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-project-api-keys",
@@ -7628,7 +7480,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7679,7 +7532,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-project-api-key",
@@ -7690,7 +7543,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7741,7 +7595,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::delete-project-api-key",
@@ -7752,7 +7606,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7793,7 +7648,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::archive-project",
@@ -7804,7 +7659,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7875,7 +7731,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::listProjectCertificates",
@@ -7886,7 +7742,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7935,7 +7792,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::activateProjectCertificates",
@@ -7946,7 +7803,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -7995,7 +7853,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::deactivateProjectCertificates",
@@ -8006,7 +7864,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8047,7 +7906,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-project-data-retention",
@@ -8058,7 +7917,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8107,7 +7967,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::update-project-data-retention",
@@ -8118,7 +7978,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8189,7 +8050,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-project-groups",
@@ -8200,7 +8061,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8249,7 +8111,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::add-project-group",
@@ -8260,7 +8122,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8321,7 +8184,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-project-group",
@@ -8332,7 +8195,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8383,7 +8247,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::remove-project-group",
@@ -8394,7 +8258,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8435,7 +8300,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-project-hosted-tool-permissions",
@@ -8446,7 +8311,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8495,7 +8361,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::update-project-hosted-tool-permissions",
@@ -8506,7 +8372,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8547,7 +8414,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-project-model-permissions",
@@ -8558,7 +8425,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8607,7 +8475,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::update-project-model-permissions",
@@ -8618,7 +8486,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8659,7 +8528,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::delete-project-model-permissions",
@@ -8670,7 +8539,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8741,7 +8611,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-project-rate-limits",
@@ -8752,7 +8622,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8811,7 +8682,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::update-project-rate-limits",
@@ -8822,7 +8693,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8883,7 +8755,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-project-service-accounts",
@@ -8894,7 +8766,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -8943,7 +8816,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::create-project-service-account",
@@ -8954,7 +8827,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9005,7 +8879,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-project-service-account",
@@ -9016,7 +8890,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9075,7 +8950,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::update-project-service-account",
@@ -9086,7 +8961,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9137,7 +9013,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::delete-project-service-account",
@@ -9148,7 +9024,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9207,7 +9084,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::CreateanAPIkeyforaserviceaccount",
@@ -9218,7 +9095,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9299,7 +9177,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-project-spend-alerts",
@@ -9310,7 +9188,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9359,7 +9238,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::create-project-spend-alert",
@@ -9370,7 +9249,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9421,7 +9301,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-project-spend-alert",
@@ -9432,7 +9312,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9491,7 +9372,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::update-project-spend-alert",
@@ -9502,7 +9383,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9553,7 +9435,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::delete-project-spend-alert",
@@ -9564,7 +9446,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9605,7 +9488,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::Getprojectspendlimit",
@@ -9616,7 +9499,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9665,7 +9549,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::Updateprojectspendlimit",
@@ -9676,7 +9560,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9717,7 +9602,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::Deleteprojectspendlimit",
@@ -9728,7 +9613,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9789,7 +9675,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-project-users",
@@ -9800,7 +9686,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9849,7 +9736,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::create-project-user",
@@ -9860,7 +9747,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9911,7 +9799,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-project-user",
@@ -9922,7 +9810,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -9981,7 +9870,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::modify-project-user",
@@ -9992,7 +9881,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10043,7 +9933,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::delete-project-user",
@@ -10054,7 +9944,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10115,7 +10006,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-roles",
@@ -10126,7 +10017,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10164,7 +10056,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::create-role",
@@ -10175,7 +10067,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10216,7 +10109,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-role",
@@ -10227,7 +10120,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10276,7 +10170,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::update-role",
@@ -10287,7 +10181,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10328,7 +10223,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::delete-role",
@@ -10339,7 +10234,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10410,7 +10306,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-organization-spend-alerts",
@@ -10421,7 +10317,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10459,7 +10356,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::create-organization-spend-alert",
@@ -10470,7 +10367,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10511,7 +10409,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-organization-spend-alert",
@@ -10522,7 +10420,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10571,7 +10470,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::update-organization-spend-alert",
@@ -10582,7 +10481,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10623,7 +10523,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::delete-organization-spend-alert",
@@ -10634,7 +10534,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10664,7 +10565,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::Getorganizationspendlimit",
@@ -10675,7 +10576,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10713,7 +10615,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::Updateorganizationspendlimit",
@@ -10724,7 +10626,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10754,7 +10657,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::Deleteorganizationspendlimit",
@@ -10765,7 +10668,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -10896,7 +10800,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::usage-audio-speeches",
@@ -10907,7 +10811,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -11038,7 +10943,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::usage-audio-transcriptions",
@@ -11049,7 +10954,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -11150,7 +11056,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::usage-code-interpreter-sessions",
@@ -11161,7 +11067,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -11302,7 +11209,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::usage-completions",
@@ -11313,7 +11220,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -11444,7 +11352,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::usage-embeddings",
@@ -11455,7 +11363,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -11586,7 +11495,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::usage-file-search-calls",
@@ -11597,7 +11506,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -11748,7 +11658,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::usage-images",
@@ -11759,7 +11669,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -11890,7 +11801,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::usage-moderations",
@@ -11901,7 +11812,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12002,7 +11914,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::usage-vector-stores",
@@ -12013,7 +11925,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12154,7 +12067,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::usage-web-search-calls",
@@ -12165,7 +12078,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12226,7 +12140,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-users",
@@ -12237,7 +12151,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12278,7 +12193,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-user",
@@ -12289,7 +12204,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12338,7 +12254,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::modify-user",
@@ -12349,7 +12265,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12390,7 +12307,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::delete-user",
@@ -12401,7 +12318,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12472,7 +12390,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-user-role-assignments",
@@ -12483,7 +12401,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12532,7 +12451,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::assign-user-role",
@@ -12543,7 +12462,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12594,7 +12514,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-user-role",
@@ -12605,7 +12525,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12656,7 +12577,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::unassign-user-role",
@@ -12667,7 +12588,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12748,7 +12670,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-project-group-role-assignments",
@@ -12759,7 +12681,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12818,7 +12741,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::assign-project-group-role",
@@ -12829,7 +12752,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12890,7 +12814,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-project-group-role",
@@ -12901,7 +12825,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -12962,7 +12887,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::unassign-project-group-role",
@@ -12973,7 +12898,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -13044,7 +12970,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-project-roles",
@@ -13055,7 +12981,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -13104,7 +13031,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::create-project-role",
@@ -13115,7 +13042,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -13166,7 +13094,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-project-role",
@@ -13177,7 +13105,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -13236,7 +13165,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::update-project-role",
@@ -13247,7 +13176,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -13298,7 +13228,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::delete-project-role",
@@ -13309,7 +13239,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -13390,7 +13321,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::list-project-user-role-assignments",
@@ -13401,7 +13332,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -13460,7 +13392,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::assign-project-user-role",
@@ -13471,7 +13403,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -13532,7 +13465,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::retrieve-project-user-role",
@@ -13543,7 +13476,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -13604,7 +13538,7 @@
       "lifecycle": "active",
       "feature": "admin",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M9-admin-client",
         "units": [
           "AdminOperation::unassign-project-user-role",
@@ -13615,7 +13549,8 @@
           "openai-rs-client::admin::tests::every_manifest_entry_has_a_unique_compiling_operation_marker",
           "openai-rs-client::admin::tests::loopback_get_post_delete_and_secret_response_use_admin_auth",
           "openai-rs-client::admin::tests::loopback_errors_are_typed_and_redacted",
-          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects"
+          "openai-rs-client::admin::tests::query_encoder_supports_arrays_null_and_deep_objects",
+          "pending: per-operation method/path/status/DTO manifest zero-diff before verified"
         ],
         "registry_group": "administration-119"
       },
@@ -13658,8 +13593,6 @@
           "CreateClientSecret",
           "CreateCall",
           "AcceptCall",
-          "RejectCall",
-          "RejectCallDefault",
           "HangupCall",
           "ReferCall"
         ],
@@ -13717,8 +13650,6 @@
           "CreateClientSecret",
           "CreateCall",
           "AcceptCall",
-          "RejectCall",
-          "RejectCallDefault",
           "HangupCall",
           "ReferCall"
         ],
@@ -13768,8 +13699,6 @@
           "CreateClientSecret",
           "CreateCall",
           "AcceptCall",
-          "RejectCall",
-          "RejectCallDefault",
           "HangupCall",
           "ReferCall"
         ],
@@ -13827,8 +13756,6 @@
           "CreateClientSecret",
           "CreateCall",
           "AcceptCall",
-          "RejectCall",
-          "RejectCallDefault",
           "HangupCall",
           "ReferCall"
         ],
@@ -13880,23 +13807,17 @@
       "lifecycle": "active",
       "feature": "realtime",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M8-realtime-client",
         "units": [
-          "CreateClientSecret",
-          "CreateCall",
-          "AcceptCall",
           "RejectCall",
-          "RejectCallDefault",
-          "HangupCall",
-          "ReferCall"
+          "RejectCallDefault"
         ],
         "tests": [
-          "openai-rs-client::realtime::tests::client_secret_route_is_typed_and_secret_debug_is_redacted",
-          "openai-rs-client::realtime::tests::create_call_sends_multipart_and_returns_sdp_location",
-          "openai-rs-client::realtime::tests::sip_actions_use_typed_routes_and_never_need_response_json"
+          "openai-rs-client::realtime::tests::sip_actions_use_typed_routes_and_never_need_response_json",
+          "pending: cover the typed reject body branch"
         ],
-        "registry_group": "realtime-http-sip"
+        "registry_group": "realtime-reject-body-coverage"
       },
       "manual_overrides": []
     },
@@ -13938,8 +13859,6 @@
           "CreateClientSecret",
           "CreateCall",
           "AcceptCall",
-          "RejectCall",
-          "RejectCallDefault",
           "HangupCall",
           "ReferCall"
         ],
@@ -14148,13 +14067,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M1-responses-client",
         "units": [
           "CompactResponse"
         ],
         "tests": [
-          "openai-rs-client::responses contract and loopback suite"
+          "pending: direct Compactconversation loopback contract test"
         ]
       },
       "manual_overrides": []
@@ -14468,13 +14387,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M1-responses-client",
         "units": [
           "CancelResponse"
         ],
         "tests": [
-          "openai-rs-client::responses contract and loopback suite"
+          "pending: direct cancelResponse loopback contract test"
         ]
       },
       "manual_overrides": []
@@ -14964,32 +14883,24 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-skills-client",
         "units": [
-          "CreateSkill",
           "ListSkills",
-          "GetSkill",
-          "GetSkillContent",
           "UpdateSkillDefaultVersion",
           "DeleteSkill",
           "CreateSkillVersion",
           "ListSkillVersions",
-          "GetSkillVersion",
-          "GetSkillVersionContent",
           "DeleteSkillVersion",
           "SkillPageStream"
         ],
         "tests": [
-          "openai-rs-client::skills::tests::directory_paths_reject_traversal_header_and_platform_ambiguity",
-          "openai-rs-client::skills::tests::create_skill_sends_single_zip_multipart",
-          "openai-rs-client::skills::tests::directory_upload_preserves_nested_relative_filename_on_wire",
           "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes",
           "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query",
           "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract",
-          "openai-rs-client::skills::tests::skill_and_version_content_stream_and_bound_collection"
+          "pending: add independent request path/query assertions for each listed operation"
         ],
-        "registry_group": "skills-versions"
+        "registry_group": "skills-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -15030,17 +14941,10 @@
         "milestone": "M7-skills-client",
         "units": [
           "CreateSkill",
-          "ListSkills",
           "GetSkill",
           "GetSkillContent",
-          "UpdateSkillDefaultVersion",
-          "DeleteSkill",
-          "CreateSkillVersion",
-          "ListSkillVersions",
           "GetSkillVersion",
-          "GetSkillVersionContent",
-          "DeleteSkillVersion",
-          "SkillPageStream"
+          "GetSkillVersionContent"
         ],
         "tests": [
           "openai-rs-client::skills::tests::directory_paths_reject_traversal_header_and_platform_ambiguity",
@@ -15094,17 +14998,10 @@
         "milestone": "M7-skills-client",
         "units": [
           "CreateSkill",
-          "ListSkills",
           "GetSkill",
           "GetSkillContent",
-          "UpdateSkillDefaultVersion",
-          "DeleteSkill",
-          "CreateSkillVersion",
-          "ListSkillVersions",
           "GetSkillVersion",
-          "GetSkillVersionContent",
-          "DeleteSkillVersion",
-          "SkillPageStream"
+          "GetSkillVersionContent"
         ],
         "tests": [
           "openai-rs-client::skills::tests::directory_paths_reject_traversal_header_and_platform_ambiguity",
@@ -15162,32 +15059,24 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-skills-client",
         "units": [
-          "CreateSkill",
           "ListSkills",
-          "GetSkill",
-          "GetSkillContent",
           "UpdateSkillDefaultVersion",
           "DeleteSkill",
           "CreateSkillVersion",
           "ListSkillVersions",
-          "GetSkillVersion",
-          "GetSkillVersionContent",
           "DeleteSkillVersion",
           "SkillPageStream"
         ],
         "tests": [
-          "openai-rs-client::skills::tests::directory_paths_reject_traversal_header_and_platform_ambiguity",
-          "openai-rs-client::skills::tests::create_skill_sends_single_zip_multipart",
-          "openai-rs-client::skills::tests::directory_upload_preserves_nested_relative_filename_on_wire",
           "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes",
           "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query",
           "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract",
-          "openai-rs-client::skills::tests::skill_and_version_content_stream_and_bound_collection"
+          "pending: add independent request path/query assertions for each listed operation"
         ],
-        "registry_group": "skills-versions"
+        "registry_group": "skills-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -15226,32 +15115,24 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-skills-client",
         "units": [
-          "CreateSkill",
           "ListSkills",
-          "GetSkill",
-          "GetSkillContent",
           "UpdateSkillDefaultVersion",
           "DeleteSkill",
           "CreateSkillVersion",
           "ListSkillVersions",
-          "GetSkillVersion",
-          "GetSkillVersionContent",
           "DeleteSkillVersion",
           "SkillPageStream"
         ],
         "tests": [
-          "openai-rs-client::skills::tests::directory_paths_reject_traversal_header_and_platform_ambiguity",
-          "openai-rs-client::skills::tests::create_skill_sends_single_zip_multipart",
-          "openai-rs-client::skills::tests::directory_upload_preserves_nested_relative_filename_on_wire",
           "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes",
           "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query",
           "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract",
-          "openai-rs-client::skills::tests::skill_and_version_content_stream_and_bound_collection"
+          "pending: add independent request path/query assertions for each listed operation"
         ],
-        "registry_group": "skills-versions"
+        "registry_group": "skills-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -15293,17 +15174,10 @@
         "milestone": "M7-skills-client",
         "units": [
           "CreateSkill",
-          "ListSkills",
           "GetSkill",
           "GetSkillContent",
-          "UpdateSkillDefaultVersion",
-          "DeleteSkill",
-          "CreateSkillVersion",
-          "ListSkillVersions",
           "GetSkillVersion",
-          "GetSkillVersionContent",
-          "DeleteSkillVersion",
-          "SkillPageStream"
+          "GetSkillVersionContent"
         ],
         "tests": [
           "openai-rs-client::skills::tests::directory_paths_reject_traversal_header_and_platform_ambiguity",
@@ -15385,32 +15259,24 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-skills-client",
         "units": [
-          "CreateSkill",
           "ListSkills",
-          "GetSkill",
-          "GetSkillContent",
           "UpdateSkillDefaultVersion",
           "DeleteSkill",
           "CreateSkillVersion",
           "ListSkillVersions",
-          "GetSkillVersion",
-          "GetSkillVersionContent",
           "DeleteSkillVersion",
           "SkillPageStream"
         ],
         "tests": [
-          "openai-rs-client::skills::tests::directory_paths_reject_traversal_header_and_platform_ambiguity",
-          "openai-rs-client::skills::tests::create_skill_sends_single_zip_multipart",
-          "openai-rs-client::skills::tests::directory_upload_preserves_nested_relative_filename_on_wire",
           "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes",
           "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query",
           "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract",
-          "openai-rs-client::skills::tests::skill_and_version_content_stream_and_bound_collection"
+          "pending: add independent request path/query assertions for each listed operation"
         ],
-        "registry_group": "skills-versions"
+        "registry_group": "skills-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -15458,32 +15324,24 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-skills-client",
         "units": [
-          "CreateSkill",
           "ListSkills",
-          "GetSkill",
-          "GetSkillContent",
           "UpdateSkillDefaultVersion",
           "DeleteSkill",
           "CreateSkillVersion",
           "ListSkillVersions",
-          "GetSkillVersion",
-          "GetSkillVersionContent",
           "DeleteSkillVersion",
           "SkillPageStream"
         ],
         "tests": [
-          "openai-rs-client::skills::tests::directory_paths_reject_traversal_header_and_platform_ambiguity",
-          "openai-rs-client::skills::tests::create_skill_sends_single_zip_multipart",
-          "openai-rs-client::skills::tests::directory_upload_preserves_nested_relative_filename_on_wire",
           "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes",
           "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query",
           "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract",
-          "openai-rs-client::skills::tests::skill_and_version_content_stream_and_bound_collection"
+          "pending: add independent request path/query assertions for each listed operation"
         ],
-        "registry_group": "skills-versions"
+        "registry_group": "skills-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -15536,17 +15394,10 @@
         "milestone": "M7-skills-client",
         "units": [
           "CreateSkill",
-          "ListSkills",
           "GetSkill",
           "GetSkillContent",
-          "UpdateSkillDefaultVersion",
-          "DeleteSkill",
-          "CreateSkillVersion",
-          "ListSkillVersions",
           "GetSkillVersion",
-          "GetSkillVersionContent",
-          "DeleteSkillVersion",
-          "SkillPageStream"
+          "GetSkillVersionContent"
         ],
         "tests": [
           "openai-rs-client::skills::tests::directory_paths_reject_traversal_header_and_platform_ambiguity",
@@ -15606,32 +15457,24 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M7-skills-client",
         "units": [
-          "CreateSkill",
           "ListSkills",
-          "GetSkill",
-          "GetSkillContent",
           "UpdateSkillDefaultVersion",
           "DeleteSkill",
           "CreateSkillVersion",
           "ListSkillVersions",
-          "GetSkillVersion",
-          "GetSkillVersionContent",
           "DeleteSkillVersion",
           "SkillPageStream"
         ],
         "tests": [
-          "openai-rs-client::skills::tests::directory_paths_reject_traversal_header_and_platform_ambiguity",
-          "openai-rs-client::skills::tests::create_skill_sends_single_zip_multipart",
-          "openai-rs-client::skills::tests::directory_upload_preserves_nested_relative_filename_on_wire",
           "openai-rs-client::skills::tests::skill_list_retrieve_update_and_delete_match_routes",
           "openai-rs-client::skills::tests::skill_page_stream_advances_cursor_and_preserves_query",
           "openai-rs-client::skills::tests::skill_version_create_list_retrieve_delete_match_contract",
-          "openai-rs-client::skills::tests::skill_and_version_content_stream_and_bound_collection"
+          "pending: add independent request path/query assertions for each listed operation"
         ],
-        "registry_group": "skills-versions"
+        "registry_group": "skills-shared-path-coverage"
       },
       "manual_overrides": []
     },
@@ -15683,17 +15526,10 @@
         "milestone": "M7-skills-client",
         "units": [
           "CreateSkill",
-          "ListSkills",
           "GetSkill",
           "GetSkillContent",
-          "UpdateSkillDefaultVersion",
-          "DeleteSkill",
-          "CreateSkillVersion",
-          "ListSkillVersions",
           "GetSkillVersion",
-          "GetSkillVersionContent",
-          "DeleteSkillVersion",
-          "SkillPageStream"
+          "GetSkillVersionContent"
         ],
         "tests": [
           "openai-rs-client::skills::tests::directory_paths_reject_traversal_header_and_platform_ambiguity",
@@ -16847,14 +16683,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M5-files-client",
         "units": [
           "CancelUpload"
         ],
         "tests": [
-          "openai-rs-client Uploads route manifest test",
-          "openai-rs-types::files::tests::upload_and_part_preserve_unknown_values_and_fields"
+          "openai-rs-types::files::tests::upload_and_part_preserve_unknown_values_and_fields",
+          "pending: direct cancelUpload client route test"
         ]
       },
       "manual_overrides": []
@@ -17040,7 +16876,7 @@
           "VectorStorePageStream"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::vector_store_crud_list_search_contracts"
+          "openai-rs-client::vector_stores::tests::store_crud_list_and_search_match_pinned_routes"
         ]
       },
       "manual_overrides": []
@@ -17083,7 +16919,7 @@
           "CreateVectorStore"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::vector_store_crud_list_search_contracts"
+          "openai-rs-client::vector_stores::tests::store_crud_list_and_search_match_pinned_routes"
         ]
       },
       "manual_overrides": []
@@ -17129,7 +16965,7 @@
           "GetVectorStore"
         ],
         "tests": [
-          "openai-rs-client Vector Store 16-operation manifest test"
+          "openai-rs-client::vector_stores::tests::operation_manifest_covers_every_pinned_vector_store_route"
         ]
       },
       "manual_overrides": []
@@ -17177,13 +17013,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M6-vector-stores-client",
         "units": [
           "ModifyVectorStore"
         ],
         "tests": [
-          "openai-rs-client Vector Store 16-operation manifest test"
+          "openai-rs-client::vector_stores::tests::operation_manifest_covers_every_pinned_vector_store_route",
+          "pending: assert the update path independently"
         ]
       },
       "manual_overrides": []
@@ -17223,13 +17060,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M6-vector-stores-client",
         "units": [
           "DeleteVectorStore"
         ],
         "tests": [
-          "openai-rs-client Vector Store 16-operation manifest test"
+          "openai-rs-client::vector_stores::tests::operation_manifest_covers_every_pinned_vector_store_route",
+          "pending: assert the delete path independently"
         ]
       },
       "manual_overrides": []
@@ -17283,7 +17121,7 @@
           "CreateVectorStoreFileBatch"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::file_batch_routes_and_polling_are_bounded"
+          "openai-rs-client::vector_stores::tests::file_batch_routes_match_pinned_contract"
         ]
       },
       "manual_overrides": []
@@ -17339,7 +17177,7 @@
           "GetVectorStoreFileBatch"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::file_batch_routes_and_polling_are_bounded"
+          "openai-rs-client::vector_stores::tests::file_batch_routes_match_pinned_contract"
         ]
       },
       "manual_overrides": []
@@ -17395,7 +17233,7 @@
           "CancelVectorStoreFileBatch"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::file_batch_routes_and_polling_are_bounded"
+          "openai-rs-client::vector_stores::tests::file_batch_routes_match_pinned_contract"
         ]
       },
       "manual_overrides": []
@@ -17501,7 +17339,7 @@
           "ListFilesInVectorStoreBatch"
         ],
         "tests": [
-          "openai-rs-client Vector Store 16-operation manifest test"
+          "openai-rs-client::vector_stores::tests::operation_manifest_covers_every_pinned_vector_store_route"
         ]
       },
       "manual_overrides": []
@@ -17591,13 +17429,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M6-vector-stores-client",
         "units": [
           "ListVectorStoreFiles"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"
+          "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies",
+          "pending: assert the collection path independently"
         ]
       },
       "manual_overrides": []
@@ -17651,7 +17490,7 @@
           "CreateVectorStoreFile"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"
+          "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"
         ]
       },
       "manual_overrides": []
@@ -17707,7 +17546,7 @@
           "GetVectorStoreFile"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"
+          "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"
         ]
       },
       "manual_overrides": []
@@ -17765,13 +17604,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M6-vector-stores-client",
         "units": [
           "UpdateVectorStoreFileAttributes"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"
+          "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies",
+          "pending: assert the attribute update path independently"
         ]
       },
       "manual_overrides": []
@@ -17821,13 +17661,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "verified",
+        "status": "partial",
         "milestone": "M6-vector-stores-client",
         "units": [
           "DeleteVectorStoreFile"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"
+          "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies",
+          "pending: assert the attached-file delete path independently"
         ]
       },
       "manual_overrides": []
@@ -17883,7 +17724,7 @@
           "RetrieveVectorStoreFileContent"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"
+          "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"
         ]
       },
       "manual_overrides": []
@@ -17937,7 +17778,7 @@
           "SearchVectorStore"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::vector_store_crud_list_search_contracts"
+          "openai-rs-client::vector_stores::tests::store_crud_list_and_search_match_pinned_routes"
         ]
       },
       "manual_overrides": []

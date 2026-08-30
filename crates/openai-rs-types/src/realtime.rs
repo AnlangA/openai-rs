@@ -2381,6 +2381,366 @@ impl fmt::Debug for RealtimeCreateClientSecretResponse {
     }
 }
 
+/// Validated translation client-secret lifetime in seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub struct RealtimeTranslationSecretLifetime(u16);
+
+impl RealtimeTranslationSecretLifetime {
+    pub const MIN_SECONDS: u16 = 10;
+    pub const MAX_SECONDS: u16 = 7_200;
+
+    pub fn new(seconds: u16) -> Result<Self, RealtimeTranslationSecretLifetimeError> {
+        if (Self::MIN_SECONDS..=Self::MAX_SECONDS).contains(&seconds) {
+            Ok(Self(seconds))
+        } else {
+            Err(RealtimeTranslationSecretLifetimeError { seconds })
+        }
+    }
+
+    #[must_use]
+    pub const fn seconds(self) -> u16 {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for RealtimeTranslationSecretLifetime {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let seconds = u16::deserialize(deserializer)?;
+        Self::new(seconds).map_err(D::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("translation client-secret lifetime {seconds} is outside 10..=7200 seconds")]
+pub struct RealtimeTranslationSecretLifetimeError {
+    pub seconds: u16,
+}
+
+literal_tag!(RealtimeTranslationExpirationAnchorTag, CreatedAt, "created_at");
+
+/// Expiration configuration for a Realtime translation client secret.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeTranslationClientSecretExpiration {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    anchor: Omittable<RealtimeTranslationExpirationAnchorTag>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    seconds: Omittable<RealtimeTranslationSecretLifetime>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl RealtimeTranslationClientSecretExpiration {
+    pub fn new(seconds: u16) -> Result<Self, RealtimeTranslationSecretLifetimeError> {
+        Ok(Self {
+            anchor: Omittable::Value(RealtimeTranslationExpirationAnchorTag::CreatedAt),
+            seconds: Omittable::Value(RealtimeTranslationSecretLifetime::new(seconds)?),
+            extra: ExtraFields::new(),
+        })
+    }
+
+    #[must_use]
+    pub fn seconds(&self) -> Option<u16> {
+        match self.seconds {
+            Omittable::Value(value) => Some(value.seconds()),
+            Omittable::Omitted => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Required source-transcription model for translation sessions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeTranslationTranscription {
+    pub model: String,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl RealtimeTranslationTranscription {
+    #[must_use]
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            extra: ExtraFields::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Required translation input noise-reduction mode.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeTranslationNoiseReduction {
+    #[serde(rename = "type")]
+    pub kind: RealtimeNoiseReductionType,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl RealtimeTranslationNoiseReduction {
+    #[must_use]
+    pub fn new(kind: RealtimeNoiseReductionType) -> Self {
+        Self {
+            kind,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Translation input-audio configuration.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeTranslationAudioInput {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub transcription: Omittable<Nullable<RealtimeTranslationTranscription>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub noise_reduction: Omittable<Nullable<RealtimeTranslationNoiseReduction>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl RealtimeTranslationAudioInput {
+    #[must_use]
+    pub fn with_transcription(mut self, value: RealtimeTranslationTranscription) -> Self {
+        self.transcription = Omittable::Value(Nullable::Value(value));
+        self
+    }
+
+    #[must_use]
+    pub fn with_transcription_null(mut self) -> Self {
+        self.transcription = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    #[must_use]
+    pub fn clear_transcription(mut self) -> Self {
+        self.transcription = Omittable::Omitted;
+        self
+    }
+
+    #[must_use]
+    pub fn with_noise_reduction(mut self, value: RealtimeTranslationNoiseReduction) -> Self {
+        self.noise_reduction = Omittable::Value(Nullable::Value(value));
+        self
+    }
+
+    #[must_use]
+    pub fn with_noise_reduction_null(mut self) -> Self {
+        self.noise_reduction = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    #[must_use]
+    pub fn clear_noise_reduction(mut self) -> Self {
+        self.noise_reduction = Omittable::Omitted;
+        self
+    }
+
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Translation output-audio configuration.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeTranslationAudioOutput {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub language: Omittable<String>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl RealtimeTranslationAudioOutput {
+    #[must_use]
+    pub fn new(language: impl Into<String>) -> Self {
+        Self {
+            language: Omittable::Value(language.into()),
+            extra: ExtraFields::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Translation input/output audio settings.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeTranslationAudio {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub input: Omittable<RealtimeTranslationAudioInput>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub output: Omittable<RealtimeTranslationAudioOutput>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl RealtimeTranslationAudio {
+    #[must_use]
+    pub fn with_input(mut self, input: RealtimeTranslationAudioInput) -> Self {
+        self.input = Omittable::Value(input);
+        self
+    }
+
+    #[must_use]
+    pub fn with_output(mut self, output: RealtimeTranslationAudioOutput) -> Self {
+        self.output = Omittable::Value(output);
+        self
+    }
+
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Configuration used to create a Realtime translation session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeTranslationSessionCreateRequest {
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub audio: Omittable<RealtimeTranslationAudio>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl RealtimeTranslationSessionCreateRequest {
+    #[must_use]
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            audio: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_audio(mut self, audio: RealtimeTranslationAudio) -> Self {
+        self.audio = Omittable::Value(audio);
+        self
+    }
+
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+literal_tag!(RealtimeTranslationSessionTag, Translation, "translation");
+
+/// Effective Realtime translation session returned by the service.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeTranslationSession {
+    pub id: String,
+    #[serde(rename = "type")]
+    kind: RealtimeTranslationSessionTag,
+    pub expires_at: i64,
+    pub model: String,
+    pub audio: RealtimeTranslationAudio,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl RealtimeTranslationSession {
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Request for a translation session client secret.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeTranslationClientSecretCreateRequest {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub expires_after: Omittable<RealtimeTranslationClientSecretExpiration>,
+    pub session: RealtimeTranslationSessionCreateRequest,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl RealtimeTranslationClientSecretCreateRequest {
+    #[must_use]
+    pub fn new(session: RealtimeTranslationSessionCreateRequest) -> Self {
+        Self {
+            expires_after: Omittable::Omitted,
+            session,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_expires_after(
+        mut self,
+        expiration: RealtimeTranslationClientSecretExpiration,
+    ) -> Self {
+        self.expires_after = Omittable::Value(expiration);
+        self
+    }
+
+    #[must_use]
+    pub fn clear_expires_after(mut self) -> Self {
+        self.expires_after = Omittable::Omitted;
+        self
+    }
+
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Translation client secret and effective session.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RealtimeTranslationClientSecretCreateResponse {
+    pub value: WireSecret,
+    pub expires_at: i64,
+    pub session: RealtimeTranslationSession,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl RealtimeTranslationClientSecretCreateResponse {
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+impl fmt::Debug for RealtimeTranslationClientSecretCreateResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RealtimeTranslationClientSecretCreateResponse")
+            .field("value", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .field("session", &self.session)
+            .field("extra", &self.extra)
+            .finish()
+    }
+}
+
+/// Ergonomic aliases matching the verb-first naming used by other Realtime DTOs.
+pub type RealtimeCreateTranslationClientSecretRequest =
+    RealtimeTranslationClientSecretCreateRequest;
+pub type RealtimeCreateTranslationClientSecretResponse =
+    RealtimeTranslationClientSecretCreateResponse;
+
 /// Session Description Protocol text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -4333,5 +4693,101 @@ mod tests {
         let decoded: WebhookRealtimeCallIncoming =
             serde_json::from_value(webhook.clone()).expect("webhook decodes");
         assert_eq!(serde_json::to_value(decoded).expect("encode"), webhook);
+    }
+
+    #[test]
+    fn translation_session_preserves_nullability_extras_and_secret_privacy() {
+        assert!(RealtimeTranslationClientSecretExpiration::new(9).is_err());
+        assert_eq!(
+            RealtimeTranslationClientSecretExpiration::new(10)
+                .expect("minimum lifetime")
+                .seconds(),
+            Some(10)
+        );
+        assert!(RealtimeTranslationClientSecretExpiration::new(7_200).is_ok());
+        assert!(RealtimeTranslationClientSecretExpiration::new(7_201).is_err());
+        assert!(
+            serde_json::from_value::<RealtimeTranslationClientSecretExpiration>(
+                json!({"seconds": 9})
+            )
+            .is_err()
+        );
+
+        let input = RealtimeTranslationAudioInput::default()
+            .with_transcription(RealtimeTranslationTranscription::new(
+                "gpt-realtime-whisper",
+            ))
+            .with_noise_reduction_null();
+        let session = RealtimeTranslationSessionCreateRequest::new("gpt-realtime-translate")
+            .with_audio(
+                RealtimeTranslationAudio::default()
+                    .with_input(input)
+                    .with_output(RealtimeTranslationAudioOutput::new("es")),
+            );
+        let request = RealtimeTranslationClientSecretCreateRequest::new(session)
+            .with_expires_after(
+                RealtimeTranslationClientSecretExpiration::new(600)
+                    .expect("translation lifetime"),
+            );
+        assert_eq!(
+            serde_json::to_value(request).expect("encode translation request"),
+            json!({
+                "expires_after": {"anchor": "created_at", "seconds": 600},
+                "session": {
+                    "model": "gpt-realtime-translate",
+                    "audio": {
+                        "input": {
+                            "transcription": {"model": "gpt-realtime-whisper"},
+                            "noise_reduction": null
+                        },
+                        "output": {"language": "es"}
+                    }
+                }
+            })
+        );
+
+        let fixture = json!({
+            "value": "ek_translation_private",
+            "expires_at": 1_756_310_470_i64,
+            "session": {
+                "id": "sess_translation",
+                "type": "translation",
+                "expires_at": 1_756_310_470_i64,
+                "model": "gpt-realtime-translate",
+                "audio": {
+                    "input": {
+                        "transcription": null,
+                        "noise_reduction": null,
+                        "future_input": true
+                    },
+                    "output": {"language": "es"}
+                },
+                "future_session": {"enabled": true}
+            },
+            "future_response": 1
+        });
+        let response: RealtimeTranslationClientSecretCreateResponse =
+            serde_json::from_value(fixture.clone()).expect("translation response decodes");
+        assert!(!format!("{response:?}").contains("ek_translation_private"));
+        assert_eq!(
+            response.extra_fields().get("future_response"),
+            Some(&json!(1))
+        );
+        assert_eq!(
+            response.session.extra_fields().get("future_session"),
+            Some(&json!({"enabled": true}))
+        );
+        assert_eq!(serde_json::to_value(response).expect("roundtrip"), fixture);
+
+        assert!(
+            serde_json::from_value::<RealtimeTranslationSession>(json!({
+                "id": "sess_1",
+                "type": "realtime",
+                "expires_at": 1,
+                "model": "gpt-realtime-translate",
+                "audio": {}
+            }))
+            .is_err()
+        );
     }
 }

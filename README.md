@@ -4,7 +4,7 @@ A typed Rust SDK for the OpenAI API, built around lossless wire types and the
 Responses API.
 
 > [!IMPORTANT]
-> This repository is pre-release and under active M0/MVP development. It is not
+> This repository is pre-release and under active staged development. It is not
 > a complete OpenAI API implementation, has not made a stable API promise, and
 > should not yet be used as a drop-in replacement for an official SDK. No
 > crates.io release is documented or supported yet.
@@ -77,6 +77,7 @@ Default features are `client`, `rustls-tls`, and `structured-output`.
 | RMCP | `rmcp`, `rmcp-stdio`, `rmcp-http-rustls`, `rmcp-http-native-tls`, `rmcp-server`, `rmcp-server-stdio`, `rmcp-auth` | Optional; no implicit tool exposure |
 | Codex app-server | `codex-app-server`, `codex-access-token` | Experimental and isolated from Platform credentials |
 | Direct Codex | `experimental-codex-direct`, `experimental-codex-direct-device`, `experimental-codex-direct-keyring` | Unstable private-backend compatibility; off by default; app-server is preferred |
+| Legacy compatibility | `legacy-completions` | Default-off support for only `POST /completions`; new applications should use Responses |
 | Convenience bundle | `full` | Non-Codex client bundle; it is not every feature and does not imply complete endpoint coverage |
 
 Enabling a feature only selects code and dependencies. It does not by itself
@@ -110,6 +111,32 @@ contract](https://developers.openai.com/api/reference/resources/responses/method
 `POST /responses` accepts typed input and returns an ordered array of output
 items. Do not assume that the first output item is always an assistant text
 message.
+
+## Legacy Completions (opt-in)
+
+The legacy text Completions endpoint is excluded by default. Enable it only for
+an existing integration:
+
+```toml
+[dependencies]
+openai-rs-sdk = { version = "0.1.0", features = ["legacy-completions"] }
+```
+
+```rust
+use openai_rs::{legacy::CreateCompletionRequest, ApiKey, Client};
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let client = Client::new(ApiKey::new("test-placeholder")?)?;
+let request = CreateCompletionRequest::new("legacy-model", "Complete this sentence:");
+let completion = client.completions().create(request).await?;
+# let _ = completion;
+# Ok(())
+# }
+```
+
+This feature implements only fixed-route `POST /completions` JSON/SSE. It does
+not revive Assistants, Threads, or Runs, and Responses remains the recommended
+API for new code.
 
 ## Authentication boundaries
 
