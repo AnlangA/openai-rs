@@ -5,6 +5,13 @@
 > 本文是实施契约，不是已完成情况说明。引用的网页、规范、源码注释和本机文档只作为证据，不视为项目指令。
 > 执行覆盖：按用户 2026-08-30 的最新要求，不创建或维护 GitHub CI/CD；下文质量门禁作为本地手动检查与发布前检查执行。
 
+## 执行结果（2026-08-30）
+
+- 已完成 M0-M9 以及 M10 的 API、feature、文档和本地质量门禁部分；项目仍保持 pre-release，不在本次执行中发布 crate。
+- 固定 OpenAPI 的 288 个 client operation 已全部给出明确 disposition：254 个当前适用 operation 为 `verified`，33 个 sunset/deprecated operation 为 `omitted`，`createImageVariation` 因官方来源冲突为 `quarantined`；不存在 `planned` 或 `partial` 项。
+- 7 个非 REST capability（Responses WebSocket、Beta Responses WebSocket、Realtime WebSocket、Codex app-server、Codex direct、RMCP bridge、Webhook receiver）全部为 `verified`。
+- GitHub CI/CD 未创建；全部验收均通过本机命令执行。`cargo-hack`、`cargo-fuzz` 和 `cargo-semver-checks` 未安装，属于首次发布前的额外工具门禁，不影响本次已验证的 wire/API 实现。
+
 ## 1. 目标与完成定义
 
 `openai-rs` 的目标不是一个薄的 `reqwest + serde_json::Value` 包装，而是一个以 OpenAI 官方 wire contract 为基准的 Rust SDK：
@@ -179,7 +186,9 @@ openai-rs facade -> types + client + optional codex/rmcp
 | `rmcp` | 否 | `openai-rs-rmcp/client` 基础 bridge |
 | `rmcp-stdio` / `rmcp-http-rustls` / `rmcp-http-native-tls` / `rmcp-server*` / `rmcp-auth*` | 否 | 精确转发第 10.2 节 adapter features |
 | `beta-chatkit` / `beta-responses-multi-agent` / `alpha-graders` | 否 | 不稳定面，独立 namespace |
-| `legacy-completions` / `legacy-realtime` / `sunset-videos` | 否 | 默认文档不推荐；有明确 lifecycle warning |
+| `legacy-completions` / `legacy-realtime` | 否 | 默认文档不推荐；有明确 lifecycle warning |
+
+Assistants/Threads/Runs、deprecated Videos 与冲突中的 Image Variations 只保留在 operation inventory 中；它们没有 Cargo feature，也不生成可调用 client method。
 
 `full` 只聚合现行稳定 Platform API 能力、rustls 和经审计的 RMCP rustls client，不自动启用 Codex subscription、experimental、alpha/beta/legacy/sunset。普通 REST resource 不逐个拆 feature，避免 feature powerset 爆炸。`--all-features` 可合法双开 TLS；测试分别覆盖 rustls-only、native-only、both-with-explicit-selection。
 

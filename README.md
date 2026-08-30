@@ -20,7 +20,10 @@ resources; and the pinned GA Realtime transport, including its 11 client-event
 and 46 server-event unions, WebSocket connection, WebRTC signaling, client-secret
 operations, and SIP call control. Administration, workload identity, and X.509
 are implemented behind separate default-off trust boundaries. The repository
-still does not claim complete OpenAPI coverage or a stable public API.
+still does not claim a stable public API. Against the pinned OpenAPI inventory,
+all 254 applicable client operations are verified; 33 sunset/deprecated
+operations are explicitly omitted and one conflicting operation is
+quarantined.
 
 | Area | Status |
 |---|---|
@@ -36,7 +39,7 @@ still does not claim complete OpenAPI coverage or a stable public API.
 | Realtime GA | 11 client events, 46 server events, WebSocket transport, client secrets, WebRTC SDP, and SIP call control implemented |
 | Administration | Separate `AdminClient`/`AdminApiKey`; 119 sealed operations plus 3 fine-tuning checkpoint-permission operations implemented |
 | Workload identity and X.509 | RFC 8693-backed `Client` auth and an isolated mTLS `X509Client` implemented |
-| Full OpenAPI resource coverage | Not implemented |
+| Pinned operation disposition | 254 applicable operations verified; 33 sunset/deprecated operations omitted; 1 conflicting operation quarantined |
 | Default-off gated/compatibility APIs | Custom Voice, alpha Graders, beta ChatKit, beta multi-agent Responses, legacy Completions, and legacy Realtime are implemented only behind explicit features |
 | RMCP bridge | Typed local Responses-function bridge implemented; transport, server, and auth feature flags pass through to the pinned `rmcp` dependency |
 | Codex app-server integration | Experimental JSONL client implemented for one exact audited Codex 0.144.5 macOS arm64 artifact |
@@ -123,7 +126,8 @@ The shape follows the [official OpenAI Responses
 contract](https://developers.openai.com/api/reference/resources/responses/methods/create):
 `POST /responses` accepts typed input and returns an ordered array of output
 items. Do not assume that the first output item is always an assistant text
-message.
+message. The same code is checked as the executable
+[`responses` example](crates/openai-rs/examples/responses.rs).
 
 ## Legacy Completions (opt-in)
 
@@ -172,12 +176,12 @@ The workspace MSRV is Rust 1.88.0. Start with:
 
 ```console
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
-cargo check -p openai-rs-sdk --all-targets --no-default-features
-cargo check --workspace --all-targets --all-features
-cargo +1.88.0 check --workspace --all-targets
-cargo run -p xtask -- check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
+cargo check -p openai-rs-sdk --all-targets --no-default-features --locked
+cargo check --workspace --all-targets --all-features --locked
+cargo +1.88.0 check --workspace --all-targets --all-features --locked
+cargo run --locked -p xtask -- check
 cargo deny --all-features check
 ```
 

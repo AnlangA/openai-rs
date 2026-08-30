@@ -22,7 +22,8 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
 cargo check -p openai-rs-sdk --all-targets --no-default-features --locked
 cargo check --workspace --all-targets --all-features --locked
-cargo +1.88.0 check --workspace --all-targets --locked
+cargo check -p openai-rs-sdk --examples --all-features --locked
+cargo +1.88.0 check --workspace --all-targets --all-features --locked
 cargo run --locked -p xtask -- check
 cargo deny --all-features check
 ```
@@ -30,6 +31,9 @@ cargo deny --all-features check
 The checks intentionally cover default features, no-default-features, and all
 features. `all-features` is a compile/test pressure test; it does not change the
 stability level of experimental features.
+
+These are local maintainer and pre-release gates. This repository intentionally
+does not define GitHub CI/CD workflows.
 
 ## `xtask check`
 

@@ -84,9 +84,14 @@ runtime boundary fits the application.
 
 ## API coverage policy
 
-The repository does not claim full OpenAPI coverage until generated operation
-inventory, public bindings, fixtures, and contract tests agree with a pinned
-specification. Until then:
+The generated pinned inventory contains 288 client operations. Its current
+disposition is 254 `verified`, 33 `omitted`, and one `quarantined`; there are no
+`planned` or `partial` entries. The omitted entries are Assistants/Threads/Runs
+and deprecated Videos operations. `createImageVariation` is quarantined because
+the official sources conflict. Neither category is exposed as a callable
+client feature.
+
+The verified surface includes:
 
 - Responses REST covers create, retrieve, delete, cancel, compact, input-item
   listing, and input-token counting.
@@ -122,9 +127,9 @@ specification. Until then:
   credential type.
 - Workload identity and X.509 authentication paths are implemented with the
   narrower boundaries described above.
-- Additional operations are added only with typed request/response and error
-  fixtures.
-- Other resource families or operations remain incomplete even if related
-  types or a feature boundary already exist.
+- Operations introduced by a future pinned revision are added only with typed
+  request/response and error fixtures plus explicit lifecycle disposition.
+- Verified coverage is a wire-contract claim for this pinned revision, not a
+  stable Rust API or live service-entitlement guarantee.
 - Unknown response fields and events are retained only where the wire contract
   is intentionally forward-compatible.

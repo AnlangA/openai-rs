@@ -1582,6 +1582,7 @@ dependencies = [
  "openai-rs-codex",
  "openai-rs-rmcp",
  "openai-rs-types",
+ "tokio",
 ]
 
 [[package]]

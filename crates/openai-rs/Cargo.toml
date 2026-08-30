@@ -50,5 +50,8 @@ openai-rs-codex = { path = "../openai-rs-codex", version = "=0.1.0", default-fea
 openai-rs-rmcp = { path = "../openai-rs-rmcp", version = "=0.1.0", default-features = false, optional = true }
 openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0", default-features = false }
 
+[dev-dependencies]
+tokio.workspace = true
+
 [lints]
 workspace = true

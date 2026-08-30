@@ -13,7 +13,7 @@
       "quarantined": 1,
       "verified": 254
     },
-    "verified_units": 294
+    "verified_units": 296
   },
   "client_operations": [
     {
@@ -325,7 +325,7 @@
       "feature": "default",
       "implementation": {
         "status": "verified",
-        "milestone": "M7-media-client",
+        "milestone": "M6-media-client",
         "units": [
           "Audio::speech",
           "Audio::speech_stream",
@@ -389,7 +389,7 @@
       "feature": "default",
       "implementation": {
         "status": "verified",
-        "milestone": "M7-media-client",
+        "milestone": "M6-media-client",
         "units": [
           "Audio::speech",
           "Audio::speech_stream",
@@ -450,7 +450,7 @@
       "feature": "default",
       "implementation": {
         "status": "verified",
-        "milestone": "M7-media-client",
+        "milestone": "M6-media-client",
         "units": [
           "Audio::speech",
           "Audio::speech_stream",
@@ -523,7 +523,7 @@
       "feature": "custom-voice",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-custom-voice",
+        "milestone": "M6-custom-voice",
         "units": [
           "Voices::create",
           "VoiceConsents::list",
@@ -575,7 +575,7 @@
       "feature": "custom-voice",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-custom-voice",
+        "milestone": "M6-custom-voice",
         "units": [
           "Voices::create",
           "VoiceConsents::list",
@@ -630,7 +630,7 @@
       "feature": "custom-voice",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-custom-voice",
+        "milestone": "M6-custom-voice",
         "units": [
           "Voices::create",
           "VoiceConsents::list",
@@ -693,7 +693,7 @@
       "feature": "custom-voice",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-custom-voice",
+        "milestone": "M6-custom-voice",
         "units": [
           "Voices::create",
           "VoiceConsents::list",
@@ -748,7 +748,7 @@
       "feature": "custom-voice",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-custom-voice",
+        "milestone": "M6-custom-voice",
         "units": [
           "Voices::create",
           "VoiceConsents::list",
@@ -800,7 +800,7 @@
       "feature": "custom-voice",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-custom-voice",
+        "milestone": "M6-custom-voice",
         "units": [
           "Voices::create",
           "VoiceConsents::list",
@@ -1139,7 +1139,7 @@
         "milestone": "M5-chat-client",
         "units": [
           "CreateChatCompletion",
-          "CreateStreamingChatCompletion"
+          "CreateChatCompletionStream"
         ],
         "tests": [
           "openai-rs-client::chat_completions::tests::create_uses_typed_non_streaming_contract",
@@ -1186,7 +1186,7 @@
         "status": "verified",
         "milestone": "M5-chat-client",
         "units": [
-          "GetChatCompletion"
+          "RetrieveChatCompletion"
         ],
         "tests": [
           "openai-rs-client::chat_completions::tests::get_chat_completion_uses_encoded_id_without_query_or_body"
@@ -1362,7 +1362,7 @@
         "status": "verified",
         "milestone": "M5-chat-client",
         "units": [
-          "GetChatCompletionMessages"
+          "ListChatCompletionMessages"
         ],
         "tests": [
           "openai-rs-client::chat_completions::tests::stored_messages_list_uses_typed_page_query"
@@ -1403,7 +1403,7 @@
       "feature": "beta-chatkit",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-chatkit",
+        "milestone": "M10-beta-chatkit",
         "units": [
           "ChatKitSessions::create",
           "ChatKitSessions::cancel",
@@ -1461,7 +1461,7 @@
       "feature": "beta-chatkit",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-chatkit",
+        "milestone": "M10-beta-chatkit",
         "units": [
           "ChatKitSessions::create",
           "ChatKitSessions::cancel",
@@ -1561,7 +1561,7 @@
       "feature": "beta-chatkit",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-chatkit",
+        "milestone": "M10-beta-chatkit",
         "units": [
           "ChatKitSessions::create",
           "ChatKitSessions::cancel",
@@ -1619,7 +1619,7 @@
       "feature": "beta-chatkit",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-chatkit",
+        "milestone": "M10-beta-chatkit",
         "units": [
           "ChatKitSessions::create",
           "ChatKitSessions::cancel",
@@ -1677,7 +1677,7 @@
       "feature": "beta-chatkit",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-chatkit",
+        "milestone": "M10-beta-chatkit",
         "units": [
           "ChatKitSessions::create",
           "ChatKitSessions::cancel",
@@ -1777,7 +1777,7 @@
       "feature": "beta-chatkit",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-chatkit",
+        "milestone": "M10-beta-chatkit",
         "units": [
           "ChatKitSessions::create",
           "ChatKitSessions::cancel",
@@ -1832,7 +1832,7 @@
       "feature": "legacy-completions",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-legacy-completions",
+        "milestone": "M10-legacy-completions",
         "units": [
           "CreateCompletion",
           "CreateCompletionStream",
@@ -1970,7 +1970,7 @@
           "CreateContainer",
           "RetrieveContainer",
           "CreateContainerFile",
-          "CreateContainerFileUpload",
+          "CreateContainerFileUploadRequest",
           "RetrieveContainerFile",
           "RetrieveContainerFileContent"
         ],
@@ -2027,7 +2027,7 @@
           "CreateContainer",
           "RetrieveContainer",
           "CreateContainerFile",
-          "CreateContainerFileUpload",
+          "CreateContainerFileUploadRequest",
           "RetrieveContainerFile",
           "RetrieveContainerFileContent"
         ],
@@ -2229,7 +2229,7 @@
           "CreateContainer",
           "RetrieveContainer",
           "CreateContainerFile",
-          "CreateContainerFileUpload",
+          "CreateContainerFileUploadRequest",
           "RetrieveContainerFile",
           "RetrieveContainerFileContent"
         ],
@@ -2296,7 +2296,7 @@
           "CreateContainer",
           "RetrieveContainer",
           "CreateContainerFile",
-          "CreateContainerFileUpload",
+          "CreateContainerFileUploadRequest",
           "RetrieveContainerFile",
           "RetrieveContainerFileContent"
         ],
@@ -2420,7 +2420,7 @@
           "CreateContainer",
           "RetrieveContainer",
           "CreateContainerFile",
-          "CreateContainerFileUpload",
+          "CreateContainerFileUploadRequest",
           "RetrieveContainerFile",
           "RetrieveContainerFileContent"
         ],
@@ -2472,7 +2472,7 @@
         "milestone": "M7-content-provenance-client",
         "units": [
           "ContentProvenanceChecks::create",
-          "ContentProvenanceCheckRequest"
+          "CreateContentProvenanceCheckRequest"
         ],
         "tests": [
           "openai-rs-client::content_provenance::tests::create_uses_one_fixed_multipart_file_field_and_typed_response",
@@ -3142,7 +3142,8 @@
           "ListEvalRunOutputItems",
           "RetrieveEvalRunOutputItem",
           "EvalPageStream",
-          "EvalRunPoller"
+          "EvalRuns::poll",
+          "EvalRunPollOptions"
         ],
         "tests": [
           "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
@@ -3259,7 +3260,8 @@
           "ListEvalRunOutputItems",
           "RetrieveEvalRunOutputItem",
           "EvalPageStream",
-          "EvalRunPoller"
+          "EvalRuns::poll",
+          "EvalRunPollOptions"
         ],
         "tests": [
           "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
@@ -3337,7 +3339,8 @@
           "ListEvalRunOutputItems",
           "RetrieveEvalRunOutputItem",
           "EvalPageStream",
-          "EvalRunPoller"
+          "EvalRuns::poll",
+          "EvalRunPollOptions"
         ],
         "tests": [
           "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
@@ -3495,7 +3498,8 @@
           "ListEvalRunOutputItems",
           "RetrieveEvalRunOutputItem",
           "EvalPageStream",
-          "EvalRunPoller"
+          "EvalRuns::poll",
+          "EvalRunPollOptions"
         ],
         "tests": [
           "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
@@ -3573,7 +3577,8 @@
           "ListEvalRunOutputItems",
           "RetrieveEvalRunOutputItem",
           "EvalPageStream",
-          "EvalRunPoller"
+          "EvalRuns::poll",
+          "EvalRunPollOptions"
         ],
         "tests": [
           "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
@@ -3653,7 +3658,8 @@
           "ListEvalRunOutputItems",
           "RetrieveEvalRunOutputItem",
           "EvalPageStream",
-          "EvalRunPoller"
+          "EvalRuns::poll",
+          "EvalRunPollOptions"
         ],
         "tests": [
           "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
@@ -3733,7 +3739,8 @@
           "ListEvalRunOutputItems",
           "RetrieveEvalRunOutputItem",
           "EvalPageStream",
-          "EvalRunPoller"
+          "EvalRuns::poll",
+          "EvalRunPollOptions"
         ],
         "tests": [
           "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
@@ -3811,7 +3818,8 @@
           "ListEvalRunOutputItems",
           "RetrieveEvalRunOutputItem",
           "EvalPageStream",
-          "EvalRunPoller"
+          "EvalRuns::poll",
+          "EvalRunPollOptions"
         ],
         "tests": [
           "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
@@ -3931,7 +3939,8 @@
           "ListEvalRunOutputItems",
           "RetrieveEvalRunOutputItem",
           "EvalPageStream",
-          "EvalRunPoller"
+          "EvalRuns::poll",
+          "EvalRunPollOptions"
         ],
         "tests": [
           "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
@@ -4021,7 +4030,8 @@
           "ListEvalRunOutputItems",
           "RetrieveEvalRunOutputItem",
           "EvalPageStream",
-          "EvalRunPoller"
+          "EvalRuns::poll",
+          "EvalRunPollOptions"
         ],
         "tests": [
           "openai-rs-client::evals::tests::list_evals_loopback_wire_contract",
@@ -4342,7 +4352,7 @@
       "feature": "alpha-graders",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-alpha-graders",
+        "milestone": "M10-alpha-graders",
         "units": [
           "RunAlphaGrader",
           "ValidateAlphaGrader",
@@ -4391,7 +4401,7 @@
       "feature": "alpha-graders",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-alpha-graders",
+        "milestone": "M10-alpha-graders",
         "units": [
           "RunAlphaGrader",
           "ValidateAlphaGrader",
@@ -4794,7 +4804,8 @@
         "milestone": "M7-fine-tuning-client",
         "units": [
           "RetrieveFineTuningJob",
-          "FineTuningJobPoller"
+          "FineTuningJobs::poll",
+          "FineTuningPollOptions"
         ],
         "tests": [
           "openai-rs-client::fine_tuning::tests::retrieve_job_uses_exact_encoded_path_and_no_body",
@@ -5181,7 +5192,7 @@
       "feature": "default",
       "implementation": {
         "status": "verified",
-        "milestone": "M7-media-client",
+        "milestone": "M6-media-client",
         "units": [
           "Audio::speech",
           "Audio::speech_stream",
@@ -5243,7 +5254,7 @@
       "feature": "default",
       "implementation": {
         "status": "verified",
-        "milestone": "M7-media-client",
+        "milestone": "M6-media-client",
         "units": [
           "Audio::speech",
           "Audio::speech_stream",
@@ -13945,7 +13956,7 @@
         "units": [
           "CreateClientSecret",
           "CreateTranslationClientSecret",
-          "CreateCall",
+          "Realtime::create_call",
           "AcceptCall",
           "HangupCall",
           "ReferCall"
@@ -14004,7 +14015,7 @@
         "units": [
           "CreateClientSecret",
           "CreateTranslationClientSecret",
-          "CreateCall",
+          "Realtime::create_call",
           "AcceptCall",
           "HangupCall",
           "ReferCall"
@@ -14055,7 +14066,7 @@
         "units": [
           "CreateClientSecret",
           "CreateTranslationClientSecret",
-          "CreateCall",
+          "Realtime::create_call",
           "AcceptCall",
           "HangupCall",
           "ReferCall"
@@ -14114,7 +14125,7 @@
         "units": [
           "CreateClientSecret",
           "CreateTranslationClientSecret",
-          "CreateCall",
+          "Realtime::create_call",
           "AcceptCall",
           "HangupCall",
           "ReferCall"
@@ -14219,7 +14230,7 @@
         "units": [
           "CreateClientSecret",
           "CreateTranslationClientSecret",
-          "CreateCall",
+          "Realtime::create_call",
           "AcceptCall",
           "HangupCall",
           "ReferCall"
@@ -14267,7 +14278,7 @@
       "feature": "legacy-realtime",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-legacy-realtime",
+        "milestone": "M10-legacy-realtime",
         "units": [
           "CreateLegacyRealtimeSession",
           "CreateLegacyRealtimeTranscriptionSession",
@@ -14314,7 +14325,7 @@
       "feature": "legacy-realtime",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-legacy-realtime",
+        "milestone": "M10-legacy-realtime",
         "units": [
           "CreateLegacyRealtimeSession",
           "CreateLegacyRealtimeTranscriptionSession",
@@ -14365,7 +14376,7 @@
         "units": [
           "CreateClientSecret",
           "CreateTranslationClientSecret",
-          "CreateCall",
+          "Realtime::create_call",
           "AcceptCall",
           "HangupCall",
           "ReferCall"
@@ -14515,7 +14526,7 @@
       "feature": "beta-responses",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-responses",
+        "milestone": "M10-beta-responses",
         "units": [
           "CreateBetaResponse",
           "CreateStreamingBetaResponse",
@@ -14625,7 +14636,7 @@
       "feature": "beta-responses",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-responses",
+        "milestone": "M10-beta-responses",
         "units": [
           "CreateBetaResponse",
           "CreateStreamingBetaResponse",
@@ -14872,7 +14883,7 @@
       "feature": "beta-responses",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-responses",
+        "milestone": "M10-beta-responses",
         "units": [
           "CreateBetaResponse",
           "CreateStreamingBetaResponse",
@@ -15072,7 +15083,7 @@
       "feature": "beta-responses",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-responses",
+        "milestone": "M10-beta-responses",
         "units": [
           "CreateBetaResponse",
           "CreateStreamingBetaResponse",
@@ -15183,7 +15194,7 @@
       "feature": "beta-responses",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-responses",
+        "milestone": "M10-beta-responses",
         "units": [
           "CreateBetaResponse",
           "CreateStreamingBetaResponse",
@@ -15248,7 +15259,7 @@
       "feature": "beta-responses",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-responses",
+        "milestone": "M10-beta-responses",
         "units": [
           "CreateBetaResponse",
           "CreateStreamingBetaResponse",
@@ -15317,7 +15328,7 @@
       "feature": "beta-responses",
       "implementation": {
         "status": "verified",
-        "milestone": "M8-beta-responses",
+        "milestone": "M10-beta-responses",
         "units": [
           "CreateBetaResponse",
           "CreateStreamingBetaResponse",
@@ -17602,10 +17613,10 @@
         "status": "verified",
         "milestone": "M6-vector-stores-client",
         "units": [
-          "GetVectorStore"
+          "RetrieveVectorStore"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::operation_manifest_covers_every_pinned_vector_store_route"
+          "openai-rs-client::vector_stores::tests::store_crud_list_and_search_match_pinned_routes"
         ]
       },
       "manual_overrides": []
@@ -17656,7 +17667,7 @@
         "status": "verified",
         "milestone": "M6-vector-stores-client",
         "units": [
-          "ModifyVectorStore"
+          "UpdateVectorStore"
         ],
         "tests": [
           "openai-rs-client::vector_stores::tests::store_crud_list_and_search_match_pinned_routes"
@@ -17812,7 +17823,7 @@
         "status": "verified",
         "milestone": "M6-vector-stores-client",
         "units": [
-          "GetVectorStoreFileBatch"
+          "RetrieveVectorStoreFileBatch"
         ],
         "tests": [
           "openai-rs-client::vector_stores::tests::file_batch_routes_match_pinned_contract"
@@ -17974,10 +17985,10 @@
         "status": "verified",
         "milestone": "M6-vector-stores-client",
         "units": [
-          "ListFilesInVectorStoreBatch"
+          "ListVectorStoreFileBatchFiles"
         ],
         "tests": [
-          "openai-rs-client::vector_stores::tests::operation_manifest_covers_every_pinned_vector_store_route"
+          "openai-rs-client::vector_stores::tests::file_batch_routes_match_pinned_contract"
         ]
       },
       "manual_overrides": []
@@ -18180,7 +18191,7 @@
         "status": "verified",
         "milestone": "M6-vector-stores-client",
         "units": [
-          "GetVectorStoreFile"
+          "RetrieveVectorStoreFile"
         ],
         "tests": [
           "openai-rs-client::vector_stores::tests::attached_file_routes_preserve_ids_query_and_bodies"
