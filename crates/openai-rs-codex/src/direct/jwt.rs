@@ -257,7 +257,7 @@ mod tests {
     use base64::Engine;
     use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
     use ring::rand::SystemRandom;
-    use ring::rsa::{KeyPair, PublicKeyComponents};
+    use ring::rsa::PublicKeyComponents;
     use ring::signature::{RSA_PKCS1_SHA256, RsaKeyPair};
     use serde_json::json;
 
@@ -267,7 +267,8 @@ mod tests {
 
     fn fixture() -> Result<(RsaKeyPair, JsonWebKeySet), Box<dyn std::error::Error>> {
         let private = STANDARD.decode(PRIVATE_KEY)?;
-        let pair = RsaKeyPair::from_pkcs8(&private)?;
+        let pair = RsaKeyPair::from_pkcs8(&private)
+            .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
         let components = PublicKeyComponents::<Vec<u8>>::from(pair.public());
         let jwks = serde_json::from_value(json!({"keys":[{
             "kty":"RSA", "kid":"fixture", "use":"sig", "alg":"RS256",
@@ -292,7 +293,8 @@ mod tests {
             &SystemRandom::new(),
             signing_input.as_bytes(),
             &mut signature,
-        )?;
+        )
+        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
         Ok(format!(
             "{signing_input}.{}",
             URL_SAFE_NO_PAD.encode(signature)

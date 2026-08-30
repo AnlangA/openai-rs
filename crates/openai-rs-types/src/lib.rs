@@ -11,6 +11,9 @@ pub mod scalar;
 pub mod secret;
 pub mod vector_stores;
 
+#[cfg(feature = "webhooks")]
+pub mod webhooks;
+
 #[cfg(feature = "structured-output")]
 pub mod structured;
 
@@ -24,6 +27,9 @@ pub use scalar::{
 };
 pub use secret::{Secret, WireSecret};
 pub use vector_stores::*;
+
+#[cfg(feature = "webhooks")]
+pub use webhooks::*;
 
 #[cfg(feature = "structured-output")]
 pub use structured::{StructuredError, StructuredOutput, TypedFunction, normalize_strict_schema};

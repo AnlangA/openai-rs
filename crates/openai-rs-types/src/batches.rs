@@ -102,8 +102,9 @@ pub const MAX_BATCH_FILE_EXPIRATION_SECONDS: u64 = 2_592_000;
 pub const MAX_BATCH_INPUT_LINES: usize = 50_000;
 /// Maximum documented batch input file size (200 MiB).
 pub const MAX_BATCH_INPUT_BYTES: usize = 200 * 1024 * 1024;
-/// Default maximum accepted size of one JSONL line.
-pub const DEFAULT_BATCH_JSONL_LINE_LIMIT: usize = 16 * 1024 * 1024;
+/// Default maximum accepted size of one JSONL line. A single line may legally
+/// occupy the complete input-file budget.
+pub const DEFAULT_BATCH_JSONL_LINE_LIMIT: usize = MAX_BATCH_INPUT_BYTES;
 
 /// Validation error for a typed Batch request or helper value.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -402,6 +403,18 @@ impl CreateBatchRequest {
     pub const fn completion_window(&self) -> &BatchCompletionWindow {
         &self.completion_window
     }
+
+    /// Returns the exact optional-nullable metadata state.
+    #[must_use]
+    pub const fn metadata(&self) -> &Omittable<Nullable<BatchMetadata>> {
+        &self.metadata
+    }
+
+    /// Returns the optional generated-file expiration policy.
+    #[must_use]
+    pub const fn output_expires_after(&self) -> &Omittable<BatchFileExpirationAfter> {
+        &self.output_expires_after
+    }
 }
 
 /// Validation errors embedded in a batch object.
@@ -544,6 +557,12 @@ impl BatchInputTokenDetails {
     pub const fn cached_tokens(&self) -> i64 {
         self.cached_tokens
     }
+
+    /// Returns fields added after this crate version.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Reasoning-token breakdown in batch usage.
@@ -559,6 +578,12 @@ impl BatchOutputTokenDetails {
     #[must_use]
     pub const fn reasoning_tokens(&self) -> i64 {
         self.reasoning_tokens
+    }
+
+    /// Returns fields added after this crate version.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -603,6 +628,12 @@ impl BatchUsage {
     #[must_use]
     pub const fn total_tokens(&self) -> i64 {
         self.total_tokens
+    }
+
+    /// Returns fields added after this crate version.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -657,6 +688,12 @@ impl Batch {
         &self.id
     }
 
+    /// Object discriminator.
+    #[must_use]
+    pub const fn object(&self) -> &BatchObjectType {
+        &self.object
+    }
+
     /// Batch status.
     #[must_use]
     pub const fn status(&self) -> &BatchStatus {
@@ -673,6 +710,30 @@ impl Batch {
     #[must_use]
     pub const fn input_file_id(&self) -> &FileId {
         &self.input_file_id
+    }
+
+    /// Completion window selected for this batch.
+    #[must_use]
+    pub const fn completion_window(&self) -> &BatchCompletionWindow {
+        &self.completion_window
+    }
+
+    /// Model reported by newer batch responses.
+    #[must_use]
+    pub fn model(&self) -> Option<&ModelId> {
+        match &self.model {
+            Omittable::Omitted => None,
+            Omittable::Value(value) => Some(value),
+        }
+    }
+
+    /// Input-file validation errors when present.
+    #[must_use]
+    pub fn errors(&self) -> Option<&BatchErrors> {
+        match &self.errors {
+            Omittable::Omitted => None,
+            Omittable::Value(value) => Some(value),
+        }
     }
 
     /// Output file identifier when available.
@@ -699,6 +760,61 @@ impl Batch {
         self.created_at
     }
 
+    fn optional_timestamp(value: &Omittable<i64>) -> Option<i64> {
+        match value {
+            Omittable::Omitted => None,
+            Omittable::Value(value) => Some(*value),
+        }
+    }
+
+    /// Processing-start timestamp.
+    #[must_use]
+    pub fn in_progress_at(&self) -> Option<i64> {
+        Self::optional_timestamp(&self.in_progress_at)
+    }
+
+    /// Scheduled expiration timestamp.
+    #[must_use]
+    pub fn expires_at(&self) -> Option<i64> {
+        Self::optional_timestamp(&self.expires_at)
+    }
+
+    /// Finalization-start timestamp.
+    #[must_use]
+    pub fn finalizing_at(&self) -> Option<i64> {
+        Self::optional_timestamp(&self.finalizing_at)
+    }
+
+    /// Completion timestamp.
+    #[must_use]
+    pub fn completed_at(&self) -> Option<i64> {
+        Self::optional_timestamp(&self.completed_at)
+    }
+
+    /// Failure timestamp.
+    #[must_use]
+    pub fn failed_at(&self) -> Option<i64> {
+        Self::optional_timestamp(&self.failed_at)
+    }
+
+    /// Expired-state timestamp.
+    #[must_use]
+    pub fn expired_at(&self) -> Option<i64> {
+        Self::optional_timestamp(&self.expired_at)
+    }
+
+    /// Cancellation-start timestamp.
+    #[must_use]
+    pub fn cancelling_at(&self) -> Option<i64> {
+        Self::optional_timestamp(&self.cancelling_at)
+    }
+
+    /// Cancellation-complete timestamp.
+    #[must_use]
+    pub fn cancelled_at(&self) -> Option<i64> {
+        Self::optional_timestamp(&self.cancelled_at)
+    }
+
     /// Request counters when populated.
     #[must_use]
     pub fn request_counts(&self) -> Option<&BatchRequestCounts> {
@@ -715,6 +831,12 @@ impl Batch {
             Omittable::Omitted => None,
             Omittable::Value(value) => Some(value),
         }
+    }
+
+    /// Exact optional-nullable metadata state.
+    #[must_use]
+    pub const fn metadata(&self) -> &Omittable<Nullable<BatchMetadata>> {
+        &self.metadata
     }
 
     /// Returns response properties unknown to this crate version.
@@ -768,6 +890,14 @@ pub struct BatchListLimitError {
     value: u32,
 }
 
+impl BatchListLimitError {
+    /// Returns the rejected value.
+    #[must_use]
+    pub const fn value(self) -> u32 {
+        self.value
+    }
+}
+
 /// Query parameters for `GET /batches`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -807,6 +937,18 @@ impl BatchListParams {
             Omittable::Value(value) => value.get(),
         }
     }
+
+    /// Exact cursor presence state.
+    #[must_use]
+    pub const fn after_cursor(&self) -> &Omittable<BatchId> {
+        &self.after
+    }
+
+    /// Exact page-limit presence state.
+    #[must_use]
+    pub const fn limit(&self) -> &Omittable<BatchListLimit> {
+        &self.limit
+    }
 }
 
 /// Response from `GET /batches`.
@@ -824,6 +966,12 @@ pub struct ListBatchesResponse {
 }
 
 impl ListBatchesResponse {
+    /// Collection discriminator.
+    #[must_use]
+    pub const fn object(&self) -> &BatchListObjectType {
+        &self.object
+    }
+
     /// Batch items in this page.
     #[must_use]
     pub fn data(&self) -> &[Batch] {
@@ -852,6 +1000,12 @@ impl ListBatchesResponse {
     #[must_use]
     pub const fn has_more(&self) -> bool {
         self.has_more
+    }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -976,6 +1130,12 @@ impl<O> BatchLineResponse<O> {
     pub const fn body(&self) -> &O {
         &self.body
     }
+
+    /// Unknown response-envelope properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Per-request failure embedded in a batch error output line.
@@ -1008,6 +1168,12 @@ impl BatchLineError {
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Unknown error properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -1215,6 +1381,16 @@ pub enum BatchJsonlError {
         /// Repeated identifier.
         custom_id: String,
     },
+    /// One input file cannot mix endpoint URLs.
+    #[error("batch JSONL line {line} uses endpoint {actual:?}; expected {expected:?}")]
+    MixedEndpoints {
+        /// One-based line number.
+        line: usize,
+        /// Endpoint selected by the first line.
+        expected: String,
+        /// Endpoint found on this line.
+        actual: String,
+    },
 }
 
 /// Incremental writer for typed Batch API input JSONL.
@@ -1226,6 +1402,7 @@ pub struct BatchJsonlWriter<W> {
     max_bytes: usize,
     max_line_bytes: usize,
     custom_ids: HashSet<String>,
+    endpoint: Option<BatchEndpoint>,
 }
 
 impl<W> fmt::Debug for BatchJsonlWriter<W> {
@@ -1237,6 +1414,7 @@ impl<W> fmt::Debug for BatchJsonlWriter<W> {
             .field("max_lines", &self.max_lines)
             .field("max_bytes", &self.max_bytes)
             .field("max_line_bytes", &self.max_line_bytes)
+            .field("endpoint", &self.endpoint)
             .finish_non_exhaustive()
     }
 }
@@ -1253,6 +1431,7 @@ impl<W: Write> BatchJsonlWriter<W> {
             max_bytes: MAX_BATCH_INPUT_BYTES,
             max_line_bytes: DEFAULT_BATCH_JSONL_LINE_LIMIT,
             custom_ids: HashSet::new(),
+            endpoint: None,
         }
     }
 
@@ -1287,6 +1466,15 @@ impl<W: Write> BatchJsonlWriter<W> {
                 custom_id: line.custom_id().as_str().to_owned(),
             });
         }
+        if let Some(expected) = &self.endpoint
+            && expected != line.endpoint()
+        {
+            return Err(BatchJsonlError::MixedEndpoints {
+                line: next_line,
+                expected: expected.as_str().to_owned(),
+                actual: line.endpoint().as_str().to_owned(),
+            });
+        }
 
         let encoded = serde_json::to_vec(line).map_err(|source| BatchJsonlError::Encode {
             line: next_line,
@@ -1313,6 +1501,9 @@ impl<W: Write> BatchJsonlWriter<W> {
                 source,
             })?;
         self.custom_ids.insert(line.custom_id().as_str().to_owned());
+        if self.endpoint.is_none() {
+            self.endpoint = Some(line.endpoint().clone());
+        }
         self.line_count = next_line;
         self.byte_count = self.byte_count.saturating_add(added);
         Ok(())

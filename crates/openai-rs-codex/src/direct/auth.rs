@@ -207,6 +207,13 @@ impl DirectAuthClient {
         })
     }
 
+    #[cfg(test)]
+    fn with_test_token_endpoint(token: Url) -> Result<Self, DirectError> {
+        let mut client = Self::new()?;
+        client.endpoints.token = token;
+        Ok(client)
+    }
+
     /// Bind an ephemeral IPv4 loopback port and build a PKCE+state+nonce URL.
     pub async fn begin_browser_login(&self) -> Result<BrowserLogin, DirectError> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
@@ -349,9 +356,15 @@ pub struct BrowserLogin {
 
 impl std::fmt::Debug for BrowserLogin {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let authorize_origin = format!(
+            "{}://{}{}",
+            self.authorize_url.scheme(),
+            self.authorize_url.host_str().unwrap_or("<invalid>"),
+            self.authorize_url.path()
+        );
         formatter
             .debug_struct("BrowserLogin")
-            .field("authorize_url", &self.authorize_url)
+            .field("authorize_url", &authorize_origin)
             .field("redirect_uri", &self.redirect_uri)
             .field("oauth_secrets", &"<redacted>")
             .finish()
@@ -377,21 +390,32 @@ impl BrowserLogin {
         self,
         store: &S,
     ) -> Result<StoredCodexSession, DirectError> {
-        let (mut stream, peer) = self
-            .listener
-            .accept()
-            .await
-            .map_err(|error| DirectError::OAuth(format!("callback accept failed: {error}")))?;
-        if !peer.ip().is_loopback() {
-            return Err(DirectError::OAuth(
-                "callback peer was not loopback".to_owned(),
-            ));
-        }
-        let callback = match read_callback(&mut stream).await {
-            Ok(callback) => callback,
-            Err(error) => {
-                let _ = write_html(&mut stream, false).await;
-                return Err(error);
+        let expected_host = self
+            .redirect_uri
+            .host_str()
+            .zip(self.redirect_uri.port())
+            .map(|(host, port)| format!("{host}:{port}"))
+            .ok_or_else(|| {
+                DirectError::Configuration("invalid loopback redirect URI".to_owned())
+            })?;
+        let (mut stream, callback) = loop {
+            let (mut stream, peer) =
+                self.listener.accept().await.map_err(|error| {
+                    DirectError::OAuth(format!("callback accept failed: {error}"))
+                })?;
+            if !peer.ip().is_loopback() {
+                let _ = write_not_found(&mut stream).await;
+                continue;
+            }
+            match read_callback(&mut stream, &expected_host).await {
+                Ok(Some(callback)) => break (stream, callback),
+                Ok(None) => {
+                    let _ = write_not_found(&mut stream).await;
+                }
+                Err(error) => {
+                    let _ = write_html(&mut stream, false).await;
+                    return Err(error);
+                }
             }
         };
         if !secure_equal(
@@ -408,38 +432,42 @@ impl BrowserLogin {
             ));
         }
 
-        let tokens = self
-            .auth
-            .exchange_code(
-                &callback.code,
-                &self.redirect_uri,
-                self.verifier.expose_secret(),
-            )
-            .await;
-        let tokens = match tokens {
-            Ok(tokens) => tokens,
+        let result = async {
+            let tokens = self
+                .auth
+                .exchange_code(
+                    &callback.code,
+                    &self.redirect_uri,
+                    self.verifier.expose_secret(),
+                )
+                .await?;
+            let verifier = self.auth.verifier().await?;
+            let account_id =
+                verifier.verify(&tokens.id_token, self.nonce.expose_secret(), now_epoch()?)?;
+            let refresh_token = tokens.refresh_token.ok_or_else(|| {
+                DirectError::OAuth("initial token response omitted refresh token".to_owned())
+            })?;
+            let session = StoredCodexSession {
+                access_token: Arc::new(SecretString::from(tokens.access_token)),
+                refresh_token: Arc::new(SecretString::from(refresh_token)),
+                expires_at: now_epoch()?
+                    .saturating_add(tokens.expires_in.unwrap_or(DEFAULT_EXPIRES_IN)),
+                account_id,
+                generation: 0,
+            };
+            store.save(&session).await?;
+            Ok::<_, DirectError>(session)
+        };
+        match result.await {
+            Ok(session) => {
+                write_html(&mut stream, true).await?;
+                Ok(session)
+            }
             Err(error) => {
                 let _ = write_html(&mut stream, false).await;
-                return Err(error);
+                Err(error)
             }
-        };
-        let verifier = self.auth.verifier().await?;
-        let account_id =
-            verifier.verify(&tokens.id_token, self.nonce.expose_secret(), now_epoch()?)?;
-        let refresh_token = tokens.refresh_token.ok_or_else(|| {
-            DirectError::OAuth("initial token response omitted refresh token".to_owned())
-        })?;
-        let session = StoredCodexSession {
-            access_token: Arc::new(SecretString::from(tokens.access_token)),
-            refresh_token: Arc::new(SecretString::from(refresh_token)),
-            expires_at: now_epoch()?
-                .saturating_add(tokens.expires_in.unwrap_or(DEFAULT_EXPIRES_IN)),
-            account_id,
-            generation: 0,
-        };
-        store.save(&session).await?;
-        write_html(&mut stream, true).await?;
-        Ok(session)
+        }
     }
 }
 
@@ -642,7 +670,10 @@ struct CallbackParams {
     error: bool,
 }
 
-async fn read_callback(stream: &mut TcpStream) -> Result<CallbackParams, DirectError> {
+async fn read_callback(
+    stream: &mut TcpStream,
+    expected_host: &str,
+) -> Result<Option<CallbackParams>, DirectError> {
     let mut request = Vec::new();
     let mut chunk = [0_u8; 1024];
     loop {
@@ -651,7 +682,7 @@ async fn read_callback(stream: &mut TcpStream) -> Result<CallbackParams, DirectE
             .await
             .map_err(|error| DirectError::OAuth(format!("callback read failed: {error}")))?;
         if read == 0 {
-            return Err(DirectError::OAuth("callback closed early".to_owned()));
+            return Ok(None);
         }
         if request.len().saturating_add(read) > MAX_CALLBACK_BYTES {
             return Err(DirectError::OAuth("callback request too large".to_owned()));
@@ -669,20 +700,40 @@ async fn read_callback(stream: &mut TcpStream) -> Result<CallbackParams, DirectE
         .ok_or_else(|| DirectError::OAuth("callback request line missing".to_owned()))?;
     let mut parts = request_line.split_ascii_whitespace();
     if parts.next() != Some("GET") {
-        return Err(DirectError::OAuth("callback method was not GET".to_owned()));
+        return Ok(None);
     }
-    let target = parts
-        .next()
-        .ok_or_else(|| DirectError::OAuth("callback target missing".to_owned()))?;
+    let Some(target) = parts.next() else {
+        return Ok(None);
+    };
     if parts.next() != Some("HTTP/1.1") || parts.next().is_some() {
+        return Ok(None);
+    }
+    let mut host = None;
+    for line in request.lines().skip(1) {
+        if line.is_empty() || line == "\r" {
+            break;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            return Ok(None);
+        };
+        if name.eq_ignore_ascii_case("host") {
+            if host.is_some() {
+                return Err(DirectError::OAuth(
+                    "duplicate callback Host header".to_owned(),
+                ));
+            }
+            host = Some(value.trim());
+        }
+    }
+    if host != Some(expected_host) {
         return Err(DirectError::OAuth(
-            "invalid callback HTTP version".to_owned(),
+            "callback Host header mismatch".to_owned(),
         ));
     }
     let url = Url::parse(&format!("http://127.0.0.1{target}"))
         .map_err(|_| DirectError::OAuth("invalid callback URL".to_owned()))?;
     if url.path() != CALLBACK_PATH {
-        return Err(DirectError::OAuth("invalid callback path".to_owned()));
+        return Ok(None);
     }
     let mut code = None;
     let mut state = None;
@@ -690,17 +741,40 @@ async fn read_callback(stream: &mut TcpStream) -> Result<CallbackParams, DirectE
     for (key, value) in url.query_pairs() {
         match key.as_ref() {
             "code" if code.is_none() => code = Some(value.into_owned()),
+            "code" => {
+                return Err(DirectError::OAuth(
+                    "duplicate callback code parameter".to_owned(),
+                ));
+            }
             "state" if state.is_none() => state = Some(value.into_owned()),
+            "state" => {
+                return Err(DirectError::OAuth(
+                    "duplicate callback state parameter".to_owned(),
+                ));
+            }
             "error" => error = true,
             _ => {}
         }
     }
     let state = state.ok_or_else(|| DirectError::OAuth("callback state missing".to_owned()))?;
-    Ok(CallbackParams {
+    Ok(Some(CallbackParams {
         code: code.unwrap_or_default(),
         state,
         error,
-    })
+    }))
+}
+
+async fn write_not_found(stream: &mut TcpStream) -> Result<(), DirectError> {
+    stream
+        .write_all(
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .map_err(|error| DirectError::OAuth(format!("callback response failed: {error}")))?;
+    stream
+        .shutdown()
+        .await
+        .map_err(|error| DirectError::OAuth(format!("callback shutdown failed: {error}")))
 }
 
 async fn write_html(stream: &mut TcpStream, success: bool) -> Result<(), DirectError> {
@@ -738,11 +812,26 @@ async fn decode_auth_response<T: serde::de::DeserializeOwned>(
 
 async fn http_status_error(response: reqwest::Response) -> DirectError {
     let status = response.status().as_u16();
-    let message = match read_limited(response, 8 * 1024).await {
-        Ok(body) => String::from_utf8_lossy(&body).into_owned(),
-        Err(_) => "response body unavailable".to_owned(),
-    };
+    let message = read_limited(response, 8 * 1024)
+        .await
+        .ok()
+        .and_then(|body| sanitized_error_code(&body))
+        .unwrap_or_else(|| "authentication request failed".to_owned());
     DirectError::HttpStatus { status, message }
+}
+
+fn sanitized_error_code(body: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let code = value.get("error")?.as_str()?;
+    if code.is_empty()
+        || code.len() > 64
+        || !code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return None;
+    }
+    Some(code.to_owned())
 }
 
 async fn read_limited(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, DirectError> {
@@ -842,9 +931,18 @@ fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
-    use static_assertions::assert_not_impl_any;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    use super::{DirectAuthClient, EphemeralStore, StoredCodexSession};
+    use static_assertions::assert_not_impl_any;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::{TcpListener, TcpStream};
+    use url::Url;
+
+    use super::{
+        CredentialStore, DirectAuthClient, EphemeralStore, StoredCodexSession, TokenManager,
+        now_epoch, read_callback, sanitized_error_code,
+    };
 
     assert_not_impl_any!(StoredCodexSession: serde::Serialize, std::fmt::Display);
 
@@ -866,6 +964,12 @@ mod tests {
             params.get("originator").map(String::as_str),
             Some("openai-rs")
         );
+        let state = params.get("state").ok_or("missing state")?;
+        let nonce = params.get("nonce").ok_or("missing nonce")?;
+        let debug = format!("{login:?}");
+        assert!(!debug.contains(state));
+        assert!(!debug.contains(nonce));
+        assert!(!debug.contains('?'));
         Ok(())
     }
 
@@ -873,6 +977,110 @@ mod tests {
     async fn ephemeral_store_round_trip_empty() -> Result<(), super::DirectError> {
         let store = EphemeralStore::default();
         assert!(super::CredentialStore::load(&store).await?.is_none());
+        Ok(())
+    }
+
+    async fn callback_request(
+        request: &str,
+        expected_host: &str,
+    ) -> Result<Result<Option<super::CallbackParams>, super::DirectError>, Box<dyn std::error::Error>>
+    {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let request = request.to_owned();
+        let client = tokio::spawn(async move {
+            let mut stream = TcpStream::connect(address).await?;
+            stream.write_all(request.as_bytes()).await?;
+            Ok::<_, std::io::Error>(())
+        });
+        let (mut server, _) = listener.accept().await?;
+        let result = read_callback(&mut server, expected_host).await;
+        client.await??;
+        Ok(result)
+    }
+
+    #[tokio::test]
+    async fn callback_ignores_favicon_and_rejects_duplicate_or_wrong_host()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let favicon = callback_request(
+            "GET /favicon.ico HTTP/1.1\r\nHost: 127.0.0.1:1234\r\n\r\n",
+            "127.0.0.1:1234",
+        )
+        .await??;
+        assert!(favicon.is_none());
+
+        let duplicate = callback_request(
+            "GET /auth/callback?code=one&code=two&state=s HTTP/1.1\r\nHost: 127.0.0.1:1234\r\n\r\n",
+            "127.0.0.1:1234",
+        )
+        .await?;
+        assert!(duplicate.is_err());
+
+        let wrong_host = callback_request(
+            "GET /auth/callback?code=one&state=s HTTP/1.1\r\nHost: attacker.test\r\n\r\n",
+            "127.0.0.1:1234",
+        )
+        .await?;
+        assert!(wrong_host.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn auth_error_body_only_exposes_sanitized_code() {
+        assert_eq!(
+            sanitized_error_code(br#"{"error":"invalid_grant","token":"secret"}"#).as_deref(),
+            Some("invalid_grant")
+        );
+        assert!(sanitized_error_code(br#"{"error":"email@example.com"}"#).is_none());
+    }
+
+    #[tokio::test]
+    async fn concurrent_expiry_refreshes_once() -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let mut count = 0_u64;
+            if let Ok((mut stream, _)) = listener.accept().await {
+                count += 1;
+                let mut request = vec![0_u8; 8 * 1024];
+                let _ = stream.readable().await;
+                let _ = stream.try_read(&mut request);
+                let body = br#"{"access_token":"new-access","expires_in":3600}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await?;
+                stream.write_all(body).await?;
+            }
+            if let Ok(Ok((_stream, _))) =
+                tokio::time::timeout(Duration::from_millis(250), listener.accept()).await
+            {
+                count += 1;
+            }
+            Ok::<_, std::io::Error>(count)
+        });
+
+        let store = Arc::new(EphemeralStore::default());
+        let expired = StoredCodexSession::fixture(
+            "old-access",
+            "refresh-secret",
+            now_epoch()?.saturating_sub(1),
+            super::ChatGptAccountId::fixture("acct-123")?,
+        );
+        store.save(&expired).await?;
+        let token_endpoint = Url::parse(&format!("http://{address}/oauth/token"))?;
+        let auth = DirectAuthClient::with_test_token_endpoint(token_endpoint)?;
+        let manager = Arc::new(TokenManager::new(store, auth));
+        let mut tasks = Vec::new();
+        for _ in 0..100 {
+            let manager = Arc::clone(&manager);
+            tasks.push(tokio::spawn(async move { manager.session().await }));
+        }
+        for task in tasks {
+            assert_eq!(task.await??.access_token(), "new-access");
+        }
+        assert_eq!(server.await??, 1);
         Ok(())
     }
 }

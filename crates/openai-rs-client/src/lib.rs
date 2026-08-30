@@ -10,6 +10,8 @@ mod error;
 mod operation;
 mod response_stream;
 mod responses;
+#[cfg(feature = "realtime")]
+mod responses_websocket;
 mod retry;
 pub mod sse;
 pub(crate) mod transport;
@@ -23,5 +25,9 @@ pub use response_stream::ResponseEventStream;
 pub use responses::{
     DeleteResponseResult, InputItems, InputTokens, Responses, RetrieveResponseParams,
     RetrieveResponseStreamParams,
+};
+#[cfg(feature = "realtime")]
+pub use responses_websocket::{
+    ResponsesWebSocket, ResponsesWebSocketConfig, WebSocketReconnectPolicy,
 };
 pub use retry::RetryPolicy;

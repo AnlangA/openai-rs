@@ -678,6 +678,7 @@ mod tests {
             RetryPolicy::disabled(),
             Duration::from_secs(1),
             SseLimits::default(),
+            None,
         );
         let path = [
             PathSegment::literal("responses"),

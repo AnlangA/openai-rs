@@ -24,8 +24,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::io::ReaderStream;
 use url::Url;
 
-use crate::{ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy};
 use crate::transport::PathSegment;
+use crate::{ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy};
 
 const JSON_MIME: &str = "application/json";
 const BINARY_MIME: &str = "application/binary";
@@ -142,9 +142,7 @@ impl OneShotMultipartSource {
 
     fn into_part(self) -> Result<Part, Error> {
         let body = match self.inner {
-            OneShotInner::Reader(reader) => {
-                reqwest::Body::wrap_stream(ReaderStream::new(reader))
-            }
+            OneShotInner::Reader(reader) => reqwest::Body::wrap_stream(ReaderStream::new(reader)),
             OneShotInner::Stream(stream) => reqwest::Body::wrap_stream(stream),
         };
         let part = match self.length {
@@ -166,7 +164,10 @@ impl fmt::Debug for OneShotMultipartSource {
             .field("kind", &kind)
             .field("length", &self.length)
             .field("file_name", &self.file_name.as_ref().map(|_| "[REDACTED]"))
-            .field("media_type", &self.media_type.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "media_type",
+                &self.media_type.as_ref().map(|_| "[REDACTED]"),
+            )
             .finish()
     }
 }
@@ -275,9 +276,9 @@ impl FileContentStream {
             .map(Box::<str>::from);
         let content_length = response.content_length();
         let stream_meta = meta.clone();
-        let inner = response
-            .bytes_stream()
-            .map(move |chunk| chunk.map_err(|error| Error::from_response_body(error, &stream_meta)));
+        let inner = response.bytes_stream().map(move |chunk| {
+            chunk.map_err(|error| Error::from_response_body(error, &stream_meta))
+        });
         Self {
             meta,
             content_type,
@@ -446,17 +447,16 @@ impl MultipartTransport {
         self.decode_json(response).await
     }
 
-    pub(crate) async fn download_file(
-        &self,
-        file_id: &FileId,
-    ) -> Result<FileContentStream, Error> {
+    pub(crate) async fn download_file(&self, file_id: &FileId) -> Result<FileContentStream, Error> {
         let path = [
             PathSegment::literal("files"),
             PathSegment::parameter("file_id", file_id.as_str())?,
             PathSegment::literal("content"),
         ];
         let url = self.operation_url(&path)?;
-        self.send_download(url).await.map(FileContentStream::from_response)
+        self.send_download(url)
+            .await
+            .map(FileContentStream::from_response)
     }
 
     async fn send_replayable(
@@ -587,7 +587,12 @@ impl MultipartTransport {
         }
     }
 
-    fn request(&self, method: reqwest::Method, url: Url, accept: &'static str) -> reqwest::RequestBuilder {
+    fn request(
+        &self,
+        method: reqwest::Method,
+        url: Url,
+        accept: &'static str,
+    ) -> reqwest::RequestBuilder {
         let mut request = self
             .http
             .request(method, url)
@@ -663,7 +668,10 @@ impl fmt::Debug for MultipartTransport {
             .debug_struct("MultipartTransport")
             .field("base_origin", &self.base_url.origin().ascii_serialization())
             .field("authorization", &"[REDACTED]")
-            .field("organization", &self.organization.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "organization",
+                &self.organization.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("project", &self.project.as_ref().map(|_| "[REDACTED]"))
             .field("max_json_body_bytes", &self.max_json_body_bytes)
             .field("max_error_body_bytes", &self.max_error_body_bytes)
@@ -701,9 +709,7 @@ impl PreparedMultipartRequest {
     async fn build_form(&self) -> Result<Form, Error> {
         let part = self.source.build_part().await?;
         Ok(match &self.kind {
-            PreparedRequestKind::CreateFile(fields) => {
-                fields.apply(Form::new()).part("file", part)
-            }
+            PreparedRequestKind::CreateFile(fields) => fields.apply(Form::new()).part("file", part),
             PreparedRequestKind::AddPart => Form::new().part("data", part),
         })
     }
@@ -749,7 +755,10 @@ struct PreparedReplayableSource {
 
 enum PreparedSourceInner {
     Bytes(Arc<[u8]>),
-    Path { path: PathBuf, snapshot: FileSnapshot },
+    Path {
+        path: PathBuf,
+        snapshot: FileSnapshot,
+    },
 }
 
 impl PreparedReplayableSource {
@@ -797,7 +806,9 @@ impl PreparedReplayableSource {
             }
             PreparedSourceInner::Path { path, snapshot } => {
                 verify_path_snapshot(path, snapshot).await?;
-                let file = tokio::fs::File::open(path).await.map_err(|_| source_error())?;
+                let file = tokio::fs::File::open(path)
+                    .await
+                    .map_err(|_| source_error())?;
                 let opened = file.metadata().await.map_err(|_| source_error())?;
                 if FileSnapshot::from_metadata(&opened)? != *snapshot {
                     return Err(source_changed());
@@ -953,11 +964,7 @@ fn should_retry_response(response: &reqwest::Response) -> bool {
     }
 }
 
-fn retry_delay(
-    headers: &http::HeaderMap,
-    retries: u32,
-    maximum: Duration,
-) -> Option<Duration> {
+fn retry_delay(headers: &http::HeaderMap, retries: u32, maximum: Duration) -> Option<Duration> {
     if let Some(value) = headers
         .get("retry-after-ms")
         .and_then(|value| value.to_str().ok())
@@ -1057,5 +1064,226 @@ fn body_too_large(limit: usize, meta: &ResponseMeta) -> Error {
         limit,
         status: meta.status(),
         request_id: meta.request_id().map(Box::<str>::from),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use openai_rs_types::{
+        CreateFileRequest, FileExpirationAfter, FileId, FilePurpose, ReplayableMultipartSource,
+    };
+    use static_assertions::assert_not_impl_any;
+    use tokio::{net::TcpListener, sync::oneshot};
+
+    use super::*;
+
+    assert_not_impl_any!(OneShotMultipartSource: Clone, serde::Serialize);
+    assert_not_impl_any!(CreateFileOneShotRequest: Clone, serde::Serialize);
+    assert_not_impl_any!(AddUploadPartOneShotRequest: Clone, serde::Serialize);
+
+    #[derive(Debug)]
+    struct CapturedRequest {
+        method: http::Method,
+        path: String,
+        accept: Option<String>,
+        content_type: Option<String>,
+        body: Vec<u8>,
+    }
+
+    async fn serve_once(
+        status: StatusCode,
+        response_content_type: &'static str,
+        response_body: Bytes,
+        retry_policy: RetryPolicy,
+    ) -> (MultipartTransport, oneshot::Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind multipart test server");
+        let address = listener.local_addr().expect("multipart test address");
+        let (sender, receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept multipart request");
+            let sender = Arc::new(Mutex::new(Some(sender)));
+            let service = service_fn(move |request: Request<Incoming>| {
+                let sender = Arc::clone(&sender);
+                let response_body = response_body.clone();
+                async move {
+                    let method = request.method().clone();
+                    let path = request.uri().path().to_owned();
+                    let accept = request
+                        .headers()
+                        .get(header::ACCEPT)
+                        .and_then(|value| value.to_str().ok())
+                        .map(ToOwned::to_owned);
+                    let content_type = request
+                        .headers()
+                        .get(header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok())
+                        .map(ToOwned::to_owned);
+                    let body = request
+                        .into_body()
+                        .collect()
+                        .await
+                        .expect("collect multipart request")
+                        .to_bytes()
+                        .to_vec();
+                    if let Some(sender) = sender.lock().expect("capture sender lock").take() {
+                        let _ = sender.send(CapturedRequest {
+                            method,
+                            path,
+                            accept,
+                            content_type,
+                            body,
+                        });
+                    }
+                    Ok::<_, Infallible>(
+                        hyper::Response::builder()
+                            .status(status)
+                            .header(header::CONTENT_TYPE, response_content_type)
+                            .header("x-request-id", "req_multipart")
+                            .body(Full::new(response_body))
+                            .expect("multipart test response"),
+                    )
+                }
+            });
+            http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await
+                .expect("serve multipart request");
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("multipart test base URL");
+        let transport = MultipartTransport::new(
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("multipart test HTTP client"),
+            base_url,
+            HeaderValue::from_static("Bearer test-placeholder-key"),
+            None,
+            None,
+            1024 * 1024,
+            64 * 1024,
+            retry_policy,
+            Duration::from_secs(5),
+        );
+        (transport, receiver)
+    }
+
+    #[tokio::test]
+    async fn create_file_sends_bracket_fields_and_raw_bytes() {
+        let response = Bytes::from_static(
+            br#"{"id":"file_1","object":"file","bytes":5,"created_at":1,"filename":"blob.bin","purpose":"user_data","status":"processed"}"#,
+        );
+        let (transport, captured) =
+            serve_once(StatusCode::OK, JSON_MIME, response, RetryPolicy::disabled()).await;
+        let source = ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(&b"a\0b\xffc"[..]))
+            .try_with_file_name("blob.bin")
+            .expect("safe multipart filename")
+            .try_with_media_type("application/octet-stream")
+            .expect("safe multipart media type");
+        let expires = FileExpirationAfter::new(3_600).expect("valid expiration");
+        let request =
+            CreateFileRequest::new(source, FilePurpose::UserData).with_expires_after(expires);
+
+        let response = transport
+            .create_file(&request)
+            .await
+            .expect("create file response");
+        assert_eq!(response.request_id(), Some("req_multipart"));
+        assert_eq!(response.filename(), "blob.bin");
+
+        let captured = captured.await.expect("captured multipart request");
+        assert_eq!(captured.method, http::Method::POST);
+        assert_eq!(captured.path, "/v1/files");
+        assert_eq!(captured.accept.as_deref(), Some(JSON_MIME));
+        let content_type = captured.content_type.expect("multipart content type");
+        assert!(content_type.starts_with("multipart/form-data; boundary="));
+        let text = String::from_utf8_lossy(&captured.body);
+        assert!(text.contains("name=\"purpose\"\r\n\r\nuser_data"));
+        assert!(text.contains("name=\"expires_after[anchor]\"\r\n\r\ncreated_at"));
+        assert!(text.contains("name=\"expires_after[seconds]\"\r\n\r\n3600"));
+        assert!(text.contains("name=\"file\"; filename=\"blob.bin\""));
+        assert!(
+            captured
+                .body
+                .windows(5)
+                .any(|window| window == b"a\0b\xffc")
+        );
+    }
+
+    #[tokio::test]
+    async fn raw_download_stream_is_not_json_decoded() {
+        let bytes = Bytes::from_static(b"\0\xffarbitrary\r\nbytes");
+        let (transport, captured) = serve_once(
+            StatusCode::OK,
+            "application/octet-stream",
+            bytes.clone(),
+            RetryPolicy::disabled(),
+        )
+        .await;
+
+        let stream = transport
+            .download_file(&FileId::new("file/a b"))
+            .await
+            .expect("download handshake");
+        assert_eq!(stream.content_type(), Some("application/octet-stream"));
+        let response = stream.collect(1024).await.expect("collect raw download");
+        assert_eq!(response.as_bytes(), bytes.as_ref());
+
+        let captured = captured.await.expect("captured download request");
+        assert_eq!(captured.method, http::Method::GET);
+        assert_eq!(captured.path, "/v1/files/file%2Fa%20b/content");
+        assert_eq!(captured.accept.as_deref(), Some(BINARY_MIME));
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn path_replacement_after_prepare_fails_closed() {
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "openai-rs-multipart-{}-{id}.bin",
+            std::process::id()
+        ));
+        tokio::fs::write(&path, b"first")
+            .await
+            .expect("write initial source");
+        let source = ReplayableMultipartSource::from_path(path.clone());
+        let prepared = PreparedReplayableSource::prepare(&source)
+            .await
+            .expect("prepare path source");
+        tokio::fs::write(&path, b"replacement-is-longer")
+            .await
+            .expect("replace source contents");
+
+        let result = prepared.build_part().await;
+        assert!(matches!(result, Err(Error::InvalidConfiguration(_))));
+        tokio::fs::remove_file(&path)
+            .await
+            .expect("remove test source");
+    }
+
+    #[test]
+    fn one_shot_debug_does_not_expose_metadata_values() {
+        let source = OneShotMultipartSource::from_reader(tokio::io::empty())
+            .try_with_file_name("private-name.txt")
+            .expect("safe filename")
+            .try_with_media_type("text/plain")
+            .expect("safe media type");
+        let debug = format!("{source:?}");
+        assert!(!debug.contains("private-name"));
+        assert!(!debug.contains("text/plain"));
     }
 }

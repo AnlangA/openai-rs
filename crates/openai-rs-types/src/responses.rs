@@ -3092,39 +3092,79 @@ impl ResponsesClientEvent {
 /// WebSocket-only fields such as `stream_id` are retained by the inner
 /// event's [`ExtraFields`], while the stable discriminator set is shared with
 /// [`ResponseStreamEvent`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ResponsesServerEvent(ResponseStreamEvent);
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResponsesServerEvent {
+    event: ResponseStreamEvent,
+    stream_id: Option<String>,
+}
+
+impl Serialize for ResponsesServerEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.event.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ResponsesServerEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let stream_id = match value.as_object().and_then(|object| object.get("stream_id")) {
+            Some(Value::String(stream_id)) => Some(stream_id.clone()),
+            Some(_) => return Err(D::Error::custom("WebSocket `stream_id` must be a string")),
+            None => None,
+        };
+        serde_json::from_value(value)
+            .map(|event| Self { event, stream_id })
+            .map_err(D::Error::custom)
+    }
+}
 
 impl ResponsesServerEvent {
     /// Wraps a stable Responses event.
     #[must_use]
-    pub const fn new(event: ResponseStreamEvent) -> Self {
-        Self(event)
+    pub fn new(event: ResponseStreamEvent) -> Self {
+        let stream_id = serde_json::to_value(&event).ok().and_then(|value| {
+            value
+                .get("stream_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
+        Self { event, stream_id }
     }
 
     /// Borrows the shared Responses event.
     #[must_use]
     pub const fn event(&self) -> &ResponseStreamEvent {
-        &self.0
+        &self.event
     }
 
     /// Consumes the wrapper.
     #[must_use]
     pub fn into_event(self) -> ResponseStreamEvent {
-        self.0
+        self.event
     }
 
     /// Returns whether this event terminates its response.
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
-        self.0.is_terminal()
+        self.event.is_terminal()
     }
 
     /// Returns the shared sequence number when present.
     #[must_use]
     pub fn sequence_number(&self) -> Option<u64> {
-        self.0.sequence_number()
+        self.event.sequence_number()
+    }
+
+    /// Returns the WebSocket lane echoed by the server.
+    #[must_use]
+    pub fn stream_id(&self) -> Option<&str> {
+        self.stream_id.as_deref()
     }
 }
 
@@ -6980,6 +7020,7 @@ mod tests {
         let server: ResponsesServerEvent =
             serde_json::from_value(server_fixture.clone()).expect("decode WS server event");
         assert_eq!(server.sequence_number(), Some(1));
+        assert_eq!(server.stream_id(), Some("agent.1"));
         assert!(!server.is_terminal());
         assert_eq!(
             serde_json::to_value(server).expect("round-trip WS server event"),

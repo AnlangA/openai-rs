@@ -1182,6 +1182,12 @@ impl VectorStoreFileCounts {
     pub const fn total(&self) -> i64 {
         self.total
     }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// A vector-store response object.
@@ -1209,6 +1215,12 @@ impl VectorStore {
     #[must_use]
     pub const fn id(&self) -> &VectorStoreId {
         &self.id
+    }
+
+    /// Object discriminator.
+    #[must_use]
+    pub const fn object(&self) -> &VectorStoreObjectType {
+        &self.object
     }
 
     /// Store name.
@@ -1239,6 +1251,18 @@ impl VectorStore {
     #[must_use]
     pub const fn status(&self) -> &VectorStoreStatus {
         &self.status
+    }
+
+    /// Optional expiration policy.
+    #[must_use]
+    pub const fn expires_after(&self) -> &Omittable<VectorStoreExpirationAfter> {
+        &self.expires_after
+    }
+
+    /// Exact optional-nullable expiration timestamp.
+    #[must_use]
+    pub const fn expires_at(&self) -> &Omittable<Nullable<i64>> {
+        &self.expires_at
     }
 
     /// Exact required-nullable last-active state.
@@ -1281,6 +1305,18 @@ impl DeletedVectorStore {
     #[must_use]
     pub const fn deleted(&self) -> bool {
         self.deleted
+    }
+
+    /// Deletion object discriminator.
+    #[must_use]
+    pub const fn object(&self) -> &DeletedVectorStoreObjectType {
+        &self.object
+    }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -1387,6 +1423,12 @@ pub struct ListVectorStoresResponse {
 }
 
 impl ListVectorStoresResponse {
+    /// Collection discriminator.
+    #[must_use]
+    pub const fn object(&self) -> &VectorStoreListObjectType {
+        &self.object
+    }
+
     /// Stores in this page.
     #[must_use]
     pub fn data(&self) -> &[VectorStore] {
@@ -1410,6 +1452,12 @@ impl ListVectorStoresResponse {
     pub const fn has_more(&self) -> bool {
         self.has_more
     }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Last processing error for an attached vector-store file.
@@ -1432,6 +1480,12 @@ impl VectorStoreFileLastError {
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -1482,6 +1536,18 @@ impl CreateVectorStoreFileRequest {
     #[must_use]
     pub const fn file_id(&self) -> &FileId {
         &self.file_id
+    }
+
+    /// Exact optional chunking-strategy state.
+    #[must_use]
+    pub const fn chunking_strategy(&self) -> &Omittable<VectorStoreChunkingStrategyRequest> {
+        &self.chunking_strategy
+    }
+
+    /// Exact optional-nullable attributes state.
+    #[must_use]
+    pub const fn attributes(&self) -> &Omittable<Nullable<VectorStoreFileAttributes>> {
+        &self.attributes
     }
 }
 
@@ -1541,6 +1607,18 @@ impl VectorStoreFile {
         &self.id
     }
 
+    /// Object discriminator.
+    #[must_use]
+    pub const fn object(&self) -> &VectorStoreFileObjectType {
+        &self.object
+    }
+
+    /// Attachment creation timestamp.
+    #[must_use]
+    pub const fn created_at(&self) -> i64 {
+        self.created_at
+    }
+
     /// Parent store identifier.
     #[must_use]
     pub const fn vector_store_id(&self) -> &VectorStoreId {
@@ -1579,6 +1657,12 @@ impl VectorStoreFile {
     pub const fn attributes(&self) -> &Omittable<Nullable<VectorStoreFileAttributes>> {
         &self.attributes
     }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Confirmation returned after detaching a file from a vector store.
@@ -1602,6 +1686,18 @@ impl DeletedVectorStoreFile {
     #[must_use]
     pub const fn deleted(&self) -> bool {
         self.deleted
+    }
+
+    /// Deletion object discriminator.
+    #[must_use]
+    pub const fn object(&self) -> &DeletedVectorStoreFileObjectType {
+        &self.object
+    }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -1677,6 +1773,12 @@ pub struct ListVectorStoreFilesResponse {
 }
 
 impl ListVectorStoreFilesResponse {
+    /// Collection discriminator.
+    #[must_use]
+    pub const fn object(&self) -> &VectorStoreListObjectType {
+        &self.object
+    }
+
     /// Attached files in this page.
     #[must_use]
     pub fn data(&self) -> &[VectorStoreFile] {
@@ -1699,6 +1801,12 @@ impl ListVectorStoreFilesResponse {
     #[must_use]
     pub const fn has_more(&self) -> bool {
         self.has_more
+    }
+
+    /// Unknown response properties.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 

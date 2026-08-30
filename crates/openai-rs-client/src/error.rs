@@ -535,10 +535,9 @@ impl Error {
             | Self::Stream(_)
             | Self::StreamProtocol { .. }
             | Self::InvalidConfiguration(_)
-            | Self::InvalidPathParameter { .. }
+            | Self::InvalidPathParameter { .. } => None,
             #[cfg(feature = "realtime")]
-            | Self::WebSocketTransport(_)
-            | Self::WebSocketProtocol(_) => None,
+            Self::WebSocketTransport(_) | Self::WebSocketProtocol(_) => None,
         }
     }
 
@@ -561,10 +560,9 @@ impl Error {
             | Self::Encode(_)
             | Self::EncodeQuery(_)
             | Self::InvalidConfiguration(_)
-            | Self::InvalidPathParameter { .. }
+            | Self::InvalidPathParameter { .. } => None,
             #[cfg(feature = "realtime")]
-            | Self::WebSocketTransport(_)
-            | Self::WebSocketProtocol(_) => None,
+            Self::WebSocketTransport(_) | Self::WebSocketProtocol(_) => None,
         }
     }
 

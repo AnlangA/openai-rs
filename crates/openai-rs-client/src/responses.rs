@@ -264,6 +264,23 @@ impl Responses {
     ) -> Result<ApiResponse<InputTokenCountResponse>, Error> {
         self.input_tokens().count(request).await
     }
+
+    /// Opens a persistent Responses WebSocket using bounded defaults.
+    #[cfg(feature = "realtime")]
+    pub async fn connect(&self) -> Result<crate::ResponsesWebSocket, Error> {
+        self.connect_with(crate::ResponsesWebSocketConfig::default())
+            .await
+    }
+
+    /// Opens a persistent Responses WebSocket with explicit limits and an
+    /// initial-connect-only reconnect policy.
+    #[cfg(feature = "realtime")]
+    pub async fn connect_with(
+        &self,
+        config: crate::ResponsesWebSocketConfig,
+    ) -> Result<crate::ResponsesWebSocket, Error> {
+        crate::ResponsesWebSocket::connect(&self.client, config).await
+    }
 }
 
 /// Normalizes the two successful delete representations used by the API and

@@ -9,9 +9,7 @@ use openai_rs_types::{
 
 use crate::{
     ApiResponse, Client, Error,
-    multipart::{
-        AddUploadPartOneShotRequest, CreateFileOneShotRequest, FileContentStream,
-    },
+    multipart::{AddUploadPartOneShotRequest, CreateFileOneShotRequest, FileContentStream},
     operation::{
         AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, RetryClass,
         private::Sealed,
@@ -77,10 +75,7 @@ impl Files {
     }
 
     /// Deletes one stored file.
-    pub async fn delete(
-        &self,
-        file_id: &FileId,
-    ) -> Result<ApiResponse<DeleteFileResponse>, Error> {
+    pub async fn delete(&self, file_id: &FileId) -> Result<ApiResponse<DeleteFileResponse>, Error> {
         let path = file_path(file_id)?;
         self.client
             .transport()
@@ -109,10 +104,7 @@ impl Uploads {
     }
 
     /// Creates an Upload session with the declared final byte count.
-    pub async fn create(
-        &self,
-        request: CreateUploadRequest,
-    ) -> Result<ApiResponse<Upload>, Error> {
+    pub async fn create(&self, request: CreateUploadRequest) -> Result<ApiResponse<Upload>, Error> {
         if request.bytes() < 0 {
             return Err(Error::InvalidConfiguration(
                 "upload byte count must not be negative".into(),
@@ -283,4 +275,3 @@ operation!(
     request_encoding = RequestEncoding::None,
     retry = RetryClass::Replayable,
 );
-
