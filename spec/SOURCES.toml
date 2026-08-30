@@ -1,0 +1,24 @@
+# Frozen upstream provenance. Regenerate only through `cargo xtask spec fetch`.
+# The URL and revision are immutable; normal builds and verification stay offline.
+
+schema_version = 1
+
+[[source]]
+id = "openai-openapi"
+kind = "openapi"
+repository = "openai/openai-openapi"
+revision = "690521b1753dce0c6d6b275f583d22537679cff9"
+url = "https://raw.githubusercontent.com/openai/openai-openapi/690521b1753dce0c6d6b275f583d22537679cff9/openapi.json"
+path = "spec/upstream/openapi-2026-08-29.json"
+fetched_at = "2026-08-30T02:10:37Z"
+byte_length = 3405126
+sha256 = "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899"
+license = "MIT"
+license_url = "https://raw.githubusercontent.com/openai/openai-openapi/690521b1753dce0c6d6b275f583d22537679cff9/LICENSE"
+openapi_version = "3.1.0"
+api_version = "2.3.0"
+path_count = 182
+client_operation_count = 288
+webhook_count = 18
+webhook_operation_count = 18
+schema_count = 1424

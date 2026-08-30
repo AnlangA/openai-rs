@@ -1,0 +1,48 @@
+[package]
+name = "openai-rs-sdk"
+description = "A typed, lossless Rust SDK for the OpenAI API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "openai_rs"
+
+[features]
+default = ["client", "rustls-tls", "structured-output"]
+client = ["dep:openai-rs-client"]
+rustls-tls = ["client", "openai-rs-client/rustls-tls"]
+native-tls = ["client", "openai-rs-client/native-tls"]
+structured-output = ["openai-rs-types/structured-output"]
+realtime = ["client", "openai-rs-types/realtime", "openai-rs-client/realtime"]
+webhook-verification = ["client", "openai-rs-types/webhooks", "openai-rs-client/webhook-verification"]
+admin = ["client", "openai-rs-types/admin", "openai-rs-client/admin"]
+workload-identity = ["client", "openai-rs-client/workload-identity"]
+x509 = ["workload-identity", "openai-rs-client/x509"]
+codex-app-server = ["dep:openai-rs-codex", "openai-rs-codex/app-server"]
+codex-access-token = ["codex-app-server", "openai-rs-codex/access-token"]
+experimental-codex-direct = ["dep:openai-rs-codex", "openai-rs-codex/experimental-direct", "rustls-tls"]
+experimental-codex-direct-device = ["experimental-codex-direct", "openai-rs-codex/experimental-direct-device"]
+rmcp = ["dep:openai-rs-rmcp", "openai-rs-rmcp/client"]
+rmcp-stdio = ["rmcp", "openai-rs-rmcp/stdio"]
+rmcp-http-rustls = ["rmcp", "openai-rs-rmcp/http-rustls"]
+rmcp-http-native-tls = ["rmcp", "openai-rs-rmcp/http-native-tls"]
+rmcp-server = ["dep:openai-rs-rmcp", "openai-rs-rmcp/server"]
+rmcp-server-stdio = ["rmcp-server", "openai-rs-rmcp/server-stdio"]
+rmcp-auth = ["dep:openai-rs-rmcp", "openai-rs-rmcp/auth"]
+full = ["client", "rustls-tls", "structured-output", "realtime", "webhook-verification", "rmcp", "rmcp-http-rustls"]
+
+[dependencies]
+openai-rs-client = { path = "../openai-rs-client", version = "=0.1.0", default-features = false, optional = true }
+openai-rs-codex = { path = "../openai-rs-codex", version = "=0.1.0", default-features = false, optional = true }
+openai-rs-rmcp = { path = "../openai-rs-rmcp", version = "=0.1.0", default-features = false, optional = true }
+openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0", default-features = false }
+
+[lints]
+workspace = true
+

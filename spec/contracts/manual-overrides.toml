@@ -1,0 +1,5 @@
+# Manual overrides are the last-resort contract layer. Each future entry must
+# satisfy manual-overrides.schema.json and cite immutable official evidence.
+
+schema_version = 1
+overrides = []

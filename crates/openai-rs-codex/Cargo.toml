@@ -1,0 +1,39 @@
+[package]
+name = "openai-rs-codex"
+description = "Isolated Codex app-server integration for openai-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["app-server"]
+app-server = []
+access-token = ["app-server"]
+experimental-direct = ["dep:reqwest", "reqwest/rustls-tls"]
+experimental-direct-device = ["experimental-direct"]
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+futures-core.workspace = true
+openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0", default-features = false }
+reqwest = { workspace = true, optional = true }
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+url.workspace = true
+
+[dev-dependencies]
+static_assertions.workspace = true
+tempfile = "3.21.0"
+
+[lints]
+workspace = true

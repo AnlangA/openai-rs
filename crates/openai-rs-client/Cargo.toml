@@ -1,0 +1,50 @@
+[package]
+name = "openai-rs-client"
+description = "Async OpenAI API client and transport runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["rustls-tls"]
+rustls-tls = ["reqwest/rustls-tls"]
+native-tls = ["reqwest/native-tls"]
+realtime = ["openai-rs-types/realtime"]
+webhook-verification = ["openai-rs-types/webhooks", "dep:sha2"]
+admin = ["openai-rs-types/admin"]
+workload-identity = []
+x509 = ["workload-identity"]
+
+[dependencies]
+async-stream.workspace = true
+bytes.workspace = true
+futures-core.workspace = true
+futures-util.workspace = true
+http.workspace = true
+openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0", default-features = false }
+pin-project-lite.workspace = true
+reqwest.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+sha2 = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["server", "tokio"] }
+static_assertions.workspace = true
+tokio = { workspace = true, features = ["net"] }
+
+[lints]
+workspace = true

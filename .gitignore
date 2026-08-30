@@ -1,0 +1,6 @@
+/target/
+/fuzz/target/
+*.profraw
+.DS_Store
+.env
+

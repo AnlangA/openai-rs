@@ -1,0 +1,281 @@
+use openai_rs_types::responses::{FunctionCall, FunctionCallOutput, FunctionTool};
+use rmcp::model::JsonObject;
+
+use crate::{
+    BridgeError, CatalogPolicy, ExecutionControl, ResponsesToolExecutor, ResultEncoding,
+    ToolCatalog, encode_tool_result, parse_function_arguments,
+};
+
+/// The result of a locally executed Responses function call.
+///
+/// MCP tool errors remain in-band and carry a normal
+/// [`FunctionCallOutput`]. Transport, timeout, cancellation, and protocol
+/// failures are returned as [`BridgeError`] instead.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum DispatchOutcome {
+    /// The MCP tool completed successfully.
+    Success(FunctionCallOutput),
+    /// The MCP protocol exchange succeeded but the tool returned
+    /// `isError: true`.
+    ToolError(FunctionCallOutput),
+}
+
+impl DispatchOutcome {
+    /// Borrow the OpenAI input item to submit on the following Responses turn.
+    pub const fn output(&self) -> &FunctionCallOutput {
+        match self {
+            Self::Success(output) | Self::ToolError(output) => output,
+        }
+    }
+
+    /// Consume the outcome and return its OpenAI input item.
+    pub fn into_output(self) -> FunctionCallOutput {
+        match self {
+            Self::Success(output) | Self::ToolError(output) => output,
+        }
+    }
+
+    /// Return whether the MCP tool reported an in-band error.
+    pub const fn is_tool_error(&self) -> bool {
+        matches!(self, Self::ToolError(_))
+    }
+}
+
+/// A catalog plus a credential-independent local tool executor.
+#[derive(Debug)]
+pub struct ResponsesToolBridge<E> {
+    executor: E,
+    catalog: ToolCatalog,
+    result_encoding: ResultEncoding,
+}
+
+impl<E> ResponsesToolBridge<E> {
+    /// Join an executor to an already frozen catalog.
+    pub fn new(executor: E, catalog: ToolCatalog) -> Self {
+        Self {
+            executor,
+            catalog,
+            result_encoding: ResultEncoding::default(),
+        }
+    }
+
+    /// Select how rich RMCP results are encoded inside OpenAI's string output.
+    pub const fn with_result_encoding(mut self, result_encoding: ResultEncoding) -> Self {
+        self.result_encoding = result_encoding;
+        self
+    }
+
+    /// Borrow the frozen name/schema mapping.
+    pub const fn catalog(&self) -> &ToolCatalog {
+        &self.catalog
+    }
+
+    /// Borrow the executor.
+    pub const fn executor(&self) -> &E {
+        &self.executor
+    }
+
+    /// Materialize the function definitions to include in a Responses request.
+    pub fn function_tools(&self) -> Vec<FunctionTool> {
+        self.catalog.function_tools()
+    }
+
+    /// Consume the bridge into its executor and catalog.
+    pub fn into_parts(self) -> (E, ToolCatalog) {
+        (self.executor, self.catalog)
+    }
+}
+
+impl<E> ResponsesToolBridge<E>
+where
+    E: ResponsesToolExecutor,
+{
+    /// Discover tools through `executor`, then freeze their names and schemas.
+    pub async fn discover(
+        executor: E,
+        policy: CatalogPolicy,
+        control: &ExecutionControl,
+    ) -> Result<Self, BridgeError> {
+        let tools = executor.list_tools(control).await?;
+        let catalog = ToolCatalog::build(tools, policy)?;
+        Ok(Self::new(executor, catalog))
+    }
+
+    /// Execute a typed OpenAI function call through the mapped MCP tool.
+    pub async fn dispatch(
+        &self,
+        call: &FunctionCall,
+        control: &ExecutionControl,
+    ) -> Result<DispatchOutcome, BridgeError> {
+        self.dispatch_parts(
+            call.call_id(),
+            call.name(),
+            call.arguments().as_raw(),
+            control,
+        )
+        .await
+    }
+
+    /// Execute a call from its stable wire components.
+    ///
+    /// This is useful to dispatch a call assembled from stream deltas after the
+    /// arguments-done event has been received.
+    pub async fn dispatch_parts(
+        &self,
+        call_id: &str,
+        openai_name: &str,
+        arguments: &str,
+        control: &ExecutionControl,
+    ) -> Result<DispatchOutcome, BridgeError> {
+        let arguments: JsonObject = parse_function_arguments(arguments)?;
+        let binding =
+            self.catalog
+                .resolve(openai_name)
+                .ok_or_else(|| BridgeError::UnknownFunction {
+                    name: openai_name.to_owned(),
+                })?;
+        let mcp_name = binding.mcp_name().to_owned();
+        let result = self
+            .executor
+            .call_tool(&mcp_name, arguments, control)
+            .await?;
+        let encoded = encode_tool_result(&result, self.result_encoding)?;
+        let is_error = encoded.is_error();
+        let output = FunctionCallOutput::new(call_id, encoded.into_output());
+        Ok(if is_error {
+            DispatchOutcome::ToolError(output)
+        } else {
+            DispatchOutcome::Success(output)
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use openai_rs_types::{JsonText, responses::ResponseItemStatus};
+    use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct FakeExecutor {
+        tools: Vec<Tool>,
+        calls: Arc<Mutex<Vec<(String, JsonObject)>>>,
+        result: CallToolResult,
+    }
+
+    #[async_trait]
+    impl ResponsesToolExecutor for FakeExecutor {
+        async fn list_tools(&self, _control: &ExecutionControl) -> Result<Vec<Tool>, BridgeError> {
+            Ok(self.tools.clone())
+        }
+
+        async fn call_tool(
+            &self,
+            name: &str,
+            arguments: JsonObject,
+            _control: &ExecutionControl,
+        ) -> Result<CallToolResult, BridgeError> {
+            self.calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((name.to_owned(), arguments));
+            Ok(self.result.clone())
+        }
+    }
+
+    fn fake_tool() -> Tool {
+        let Value::Object(schema) = json!({
+            "type": "object",
+            "properties": {"city": {"type": "string"}}
+        }) else {
+            panic!("literal schema must be an object");
+        };
+        Tool::new("weather/read", "Read weather", Arc::new(schema))
+    }
+
+    #[tokio::test]
+    async fn typed_function_call_round_trips_through_fake_executor() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let executor = FakeExecutor {
+            tools: vec![fake_tool()],
+            calls: calls.clone(),
+            result: CallToolResult::success(vec![ContentBlock::text("sunny")]),
+        };
+        let bridge = ResponsesToolBridge::discover(
+            executor,
+            CatalogPolicy::default(),
+            &ExecutionControl::default(),
+        )
+        .await;
+        let Ok(bridge) = bridge else {
+            panic!("fake catalog must build");
+        };
+        let Some(function) = bridge.function_tools().into_iter().next() else {
+            panic!("one function should be exposed");
+        };
+        let call = FunctionCall::new(
+            "item_1",
+            "call_1",
+            function.name(),
+            JsonText::from_raw(r#"{"city":"杭州"}"#),
+            ResponseItemStatus::Completed,
+        );
+
+        let outcome = bridge.dispatch(&call, &ExecutionControl::default()).await;
+        let Ok(outcome) = outcome else {
+            panic!("fake tool call should succeed");
+        };
+        assert!(!outcome.is_tool_error());
+        assert_eq!(outcome.output().call_id(), "call_1");
+        let payload = outcome.output().deserialize_output::<Value>();
+        assert!(matches!(
+            payload,
+            Ok(ref value) if value["content"][0]["text"] == "sunny"
+        ));
+
+        let calls = calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(matches!(
+            calls.as_slice(),
+            [(name, arguments)]
+                if name == "weather/read" && arguments["city"] == "杭州"
+        ));
+    }
+
+    #[tokio::test]
+    async fn tool_error_stays_in_band() {
+        let executor = FakeExecutor {
+            tools: vec![fake_tool()],
+            calls: Arc::new(Mutex::new(Vec::new())),
+            result: CallToolResult::error(vec![ContentBlock::text("not found")]),
+        };
+        let bridge = ResponsesToolBridge::discover(
+            executor,
+            CatalogPolicy::default(),
+            &ExecutionControl::default(),
+        )
+        .await;
+        let Ok(bridge) = bridge else {
+            panic!("fake catalog must build");
+        };
+        let Some(function) = bridge.function_tools().into_iter().next() else {
+            panic!("one function should be exposed");
+        };
+        let outcome = bridge
+            .dispatch_parts(
+                "call_error",
+                function.name(),
+                "{}",
+                &ExecutionControl::default(),
+            )
+            .await;
+        assert!(matches!(outcome, Ok(DispatchOutcome::ToolError(_))));
+    }
+}

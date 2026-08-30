@@ -1,0 +1,29 @@
+[package]
+name = "openai-rs-contract-tests"
+description = "Cross-crate contract tests for openai-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+openai-rs-client = { path = "../openai-rs-client", version = "=0.1.0", features = ["rustls-tls"] }
+openai-rs-codex = { path = "../openai-rs-codex", version = "=0.1.0" }
+openai-rs-rmcp = { path = "../openai-rs-rmcp", version = "=0.1.0" }
+openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0" }
+bytes.workspace = true
+futures-util.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["server"] }
+hyper-util = { workspace = true, features = ["server", "tokio"] }
+proptest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+static_assertions.workspace = true
+tokio.workspace = true
+trybuild.workspace = true
+
+[lints]
+workspace = true
+

@@ -1,0 +1,520 @@
+use http::{Method, StatusCode};
+use openai_rs_types::{
+    ResponseId,
+    responses::{
+        CompactResponseRequest, CompactedResponse, CountInputTokensRequest, CreateResponseRequest,
+        DeletedResponse, InputTokenCountResponse, ListResponseInputItemsParams, Response,
+        ResponseInputItemList,
+    },
+};
+
+use crate::{
+    ApiResponse, Client, Error,
+    operation::{
+        AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, private::Sealed,
+    },
+    transport::PathSegment,
+};
+
+const OK: &[StatusCode] = &[StatusCode::OK];
+const OK_OR_NO_CONTENT: &[StatusCode] = &[StatusCode::OK, StatusCode::NO_CONTENT];
+
+/// Responses API resource methods.
+#[derive(Clone, Debug)]
+pub struct Responses {
+    client: Client,
+}
+
+impl Responses {
+    pub(crate) const fn new(client: Client) -> Self {
+        Self { client }
+    }
+
+    /// Creates a non-streaming model response.
+    pub async fn create(
+        &self,
+        request: CreateResponseRequest,
+    ) -> Result<ApiResponse<Response>, Error> {
+        let path = [PathSegment::literal("responses")];
+        self.client
+            .transport()
+            .execute_json::<CreateResponse, ()>(&path, None, Some(&request))
+            .await
+    }
+
+    /// Retrieves a stored response by its opaque identifier.
+    pub async fn retrieve(&self, response_id: &ResponseId) -> Result<ApiResponse<Response>, Error> {
+        let path = response_path(response_id)?;
+        self.client
+            .transport()
+            .execute_json::<RetrieveResponse, ()>(&path, None, None)
+            .await
+    }
+
+    /// Deletes a stored response.
+    ///
+    /// The wire API and official SDKs differ on whether a successful body is
+    /// returned. Both forms are represented explicitly.
+    pub async fn delete(
+        &self,
+        response_id: &ResponseId,
+    ) -> Result<ApiResponse<DeleteResponseResult>, Error> {
+        let path = response_path(response_id)?;
+        let response = self
+            .client
+            .transport()
+            .execute_optional_json::<DeleteResponse, ()>(&path, None, None)
+            .await?;
+        let (body, meta) = response.into_parts();
+        let body = match body {
+            Some(deleted) => DeleteResponseResult::Deleted(deleted),
+            None => DeleteResponseResult::Empty,
+        };
+        Ok(ApiResponse::new(body, meta))
+    }
+
+    /// Requests cancellation of a background response.
+    pub async fn cancel(&self, response_id: &ResponseId) -> Result<ApiResponse<Response>, Error> {
+        let path = [
+            PathSegment::literal("responses"),
+            response_id_segment(response_id)?,
+            PathSegment::literal("cancel"),
+        ];
+        self.client
+            .transport()
+            .execute_json::<CancelResponse, ()>(&path, None, None)
+            .await
+    }
+
+    /// Compacts a conversation input into a compacted response.
+    pub async fn compact(
+        &self,
+        request: CompactResponseRequest,
+    ) -> Result<ApiResponse<CompactedResponse>, Error> {
+        let path = [
+            PathSegment::literal("responses"),
+            PathSegment::literal("compact"),
+        ];
+        self.client
+            .transport()
+            .execute_json::<CompactResponse, ()>(&path, None, Some(&request))
+            .await
+    }
+
+    /// Returns the input-items subresource.
+    #[must_use]
+    pub fn input_items(&self) -> InputItems {
+        InputItems {
+            client: self.client.clone(),
+        }
+    }
+
+    /// Returns the input-token counting subresource.
+    #[must_use]
+    pub fn input_tokens(&self) -> InputTokens {
+        InputTokens {
+            client: self.client.clone(),
+        }
+    }
+
+    /// Convenience alias for `responses().input_items().list(...)`.
+    pub async fn list_input_items(
+        &self,
+        response_id: &ResponseId,
+        params: ListResponseInputItemsParams,
+    ) -> Result<ApiResponse<ResponseInputItemList>, Error> {
+        self.input_items().list(response_id, params).await
+    }
+
+    /// Convenience alias for `responses().input_tokens().count(...)`.
+    pub async fn count_input_tokens(
+        &self,
+        request: CountInputTokensRequest,
+    ) -> Result<ApiResponse<InputTokenCountResponse>, Error> {
+        self.input_tokens().count(request).await
+    }
+}
+
+/// Normalizes the two successful delete representations used by the API and
+/// official generated SDKs.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum DeleteResponseResult {
+    Empty,
+    Deleted(DeletedResponse),
+}
+
+/// Input items associated with a Response.
+#[derive(Clone, Debug)]
+pub struct InputItems {
+    client: Client,
+}
+
+impl InputItems {
+    pub async fn list(
+        &self,
+        response_id: &ResponseId,
+        params: ListResponseInputItemsParams,
+    ) -> Result<ApiResponse<ResponseInputItemList>, Error> {
+        let path = [
+            PathSegment::literal("responses"),
+            response_id_segment(response_id)?,
+            PathSegment::literal("input_items"),
+        ];
+        self.client
+            .transport()
+            .execute_json::<ListInputItems, _>(&path, Some(&params), None)
+            .await
+    }
+}
+
+/// Input-token counting operations for Responses.
+#[derive(Clone, Debug)]
+pub struct InputTokens {
+    client: Client,
+}
+
+impl InputTokens {
+    pub async fn count(
+        &self,
+        request: CountInputTokensRequest,
+    ) -> Result<ApiResponse<InputTokenCountResponse>, Error> {
+        let path = [
+            PathSegment::literal("responses"),
+            PathSegment::literal("input_tokens"),
+        ];
+        self.client
+            .transport()
+            .execute_json::<CountInputTokens, ()>(&path, None, Some(&request))
+            .await
+    }
+}
+
+fn response_path(response_id: &ResponseId) -> Result<[PathSegment<'_>; 2], Error> {
+    Ok([
+        PathSegment::literal("responses"),
+        response_id_segment(response_id)?,
+    ])
+}
+
+fn response_id_segment(response_id: &ResponseId) -> Result<PathSegment<'_>, Error> {
+    PathSegment::parameter("response_id", response_id.as_str())
+}
+
+macro_rules! operation {
+    (
+        $name:ident,
+        request = $request:ty,
+        response = $response:ty,
+        method = $method:expr,
+        route = $route:literal,
+        request_encoding = $request_encoding:expr,
+        response_mode = $response_mode:expr,
+        success = $success:expr $(,)?
+    ) => {
+        struct $name;
+
+        impl Sealed for $name {}
+
+        impl Operation for $name {
+            type Request = $request;
+            type Response = $response;
+
+            const META: OperationMeta = OperationMeta {
+                id: stringify!($name),
+                method: $method,
+                route: $route,
+                auth: AuthScope::Platform,
+                request_encoding: $request_encoding,
+                response_mode: $response_mode,
+                success_statuses: $success,
+            };
+        }
+    };
+}
+
+operation!(
+    CreateResponse,
+    request = CreateResponseRequest,
+    response = Response,
+    method = Method::POST,
+    route = "/responses",
+    request_encoding = RequestEncoding::Json,
+    response_mode = ResponseMode::Json,
+    success = OK,
+);
+
+operation!(
+    RetrieveResponse,
+    request = (),
+    response = Response,
+    method = Method::GET,
+    route = "/responses/{response_id}",
+    request_encoding = RequestEncoding::None,
+    response_mode = ResponseMode::Json,
+    success = OK,
+);
+
+operation!(
+    DeleteResponse,
+    request = (),
+    response = DeletedResponse,
+    method = Method::DELETE,
+    route = "/responses/{response_id}",
+    request_encoding = RequestEncoding::None,
+    response_mode = ResponseMode::EmptyOrJson,
+    success = OK_OR_NO_CONTENT,
+);
+
+operation!(
+    CancelResponse,
+    request = (),
+    response = Response,
+    method = Method::POST,
+    route = "/responses/{response_id}/cancel",
+    request_encoding = RequestEncoding::None,
+    response_mode = ResponseMode::Json,
+    success = OK,
+);
+
+operation!(
+    CompactResponse,
+    request = CompactResponseRequest,
+    response = CompactedResponse,
+    method = Method::POST,
+    route = "/responses/compact",
+    request_encoding = RequestEncoding::Json,
+    response_mode = ResponseMode::Json,
+    success = OK,
+);
+
+operation!(
+    ListInputItems,
+    request = (),
+    response = ResponseInputItemList,
+    method = Method::GET,
+    route = "/responses/{response_id}/input_items",
+    request_encoding = RequestEncoding::None,
+    response_mode = ResponseMode::Json,
+    success = OK,
+);
+
+operation!(
+    CountInputTokens,
+    request = CountInputTokensRequest,
+    response = InputTokenCountResponse,
+    method = Method::POST,
+    route = "/responses/input_tokens",
+    request_encoding = RequestEncoding::Json,
+    response_mode = ResponseMode::Json,
+    success = OK,
+);
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        sync::{Arc, Mutex},
+    };
+
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use serde_json::{Value, json};
+    use tokio::{net::TcpListener, sync::oneshot};
+    use url::Url;
+
+    use super::*;
+    use crate::{ApiKey, Client};
+
+    #[derive(Debug)]
+    struct CapturedRequest {
+        method: Method,
+        path_and_query: String,
+        authorization: Option<String>,
+        body: Vec<u8>,
+    }
+
+    async fn serve_once(
+        status: StatusCode,
+        body: &'static str,
+    ) -> (Url, oneshot::Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback server");
+        let address = listener.local_addr().expect("loopback address");
+        let (sender, receiver) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept one request");
+            let sender = Arc::new(Mutex::new(Some(sender)));
+            let service = service_fn(move |request: Request<Incoming>| {
+                let sender = Arc::clone(&sender);
+                async move {
+                    let method = request.method().clone();
+                    let path_and_query = request
+                        .uri()
+                        .path_and_query()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    let authorization = request
+                        .headers()
+                        .get(http::header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                        .map(ToOwned::to_owned);
+                    let request_body = request
+                        .into_body()
+                        .collect()
+                        .await
+                        .expect("read request body")
+                        .to_bytes()
+                        .to_vec();
+                    let sender = sender.lock().expect("capture sender lock").take();
+                    if let Some(sender) = sender {
+                        let _ = sender.send(CapturedRequest {
+                            method,
+                            path_and_query,
+                            authorization,
+                            body: request_body,
+                        });
+                    }
+
+                    let response = hyper::Response::builder()
+                        .status(status)
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .header("x-request-id", "req_loopback")
+                        .body(Full::new(Bytes::from_static(body.as_bytes())))
+                        .expect("build loopback response");
+                    Ok::<_, Infallible>(response)
+                }
+            });
+            http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await
+                .expect("serve one request");
+        });
+
+        let base = Url::parse(&format!("http://{address}/v1/")).expect("loopback base URL");
+        (base, receiver)
+    }
+
+    fn client(base_url: Url) -> Client {
+        let key = ApiKey::new("test-placeholder-key").expect("valid test key");
+        Client::builder(key)
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("loopback client")
+    }
+
+    #[tokio::test]
+    async fn count_input_tokens_sends_typed_json_and_preserves_metadata() {
+        let (base_url, captured) = serve_once(
+            StatusCode::OK,
+            r#"{"object":"response.input_tokens","input_tokens":17}"#,
+        )
+        .await;
+        let request: CountInputTokensRequest =
+            serde_json::from_value(json!({})).expect("minimal count request");
+
+        let response = client(base_url)
+            .responses()
+            .input_tokens()
+            .count(request)
+            .await
+            .expect("count response");
+
+        assert_eq!(response.request_id(), Some("req_loopback"));
+        let response_json = serde_json::to_value(response.body()).expect("serialize response");
+        assert_eq!(response_json["input_tokens"], 17);
+
+        let captured = captured.await.expect("captured request");
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/responses/input_tokens");
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captured.body).expect("request JSON"),
+            json!({})
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_encodes_id_as_one_segment_and_accepts_empty_success() {
+        let (base_url, captured) = serve_once(StatusCode::NO_CONTENT, "").await;
+        let response_id = ResponseId::new("resp/a b");
+
+        let response = client(base_url)
+            .responses()
+            .delete(&response_id)
+            .await
+            .expect("delete response");
+        assert!(matches!(response.body(), DeleteResponseResult::Empty));
+
+        let captured = captured.await.expect("captured request");
+        assert_eq!(captured.method, Method::DELETE);
+        assert_eq!(captured.path_and_query, "/v1/responses/resp%2Fa%20b");
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn input_items_encodes_cursor_query_without_following_a_url() {
+        let (base_url, captured) = serve_once(
+            StatusCode::OK,
+            r#"{"object":"list","data":[],"first_id":null,"last_id":null,"has_more":false}"#,
+        )
+        .await;
+        let response_id = ResponseId::new("resp_query");
+        let params = ListResponseInputItemsParams::new()
+            .after("item cursor")
+            .include("reasoning.encrypted_content")
+            .limit(2)
+            .order("asc");
+
+        let response = client(base_url)
+            .responses()
+            .list_input_items(&response_id, params)
+            .await
+            .expect("input-item page");
+        assert!(response.data().is_empty());
+
+        let captured = captured.await.expect("captured request");
+        assert_eq!(captured.method, Method::GET);
+        let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
+            .expect("captured URL");
+        let query = url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("after".into(), "item cursor".into())));
+        assert!(query.contains(&("include".into(), "reasoning.encrypted_content".into())));
+        assert!(query.contains(&("limit".into(), "2".into())));
+        assert!(query.contains(&("order".into(), "asc".into())));
+    }
+
+    #[tokio::test]
+    async fn api_error_is_typed_bounded_and_redacted() {
+        let (base_url, _captured) = serve_once(
+            StatusCode::UNAUTHORIZED,
+            r#"{"error":{"message":"invalid Bearer private-token","type":"authentication_error","param":null,"code":"invalid_api_key"},"token":"sk-private"}"#,
+        )
+        .await;
+        let request: CountInputTokensRequest =
+            serde_json::from_value(json!({})).expect("minimal count request");
+
+        let error = client(base_url)
+            .responses()
+            .count_input_tokens(request)
+            .await
+            .expect_err("server returned an API error");
+        assert_eq!(error.status(), Some(StatusCode::UNAUTHORIZED));
+        assert_eq!(error.request_id(), Some("req_loopback"));
+        let api_error = match error {
+            Error::Api(error) => error,
+            other => panic!("expected API error, got {other:?}"),
+        };
+        assert_eq!(api_error.code(), Some("invalid_api_key"));
+        assert!(!api_error.message().contains("private-token"));
+        assert!(!api_error.body_preview().as_str().contains("sk-private"));
+    }
+}
