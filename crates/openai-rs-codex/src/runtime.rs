@@ -7,6 +7,11 @@ use crate::Error;
 pub const COMPILED_APP_SERVER_SCHEMA_SHA256: &str =
     "95f68321313fc4d64c8781737abf60657d6d100e2f516a036253ca936f4d73a2";
 
+pub const BUNDLED_CODEX_VERSION: &str = "0.144.5";
+pub const BUNDLED_CODEX_TARGET: &str = "aarch64-apple-darwin";
+pub const BUNDLED_CODEX_EXECUTABLE_SHA256: &str =
+    "5e29ab10ca1171be158f7335dd6bd8ce1aaf9af1556939db36a5ee338be6f5f2";
+
 /// Immutable identity of one audited Codex runtime and its frozen app-server
 /// schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -28,9 +33,9 @@ impl RuntimeIdentity {
     ) -> Result<Self, Error> {
         let released_version = released_version.into();
         let released_version = released_version.trim();
-        if released_version.is_empty() || released_version == "0.0.0" {
+        if !is_released_version(released_version) || released_version == "0.0.0" {
             return Err(Error::InvalidConfiguration(
-                "runtime identity requires a released, non-0.0.0 version".to_owned(),
+                "runtime identity requires a released x.y.z, non-0.0.0 version".to_owned(),
             ));
         }
         let executable_sha256 = normalize_sha256(executable_sha256.as_ref()).ok_or_else(|| {

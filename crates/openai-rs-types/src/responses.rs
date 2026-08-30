@@ -1573,6 +1573,52 @@ pub enum ResponseInputItem {
     McpApprovalRequest(McpApprovalRequest),
     /// A user's MCP approval decision.
     McpApprovalResponse(McpApprovalResponse),
+    /// A compaction trigger control item.
+    CompactionTrigger(CompactionTrigger),
+    /// A reference to a stored item.
+    ItemReference(ItemReference),
+    /// A programmatic tool-calling program.
+    Program(ProgramItem),
+    /// Output from a programmatic tool-calling program.
+    ProgramOutput(ProgramOutputItem),
+    /// A file-search call replayed as input.
+    FileSearchCall(FileSearchCall),
+    /// A computer-use call replayed as input.
+    ComputerCall(ComputerCall),
+    /// Output for a computer-use call.
+    ComputerCallOutput(ComputerCallOutput),
+    /// A web-search call replayed as input.
+    WebSearchCall(WebSearchCall),
+    /// A tool-search request.
+    ToolSearchCall(ToolSearchCallInput),
+    /// Tools returned by tool search.
+    ToolSearchOutput(ToolSearchOutputInput),
+    /// Additional tools dynamically supplied to the model.
+    AdditionalTools(AdditionalToolsInput),
+    /// A reasoning item replayed as input.
+    Reasoning(ReasoningItem),
+    /// An encrypted compaction summary.
+    Compaction(CompactionSummaryInput),
+    /// An image-generation call replayed as input.
+    ImageGenerationCall(ImageGenerationCall),
+    /// A code-interpreter call replayed as input.
+    CodeInterpreterCall(CodeInterpreterCall),
+    /// A local-shell call replayed as input.
+    LocalShellCall(LocalShellCall),
+    /// Output from a local-shell call.
+    LocalShellCallOutput(LocalShellCallOutput),
+    /// A function-shell call.
+    FunctionShellCall(FunctionShellCallInput),
+    /// Output from a function-shell call.
+    FunctionShellCallOutput(FunctionShellCallOutputInput),
+    /// An apply-patch call.
+    ApplyPatchCall(ApplyPatchCallInput),
+    /// Output from an apply-patch call.
+    ApplyPatchCallOutput(ApplyPatchCallOutputInput),
+    /// Output from a custom tool call.
+    CustomToolCallOutput(CustomToolCallOutput),
+    /// A custom tool invocation.
+    CustomToolCall(CustomToolCall),
     /// A future input item retained verbatim.
     Unknown(UnknownTaggedObject),
 }
@@ -1591,6 +1637,29 @@ impl Serialize for ResponseInputItem {
             Self::McpCall(value) => value.serialize(serializer),
             Self::McpApprovalRequest(value) => value.serialize(serializer),
             Self::McpApprovalResponse(value) => value.serialize(serializer),
+            Self::CompactionTrigger(value) => value.serialize(serializer),
+            Self::ItemReference(value) => value.serialize(serializer),
+            Self::Program(value) => value.serialize(serializer),
+            Self::ProgramOutput(value) => value.serialize(serializer),
+            Self::FileSearchCall(value) => value.serialize(serializer),
+            Self::ComputerCall(value) => value.serialize(serializer),
+            Self::ComputerCallOutput(value) => value.serialize(serializer),
+            Self::WebSearchCall(value) => value.serialize(serializer),
+            Self::ToolSearchCall(value) => value.serialize(serializer),
+            Self::ToolSearchOutput(value) => value.serialize(serializer),
+            Self::AdditionalTools(value) => value.serialize(serializer),
+            Self::Reasoning(value) => value.serialize(serializer),
+            Self::Compaction(value) => value.serialize(serializer),
+            Self::ImageGenerationCall(value) => value.serialize(serializer),
+            Self::CodeInterpreterCall(value) => value.serialize(serializer),
+            Self::LocalShellCall(value) => value.serialize(serializer),
+            Self::LocalShellCallOutput(value) => value.serialize(serializer),
+            Self::FunctionShellCall(value) => value.serialize(serializer),
+            Self::FunctionShellCallOutput(value) => value.serialize(serializer),
+            Self::ApplyPatchCall(value) => value.serialize(serializer),
+            Self::ApplyPatchCallOutput(value) => value.serialize(serializer),
+            Self::CustomToolCallOutput(value) => value.serialize(serializer),
+            Self::CustomToolCall(value) => value.serialize(serializer),
             Self::Unknown(value) => value.serialize(serializer),
         }
     }

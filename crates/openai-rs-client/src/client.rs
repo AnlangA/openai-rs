@@ -11,6 +11,20 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 const DEFAULT_MAX_JSON_BODY_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 
+/// TLS implementation selected for the reqwest transport.
+///
+/// Variants exist only when their matching crate feature is enabled. When both
+/// are compiled, rustls remains the default and callers may select native TLS
+/// explicitly at runtime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TlsBackend {
+    #[cfg(feature = "rustls-tls")]
+    Rustls,
+    #[cfg(feature = "native-tls")]
+    Native,
+}
+
 /// A cheap-to-clone OpenAI Platform client.
 #[derive(Clone)]
 pub struct Client {
@@ -88,6 +102,7 @@ pub struct ClientBuilder {
     request_timeout: Duration,
     max_json_body_bytes: usize,
     max_error_body_bytes: usize,
+    tls_backend: Option<TlsBackend>,
 }
 
 impl ClientBuilder {
@@ -103,6 +118,7 @@ impl ClientBuilder {
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             max_json_body_bytes: DEFAULT_MAX_JSON_BODY_BYTES,
             max_error_body_bytes: DEFAULT_MAX_ERROR_BODY_BYTES,
+            tls_backend: default_tls_backend(),
         }
     }
 
@@ -158,6 +174,13 @@ impl ClientBuilder {
         self
     }
 
+    /// Selects one of the TLS backends compiled into this crate.
+    #[must_use]
+    pub const fn tls_backend(mut self, backend: TlsBackend) -> Self {
+        self.tls_backend = Some(backend);
+        self
+    }
+
     pub fn build(self) -> Result<Client, Error> {
         if self.connect_timeout.is_zero() {
             return Err(invalid_configuration("connect timeout must be non-zero"));
@@ -201,8 +224,15 @@ impl ClientBuilder {
             .timeout(self.request_timeout)
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
-            .user_agent(concat!("openai-rs/", env!("CARGO_PKG_VERSION")))
-            .build()
+            .user_agent(concat!("openai-rs/", env!("CARGO_PKG_VERSION")));
+        let http = match self.tls_backend {
+            #[cfg(feature = "rustls-tls")]
+            Some(TlsBackend::Rustls) => http.use_rustls_tls(),
+            #[cfg(feature = "native-tls")]
+            Some(TlsBackend::Native) => http.use_native_tls(),
+            None => http,
+        }
+        .build()
             .map_err(Error::from_reqwest)?;
 
         Ok(Client {
@@ -237,6 +267,7 @@ impl fmt::Debug for ClientBuilder {
             .field("request_timeout", &self.request_timeout)
             .field("max_json_body_bytes", &self.max_json_body_bytes)
             .field("max_error_body_bytes", &self.max_error_body_bytes)
+            .field("tls_backend", &self.tls_backend)
             .finish()
     }
 }
@@ -298,6 +329,21 @@ fn optional_sensitive_header(
 
 fn invalid_configuration(message: impl Into<Box<str>>) -> Error {
     Error::InvalidConfiguration(message.into())
+}
+
+const fn default_tls_backend() -> Option<TlsBackend> {
+    #[cfg(feature = "rustls-tls")]
+    {
+        return Some(TlsBackend::Rustls);
+    }
+    #[cfg(all(not(feature = "rustls-tls"), feature = "native-tls"))]
+    {
+        return Some(TlsBackend::Native);
+    }
+    #[cfg(all(not(feature = "rustls-tls"), not(feature = "native-tls")))]
+    {
+        None
+    }
 }
 
 #[cfg(test)]

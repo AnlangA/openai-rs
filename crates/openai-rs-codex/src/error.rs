@@ -93,6 +93,9 @@ pub enum Error {
     #[error("Codex runtime SHA-256 {actual_sha256} is not present in the compatibility set")]
     RuntimeArtifactMismatch { actual_sha256: String },
 
+    #[error("no bundled Codex app-server runtime is audited for target {target}")]
+    UnsupportedRuntimeTarget { target: String },
+
     #[error("app-server stdio error: {0}")]
     Io(#[source] std::io::Error),
 

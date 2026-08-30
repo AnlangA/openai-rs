@@ -14,7 +14,7 @@ pub mod sse;
 pub(crate) mod transport;
 
 pub use auth::{ApiKey, ApiKeyError};
-pub use client::{Client, ClientBuilder};
+pub use client::{Client, ClientBuilder, TlsBackend};
 pub use core_resources::{Embeddings, Models, Moderations};
 pub use error::{ApiError, BodyPreview, Error, StreamError};
 pub use operation::{ApiResponse, RateLimitMetadata, ResponseMeta};
