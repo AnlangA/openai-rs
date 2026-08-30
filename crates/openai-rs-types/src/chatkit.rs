@@ -117,9 +117,12 @@ crate::open_string_enum! {
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ChatKitValidationError {
-    /// A user identifier is empty or exceeds 512 characters.
-    #[error("ChatKit user identifier must contain 1..=512 characters")]
+    /// A user identifier is empty.
+    #[error("ChatKit user identifier must not be empty")]
     InvalidUser,
+    /// A thread-list user filter exceeds its endpoint limit.
+    #[error("ChatKit thread user filter must contain 1..=512 characters")]
+    InvalidUserFilter,
     /// A list page size is outside `0..=100`.
     #[error("ChatKit list limit must be between 0 and 100, got {value}")]
     InvalidListLimit {
@@ -164,11 +167,10 @@ pub enum ChatKitValidationError {
 pub struct ChatKitUserId(Box<str>);
 
 impl ChatKitUserId {
-    /// Validates an identifier used for both session creation and list filters.
+    /// Validates the non-empty user scope required during session creation.
     pub fn new(value: impl Into<Box<str>>) -> Result<Self, ChatKitValidationError> {
         let value = value.into();
-        let len = value.chars().count();
-        if len == 0 || len > 512 {
+        if value.is_empty() {
             return Err(ChatKitValidationError::InvalidUser);
         }
         Ok(Self(value))
@@ -178,6 +180,38 @@ impl ChatKitUserId {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// Validated `user` query filter for `GET /chatkit/threads`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct ChatKitUserFilter(Box<str>);
+
+impl ChatKitUserFilter {
+    /// Applies the endpoint's `1..=512` character constraint.
+    pub fn new(value: impl Into<Box<str>>) -> Result<Self, ChatKitValidationError> {
+        let value = value.into();
+        let len = value.chars().count();
+        if len == 0 || len > 512 {
+            return Err(ChatKitValidationError::InvalidUserFilter);
+        }
+        Ok(Self(value))
+    }
+
+    /// Borrows the filter value.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ChatKitUserFilter {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(Box::<str>::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
 }
 
@@ -560,7 +594,7 @@ pub struct CreateChatKitSessionRequest {
     /// Hosted workflow reference.
     pub workflow: ChatKitWorkflowRequest,
     /// End-user scope. This must be unique per end user.
-    pub user: ChatKitUserId,
+    pub user: String,
     /// Optional expiration override.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub expires_after: Omittable<ChatKitExpiresAfterRequest>,
@@ -621,7 +655,7 @@ pub struct ChatKitWorkflow {
     /// Required-nullable workflow version.
     pub version: Nullable<String>,
     /// Required-nullable state variables.
-    pub state_variables: Nullable<ChatKitStateVariables>,
+    pub state_variables: Nullable<BTreeMap<String, ChatKitStateValue>>,
     /// Resolved tracing settings.
     pub tracing: ChatKitWorkflowTracing,
     #[serde(default, flatten)]
@@ -703,7 +737,7 @@ pub struct ChatKitSession {
     /// Resolved workflow metadata.
     pub workflow: ChatKitWorkflow,
     /// End-user scope.
-    pub user: ChatKitUserId,
+    pub user: String,
     /// Resolved rate limits.
     pub rate_limits: ChatKitRateLimits,
     /// Convenience copy of the per-minute limit.
@@ -890,7 +924,7 @@ pub struct ChatKitThreadListParams {
     pub before: Omittable<ChatKitThreadId>,
     /// Optional end-user filter.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub user: Omittable<ChatKitUserId>,
+    pub user: Omittable<ChatKitUserFilter>,
 }
 
 impl ChatKitThreadListParams {
@@ -902,7 +936,7 @@ impl ChatKitThreadListParams {
 
     /// Filters by one validated user identifier.
     pub fn with_user(mut self, user: impl Into<Box<str>>) -> Result<Self, ChatKitValidationError> {
-        self.user = Omittable::Value(ChatKitUserId::new(user)?);
+        self.user = Omittable::Value(ChatKitUserFilter::new(user)?);
         Ok(self)
     }
 
@@ -1511,6 +1545,8 @@ mod tests {
         assert!(ChatKitExpiresAfterRequest::new(0).is_err());
         assert!(ChatKitFileSizeMb::new(513).is_err());
         assert!(CreateChatKitSessionRequest::new(ChatKitWorkflowRequest::new("wf"), "").is_err());
+        assert!(ChatKitUserId::new("x".repeat(513)).is_ok());
+        assert!(ChatKitUserFilter::new("x".repeat(513)).is_err());
     }
 
     #[test]

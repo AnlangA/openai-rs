@@ -1239,3 +1239,485 @@ impl BetaContextManagement {
         self
     }
 }
+
+/// Non-streaming `POST /responses?beta=true` body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BetaCreateResponseRequest {
+    base: crate::responses::CreateResponseRequest,
+    input: Omittable<BetaResponseInput>,
+    context_management: Omittable<Nullable<Vec<BetaContextManagement>>>,
+    moderation: Omittable<Nullable<BetaModerationConfig>>,
+    multi_agent: Omittable<Nullable<BetaMultiAgentConfig>>,
+    prompt_cache_options: Omittable<BetaPromptCacheOptions>,
+    reasoning: Omittable<Nullable<BetaReasoningConfig>>,
+}
+
+impl Default for BetaCreateResponseRequest {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl BetaCreateResponseRequest {
+    /// Creates an empty beta request.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            base: crate::responses::CreateResponseRequest::empty(),
+            input: Omittable::Omitted,
+            context_management: Omittable::Omitted,
+            moderation: Omittable::Omitted,
+            multi_agent: Omittable::Omitted,
+            prompt_cache_options: Omittable::Omitted,
+            reasoning: Omittable::Omitted,
+        }
+    }
+
+    /// Creates a request with model and typed beta input.
+    #[must_use]
+    pub fn new(model: impl Into<String>, input: impl Into<BetaResponseInput>) -> Self {
+        Self::empty().model(model).input(input)
+    }
+
+    /// Sets the model id.
+    #[must_use]
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.base = self.base.model(model);
+        self
+    }
+
+    /// Sets typed beta input.
+    #[must_use]
+    pub fn input(mut self, input: impl Into<BetaResponseInput>) -> Self {
+        self.input = Omittable::Value(input.into());
+        self
+    }
+
+    /// Sets system or developer instructions.
+    #[must_use]
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.base = self.base.instructions(instructions);
+        self
+    }
+
+    /// Enables or disables background execution.
+    #[must_use]
+    pub fn background(mut self, background: bool) -> Self {
+        self.base = self.base.background(background);
+        self
+    }
+
+    /// Adds one typed context-management rule.
+    #[must_use]
+    pub fn context_management(mut self, rule: BetaContextManagement) -> Self {
+        let rules = match &mut self.context_management {
+            Omittable::Value(Nullable::Value(rules)) => rules,
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => {
+                self.context_management = Omittable::Value(Nullable::Value(Vec::new()));
+                match &mut self.context_management {
+                    Omittable::Value(Nullable::Value(rules)) => rules,
+                    _ => unreachable!(),
+                }
+            }
+        };
+        rules.push(rule);
+        self
+    }
+
+    /// Requests one optional expanded response field.
+    #[must_use]
+    pub fn include(mut self, include: BetaResponseIncludable) -> Self {
+        self.base = self.base.include(include.as_str());
+        self
+    }
+
+    /// Caps generated tokens.
+    #[must_use]
+    pub fn max_output_tokens(mut self, maximum: u32) -> Self {
+        self.base = self.base.max_output_tokens(maximum);
+        self
+    }
+
+    /// Caps total built-in tool calls.
+    #[must_use]
+    pub fn max_tool_calls(mut self, maximum: u32) -> Self {
+        self.base = self.base.max_tool_calls(maximum);
+        self
+    }
+
+    /// Inserts one metadata pair.
+    #[must_use]
+    pub fn metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.base = self.base.metadata(key, value);
+        self
+    }
+
+    /// Configures moderated completion handling.
+    #[must_use]
+    pub fn moderation(mut self, moderation: BetaModerationConfig) -> Self {
+        self.moderation = Omittable::Value(Nullable::Value(moderation));
+        self
+    }
+
+    /// Configures server-hosted multi-agent execution.
+    #[must_use]
+    pub fn multi_agent(mut self, multi_agent: BetaMultiAgentConfig) -> Self {
+        self.multi_agent = Omittable::Value(Nullable::Value(multi_agent));
+        self
+    }
+
+    /// Controls parallel tool calls.
+    #[must_use]
+    pub fn parallel_tool_calls(mut self, enabled: bool) -> Self {
+        self.base = self.base.parallel_tool_calls(enabled);
+        self
+    }
+
+    /// Continues from a prior response.
+    #[must_use]
+    pub fn previous_response_id(mut self, id: impl Into<String>) -> Self {
+        self.base = self.base.previous_response_id(id);
+        self
+    }
+
+    /// Sets a prompt-cache key.
+    #[must_use]
+    pub fn prompt_cache_key(mut self, key: impl Into<String>) -> Self {
+        self.base = self.base.prompt_cache_key(key);
+        self
+    }
+
+    /// Sets typed prompt-cache options.
+    #[must_use]
+    pub fn prompt_cache_options(mut self, options: BetaPromptCacheOptions) -> Self {
+        self.prompt_cache_options = Omittable::Value(options);
+        self
+    }
+
+    /// Sets preview reasoning configuration.
+    #[must_use]
+    pub fn reasoning(mut self, reasoning: BetaReasoningConfig) -> Self {
+        self.reasoning = Omittable::Value(Nullable::Value(reasoning));
+        self
+    }
+
+    /// Controls response storage.
+    #[must_use]
+    pub fn store(mut self, store: bool) -> Self {
+        self.base = self.base.store(store);
+        self
+    }
+
+    /// Adds one stable or beta-compatible tool definition.
+    #[must_use]
+    pub fn tool(mut self, tool: impl Into<ResponseTool>) -> Self {
+        self.base = self.base.tool(tool);
+        self
+    }
+
+    /// Selects the tool-choice policy.
+    #[must_use]
+    pub fn tool_choice(mut self, tool_choice: ToolChoice) -> Self {
+        self.base = self.base.tool_choice(tool_choice);
+        self
+    }
+
+    /// Sets typed text-output configuration.
+    #[must_use]
+    pub fn text(mut self, text: ResponseTextConfig) -> Self {
+        self.base = self.base.text(text);
+        self
+    }
+
+    /// Sets sampling temperature.
+    #[must_use]
+    pub fn temperature(mut self, temperature: f64) -> Self {
+        self.base = self.base.temperature(temperature);
+        self
+    }
+
+    /// Sets nucleus sampling probability.
+    #[must_use]
+    pub fn top_p(mut self, top_p: f64) -> Self {
+        self.base = self.base.top_p(top_p);
+        self
+    }
+
+    /// Sets the truncation policy.
+    #[must_use]
+    pub fn truncation(mut self, truncation: TruncationStrategy) -> Self {
+        self.base = self.base.truncation(truncation);
+        self
+    }
+
+    /// Converts the body to the streaming typestate.
+    #[must_use]
+    pub fn into_streaming(self) -> BetaCreateStreamingResponseRequest {
+        BetaCreateStreamingResponseRequest {
+            request: self,
+            stream_options: Omittable::Omitted,
+        }
+    }
+}
+
+impl Serialize for BetaCreateResponseRequest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut object = serialized_object(&self.base).map_err(serde::ser::Error::custom)?;
+        insert_omittable(&mut object, "input", &self.input)
+            .map_err(serde::ser::Error::custom)?;
+        insert_omittable(&mut object, "context_management", &self.context_management)
+            .map_err(serde::ser::Error::custom)?;
+        insert_omittable(&mut object, "moderation", &self.moderation)
+            .map_err(serde::ser::Error::custom)?;
+        insert_omittable(&mut object, "multi_agent", &self.multi_agent)
+            .map_err(serde::ser::Error::custom)?;
+        insert_omittable(&mut object, "prompt_cache_options", &self.prompt_cache_options)
+            .map_err(serde::ser::Error::custom)?;
+        insert_omittable(&mut object, "reasoning", &self.reasoning)
+            .map_err(serde::ser::Error::custom)?;
+        Value::Object(object).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BetaCreateResponseRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut object = deserialize_object(deserializer)?;
+        let input = take_omittable(&mut object, "input").map_err(D::Error::custom)?;
+        let context_management =
+            take_omittable(&mut object, "context_management").map_err(D::Error::custom)?;
+        let moderation = take_omittable(&mut object, "moderation").map_err(D::Error::custom)?;
+        let multi_agent = take_omittable(&mut object, "multi_agent").map_err(D::Error::custom)?;
+        let prompt_cache_options =
+            take_omittable(&mut object, "prompt_cache_options").map_err(D::Error::custom)?;
+        let reasoning = take_omittable(&mut object, "reasoning").map_err(D::Error::custom)?;
+        let base = serde_json::from_value(Value::Object(object)).map_err(D::Error::custom)?;
+        Ok(Self {
+            base,
+            input,
+            context_management,
+            moderation,
+            multi_agent,
+            prompt_cache_options,
+            reasoning,
+        })
+    }
+}
+
+/// Streaming `POST /responses?beta=true` body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BetaCreateStreamingResponseRequest {
+    request: BetaCreateResponseRequest,
+    stream_options: Omittable<ResponseStreamOptions>,
+}
+
+impl BetaCreateStreamingResponseRequest {
+    /// Creates a streaming request with model and input.
+    #[must_use]
+    pub fn new(model: impl Into<String>, input: impl Into<BetaResponseInput>) -> Self {
+        BetaCreateResponseRequest::new(model, input).into_streaming()
+    }
+
+    /// Sets SSE payload options.
+    #[must_use]
+    pub fn stream_options(mut self, options: ResponseStreamOptions) -> Self {
+        self.stream_options = Omittable::Value(options);
+        self
+    }
+
+    /// Converts back to the non-streaming typestate.
+    #[must_use]
+    pub fn into_non_streaming(self) -> BetaCreateResponseRequest {
+        self.request
+    }
+}
+
+impl Serialize for BetaCreateStreamingResponseRequest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut object = serialized_object(&self.request).map_err(serde::ser::Error::custom)?;
+        object.insert("stream".to_owned(), Value::Bool(true));
+        insert_omittable(&mut object, "stream_options", &self.stream_options)
+            .map_err(serde::ser::Error::custom)?;
+        Value::Object(object).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BetaCreateStreamingResponseRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut object = deserialize_object(deserializer)?;
+        match object.remove("stream") {
+            Some(Value::Bool(true)) => {}
+            _ => return Err(D::Error::custom("beta streaming request requires `stream: true`")),
+        }
+        let stream_options =
+            take_omittable(&mut object, "stream_options").map_err(D::Error::custom)?;
+        let request = serde_json::from_value(Value::Object(object)).map_err(D::Error::custom)?;
+        Ok(Self {
+            request,
+            stream_options,
+        })
+    }
+}
+
+/// Moderation result returned by the beta response resource.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+#[non_exhaustive]
+pub enum BetaModerationOutcome {
+    #[serde(rename = "moderation_result")]
+    Result {
+        categories: BTreeMap<String, bool>,
+        category_applied_input_types: BTreeMap<String, Vec<BetaModerationInputType>>,
+        category_scores: BTreeMap<String, f64>,
+        flagged: bool,
+        model: String,
+    },
+    #[serde(rename = "error")]
+    Error { code: String, message: String },
+}
+
+crate::open_string_enum! {
+    /// Modality reflected in one moderation category score.
+    pub enum BetaModerationInputType {
+        Text = "text",
+        Image = "image",
+    }
+}
+
+/// Moderation outcomes for response input and output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaModerationResult {
+    input: BetaModerationOutcome,
+    output: BetaModerationOutcome,
+}
+
+literal_tag!(BetaResponseObjectTag, Response, "response");
+
+/// Complete beta Responses resource.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaResponse {
+    id: String,
+    created_at: i64,
+    error: Nullable<ResponseError>,
+    incomplete_details: Nullable<IncompleteDetails>,
+    instructions: Nullable<ResponseInstructions>,
+    metadata: Nullable<BTreeMap<String, String>>,
+    model: String,
+    #[serde(rename = "object")]
+    object: BetaResponseObjectTag,
+    output: Vec<BetaResponseOutputItem>,
+    parallel_tool_calls: bool,
+    temperature: Nullable<f64>,
+    tool_choice: ToolChoice,
+    tools: Vec<ResponseTool>,
+    top_p: Nullable<f64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    background: Omittable<Nullable<bool>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    completed_at: Omittable<Nullable<i64>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    conversation: Omittable<Nullable<ConversationObjectReference>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    max_output_tokens: Omittable<Nullable<u32>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    max_tool_calls: Omittable<Nullable<u32>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    moderation: Omittable<Nullable<BetaModerationResult>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    previous_response_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt: Omittable<Nullable<PromptReference>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_key: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_options: Omittable<BetaPromptCacheOptions>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_retention: Omittable<Nullable<BetaPromptCacheRetention>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    reasoning: Omittable<Nullable<BetaReasoningConfig>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    safety_identifier: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    service_tier: Omittable<Nullable<BetaServiceTier>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    status: Omittable<ResponseStatus>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    text: Omittable<ResponseTextConfig>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    top_logprobs: Omittable<Nullable<u32>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    truncation: Omittable<Nullable<TruncationStrategy>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    usage: Omittable<ResponseUsage>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    user: Omittable<String>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl BetaResponse {
+    /// Returns the opaque response id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the Unix creation timestamp in seconds.
+    #[must_use]
+    pub const fn created_at(&self) -> i64 {
+        self.created_at
+    }
+
+    /// Returns the model selected by the service.
+    #[must_use]
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Returns output items in wire order.
+    #[must_use]
+    pub fn output(&self) -> &[BetaResponseOutputItem] {
+        &self.output
+    }
+
+    /// Returns the lifecycle status when present.
+    #[must_use]
+    pub fn status(&self) -> Option<&ResponseStatus> {
+        omitted_ref(&self.status)
+    }
+
+    /// Returns usage when present.
+    #[must_use]
+    pub fn usage(&self) -> Option<&ResponseUsage> {
+        omitted_ref(&self.usage)
+    }
+
+    /// Returns preview reasoning configuration when present and non-null.
+    #[must_use]
+    pub fn reasoning(&self) -> Option<&BetaReasoningConfig> {
+        non_null(&self.reasoning)
+    }
+
+    /// Returns the maximum tool-call budget when present and non-null.
+    #[must_use]
+    pub fn max_tool_calls(&self) -> Option<u32> {
+        non_null(&self.max_tool_calls).copied()
+    }
+
+    /// Returns future fields retained during decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}

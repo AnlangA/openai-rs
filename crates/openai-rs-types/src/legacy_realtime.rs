@@ -11,9 +11,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use crate::{
     ExtraFields, ModelId, Nullable, Omittable, WireSecret, open_string_enum,
     realtime::{
-        RealtimeAudioTranscription, RealtimeClientSecretExpirationAnchor,
-        RealtimeFunctionTool, RealtimeNoiseReduction, RealtimeOutputModality, RealtimeTracing,
-        RealtimeTruncation, RealtimeTurnDetection, RealtimeVoice,
+        RealtimeAudioTranscription, RealtimeClientSecretExpirationAnchor, RealtimeFunctionTool,
+        RealtimeNoiseReduction, RealtimeOutputModality, RealtimeTracing, RealtimeTruncation,
+        RealtimeTurnDetection, RealtimeVoice,
     },
     responses::PromptReference,
 };
@@ -162,9 +162,7 @@ impl LegacyRealtimeMaxResponseOutputTokens {
         if (1..=4096).contains(&tokens) {
             Ok(Self::Limited(tokens as u16))
         } else {
-            Err(
-                LegacyRealtimeValidationError::InvalidMaxResponseOutputTokens { tokens },
-            )
+            Err(LegacyRealtimeValidationError::InvalidMaxResponseOutputTokens { tokens })
         }
     }
 
@@ -821,7 +819,6 @@ fn present<T>(value: &Omittable<T>) -> Option<&T> {
     match value {
         Omittable::Value(value) => Some(value),
         Omittable::Omitted => None,
-        _ => None,
     }
 }
 
@@ -855,12 +852,9 @@ mod tests {
             .with_output_audio_format(LegacyRealtimeAudioFormat::G711Ulaw)
             .with_turn_detection_null()
             .with_speed(LegacyRealtimeSpeed::new(1.1).expect("valid speed"))
-            .with_temperature(
-                LegacyRealtimeTemperature::new(0.7).expect("valid temperature"),
-            )
+            .with_temperature(LegacyRealtimeTemperature::new(0.7).expect("valid temperature"))
             .with_max_response_output_tokens(
-                LegacyRealtimeMaxResponseOutputTokens::limited(200)
-                    .expect("valid output limit"),
+                LegacyRealtimeMaxResponseOutputTokens::limited(200).expect("valid output limit"),
             );
         assert_eq!(
             serde_json::to_value(request).expect("encode legacy session request"),
