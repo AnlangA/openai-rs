@@ -11,14 +11,15 @@ use futures_core::Stream;
 use http::{Method, StatusCode};
 use openai_rs_types::{
     Batch, BatchEndpoint, BatchFileExpirationAfter, BatchId, BatchJsonlError, BatchJsonlWriter,
-    BatchLine, BatchMetadata, CreateBatchRequest, CreateFileRequest, FileObject, FilePurpose,
-    ListBatchesResponse, Omittable, ReplayableMultipartSource, batches::BatchListParams,
+    BatchLine, BatchMetadata, BatchStatus, CreateBatchRequest, CreateFileRequest, FileObject,
+    FilePurpose, ListBatchesResponse, Omittable, ReplayableMultipartSource,
+    batches::BatchListParams,
 };
 use serde::Serialize;
 use thiserror::Error as ThisError;
 
 use crate::{
-    ApiResponse, Client, Error, FileContentStream,
+    ApiResponse, Client, Error, FileContentStream, PollError, PollOptions,
     operation::{
         AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, RetryClass,
         private::Sealed,
@@ -82,26 +83,16 @@ impl Batches {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
             if let Omittable::Value(cursor) = params.after_cursor() {
-                seen.insert(cursor.as_str().to_owned());
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
             }
             loop {
                 let page = batches.list(params.clone()).await?;
-                let next = if page.has_more() {
-                    let cursor = page.last_id().ok_or_else(|| {
-                        Error::InvalidConfiguration(
-                            "batch page advertises more results without a last_id".into(),
-                        )
-                    })?;
-                    let value = cursor.as_str().to_owned();
-                    if !seen.insert(value.clone()) {
-                        Err(Error::InvalidConfiguration(
-                            "batch pagination returned a repeated cursor".into(),
-                        ))?;
-                    }
-                    Some(value)
-                } else {
-                    None
-                };
+                let next = crate::pagination::next_cursor(
+                    page.has_more(),
+                    page.last_id().map(|id| id.as_str()),
+                    &mut seen,
+                    "batch",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => params = params.clone().after(BatchId::new(cursor)),
@@ -122,6 +113,29 @@ impl Batches {
             .transport()
             .execute_json::<CancelBatch, ()>(&path, None, None)
             .await
+    }
+
+    /// Polls until the batch reaches a terminal status (completed, failed, expired, or cancelled).
+    pub async fn poll(
+        &self,
+        batch_id: &BatchId,
+        options: PollOptions,
+    ) -> Result<ApiResponse<Batch>, PollError> {
+        crate::poll::poll_resource_with_status(
+            || self.retrieve(batch_id),
+            |batch| {
+                matches!(
+                    batch.status(),
+                    BatchStatus::Completed
+                        | BatchStatus::Failed
+                        | BatchStatus::Expired
+                        | BatchStatus::Cancelled
+                )
+            },
+            |batch| batch.status().as_str().to_owned(),
+            options,
+        )
+        .await
     }
 
     /// Uploads a caller-managed JSONL path and creates its batch.
@@ -420,6 +434,7 @@ operation!(
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::VecDeque,
         convert::Infallible,
         io::{Read, Seek},
         sync::{Arc, Mutex},
@@ -434,7 +449,10 @@ mod tests {
         responses::CreateResponseRequest,
     };
     use serde_json::{Value, json};
-    use tokio::{net::TcpListener, sync::oneshot};
+    use tokio::{
+        net::TcpListener,
+        sync::{mpsc, oneshot},
+    };
     use url::Url;
 
     use super::*;
@@ -446,6 +464,89 @@ mod tests {
         path_and_query: String,
         authorization: Option<String>,
         body: Vec<u8>,
+    }
+
+    async fn serve_sequence(
+        responses: Vec<(StatusCode, String)>,
+    ) -> (Client, mpsc::Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind batch server");
+        let address = listener.local_addr().expect("batch address");
+        let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
+        let (sender, receiver) = mpsc::channel(16);
+
+        tokio::spawn(async move {
+            loop {
+                if responses.lock().expect("response queue lock").is_empty() {
+                    break;
+                }
+                let (stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+                let responses = Arc::clone(&responses);
+                let sender = sender.clone();
+                let service = service_fn(move |request: Request<Incoming>| {
+                    let responses = Arc::clone(&responses);
+                    let sender = sender.clone();
+                    async move {
+                        let method = request.method().clone();
+                        let path_and_query = request
+                            .uri()
+                            .path_and_query()
+                            .map(ToString::to_string)
+                            .unwrap_or_default();
+                        let authorization = request
+                            .headers()
+                            .get(http::header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .map(ToOwned::to_owned);
+                        let body = request
+                            .into_body()
+                            .collect()
+                            .await
+                            .expect("read request body")
+                            .to_bytes()
+                            .to_vec();
+                        let _ = sender
+                            .send(CapturedRequest {
+                                method,
+                                path_and_query,
+                                authorization,
+                                body,
+                            })
+                            .await;
+
+                        let next = responses
+                            .lock()
+                            .expect("response queue lock")
+                            .pop_front()
+                            .unwrap_or((StatusCode::OK, "{}".into()));
+                        let response = hyper::Response::builder()
+                            .status(next.0)
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .header("x-request-id", "req_batch")
+                            .body(Full::new(Bytes::from(next.1)))
+                            .expect("build batch response");
+                        Ok::<_, Infallible>(response)
+                    }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            }
+        });
+
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("batch base URL");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(RetryPolicy::disabled())
+            .build()
+            .expect("batch client");
+        (client, receiver)
     }
 
     async fn serve_once(body: &'static str) -> (Client, oneshot::Receiver<CapturedRequest>) {
@@ -682,5 +783,29 @@ mod tests {
         let error = write_temporary_jsonl(lines, &BatchEndpoint::Responses)
             .expect_err("empty batch must fail");
         assert!(matches!(error, BatchSubmissionError::EmptyInput));
+    }
+
+    #[tokio::test]
+    async fn batch_poll_stops_at_terminal_state() {
+        use std::time::Duration;
+        let (client, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, batch_json("batch_1", "in_progress")),
+            (StatusCode::OK, batch_json("batch_1", "completed")),
+        ])
+        .await;
+
+        let response = client
+            .batches()
+            .poll(
+                &BatchId::new("batch_1"),
+                PollOptions::new()
+                    .with_interval(Duration::from_millis(1))
+                    .with_timeout(Duration::from_secs(1)),
+            )
+            .await
+            .expect("poll batch");
+        assert_eq!(response.status(), &BatchStatus::Completed);
+        assert!(captured.recv().await.is_some());
+        assert!(captured.recv().await.is_some());
     }
 }

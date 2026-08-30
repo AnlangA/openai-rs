@@ -436,16 +436,6 @@ pub type ConversationResource = Conversation;
 /// OpenAPI resource-name alias.
 pub type DeletedConversationResource = DeletedConversation;
 
-macro_rules! literal_tag {
-    ($name:ident, $variant:ident, $wire:literal) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-        enum $name {
-            #[serde(rename = $wire)]
-            $variant,
-        }
-    };
-}
-
 fn discriminator(value: &Value) -> Result<String, &'static str> {
     value
         .as_object()

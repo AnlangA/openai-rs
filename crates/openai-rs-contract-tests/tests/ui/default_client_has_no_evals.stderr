@@ -1,0 +1,5 @@
+error[E0599]: no method named `evals` found for struct `openai_rs_client::Client` in the current scope
+ --> tests/ui/default_client_has_no_evals.rs:4:20
+  |
+4 |     let _ = client.evals();
+  |                    ^^^^^ method not found in `Client`

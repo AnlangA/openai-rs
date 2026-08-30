@@ -302,16 +302,6 @@ impl fmt::Debug for RealtimeCallIncomingWebhookData {
     }
 }
 
-macro_rules! literal_tag {
-    ($name:ident, $wire:literal) => {
-        #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-        enum $name {
-            #[serde(rename = $wire)]
-            Value,
-        }
-    };
-}
-
 literal_tag!(WebhookObject, "event");
 
 macro_rules! event_accessors {

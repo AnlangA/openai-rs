@@ -1,0 +1,9 @@
+{
+  "id": "file_synthetic_1",
+  "object": "file",
+  "bytes": 12,
+  "created_at": 1,
+  "filename": "synthetic.txt",
+  "purpose": "user_data",
+  "status": "processed"
+}

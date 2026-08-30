@@ -1,6 +1,7 @@
 //! Client resources for the preview Responses multi-agent API.
 
 use std::{
+    collections::HashSet,
     fmt,
     pin::Pin,
     task::{Context, Poll},
@@ -30,7 +31,7 @@ use tokio_tungstenite::{
 use url::Url;
 
 use crate::{
-    ApiResponse, BodyPreview, Client, Error, ResponseMeta, StreamError,
+    ApiResponse, BodyPreview, Client, Error, PollError, PollOptions, ResponseMeta, StreamError,
     operation::{
         AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, RetryClass,
         private::Sealed,
@@ -46,6 +47,10 @@ use crate::{
 
 const OK: &[StatusCode] = &[StatusCode::OK];
 const OK_OR_NO_CONTENT: &[StatusCode] = &[StatusCode::OK, StatusCode::NO_CONTENT];
+
+/// A stream of bounded beta Response input item collection pages.
+pub type BetaResponseInputItemPageStream =
+    Pin<Box<dyn Stream<Item = Result<ApiResponse<BetaResponseItemList>, Error>> + Send + 'static>>;
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
 const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_WRITE_BUFFER_BYTES: usize = 64 * 1024;
@@ -237,6 +242,46 @@ impl BetaResponses {
         }
     }
 
+    /// Convenience alias for `beta_responses().input_items().list_pages(...)`.
+    #[must_use]
+    pub fn list_input_item_pages(
+        &self,
+        response_id: &ResponseId,
+        params: BetaListInputItemsParams,
+    ) -> BetaResponseInputItemPageStream {
+        self.input_items().list_pages(response_id, params)
+    }
+
+    /// Polls a background beta response until it reaches a terminal status.
+    pub async fn poll(
+        &self,
+        response_id: &ResponseId,
+        options: PollOptions,
+    ) -> Result<ApiResponse<BetaResponse>, PollError> {
+        crate::poll::poll_resource_with_status(
+            || self.retrieve(response_id),
+            |response| {
+                matches!(
+                    response.status(),
+                    Some(
+                        openai_rs_types::responses::ResponseStatus::Completed
+                            | openai_rs_types::responses::ResponseStatus::Failed
+                            | openai_rs_types::responses::ResponseStatus::Incomplete
+                            | openai_rs_types::responses::ResponseStatus::Cancelled
+                    )
+                )
+            },
+            |response| {
+                response
+                    .status()
+                    .map(|s| s.as_str().to_owned())
+                    .unwrap_or_else(|| "unknown".into())
+            },
+            options,
+        )
+        .await
+    }
+
     /// Opens a typed beta Responses WebSocket at the pinned `/responses` path.
     pub async fn connect(&self) -> Result<BetaResponsesWebSocket, Error> {
         self.connect_with(BetaResponsesWebSocketConfig::new()).await
@@ -274,6 +319,38 @@ impl BetaResponseInputItems {
             .transport()
             .execute_json::<ListBetaResponseInputItems, _>(&path, Some(&query), None)
             .await
+    }
+
+    /// Streams input item pages while rejecting a repeated or missing cursor.
+    #[must_use]
+    pub fn list_pages(
+        &self,
+        response_id: &ResponseId,
+        params: BetaListInputItemsParams,
+    ) -> BetaResponseInputItemPageStream {
+        let items = self.clone();
+        let response_id = response_id.clone();
+        Box::pin(async_stream::try_stream! {
+            let mut params = params;
+            let mut seen = HashSet::<String>::new();
+            if let Some(cursor) = params.after_ref() {
+                crate::pagination::seed_seen(&mut seen, Some(cursor));
+            }
+            loop {
+                let page = items.list(&response_id, params.clone()).await?;
+                let next = crate::pagination::next_cursor(
+                    page.has_more(),
+                    Some(page.last_id()),
+                    &mut seen,
+                    "beta response input item",
+                )?;
+                yield page;
+                match next {
+                    Some(cursor) => params = params.clone().after(cursor),
+                    None => break,
+                }
+            }
+        })
     }
 }
 

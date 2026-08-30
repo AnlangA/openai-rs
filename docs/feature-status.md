@@ -25,7 +25,7 @@ Status terms:
 
 | Feature | Default | Status | Notes |
 |---|---:|---|---|
-| `client` | Yes | Implemented | Enables the Platform `Client`. Coverage includes Responses, Chat Completions, Files/Uploads, Batches, Vector Stores, Models, Embeddings, Moderations, media, Fine-tuning, Evals, Conversations, Containers, Skills, and Content Provenance. |
+| `client` | Yes | Implemented | Enables the Platform `Client`. Coverage includes Responses, Chat Completions, Files/Uploads, Batches, Vector Stores, Models, Embeddings, Moderations, media, Fine-tuning, Conversations, Containers, Skills, and Content Provenance. Evals is available via the default-off `legacy-evals` feature. |
 | `rustls-tls` | Yes | Implemented | Rustls-backed Platform transport. Implies `client`. |
 | `native-tls` | No | Implemented | Native TLS transport selection. Implies `client`. |
 | `structured-output` | Yes | Implemented | Typed schema generation and strict-subset normalization; keyword/limit coverage remains pre-release. |
@@ -34,8 +34,9 @@ Status terms:
 | `admin` | No | Implemented | Dedicated `AdminApiKey`/`AdminClient`, sealed typed requests for the 119-operation Administration manifest, convenience resource facades, and three fine-tuning checkpoint-permission methods. Never added to the ordinary `Client`. |
 | `workload-identity` | No | Implemented | RFC 8693 subject-token exchange for the ordinary Platform `Client`, with token caching, singleflight/proactive refresh, and bounded one-time 401 replay where the request is replayable. Not a Codex subscription credential. |
 | `x509` | No | Implemented | Isolated rustls mTLS `X509Client` with pinned regional origins, X.509 token exchange, non-streaming Responses create/retrieve/cancel/compact/count, and Models list/retrieve. It exposes neither Realtime nor arbitrary URLs. |
+| `legacy-evals` (alias `evals`) | No | Legacy | Default-off typed Evals operations. The OpenAI Evals platform becomes read-only on 2026-10-31 and shuts down on 2026-11-30. |
 | `custom-voice` | No | Implemented | Six typed Custom Voice/consent operations. Access remains controlled by the service. |
-| `alpha-graders` | No | Alpha | Two typed alpha Graders operations under the explicit unstable facade. |
+| `alpha-graders` | No | Alpha | Two typed alpha Graders operations under the explicit unstable facade. Follows the same 2026-11-30 shutdown timeline as Evals. |
 | `beta-chatkit` | No | Beta | Six typed ChatKit session/thread operations and pagination. |
 | `beta-responses-multi-agent` | No | Beta | Seven typed beta Responses operations, SSE, and persistent WebSocket create/inject support for the multi-agent contract. |
 | `legacy-completions` | No | Legacy | Default-off typed JSON/SSE support for only `POST /completions`; Responses is preferred. |
@@ -89,7 +90,10 @@ disposition is 254 `verified`, 33 `omitted`, and one `quarantined`; there are no
 `planned` or `partial` entries. The omitted entries are Assistants/Threads/Runs
 and deprecated Videos operations. `createImageVariation` is quarantined because
 the official sources conflict. Neither category is exposed as a callable
-client feature.
+client feature. The 18 OpenAPI webhook receiver operations are separately
+`verified` through `WebhookVerifier` and the 18-event `WebhookEvent` union;
+they are counted in `counts.webhook_implementation_statuses`, not mixed into
+the 254 client figure.
 
 The verified surface includes:
 
@@ -133,3 +137,16 @@ The verified surface includes:
   stable Rust API or live service-entitlement guarantee.
 - Unknown response fields and events are retained only where the wire contract
   is intentionally forward-compatible.
+
+## Official API lifecycle and deprecation timeline (2026-08-30)
+
+| Official service / endpoint | Lifecycle status & milestone | SDK disposition |
+|---|---|---|
+| Assistants / Threads / Runs | Sunset on 2026-08-26 | Omitted; no `beta-assistants` feature |
+| Videos / Sora 2 | Sunset on 2026-09-24 | Omitted; no `create_and_poll` |
+| Evals platform (`v1/evals`) | Read-only on 2026-10-31, shutdown on 2026-11-30 | Moved out of default `Client` to default-off `legacy-evals` feature |
+| Alpha Graders | Follows Evals shutdown on 2026-11-30 | Gated under default-off `alpha-graders` feature |
+| Prompts (`v1/prompts`) | Shutdown on 2026-11-30 | Omitted; no Prompts resource; `prompt` field in Responses retained until next pin disposition |
+| Agent Builder | Shutdown on 2026-11-30 | No binding; ChatKit remains available under `beta-chatkit` |
+| Fine-tuning | New job creation freezes on 2027-01-06 for existing customers | Verified; job creation and polling methods retained |
+| Responses API | Primary recommended API | Fully typed REST, SSE, WS, tool loops, and background polling |

@@ -4,7 +4,13 @@
 //! OpenAI API.  It never silently drops a schema keyword: unsupported input is
 //! returned as an error with a JSON Pointer-like path.
 
-use std::marker::PhantomData;
+use std::{
+    collections::HashMap,
+    future::Future,
+    marker::PhantomData,
+    pin::Pin,
+    sync::Arc,
+};
 
 use schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
@@ -227,6 +233,183 @@ where
     /// Parses a previously encoded function result.
     pub fn decode_output(&self, output: &str) -> Result<R, StructuredError> {
         serde_json::from_str(output).map_err(StructuredError::Decode)
+    }
+}
+
+/// Context passed to a typed tool handler.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolContext {
+    pub call_id: String,
+}
+
+impl ToolContext {
+    /// Creates a tool invocation context with an opaque call id.
+    #[must_use]
+    pub fn new(call_id: impl Into<String>) -> Self {
+        Self {
+            call_id: call_id.into(),
+        }
+    }
+
+    /// Returns the call id of the tool invocation.
+    #[must_use]
+    pub fn call_id(&self) -> &str {
+        &self.call_id
+    }
+}
+
+/// Errors produced during tool handler execution.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ToolExecutionError {
+    /// Handler-level domain/business execution failure.
+    #[error("tool execution failed: {0}")]
+    Custom(String),
+    /// Invalid arguments provided to the tool.
+    #[error("invalid tool arguments: {0}")]
+    InvalidArguments(String),
+}
+
+impl ToolExecutionError {
+    /// Constructs a custom domain error.
+    pub fn custom(message: impl Into<String>) -> Self {
+        Self::Custom(message.into())
+    }
+}
+
+/// Specification of a typed function tool.
+pub trait ToolSpec {
+    /// The strongly typed arguments deserialized from model JSON.
+    type Arguments: DeserializeOwned + JsonSchema + Send + Sync + 'static;
+    /// The strongly typed output serialized into JSON.
+    type Output: Serialize + JsonSchema + Send + Sync + 'static;
+
+    /// The name of the tool presented to the model.
+    fn name() -> &'static str;
+    /// The description of the tool presented to the model.
+    fn description() -> &'static str;
+}
+
+/// Asynchronous execution handler for a typed function tool.
+pub trait ToolHandler: ToolSpec {
+    /// Executes the tool with typed arguments and invocation context.
+    fn call(
+        &self,
+        arguments: Self::Arguments,
+        context: ToolContext,
+    ) -> impl Future<Output = Result<Self::Output, ToolExecutionError>> + Send;
+}
+
+pub(crate) trait ErasedToolHandler: Send + Sync {
+    fn tool_definition(&self) -> Result<crate::responses::FunctionTool, StructuredError>;
+    fn call_erased(
+        &self,
+        call_id: String,
+        raw_arguments: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, ToolExecutionError>> + Send + '_>>;
+}
+
+impl<H> ErasedToolHandler for H
+where
+    H: ToolHandler + Send + Sync + 'static,
+{
+    fn tool_definition(&self) -> Result<crate::responses::FunctionTool, StructuredError> {
+        crate::responses::FunctionTool::for_type::<H::Arguments>(H::name(), H::description())
+    }
+
+    fn call_erased(
+        &self,
+        call_id: String,
+        raw_arguments: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, ToolExecutionError>> + Send + '_>> {
+        let args_res: Result<H::Arguments, serde_json::Error> = serde_json::from_str(raw_arguments);
+        match args_res {
+            Ok(args) => {
+                let fut = self.call(args, ToolContext::new(call_id));
+                Box::pin(async move {
+                    let output = fut.await?;
+                    serde_json::to_string(&output).map_err(|e| ToolExecutionError::Custom(e.to_string()))
+                })
+            }
+            Err(err) => Box::pin(async move {
+                Err(ToolExecutionError::InvalidArguments(err.to_string()))
+            }),
+        }
+    }
+}
+
+/// Registry of typed tool handlers for automatic tool call dispatching.
+#[derive(Default, Clone)]
+pub struct ToolRegistry {
+    tools: HashMap<String, Arc<dyn ErasedToolHandler>>,
+}
+
+impl ToolRegistry {
+    /// Creates an empty tool registry.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registers a typed tool handler. Returns an error if a tool with the same name is already registered.
+    pub fn register<H: ToolHandler + Send + Sync + 'static>(
+        &mut self,
+        handler: H,
+    ) -> Result<(), StructuredError> {
+        let name = H::name();
+        validate_name(name)?;
+        if self.tools.contains_key(name) {
+            return Err(StructuredError::InvalidName(format!(
+                "duplicate tool registration: `{name}`"
+            )));
+        }
+        self.tools.insert(name.to_string(), Arc::new(handler));
+        Ok(())
+    }
+
+    /// Returns the tool definitions for all registered tools.
+    pub fn definitions(&self) -> Result<Vec<crate::responses::FunctionTool>, StructuredError> {
+        let mut defs = Vec::with_capacity(self.tools.len());
+        for tool in self.tools.values() {
+            defs.push(tool.tool_definition()?);
+        }
+        Ok(defs)
+    }
+
+    /// Executes a single function call against the registered handlers.
+    /// Business-level failures (`ToolExecutionError`) are converted into in-band JSON error outputs.
+    pub async fn execute(
+        &self,
+        call: &crate::responses::FunctionCall,
+    ) -> Result<crate::responses::FunctionCallOutput, StructuredError> {
+        let tool = self.tools.get(call.name()).ok_or_else(|| {
+            StructuredError::InvalidName(format!("unknown tool `{}`", call.name()))
+        })?;
+        let output_string = match tool
+            .call_erased(call.call_id().to_string(), call.arguments().as_str())
+            .await
+        {
+            Ok(json_output) => json_output,
+            Err(exec_error) => serde_json::to_string(&json!({
+                "error": exec_error.to_string()
+            }))
+            .map_err(StructuredError::Encode)?,
+        };
+        Ok(crate::responses::FunctionCallOutput::new(
+            call.call_id(),
+            output_string,
+        ))
+    }
+
+    /// Executes all function calls and returns the corresponding function call outputs.
+    pub async fn execute_all(
+        &self,
+        calls: impl IntoIterator<Item = &crate::responses::FunctionCall>,
+    ) -> Result<Vec<crate::responses::FunctionCallOutput>, StructuredError> {
+        let mut outputs = Vec::new();
+        for call in calls {
+            outputs.push(self.execute(call).await?);
+        }
+        Ok(outputs)
     }
 }
 
@@ -458,5 +641,82 @@ mod tests {
         assert_eq!(wire["type"], "json_schema");
         assert_eq!(wire["strict"], true);
         assert_eq!(wire["name"], "weather_result");
+    }
+
+    struct WeatherToolHandler;
+
+    impl super::ToolSpec for WeatherToolHandler {
+        type Arguments = WeatherArgs;
+        type Output = WeatherResult;
+
+        fn name() -> &'static str {
+            "get_weather"
+        }
+
+        fn description() -> &'static str {
+            "Get weather for a city"
+        }
+    }
+
+    impl super::ToolHandler for WeatherToolHandler {
+        async fn call(
+            &self,
+            arguments: Self::Arguments,
+            _context: super::ToolContext,
+        ) -> Result<Self::Output, super::ToolExecutionError> {
+            if arguments.city == "Invalid" {
+                return Err(super::ToolExecutionError::custom("city not found"));
+            }
+            Ok(WeatherResult { temperature: 22.5 })
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_registry_dispatches_success_and_error() {
+        let mut registry = super::ToolRegistry::new();
+        registry
+            .register(WeatherToolHandler)
+            .expect("register tool");
+
+        // Duplicate registration fails
+        let dup_err = registry
+            .register(WeatherToolHandler)
+            .expect_err("duplicate must fail");
+        assert!(matches!(dup_err, StructuredError::InvalidName(_)));
+
+        let defs = registry.definitions().expect("definitions");
+        assert_eq!(defs.len(), 1);
+
+        // Success call
+        let call = crate::responses::FunctionCall::new(
+            "item_1",
+            "call_1",
+            "get_weather",
+            serde_json::json!({ "city": "Beijing", "unit": null })
+                .to_string()
+                .into(),
+            crate::responses::ResponseItemStatus::Completed,
+        );
+        let out = registry.execute(&call).await.expect("execute");
+        assert_eq!(
+            serde_json::to_value(out).unwrap()["output"],
+            "{\"temperature\":22.5}"
+        );
+
+        // Tool business error converts to in-band JSON error
+        let err_call = crate::responses::FunctionCall::new(
+            "item_2",
+            "call_2",
+            "get_weather",
+            serde_json::json!({ "city": "Invalid", "unit": null })
+                .to_string()
+                .into(),
+            crate::responses::ResponseItemStatus::Completed,
+        );
+        let err_out = registry.execute(&err_call).await.expect("execute error");
+        assert_eq!(
+            serde_json::to_value(err_out).unwrap()["output"],
+            "{\"error\":\"tool execution failed: city not found\"}"
+        );
     }
 }

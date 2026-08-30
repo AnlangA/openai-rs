@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::RenderedArtifact;
@@ -67,6 +67,7 @@ struct OperationCounts {
     webhook: usize,
     total: usize,
     implementation_statuses: BTreeMap<String, usize>,
+    webhook_implementation_statuses: BTreeMap<String, usize>,
     verified_units: usize,
 }
 
@@ -308,13 +309,18 @@ fn build_operations(
         )));
     }
 
-    let known_operation_ids = client_operations
+    let known_labels = client_operations
         .iter()
-        .filter_map(|operation| operation.operation_id.as_ref())
+        .filter_map(|operation| operation.operation_id.clone())
+        .chain(
+            webhook_operations
+                .iter()
+                .map(|operation| webhook_registry_label(&operation.path, &operation.method)),
+        )
         .collect::<BTreeSet<_>>();
     let orphaned = implementation_registry
         .keys()
-        .filter(|operation_id| !known_operation_ids.contains(operation_id))
+        .filter(|operation_id| !known_labels.contains(*operation_id))
         .cloned()
         .collect::<Vec<_>>();
     if !orphaned.is_empty() {
@@ -324,9 +330,18 @@ fn build_operations(
         )));
     }
     let mut implementation_statuses = BTreeMap::new();
+    let mut webhook_implementation_statuses = BTreeMap::new();
     let mut verified_units = BTreeSet::new();
     for operation in &client_operations {
         *implementation_statuses
+            .entry(operation.implementation.status.clone())
+            .or_insert(0) += 1;
+        if operation.implementation.status == "verified" {
+            verified_units.extend(operation.implementation.units.iter().cloned());
+        }
+    }
+    for operation in &webhook_operations {
+        *webhook_implementation_statuses
             .entry(operation.implementation.status.clone())
             .or_insert(0) += 1;
         if operation.implementation.status == "verified" {
@@ -342,6 +357,7 @@ fn build_operations(
             webhook: webhook_operations.len(),
             total: client_operations.len() + webhook_operations.len(),
             implementation_statuses,
+            webhook_implementation_statuses,
             verified_units: verified_units.len(),
         },
         client_operations,
@@ -400,9 +416,8 @@ fn collect_operations(
                 response: response_contract(document, operation, &operation_label)?,
                 lifecycle,
                 feature,
-                implementation: operation_id
-                    .as_ref()
-                    .and_then(|operation_id| implementation_registry.get(operation_id))
+                implementation: implementation_registry
+                    .get(&operation_label)
                     .cloned()
                     .unwrap_or_else(planned_implementation),
                 manual_overrides: operation_id
@@ -422,6 +437,10 @@ fn collect_operations(
     Ok(operations)
 }
 
+fn webhook_registry_label(path: &str, method: &str) -> String {
+    format!("webhook:{path}:{}", method.to_ascii_lowercase())
+}
+
 fn planned_implementation() -> ImplementationStatus {
     ImplementationStatus {
         status: "planned".to_owned(),
@@ -432,73 +451,57 @@ fn planned_implementation() -> ImplementationStatus {
     }
 }
 
-#[derive(Clone, Copy)]
-enum RegistrySection {
-    Operation,
-    Group,
-    NonRest,
+#[derive(Deserialize)]
+struct ImplementationToml {
+    schema_version: u32,
+    #[serde(default)]
+    operations: Vec<OperationToml>,
+    #[serde(default)]
+    groups: Vec<GroupToml>,
+    #[serde(default)]
+    non_rest: Vec<NonRestToml>,
+}
+
+#[derive(Deserialize)]
+struct OperationToml {
+    operation_id: String,
+    status: String,
+    milestone: String,
+    units: Vec<String>,
+    tests: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct GroupToml {
+    name: String,
+    operation_ids: Vec<String>,
+    status: String,
+    milestone: String,
+    units: Vec<String>,
+    tests: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct NonRestToml {
+    id: String,
+    status: String,
+    milestone: String,
+    units: Vec<String>,
+    tests: Vec<String>,
 }
 
 fn load_implementation_registry(repository_root: &Path) -> Result<ImplementationRegistry> {
     let path = repository_root.join(IMPLEMENTATION_PATH);
     let input = fs::read_to_string(&path)
         .map_err(|source| Error::io("read implementation registry", &path, source))?;
-    let mut schema_version = None;
-    let mut current: Option<(RegistrySection, BTreeMap<String, String>)> = None;
-    let mut sections = Vec::new();
+    let toml_data: ImplementationToml = toml::from_str(&input).map_err(|source| {
+        Error::message(format!(
+            "invalid TOML in {}: {source}",
+            path.display()
+        ))
+    })?;
 
-    for (line_index, raw_line) in input.lines().enumerate() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let section = match line {
-            "[[operations]]" => Some(RegistrySection::Operation),
-            "[[groups]]" => Some(RegistrySection::Group),
-            "[[non_rest]]" => Some(RegistrySection::NonRest),
-            _ => None,
-        };
-        if let Some(section) = section {
-            if let Some(entry) = current.take() {
-                sections.push(entry);
-            }
-            current = Some((section, BTreeMap::new()));
-            continue;
-        }
-        let (key, value) = line.split_once('=').ok_or_else(|| {
-            Error::message(format!(
-                "invalid implementation registry assignment in {} at line {}",
-                path.display(),
-                line_index + 1
-            ))
-        })?;
-        let key = key.trim();
-        let value = value.trim();
-        if let Some((_, entry)) = current.as_mut() {
-            if entry.insert(key.to_owned(), value.to_owned()).is_some() {
-                return Err(Error::message(format!(
-                    "duplicate implementation key `{key}` in {}",
-                    path.display()
-                )));
-            }
-        } else if key == "schema_version" && schema_version.is_none() {
-            schema_version = Some(value.parse::<u64>().map_err(|source| {
-                Error::message(format!(
-                    "implementation schema_version in {} must be an integer: {source}",
-                    path.display()
-                ))
-            })?);
-        } else {
-            return Err(Error::message(format!(
-                "unknown or duplicate top-level implementation key `{key}` in {}",
-                path.display()
-            )));
-        }
-    }
-    if let Some(entry) = current {
-        sections.push(entry);
-    }
-    if schema_version != Some(1) {
+    if toml_data.schema_version != 1 {
         return Err(Error::message(format!(
             "{} must declare schema_version = 1",
             path.display()
@@ -508,62 +511,66 @@ fn load_implementation_registry(repository_root: &Path) -> Result<Implementation
     let mut operations = BTreeMap::new();
     let mut non_rest = Vec::new();
     let mut non_rest_ids = BTreeSet::new();
-    for (section, mut entry) in sections {
-        match section {
-            RegistrySection::Operation => {
-                let operation_id = take_registry_string(&mut entry, "operation_id", &path)?;
-                let status = parse_implementation_fields(
-                    &mut entry,
-                    &format!("operation {operation_id}"),
-                    None,
-                    &path,
-                )?;
-                insert_operation(&mut operations, operation_id, status)?;
-            }
-            RegistrySection::Group => {
-                let name = take_registry_string(&mut entry, "name", &path)?;
-                let operation_ids = take_registry_array(&mut entry, "operation_ids", &path)?;
-                if operation_ids.is_empty() {
-                    return Err(Error::message(format!(
-                        "implementation group `{name}` must list at least one operation id"
-                    )));
-                }
-                let status = parse_implementation_fields(
-                    &mut entry,
-                    &format!("group {name}"),
-                    Some(name.clone()),
-                    &path,
-                )?;
-                for operation_id in operation_ids {
-                    let mut expanded = status.clone();
-                    expanded.units = expanded
-                        .units
-                        .iter()
-                        .map(|unit| unit.replace("{operation_id}", &operation_id))
-                        .collect();
-                    insert_operation(&mut operations, operation_id, expanded)?;
-                }
-            }
-            RegistrySection::NonRest => {
-                let id = take_registry_string(&mut entry, "id", &path)?;
-                let status = parse_implementation_fields(
-                    &mut entry,
-                    &format!("non-REST unit {id}"),
-                    None,
-                    &path,
-                )?;
-                if !non_rest_ids.insert(id.clone()) {
-                    return Err(Error::message(format!(
-                        "duplicate non-REST implementation id `{id}`"
-                    )));
-                }
-                non_rest.push(NonRestImplementation {
-                    id,
-                    implementation: status,
-                });
-            }
+
+    for op in toml_data.operations {
+        let status = validate_implementation_fields(
+            op.status,
+            op.milestone,
+            op.units,
+            op.tests,
+            &format!("operation {}", op.operation_id),
+            None,
+        )?;
+        insert_operation(&mut operations, op.operation_id, status)?;
+    }
+
+    for group in toml_data.groups {
+        if group.operation_ids.is_empty() {
+            return Err(Error::message(format!(
+                "implementation group `{}` must list at least one operation id",
+                group.name
+            )));
+        }
+        let status = validate_implementation_fields(
+            group.status,
+            group.milestone,
+            group.units,
+            group.tests,
+            &format!("group {}", group.name),
+            Some(group.name.clone()),
+        )?;
+        for operation_id in group.operation_ids {
+            let mut expanded = status.clone();
+            expanded.units = expanded
+                .units
+                .iter()
+                .map(|unit| unit.replace("{operation_id}", &operation_id))
+                .collect();
+            insert_operation(&mut operations, operation_id, expanded)?;
         }
     }
+
+    for nr in toml_data.non_rest {
+        let status = validate_implementation_fields(
+            nr.status,
+            nr.milestone,
+            nr.units,
+            nr.tests,
+            &format!("non-REST unit {}", nr.id),
+            None,
+        )?;
+        if !non_rest_ids.insert(nr.id.clone()) {
+            return Err(Error::message(format!(
+                "duplicate non-REST implementation id `{}`",
+                nr.id
+            )));
+        }
+        non_rest.push(NonRestImplementation {
+            id: nr.id,
+            implementation: status,
+        });
+    }
+
     non_rest.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(ImplementationRegistry {
         operations,
@@ -571,16 +578,14 @@ fn load_implementation_registry(repository_root: &Path) -> Result<Implementation
     })
 }
 
-fn parse_implementation_fields(
-    entry: &mut BTreeMap<String, String>,
+fn validate_implementation_fields(
+    status: String,
+    milestone: String,
+    units: Vec<String>,
+    tests: Vec<String>,
     label: &str,
     registry_group: Option<String>,
-    path: &Path,
 ) -> Result<ImplementationStatus> {
-    let status = take_registry_string(entry, "status", path)?;
-    let milestone = take_registry_string(entry, "milestone", path)?;
-    let units = take_registry_array(entry, "units", path)?;
-    let tests = take_registry_array(entry, "tests", path)?;
     if !is_valid_implementation_status(&status) {
         return Err(Error::message(format!(
             "implementation status for {label} must be planned, partial, implemented, verified, historical, quarantined, or omitted"
@@ -589,12 +594,6 @@ fn parse_implementation_fields(
     if milestone.is_empty() || units.is_empty() || tests.is_empty() {
         return Err(Error::message(format!(
             "implementation registry {label} requires non-empty milestone, units, and tests"
-        )));
-    }
-    if !entry.is_empty() {
-        return Err(Error::message(format!(
-            "unknown implementation keys for {label}: {}",
-            entry.keys().cloned().collect::<Vec<_>>().join(", ")
         )));
     }
     Ok(ImplementationStatus {
@@ -635,44 +634,6 @@ fn insert_operation(
         )));
     }
     Ok(())
-}
-
-fn take_registry_string(
-    values: &mut BTreeMap<String, String>,
-    key: &str,
-    path: &Path,
-) -> Result<String> {
-    let raw = values.remove(key).ok_or_else(|| {
-        Error::message(format!(
-            "implementation entry in {} is missing `{key}`",
-            path.display()
-        ))
-    })?;
-    serde_json::from_str::<String>(&raw).map_err(|source| {
-        Error::message(format!(
-            "implementation key `{key}` in {} must be a TOML basic string compatible with JSON quoting: {source}",
-            path.display()
-        ))
-    })
-}
-
-fn take_registry_array(
-    values: &mut BTreeMap<String, String>,
-    key: &str,
-    path: &Path,
-) -> Result<Vec<String>> {
-    let raw = values.remove(key).ok_or_else(|| {
-        Error::message(format!(
-            "implementation entry in {} is missing `{key}`",
-            path.display()
-        ))
-    })?;
-    serde_json::from_str::<Vec<String>>(&raw).map_err(|source| {
-        Error::message(format!(
-            "implementation key `{key}` in {} must be a one-line string array: {source}",
-            path.display()
-        ))
-    })
 }
 
 fn request_contract(
@@ -1123,17 +1084,29 @@ fn is_null_schema(node: &Value) -> bool {
 fn build_schema_ir(document: &Value) -> Result<SchemaIrArtifact> {
     let schemas = object_at(document, "/components/schemas")?;
     let mut lowered = Vec::new();
-    for schema_name in COMPLEX_SCHEMAS {
-        let schema = schemas.get(schema_name).ok_or_else(|| {
+    let mut selected_names = BTreeSet::new();
+
+    for name in COMPLEX_SCHEMAS {
+        selected_names.insert(name.to_string());
+    }
+
+    for (schema_name, schema) in schemas {
+        if is_schema_ir_target(schema_name, schema) {
+            selected_names.insert(schema_name.clone());
+        }
+    }
+
+    for schema_name in selected_names {
+        let schema = schemas.get(&schema_name).ok_or_else(|| {
             Error::message(format!(
-                "selected complex schema `{schema_name}` is missing"
+                "selected schema `{schema_name}` is missing"
             ))
         })?;
-        let pointer = format!("#/components/schemas/{}", escape_json_pointer(schema_name));
+        let pointer = format!("#/components/schemas/{}", escape_json_pointer(&schema_name));
         let mut metrics = SchemaMetrics::default();
         collect_metrics(schema, 0, &mut metrics);
         lowered.push(LoweredSchema {
-            name: schema_name.to_owned(),
+            name: schema_name,
             pointer,
             metrics,
             node: lower_node(schema)?,
@@ -1143,10 +1116,41 @@ fn build_schema_ir(document: &Value) -> Result<SchemaIrArtifact> {
     Ok(SchemaIrArtifact {
         schema_version: 1,
         source: source_identity(),
-        selection: "fixed high-complexity proof set; references remain local and unresolved",
+        selection: "tagged unions, event streams, and high-complexity proof schemas; references remain local and unresolved",
         count: lowered.len(),
         schemas: lowered,
     })
+}
+
+fn is_schema_ir_target(name: &str, schema: &Value) -> bool {
+    if COMPLEX_SCHEMAS.contains(&name) {
+        return true;
+    }
+    let mut has_discriminator = false;
+    let pointer = format!("#/components/schemas/{}", escape_json_pointer(name));
+    walk_schema_nodes(schema, &pointer, &mut |node, _| {
+        if node.get("discriminator").and_then(Value::as_object).is_some() {
+            has_discriminator = true;
+        }
+    });
+    if has_discriminator {
+        return true;
+    }
+
+    if (name.starts_with("Response")
+        && (name.contains("Event") || name.contains("Item") || name.contains("Stream")))
+        || (name.starts_with("Realtime")
+            && (name.contains("Event") || name.contains("Item") || name.contains("Session")))
+        || (name.starts_with("ChatCompletion")
+            && (name.contains("Chunk")
+                || name.contains("Delta")
+                || name.contains("Message")
+                || name.contains("Stream")))
+    {
+        return true;
+    }
+
+    false
 }
 
 fn lower_node(node: &Value) -> Result<LoweredNode> {
@@ -1526,6 +1530,14 @@ mod tests {
             assert_eq!(initial_feature(path, false, lifecycle), feature);
         }
         Ok(())
+    }
+
+    #[test]
+    fn webhook_registry_label_uses_lowercase_method() {
+        assert_eq!(
+            super::webhook_registry_label("batch_cancelled", "POST"),
+            "webhook:batch_cancelled:post"
+        );
     }
 
     #[test]

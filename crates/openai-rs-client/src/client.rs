@@ -18,9 +18,11 @@ use crate::LegacyRealtimeSessions;
 use crate::Realtime;
 #[cfg(feature = "custom-voice")]
 use crate::Voices;
+#[cfg(feature = "legacy-evals")]
+use crate::Evals;
 use crate::{
     ApiKey, Audio, Batches, ChatCompletions, Containers, ContentProvenanceChecks, Conversations,
-    Embeddings, Error, Evals, Files, FineTuning, Images, Models, Moderations, Responses,
+    Embeddings, Error, Files, FineTuning, Images, Models, Moderations, Responses,
     RetryPolicy, Skills, Uploads, VectorStores, auth::AuthProvider, multipart::MultipartTransport,
     sse::SseLimits, transport::Transport,
 };
@@ -156,6 +158,9 @@ impl Client {
     }
 
     /// Returns the Evals resource facade.
+    ///
+    /// The OpenAI Evals platform will become read-only on 2026-10-31 and shut down on 2026-11-30.
+    #[cfg(feature = "legacy-evals")]
     #[must_use]
     pub fn evals(&self) -> Evals {
         Evals::new(self.clone())

@@ -1,0 +1,31 @@
+[package]
+name = "openai-rs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+openai-rs-types = { path = "../crates/openai-rs-types", features = ["realtime", "webhooks", "structured-output", "legacy-evals"] }
+serde_json = "1.0"
+
+[[bin]]
+name = "kernel_omittable_extra"
+path = "fuzz_targets/kernel_omittable_extra.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "sse_decoder"
+path = "fuzz_targets/sse_decoder.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "responses_stream_event"
+path = "fuzz_targets/responses_stream_event.rs"
+test = false
+doc = false

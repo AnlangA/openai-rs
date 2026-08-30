@@ -8,6 +8,9 @@ members = [
     "crates/openai-rs-contract-tests",
     "xtask",
 ]
+exclude = [
+    "fuzz",
+]
 resolver = "2"
 
 [workspace.package]
@@ -45,6 +48,7 @@ sha2 = "0.10.9"
 static_assertions = "1.1.0"
 thiserror = "2.0.16"
 tokio = { version = "1.47.1", features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
+toml = "0.8.20"
 tokio-stream = "0.1.17"
 tower = "0.5.2"
 trybuild = "1.0.110"

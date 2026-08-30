@@ -758,16 +758,6 @@ impl ChatKitSession {
     }
 }
 
-macro_rules! literal_tag {
-    ($name:ident, $variant:ident, $wire:literal) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-        enum $name {
-            #[serde(rename = $wire)]
-            $variant,
-        }
-    };
-}
-
 fn tagged_type<'a>(value: &'a Value, context: &'static str) -> Result<&'a str, String> {
     value
         .as_object()

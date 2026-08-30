@@ -169,13 +169,16 @@ impl ConversationItems {
         Box::pin(async_stream::try_stream! {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
-            if let Some(cursor) = params.after_ref() {
-                seen.insert(cursor.as_str().to_owned());
-            }
+            crate::pagination::seed_seen(&mut seen, params.after_ref().map(|cursor| cursor.as_str()));
 
             loop {
                 let page = items.list(&conversation_id, params.clone()).await?;
-                let next = next_item_cursor(&page, &mut seen)?;
+                let next = crate::pagination::next_cursor(
+                    page.has_more(),
+                    page.last_id().map(|id| id.as_str()),
+                    &mut seen,
+                    "conversation item",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => {
@@ -186,32 +189,6 @@ impl ConversationItems {
             }
         })
     }
-}
-
-fn next_item_cursor(
-    page: &ApiResponse<ConversationItemList>,
-    seen: &mut HashSet<String>,
-) -> Result<Option<String>, Error> {
-    if !page.has_more() {
-        return Ok(None);
-    }
-    let cursor = page.last_id().ok_or_else(|| {
-        Error::InvalidConfiguration(
-            "conversation item page advertises more results without a last_id".into(),
-        )
-    })?;
-    let value = cursor.as_str().to_owned();
-    if value.is_empty() {
-        return Err(Error::InvalidConfiguration(
-            "conversation item page advertises more results with an empty last_id".into(),
-        ));
-    }
-    if !seen.insert(value.clone()) {
-        return Err(Error::InvalidConfiguration(
-            "conversation item pagination returned a repeated cursor".into(),
-        ));
-    }
-    Ok(Some(value))
 }
 
 fn conversation_path(conversation_id: &ConversationId) -> Result<[PathSegment<'_>; 2], Error> {

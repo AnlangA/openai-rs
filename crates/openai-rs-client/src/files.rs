@@ -1,10 +1,13 @@
 //! Resource facades for the Files and multipart Uploads APIs.
 
+use std::{collections::HashSet, pin::Pin};
+
+use futures_core::Stream;
 use http::{Method, StatusCode};
 use openai_rs_types::{
     AddUploadPartRequest, CompleteUploadRequest, CreateFileRequest, CreateUploadRequest,
-    DeleteFileResponse, FileId, FileListPage, FileListParams, FileObject, Upload, UploadId,
-    UploadPart,
+    DeleteFileResponse, FileId, FileListPage, FileListParams, FileObject, Omittable, Upload,
+    UploadId, UploadPart,
 };
 
 use crate::{
@@ -18,6 +21,10 @@ use crate::{
 };
 
 const OK: &[StatusCode] = &[StatusCode::OK];
+
+/// A stream of bounded File collection pages.
+pub type FilePageStream =
+    Pin<Box<dyn Stream<Item = Result<ApiResponse<FileListPage>, Error>> + Send + 'static>>;
 
 /// Operations on files stored by OpenAI.
 #[derive(Clone, Debug)]
@@ -37,6 +44,33 @@ impl Files {
             .transport()
             .execute_json::<ListFiles, _>(&path, Some(&params), None)
             .await
+    }
+
+    /// Streams file list pages while rejecting a repeated or missing cursor.
+    #[must_use]
+    pub fn list_pages(&self, params: FileListParams) -> FilePageStream {
+        let files = self.clone();
+        Box::pin(async_stream::try_stream! {
+            let mut params = params;
+            let mut seen = HashSet::<String>::new();
+            if let Omittable::Value(cursor) = params.after_cursor() {
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
+            }
+            loop {
+                let page = files.list(params.clone()).await?;
+                let next = crate::pagination::next_cursor(
+                    page.has_more(),
+                    Some(page.last_id().as_str()),
+                    &mut seen,
+                    "file",
+                )?;
+                yield page;
+                match next {
+                    Some(cursor) => params = params.clone().after(FileId::new(cursor)),
+                    None => break,
+                }
+            }
+        })
     }
 
     /// Creates a file from immutable bytes or a snapshotted filesystem path.
@@ -279,6 +313,7 @@ operation!(
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::VecDeque,
         convert::Infallible,
         sync::{Arc, Mutex},
     };
@@ -292,7 +327,10 @@ mod tests {
         FileSortOrder, UploadId, UploadPartId,
     };
     use serde_json::{Value, json};
-    use tokio::{net::TcpListener, sync::oneshot};
+    use tokio::{
+        net::TcpListener,
+        sync::{mpsc, oneshot},
+    };
     use url::Url;
 
     use super::*;
@@ -305,6 +343,95 @@ mod tests {
         authorization: Option<String>,
         content_type: Option<String>,
         body: Vec<u8>,
+    }
+
+    async fn serve_sequence(
+        responses: Vec<(StatusCode, String)>,
+    ) -> (Client, mpsc::Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind file server");
+        let address = listener.local_addr().expect("file address");
+        let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
+        let (sender, receiver) = mpsc::channel(16);
+
+        tokio::spawn(async move {
+            loop {
+                if responses.lock().expect("response queue lock").is_empty() {
+                    break;
+                }
+                let (stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+                let responses = Arc::clone(&responses);
+                let sender = sender.clone();
+                let service = service_fn(move |request: Request<Incoming>| {
+                    let responses = Arc::clone(&responses);
+                    let sender = sender.clone();
+                    async move {
+                        let method = request.method().clone();
+                        let path_and_query = request
+                            .uri()
+                            .path_and_query()
+                            .map(ToString::to_string)
+                            .unwrap_or_default();
+                        let authorization = request
+                            .headers()
+                            .get(http::header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .map(ToOwned::to_owned);
+                        let content_type = request
+                            .headers()
+                            .get(http::header::CONTENT_TYPE)
+                            .and_then(|value| value.to_str().ok())
+                            .map(ToOwned::to_owned);
+                        let body = request
+                            .into_body()
+                            .collect()
+                            .await
+                            .expect("read request body")
+                            .to_bytes()
+                            .to_vec();
+                        let _ = sender
+                            .send(CapturedRequest {
+                                method,
+                                path_and_query,
+                                authorization,
+                                content_type,
+                                body,
+                            })
+                            .await;
+
+                        let next = responses
+                            .lock()
+                            .expect("response queue lock")
+                            .pop_front()
+                            .unwrap_or((StatusCode::OK, "{}".into()));
+                        let response = hyper::Response::builder()
+                            .status(next.0)
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .header("x-request-id", "req_files")
+                            .body(Full::new(Bytes::from(next.1)))
+                            .expect("build file response");
+                        Ok::<_, Infallible>(response)
+                    }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            }
+        });
+
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("file base URL");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(RetryPolicy::disabled())
+            .build()
+            .expect("file client");
+        (client, receiver)
     }
 
     async fn serve_once(
@@ -562,5 +689,30 @@ mod tests {
         );
         assert_eq!(captured.content_type, None);
         assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_pages_streams_and_advances_cursor() {
+        use futures_util::StreamExt;
+        let page1 = r#"{"data":[{"id":"file_1","bytes":100,"created_at":1,"filename":"a.jsonl","object":"file","purpose":"batch","status":"processed"}],"first_id":"file_1","last_id":"file_1","has_more":true,"object":"list"}"#;
+        let page2 = r#"{"data":[{"id":"file_2","bytes":200,"created_at":2,"filename":"b.jsonl","object":"file","purpose":"batch","status":"processed"}],"first_id":"file_2","last_id":"file_2","has_more":false,"object":"list"}"#;
+        let (client, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, page1.to_string()),
+            (StatusCode::OK, page2.to_string()),
+        ])
+        .await;
+
+        let mut stream = client.files().list_pages(FileListParams::new());
+        let first = stream.next().await.expect("page 1").expect("ok");
+        assert_eq!(first.data().len(), 1);
+        assert_eq!(first.data()[0].id().as_str(), "file_1");
+
+        let second = stream.next().await.expect("page 2").expect("ok");
+        assert_eq!(second.data().len(), 1);
+        assert_eq!(second.data()[0].id().as_str(), "file_2");
+
+        assert!(stream.next().await.is_none());
+        assert!(captured.recv().await.is_some());
+        assert!(captured.recv().await.is_some());
     }
 }

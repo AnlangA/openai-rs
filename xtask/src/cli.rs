@@ -6,12 +6,14 @@ Repository maintenance commands for openai-rs
 Usage:
   cargo run -p xtask -- spec fetch --rev <40-char-sha> [--url <official-raw-url>]
   cargo run -p xtask -- spec verify
+  cargo run -p xtask -- drift [--from <spec-path>] --to <spec-path>
   cargo run -p xtask -- codegen [--check]
   cargo run -p xtask -- check
 
 Commands:
   spec fetch   Fetch the audited OpenAPI snapshot from an immutable official GitHub URL.
   spec verify  Verify the committed OpenAPI bytes, identity, versions, and inventory.
+  drift        Compare two OpenAPI snapshots and classify breaking, lifecycle, and additive drift.
   codegen      Run the extensible code-generation pipeline skeleton.
   check        Run spec verify followed by codegen --check.
 ";
@@ -19,9 +21,16 @@ Commands:
 #[derive(Debug, Eq, PartialEq)]
 pub enum Command {
     Spec(SpecCommand),
+    Drift(DriftArguments),
     Codegen { check: bool },
     Check,
     Help,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct DriftArguments {
+    pub from: Option<String>,
+    pub to: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -51,10 +60,51 @@ pub fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Command> {
             require_len(&arguments, 1, "check does not accept arguments")?;
             Ok(Command::Check)
         }
+        "drift" => parse_drift(&arguments[1..]),
         "codegen" => parse_codegen(&arguments[1..]),
         "spec" => parse_spec(&arguments[1..]),
         other => Err(usage_error(format!("unknown command `{other}`"))),
     }
+}
+
+fn parse_drift(arguments: &[String]) -> Result<Command> {
+    let mut from = None;
+    let mut to = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--from" => {
+                if from.is_some() {
+                    return Err(usage_error("duplicate `--from` option"));
+                }
+                index += 1;
+                from = Some(
+                    arguments
+                        .get(index)
+                        .cloned()
+                        .ok_or_else(|| usage_error("missing value for `--from`"))?,
+                );
+            }
+            "--to" => {
+                if to.is_some() {
+                    return Err(usage_error("duplicate `--to` option"));
+                }
+                index += 1;
+                to = Some(
+                    arguments
+                        .get(index)
+                        .cloned()
+                        .ok_or_else(|| usage_error("missing value for `--to`"))?,
+                );
+            }
+            other => {
+                return Err(usage_error(format!("unknown drift option `{other}`")));
+            }
+        }
+        index += 1;
+    }
+    let to = to.ok_or_else(|| usage_error("drift requires `--to <path-or-spec>`"))?;
+    Ok(Command::Drift(DriftArguments { from, to }))
 }
 
 fn parse_codegen(arguments: &[String]) -> Result<Command> {
@@ -149,6 +199,25 @@ mod tests {
     #[test]
     fn parses_aggregate_check() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(parse(["check".to_owned()])?, Command::Check);
+        Ok(())
+    }
+
+    #[test]
+    fn parses_drift() -> Result<(), Box<dyn std::error::Error>> {
+        let command = parse([
+            "drift".to_owned(),
+            "--from".to_owned(),
+            "spec/a.json".to_owned(),
+            "--to".to_owned(),
+            "spec/b.json".to_owned(),
+        ])?;
+        assert_eq!(
+            command,
+            Command::Drift(super::DriftArguments {
+                from: Some("spec/a.json".to_owned()),
+                to: "spec/b.json".to_owned(),
+            })
+        );
         Ok(())
     }
 

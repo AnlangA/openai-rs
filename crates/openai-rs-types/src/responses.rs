@@ -10,282 +10,90 @@ use std::{collections::BTreeMap, fmt};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Value};
 
-use crate::{ExtraFields, JsonText, Nullable, Omittable};
+use crate::{ExtraFields, JsonText, Nullable, Omittable, open_string_enum};
 
-macro_rules! literal_tag {
-    ($name:ident, $variant:ident, $wire:literal) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-        enum $name {
-            #[serde(rename = $wire)]
-            $variant,
-        }
-    };
-}
-
-macro_rules! open_string_enum {
-    ($(#[$meta:meta])* pub enum $name:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        #[non_exhaustive]
-        pub enum $name {
-            $($variant,)+
-            /// A value added by the service after this crate was released.
-            Unknown(Box<str>),
-        }
-
-        impl $name {
-            /// Returns the exact string carried on the wire.
-            #[must_use]
-            pub fn as_str(&self) -> &str {
-                match self {
-                    $(Self::$variant => $wire,)+
-                    Self::Unknown(value) => value,
-                }
-            }
-
-            /// Preserves an arbitrary wire value, recognizing current values.
-            #[must_use]
-            pub fn from_raw(value: impl Into<Box<str>>) -> Self {
-                let value = value.into();
-                match value.as_ref() {
-                    $($wire => Self::$variant,)+
-                    _ => Self::Unknown(value),
-                }
-            }
-        }
-
-        impl Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: Serializer,
-            {
-                serializer.serialize_str(self.as_str())
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                String::deserialize(deserializer).map(Self::from_raw)
-            }
-        }
-    };
-}
-
-macro_rules! tagged_union {
-    ($(#[$meta:meta])* pub enum $name:ident {
-        $($variant:ident($ty:ty) => $wire:literal),+ $(,)?
-    }) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq)]
-        #[non_exhaustive]
-        pub enum $name {
-            $($variant($ty),)+
-            /// A future variant retained as a complete semantic JSON object.
-            Unknown(UnknownTaggedObject),
-        }
-
-        impl Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: Serializer,
-            {
-                match self {
-                    $(Self::$variant(value) => value.serialize(serializer),)+
-                    Self::Unknown(value) => value.serialize(serializer),
-                }
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                let value = Value::deserialize(deserializer)?;
-                let discriminator = object_discriminator(&value).map_err(D::Error::custom)?;
-                match discriminator.as_str() {
-                    $($wire => serde_json::from_value::<$ty>(value)
-                        .map(Self::$variant)
-                        .map_err(D::Error::custom),)+
-                    _ => UnknownTaggedObject::from_value(value)
-                        .map(Self::Unknown)
-                        .map_err(D::Error::custom),
-                }
-            }
-        }
-    };
-}
+pub use crate::kernel::{UnknownTaggedObject, UnknownTaggedObjectError};
 
 fn object_discriminator(value: &Value) -> Result<String, &'static str> {
-    let object = value
-        .as_object()
-        .ok_or("tagged value must be a JSON object")?;
-    object
-        .get("type")
-        .ok_or("tagged object is missing string field `type`")?
-        .as_str()
-        .map(str::to_owned)
-        .ok_or("tagged object field `type` must be a string")
-}
-
-/// A future tagged object, including its discriminator and every raw field.
-///
-/// The map is immutable through the public API, so `discriminator` can never
-/// drift from its retained `type` property.
-#[derive(Clone, PartialEq)]
-pub struct UnknownTaggedObject {
-    discriminator: Box<str>,
-    raw: Map<String, Value>,
-}
-
-impl UnknownTaggedObject {
-    /// Validates and retains an unknown tagged JSON object.
-    pub fn from_value(value: Value) -> Result<Self, UnknownTaggedObjectError> {
-        let discriminator = object_discriminator(&value)
-            .map_err(UnknownTaggedObjectError::Invalid)?
-            .into_boxed_str();
-        let Value::Object(raw) = value else {
-            return Err(UnknownTaggedObjectError::Invalid(
-                "tagged value must be a JSON object",
-            ));
-        };
-        Ok(Self { discriminator, raw })
-    }
-
-    /// Returns the exact unknown discriminator.
-    #[must_use]
-    pub fn discriminator(&self) -> &str {
-        &self.discriminator
-    }
-
-    /// Borrows all retained object fields, including `type`.
-    #[must_use]
-    pub const fn raw(&self) -> &Map<String, Value> {
-        &self.raw
-    }
-
-    /// Converts this value back into its semantic JSON object.
-    #[must_use]
-    pub fn into_value(self) -> Value {
-        Value::Object(self.raw)
-    }
-}
-
-impl fmt::Debug for UnknownTaggedObject {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("UnknownTaggedObject")
-            .field("discriminator", &self.discriminator)
-            .field("field_count", &self.raw.len())
-            .finish()
-    }
-}
-
-impl Serialize for UnknownTaggedObject {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.raw.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for UnknownTaggedObject {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::from_value(Value::deserialize(deserializer)?).map_err(D::Error::custom)
-    }
-}
-
-/// A supplied value was not a tagged JSON object.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum UnknownTaggedObjectError {
-    /// The discriminator was absent or had the wrong JSON kind.
-    #[error("{0}")]
-    Invalid(&'static str),
+    crate::kernel::object_discriminator(value)
 }
 
 open_string_enum! {
     /// Lifecycle state of a response.
     pub enum ResponseStatus {
-        Queued => "queued",
-        InProgress => "in_progress",
-        Completed => "completed",
-        Failed => "failed",
-        Incomplete => "incomplete",
-        Cancelled => "cancelled"
+        Queued = "queued",
+        InProgress = "in_progress",
+        Completed = "completed",
+        Failed = "failed",
+        Incomplete = "incomplete",
+        Cancelled = "cancelled"
     }
 }
 
 open_string_enum! {
     /// Lifecycle state of one response item.
     pub enum ResponseItemStatus {
-        InProgress => "in_progress",
-        Completed => "completed",
-        Incomplete => "incomplete",
-        Failed => "failed"
+        InProgress = "in_progress",
+        Completed = "completed",
+        Incomplete = "incomplete",
+        Failed = "failed"
     }
 }
 
 open_string_enum! {
     /// Role assigned to a Responses message.
     pub enum MessageRole {
-        User => "user",
-        Assistant => "assistant",
-        System => "system",
-        Developer => "developer"
+        User = "user",
+        Assistant = "assistant",
+        System = "system",
+        Developer = "developer"
     }
 }
 
 open_string_enum! {
     /// Requested image fidelity.
     pub enum ImageDetail {
-        Auto => "auto",
-        Low => "low",
-        High => "high",
-        Original => "original"
+        Auto = "auto",
+        Low = "low",
+        High = "high",
+        Original = "original"
     }
 }
 
 open_string_enum! {
     /// Context truncation policy.
     pub enum TruncationStrategy {
-        Auto => "auto",
-        Disabled => "disabled"
+        Auto = "auto",
+        Disabled = "disabled"
     }
 }
 
 open_string_enum! {
     /// Amount of reasoning requested from a compatible model.
     pub enum ReasoningEffort {
-        None => "none",
-        Minimal => "minimal",
-        Low => "low",
-        Medium => "medium",
-        High => "high",
-        XHigh => "xhigh"
+        None = "none",
+        Minimal = "minimal",
+        Low = "low",
+        Medium = "medium",
+        High = "high",
+        XHigh = "xhigh"
     }
 }
 
 open_string_enum! {
     /// Requested form of a reasoning summary.
     pub enum ReasoningSummary {
-        Auto => "auto",
-        Concise => "concise",
-        Detailed => "detailed"
+        Auto = "auto",
+        Concise = "concise",
+        Detailed = "detailed"
     }
 }
 
 open_string_enum! {
     /// Why a response stopped before completing.
     pub enum IncompleteReason {
-        MaxOutputTokens => "max_output_tokens",
-        ContentFilter => "content_filter"
+        MaxOutputTokens = "max_output_tokens",
+        ContentFilter = "content_filter"
     }
 }
 
@@ -684,6 +492,20 @@ pub enum ResponseInput {
     Items(Vec<ResponseInputItem>),
 }
 
+impl ResponseInput {
+    /// Creates a shorthand text input.
+    #[must_use]
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text(text.into())
+    }
+
+    /// Creates input from typed input items.
+    #[must_use]
+    pub fn items(items: impl IntoIterator<Item = impl Into<ResponseInputItem>>) -> Self {
+        Self::Items(items.into_iter().map(Into::into).collect())
+    }
+}
+
 impl From<String> for ResponseInput {
     fn from(value: String) -> Self {
         Self::Text(value)
@@ -760,6 +582,23 @@ pub struct FunctionTool {
 }
 
 impl FunctionTool {
+    /// Creates a strict function tool from `T`'s `schemars` JSON Schema definition.
+    #[cfg(feature = "structured-output")]
+    pub fn for_type<T: schemars::JsonSchema>(
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Result<Self, crate::StructuredError> {
+        let name = name.into();
+        let description = description.into();
+        let mut schema = serde_json::to_value(schemars::schema_for!(T))
+            .map_err(crate::StructuredError::Encode)?;
+        crate::structured::normalize_strict_schema(&mut schema)?;
+        Ok(Self::new(name)
+            .description(description)
+            .parameters(schema)
+            .strict(true))
+    }
+
     /// Creates a function tool with a permissive empty object schema.
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
@@ -1243,6 +1082,11 @@ impl FunctionCall {
         &self.arguments
     }
 
+    /// Parses the function arguments into a declared Rust type.
+    pub fn arguments_as<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
+        serde_json::from_str(self.arguments.as_str())
+    }
+
     /// Returns the item status.
     #[must_use]
     pub fn status(&self) -> Option<&ResponseItemStatus> {
@@ -1332,6 +1176,14 @@ impl FunctionCallOutput {
         output: &T,
     ) -> Result<Self, serde_json::Error> {
         serde_json::to_string(output).map(|output| Self::new(call_id, output))
+    }
+
+    /// Serializes a typed result into JSON output for a function call.
+    pub fn json<T: Serialize>(
+        call_id: impl Into<String>,
+        output: &T,
+    ) -> Result<Self, serde_json::Error> {
+        Self::from_serializable(call_id, output)
     }
 
     /// Sets an item id for stored input items.
@@ -1734,6 +1586,15 @@ impl OutputMessage {
         self.content.iter().filter_map(|part| match part {
             OutputContent::Text(text) => Some(text.text()),
             OutputContent::Refusal(_) | OutputContent::Unknown(_) => None,
+        })
+    }
+
+    /// Returns the refusal text if this message contains a refusal part.
+    #[must_use]
+    pub fn refusal(&self) -> Option<&str> {
+        self.content.iter().find_map(|part| match part {
+            OutputContent::Refusal(refusal) => Some(refusal.refusal()),
+            _ => None,
         })
     }
 
@@ -2325,12 +2186,44 @@ impl TextFormatJsonSchema {
     }
 }
 
+#[cfg(feature = "structured-output")]
+impl<T: schemars::JsonSchema> From<&crate::StructuredOutput<T>> for TextFormatJsonSchema {
+    fn from(output: &crate::StructuredOutput<T>) -> Self {
+        let mut schema = Self::new(output.name(), output.schema().clone()).strict(true);
+        if let Some(description) = output.description() {
+            schema = schema.description(description);
+        }
+        schema
+    }
+}
+
+#[cfg(feature = "structured-output")]
+impl<T: schemars::JsonSchema> From<crate::StructuredOutput<T>> for TextFormatJsonSchema {
+    fn from(output: crate::StructuredOutput<T>) -> Self {
+        Self::from(&output)
+    }
+}
+
 tagged_union! {
     /// The requested model text output format.
     pub enum TextFormat {
         Text(TextFormatText) => "text",
         JsonObject(TextFormatJsonObject) => "json_object",
         JsonSchema(TextFormatJsonSchema) => "json_schema"
+    }
+}
+
+#[cfg(feature = "structured-output")]
+impl<T: schemars::JsonSchema> From<&crate::StructuredOutput<T>> for TextFormat {
+    fn from(output: &crate::StructuredOutput<T>) -> Self {
+        Self::JsonSchema(TextFormatJsonSchema::from(output))
+    }
+}
+
+#[cfg(feature = "structured-output")]
+impl<T: schemars::JsonSchema> From<crate::StructuredOutput<T>> for TextFormat {
+    fn from(output: crate::StructuredOutput<T>) -> Self {
+        Self::JsonSchema(TextFormatJsonSchema::from(output))
     }
 }
 
@@ -2826,16 +2719,44 @@ macro_rules! impl_create_response_builders {
                 self
             }
 
+            /// Sets structured output configuration using a typed schema.
+            #[cfg(feature = "structured-output")]
+            #[must_use]
+            pub fn text_format<T: schemars::JsonSchema>(
+                mut self,
+                output: &crate::StructuredOutput<T>,
+            ) -> Self {
+                let format = TextFormat::from(output);
+                let text_config = match self.body.text {
+                    Omittable::Value(config) => {
+                        let mut next = ResponseTextConfig::new(format);
+                        if let Omittable::Value(v) = config.verbosity {
+                            next = next.verbosity(v);
+                        }
+                        next
+                    }
+                    Omittable::Omitted => ResponseTextConfig::new(format),
+                };
+                self.body.text = Omittable::Value(text_config);
+                self
+            }
+
             /// Adds a tool.
             #[must_use]
             pub fn tool(mut self, tool: impl Into<ResponseTool>) -> Self {
                 let mut tools = match std::mem::take(&mut self.body.tools) {
                     Omittable::Value(tools) => tools,
                     Omittable::Omitted => Vec::new(),
-                };
+                    };
                 tools.push(tool.into());
                 self.body.tools = Omittable::Value(tools);
                 self
+            }
+
+            /// Adds a tool.
+            #[must_use]
+            pub fn with_tool(self, tool: impl Into<ResponseTool>) -> Self {
+                self.tool(tool)
             }
 
             /// Adds multiple tools.
@@ -3299,6 +3220,24 @@ impl ResponseUsage {
     }
 }
 
+/// Failures produced when parsing structured output from a Response.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum OutputParseError {
+    /// The response was incomplete.
+    #[error("response was incomplete: {0:?}")]
+    Incomplete(Option<String>),
+    /// The model refused to respond.
+    #[error("model refused to respond: {0}")]
+    Refusal(String),
+    /// The response contains no text output.
+    #[error("response contains no text output")]
+    NoTextOutput,
+    /// Failed to deserialize output text into the target type.
+    #[error("failed to parse structured output: {0}")]
+    Decode(#[source] serde_json::Error),
+}
+
 /// A complete Responses API resource.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Response {
@@ -3406,6 +3345,43 @@ impl Response {
             ResponseOutputItem::FunctionCall(call) => Some(call),
             _ => None,
         })
+    }
+
+    /// Returns the first refusal text if the response contains a refusal part.
+    #[must_use]
+    pub fn refusal(&self) -> Option<&str> {
+        self.output.iter().find_map(|item| match item {
+            ResponseOutputItem::Message(message) => message.refusal(),
+            _ => None,
+        })
+    }
+
+    /// Returns details explaining why the response was incomplete.
+    #[must_use]
+    pub fn incomplete_details(&self) -> Option<&IncompleteDetails> {
+        match &self.incomplete_details {
+            Nullable::Value(value) => Some(value),
+            Nullable::Null => None,
+        }
+    }
+
+    /// Parses assistant output text into a declared Rust type.
+    ///
+    /// Refusal and incomplete states are routed to dedicated error variants
+    /// rather than being treated as malformed JSON.
+    pub fn output_parsed<T: serde::de::DeserializeOwned>(&self) -> Result<T, OutputParseError> {
+        if matches!(self.status(), Some(ResponseStatus::Incomplete)) {
+            let reason = self.incomplete_details().map(|d| d.reason().as_str().to_owned());
+            return Err(OutputParseError::Incomplete(reason));
+        }
+        if let Some(refusal) = self.refusal() {
+            return Err(OutputParseError::Refusal(refusal.to_owned()));
+        }
+        let text = self.output_text();
+        if text.is_empty() {
+            return Err(OutputParseError::NoTextOutput);
+        }
+        serde_json::from_str(&text).map_err(OutputParseError::Decode)
     }
 
     /// Converts replayable output items into the corresponding input items.
@@ -5899,8 +5875,8 @@ pub const STABLE_RESPONSE_TOOL_DISCRIMINATORS: [&str; 16] = [
 open_string_enum! {
     /// Whether an allowed-tool set is optional or mandatory.
     pub enum AllowedToolsMode {
-        Auto => "auto",
-        Required => "required"
+        Auto = "auto",
+        Required = "required"
     }
 }
 
@@ -5942,14 +5918,14 @@ impl AllowedToolsChoice {
 open_string_enum! {
     /// Hosted tool types accepted by the tool-choice object branch.
     pub enum HostedToolType {
-        FileSearch => "file_search",
-        WebSearchPreview => "web_search_preview",
-        Computer => "computer",
-        ComputerUsePreview => "computer_use_preview",
-        ComputerUse => "computer_use",
-        WebSearchPreview20250311 => "web_search_preview_2025_03_11",
-        ImageGeneration => "image_generation",
-        CodeInterpreter => "code_interpreter"
+        FileSearch = "file_search",
+        WebSearchPreview = "web_search_preview",
+        Computer = "computer",
+        ComputerUsePreview = "computer_use_preview",
+        ComputerUse = "computer_use",
+        WebSearchPreview20250311 = "web_search_preview_2025_03_11",
+        ImageGeneration = "image_generation",
+        CodeInterpreter = "code_interpreter"
     }
 }
 
@@ -7474,5 +7450,196 @@ mod tests {
         assert_eq!(value["type"], "mcp");
         assert_eq!(value["server_label"], "calendar");
         assert_eq!(value["require_approval"], "always");
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+    struct WeatherQuery {
+        city: String,
+        country: Option<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+    struct WeatherReport {
+        temperature: f64,
+        summary: String,
+    }
+
+    #[test]
+    fn function_tool_for_type_and_arguments_as() {
+        let tool = FunctionTool::for_type::<WeatherQuery>("get_weather", "Get weather for a city")
+            .expect("build tool");
+        let serialized = serde_json::to_value(&tool).expect("serialize tool");
+        assert_eq!(serialized["type"], "function");
+        assert_eq!(serialized["name"], "get_weather");
+        assert_eq!(serialized["strict"], true);
+        assert_eq!(serialized["parameters"]["type"], "object");
+        assert_eq!(serialized["parameters"]["additionalProperties"], false);
+
+        let call = FunctionCall::new(
+            "item_1",
+            "call_123",
+            "get_weather",
+            serde_json::json!({ "city": "Hangzhou", "country": null })
+                .to_string()
+                .into(),
+            ResponseItemStatus::Completed,
+        );
+        let parsed: WeatherQuery = call.arguments_as().expect("parse arguments");
+        assert_eq!(
+            parsed,
+            WeatherQuery {
+                city: "Hangzhou".into(),
+                country: None,
+            }
+        );
+
+        let output = FunctionCallOutput::json(
+            call.call_id(),
+            &WeatherReport {
+                temperature: 26.0,
+                summary: "Sunny".into(),
+            },
+        )
+        .expect("build output");
+        let val = serde_json::to_value(&output).expect("serialize output");
+        assert_eq!(val["type"], "function_call_output");
+        assert_eq!(val["call_id"], "call_123");
+        assert_eq!(
+            val["output"],
+            "{\"temperature\":26.0,\"summary\":\"Sunny\"}"
+        );
+    }
+
+    #[test]
+    fn response_output_parsed_branches() {
+        // Success case
+        let success_response = Response {
+            id: "resp_1".into(),
+            created_at: 1000,
+            error: Nullable::Null,
+            incomplete_details: Nullable::Null,
+            instructions: Nullable::Null,
+            metadata: Nullable::Null,
+            model: "gpt-5.6".into(),
+            object: ResponseObjectTag::Response,
+            output: vec![ResponseOutputItem::Message(OutputMessage::new(
+                "msg_1",
+                ResponseItemStatus::Completed,
+                vec![OutputContent::Text(OutputText::new(
+                    "{\"temperature\":20.5,\"summary\":\"Cloudy\"}",
+                ))],
+            ))],
+            parallel_tool_calls: false,
+            temperature: Nullable::Null,
+            tool_choice: ToolChoice::Auto,
+            tools: vec![],
+            top_p: Nullable::Null,
+            status: Omittable::Value(ResponseStatus::Completed),
+            background: Omittable::Omitted,
+            completed_at: Omittable::Omitted,
+            conversation: Omittable::Omitted,
+            max_output_tokens: Omittable::Omitted,
+            max_tool_calls: Omittable::Omitted,
+            previous_response_id: Omittable::Omitted,
+            prompt: Omittable::Omitted,
+            reasoning: Omittable::Omitted,
+            safety_identifier: Omittable::Omitted,
+            service_tier: Omittable::Omitted,
+            store: Omittable::Omitted,
+            text: Omittable::Omitted,
+            truncation: Omittable::Omitted,
+            usage: Omittable::Omitted,
+            user: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        };
+        let parsed: WeatherReport = success_response
+            .output_parsed()
+            .expect("parse successful output");
+        assert_eq!(parsed.temperature, 20.5);
+
+        // Refusal case
+        let refusal_response = Response {
+            id: "resp_2".into(),
+            created_at: 1000,
+            error: Nullable::Null,
+            incomplete_details: Nullable::Null,
+            instructions: Nullable::Null,
+            metadata: Nullable::Null,
+            model: "gpt-5.6".into(),
+            object: ResponseObjectTag::Response,
+            output: vec![ResponseOutputItem::Message(OutputMessage::new(
+                "msg_2",
+                ResponseItemStatus::Completed,
+                vec![OutputContent::Refusal(Refusal::new("Cannot assist with that request"))],
+            ))],
+            parallel_tool_calls: false,
+            temperature: Nullable::Null,
+            tool_choice: ToolChoice::Auto,
+            tools: vec![],
+            top_p: Nullable::Null,
+            status: Omittable::Value(ResponseStatus::Completed),
+            background: Omittable::Omitted,
+            completed_at: Omittable::Omitted,
+            conversation: Omittable::Omitted,
+            max_output_tokens: Omittable::Omitted,
+            max_tool_calls: Omittable::Omitted,
+            previous_response_id: Omittable::Omitted,
+            prompt: Omittable::Omitted,
+            reasoning: Omittable::Omitted,
+            safety_identifier: Omittable::Omitted,
+            service_tier: Omittable::Omitted,
+            store: Omittable::Omitted,
+            text: Omittable::Omitted,
+            truncation: Omittable::Omitted,
+            usage: Omittable::Omitted,
+            user: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        };
+        let err = refusal_response
+            .output_parsed::<WeatherReport>()
+            .expect_err("refusal must error");
+        assert!(matches!(err, OutputParseError::Refusal(r) if r.contains("Cannot assist")));
+
+        // Incomplete case
+        let incomplete_response = Response {
+            id: "resp_3".into(),
+            created_at: 1000,
+            error: Nullable::Null,
+            incomplete_details: Nullable::Value(IncompleteDetails {
+                reason: IncompleteReason::MaxOutputTokens,
+                extra: ExtraFields::new(),
+            }),
+            instructions: Nullable::Null,
+            metadata: Nullable::Null,
+            model: "gpt-5.6".into(),
+            object: ResponseObjectTag::Response,
+            output: vec![],
+            parallel_tool_calls: false,
+            temperature: Nullable::Null,
+            tool_choice: ToolChoice::Auto,
+            tools: vec![],
+            top_p: Nullable::Null,
+            status: Omittable::Value(ResponseStatus::Incomplete),
+            background: Omittable::Omitted,
+            completed_at: Omittable::Omitted,
+            conversation: Omittable::Omitted,
+            max_output_tokens: Omittable::Omitted,
+            max_tool_calls: Omittable::Omitted,
+            previous_response_id: Omittable::Omitted,
+            prompt: Omittable::Omitted,
+            reasoning: Omittable::Omitted,
+            safety_identifier: Omittable::Omitted,
+            service_tier: Omittable::Omitted,
+            store: Omittable::Omitted,
+            text: Omittable::Omitted,
+            truncation: Omittable::Omitted,
+            usage: Omittable::Omitted,
+            user: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        };
+        let inc_err = incomplete_response
+            .output_parsed::<WeatherReport>()
+            .expect_err("incomplete must error");
+        assert!(matches!(inc_err, OutputParseError::Incomplete(Some(reason)) if reason == "max_output_tokens"));
     }
 }

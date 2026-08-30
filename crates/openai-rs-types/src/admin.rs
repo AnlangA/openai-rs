@@ -23,16 +23,6 @@ fn discriminator<'a>(value: &'a Value, field: &str) -> Result<&'a str, &'static 
         .ok_or("tagged admin discriminator must be a string")
 }
 
-macro_rules! literal_tag {
-    ($name:ident, $variant:ident, $wire:literal) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-        enum $name {
-            #[serde(rename = $wire)]
-            $variant,
-        }
-    };
-}
-
 macro_rules! strict_tagged_union {
     (
         field = $field:literal;

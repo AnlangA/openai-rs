@@ -1469,7 +1469,9 @@ mod tests {
 
     #[tokio::test]
     async fn raw_download_stream_is_not_json_decoded() {
-        let bytes = Bytes::from_static(b"\0\xffarbitrary\r\nbytes");
+        const DOWNLOAD_FIXTURE: &[u8] =
+            include_bytes!("../../../testdata/fixtures/files/downloadFile/response.bin");
+        let bytes = Bytes::copy_from_slice(DOWNLOAD_FIXTURE);
         let (transport, captured) = serve_once(
             StatusCode::OK,
             "application/octet-stream",

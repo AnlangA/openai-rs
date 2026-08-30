@@ -1,5 +1,8 @@
 //! Lossless wire types and Serde primitives for the OpenAI API.
 
+#[macro_use]
+pub mod kernel;
+
 #[cfg(feature = "admin")]
 pub mod admin;
 
@@ -14,7 +17,6 @@ pub mod core;
 pub mod evals;
 pub mod files;
 pub mod fine_tuning;
-pub mod kernel;
 pub mod media;
 pub mod responses;
 pub mod scalar;
@@ -73,4 +75,7 @@ pub use voices::*;
 pub use chatkit::*;
 
 #[cfg(feature = "structured-output")]
-pub use structured::{StructuredError, StructuredOutput, TypedFunction, normalize_strict_schema};
+pub use structured::{
+    StructuredError, StructuredOutput, ToolContext, ToolExecutionError, ToolHandler, ToolRegistry,
+    ToolSpec, TypedFunction, normalize_strict_schema,
+};

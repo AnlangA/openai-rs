@@ -1,6 +1,7 @@
 mod cli;
 mod codegen;
 mod codex_compat;
+mod drift;
 mod error;
 mod spec;
 
@@ -31,6 +32,7 @@ fn run() -> Result<()> {
     match command {
         Command::Spec(SpecCommand::Fetch(arguments)) => spec::fetch(&repository_root, &arguments),
         Command::Spec(SpecCommand::Verify) => spec::verify(&repository_root),
+        Command::Drift(arguments) => drift::run(&repository_root, &arguments),
         Command::Codegen { check } => {
             spec::verify(&repository_root)?;
             codegen::run(&repository_root, check)

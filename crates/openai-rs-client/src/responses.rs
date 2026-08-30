@@ -1,16 +1,20 @@
+use std::{collections::HashSet, pin::Pin};
+
+use futures_core::Stream;
 use http::{Method, StatusCode};
 use openai_rs_types::{
     ResponseId,
     responses::{
         CompactResponseRequest, CompactedResponse, CountInputTokensRequest, CreateResponseRequest,
         CreateStreamingResponseRequest, DeletedResponse, InputTokenCountResponse,
-        ListResponseInputItemsParams, Response, ResponseInputItemList, ResponseStreamEvent,
+        ListResponseInputItemsParams, Response, ResponseInputItemList, ResponseStatus,
+        ResponseStreamEvent,
     },
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ApiResponse, Client, Error, ResponseEventStream,
+    ApiResponse, Client, Error, PollError, PollOptions, ResponseEventStream,
     operation::{
         AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, RetryClass,
         private::Sealed,
@@ -20,6 +24,10 @@ use crate::{
 
 const OK: &[StatusCode] = &[StatusCode::OK];
 const OK_OR_NO_CONTENT: &[StatusCode] = &[StatusCode::OK, StatusCode::NO_CONTENT];
+
+/// A stream of bounded Response input item collection pages.
+pub type ResponseInputItemPageStream =
+    Pin<Box<dyn Stream<Item = Result<ApiResponse<ResponseInputItemList>, Error>> + Send + 'static>>;
 
 /// Optional fields to include while retrieving a non-streaming Response.
 /// Streaming-only query parameters are intentionally exposed by separate
@@ -265,6 +273,46 @@ impl Responses {
         self.input_tokens().count(request).await
     }
 
+    /// Polls a background response until it reaches a terminal status (completed, failed, incomplete, or cancelled).
+    pub async fn poll(
+        &self,
+        response_id: &ResponseId,
+        options: PollOptions,
+    ) -> Result<ApiResponse<Response>, PollError> {
+        crate::poll::poll_resource_with_status(
+            || self.retrieve(response_id),
+            |response| {
+                matches!(
+                    response.status(),
+                    Some(
+                        ResponseStatus::Completed
+                            | ResponseStatus::Failed
+                            | ResponseStatus::Incomplete
+                            | ResponseStatus::Cancelled
+                    )
+                )
+            },
+            |response| {
+                response
+                    .status()
+                    .map(|s| s.as_str().to_owned())
+                    .unwrap_or_else(|| "unknown".into())
+            },
+            options,
+        )
+        .await
+    }
+
+    /// Convenience alias for `responses().input_items().list_pages(...)`.
+    #[must_use]
+    pub fn list_input_item_pages(
+        &self,
+        response_id: &ResponseId,
+        params: ListResponseInputItemsParams,
+    ) -> ResponseInputItemPageStream {
+        self.input_items().list_pages(response_id, params)
+    }
+
     /// Opens a persistent Responses WebSocket using bounded defaults.
     #[cfg(feature = "realtime")]
     pub async fn connect(&self) -> Result<crate::ResponsesWebSocket, Error> {
@@ -313,6 +361,38 @@ impl InputItems {
             .transport()
             .execute_json::<ListInputItems, _>(&path, Some(&params), None)
             .await
+    }
+
+    /// Streams input item pages while rejecting a repeated or missing cursor.
+    #[must_use]
+    pub fn list_pages(
+        &self,
+        response_id: &ResponseId,
+        params: ListResponseInputItemsParams,
+    ) -> ResponseInputItemPageStream {
+        let items = self.clone();
+        let response_id = response_id.clone();
+        Box::pin(async_stream::try_stream! {
+            let mut params = params;
+            let mut seen = HashSet::<String>::new();
+            if let Some(cursor) = params.after_ref() {
+                crate::pagination::seed_seen(&mut seen, Some(cursor));
+            }
+            loop {
+                let page = items.list(&response_id, params.clone()).await?;
+                let next = crate::pagination::next_cursor(
+                    page.has_more(),
+                    page.last_id(),
+                    &mut seen,
+                    "response input item",
+                )?;
+                yield page;
+                match next {
+                    Some(cursor) => params = params.clone().after(cursor),
+                    None => break,
+                }
+            }
+        })
     }
 }
 
@@ -494,6 +574,7 @@ operation!(
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::VecDeque,
         convert::Infallible,
         sync::{Arc, Mutex},
     };
@@ -504,7 +585,10 @@ mod tests {
     use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
     use hyper_util::rt::TokioIo;
     use serde_json::{Value, json};
-    use tokio::{net::TcpListener, sync::oneshot};
+    use tokio::{
+        net::TcpListener,
+        sync::{mpsc, oneshot},
+    };
     use url::Url;
 
     use super::*;
@@ -518,6 +602,82 @@ mod tests {
         path_and_query: String,
         authorization: Option<String>,
         body: Vec<u8>,
+    }
+
+    async fn serve_sequence(
+        responses: Vec<(StatusCode, String)>,
+    ) -> (Url, mpsc::Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback server");
+        let address = listener.local_addr().expect("loopback address");
+        let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
+        let (sender, receiver) = mpsc::channel(16);
+
+        tokio::spawn(async move {
+            loop {
+                if responses.lock().expect("response queue lock").is_empty() {
+                    break;
+                }
+                let (stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+                let responses = Arc::clone(&responses);
+                let sender = sender.clone();
+                let service = service_fn(move |request: Request<Incoming>| {
+                    let responses = Arc::clone(&responses);
+                    let sender = sender.clone();
+                    async move {
+                        let method = request.method().clone();
+                        let path_and_query = request
+                            .uri()
+                            .path_and_query()
+                            .map(ToString::to_string)
+                            .unwrap_or_default();
+                        let authorization = request
+                            .headers()
+                            .get(http::header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .map(ToOwned::to_owned);
+                        let body = request
+                            .into_body()
+                            .collect()
+                            .await
+                            .expect("read request body")
+                            .to_bytes()
+                            .to_vec();
+                        let _ = sender
+                            .send(CapturedRequest {
+                                method,
+                                path_and_query,
+                                authorization,
+                                body,
+                            })
+                            .await;
+
+                        let next = responses
+                            .lock()
+                            .expect("response queue lock")
+                            .pop_front()
+                            .unwrap_or((StatusCode::OK, "{}".into()));
+                        let response = hyper::Response::builder()
+                            .status(next.0)
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .header("x-request-id", "req_loopback")
+                            .body(Full::new(Bytes::from(next.1)))
+                            .expect("build loopback response");
+                        Ok::<_, Infallible>(response)
+                    }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            }
+        });
+
+        let base = Url::parse(&format!("http://{address}/v1/")).expect("loopback base URL");
+        (base, receiver)
     }
 
     async fn serve_once(
@@ -905,5 +1065,99 @@ mod tests {
             .await
             .expect("terminal response");
         assert_eq!(response.id(), "resp_final");
+    }
+
+    #[tokio::test]
+    async fn response_poll_stops_at_terminal_state() {
+        use std::time::Duration;
+        let response_queued = json!({
+            "id": "resp_1",
+            "created_at": 1,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-4.5",
+            "object": "response",
+            "output": [],
+            "status": "in_progress",
+            "parallel_tool_calls": true,
+            "temperature": 1.0,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0
+        });
+        let response_completed = json!({
+            "id": "resp_1",
+            "created_at": 1,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-4.5",
+            "object": "response",
+            "output": [],
+            "status": "completed",
+            "parallel_tool_calls": true,
+            "temperature": 1.0,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0
+        });
+        let (base_url, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, response_queued.to_string()),
+            (StatusCode::OK, response_completed.to_string()),
+        ])
+        .await;
+
+        let response = client(base_url)
+            .responses()
+            .poll(
+                &ResponseId::new("resp_1"),
+                PollOptions::new()
+                    .with_interval(Duration::from_millis(1))
+                    .with_timeout(Duration::from_secs(1)),
+            )
+            .await
+            .expect("poll response");
+        assert_eq!(response.status(), Some(&ResponseStatus::Completed));
+        assert!(captured.recv().await.is_some());
+        assert!(captured.recv().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn list_input_item_pages_streams_and_advances_cursor() {
+        let page1 = json!({
+            "object": "list",
+            "data": [],
+            "first_id": "item_1",
+            "last_id": "item_1",
+            "has_more": true
+        });
+        let page2 = json!({
+            "object": "list",
+            "data": [],
+            "first_id": "item_2",
+            "last_id": "item_2",
+            "has_more": false
+        });
+        let (base_url, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, page1.to_string()),
+            (StatusCode::OK, page2.to_string()),
+        ])
+        .await;
+
+        let mut stream = client(base_url).responses().list_input_item_pages(
+            &ResponseId::new("resp_1"),
+            ListResponseInputItemsParams::new(),
+        );
+        let first = stream.next().await.expect("page 1").expect("ok");
+        assert_eq!(first.last_id(), Some("item_1"));
+        let second = stream.next().await.expect("page 2").expect("ok");
+        assert_eq!(second.last_id(), Some("item_2"));
+        assert!(stream.next().await.is_none());
+
+        assert!(captured.recv().await.is_some());
+        assert!(captured.recv().await.is_some());
     }
 }

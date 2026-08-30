@@ -15,16 +15,6 @@ use crate::{
     ExtraFields, FileId, JsonText, ModelId, Nullable, Omittable, responses::UnknownTaggedObject,
 };
 
-macro_rules! literal_tag {
-    ($name:ident, $variant:ident, $wire:literal) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-        enum $name {
-            #[serde(rename = $wire)]
-            $variant,
-        }
-    };
-}
-
 macro_rules! strict_tagged_union {
     (
         $(#[$meta:meta])*
@@ -723,6 +713,11 @@ impl ChatFunctionInvocation {
         JsonText::from_serializable(arguments).map(|arguments| Self::new(name, arguments.cast()))
     }
 
+    /// Parses the JSON arguments into a declared Rust type.
+    pub fn arguments_as<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
+        serde_json::from_str(self.arguments.as_str())
+    }
+
     /// Future fields retained while decoding.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
@@ -764,6 +759,11 @@ impl ChatFunctionToolCall {
     ) -> Result<Self, serde_json::Error> {
         ChatFunctionInvocation::from_serializable(name, arguments)
             .map(|function| Self::new(id, function))
+    }
+
+    /// Parses the JSON arguments into a declared Rust type.
+    pub fn arguments_as<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
+        self.function.arguments_as()
     }
 
     /// Future fields retained while decoding.
@@ -1323,6 +1323,28 @@ impl ChatFunctionTool {
             kind: FunctionToolTag::Function,
             function,
         }
+    }
+
+    /// Builds a strict Chat function tool from `T`'s `schemars` JSON Schema definition.
+    #[cfg(feature = "structured-output")]
+    pub fn for_type<T: schemars::JsonSchema>(
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Result<Self, crate::StructuredError> {
+        let name = name.into();
+        let description = description.into();
+        let mut schema = serde_json::to_value(schemars::schema_for!(T))
+            .map_err(crate::StructuredError::Encode)?;
+        crate::structured::normalize_strict_schema(&mut schema)?;
+        let obj = schema
+            .as_object()
+            .cloned()
+            .ok_or(crate::StructuredError::RootMustBeObject)?;
+        let mut function = ChatFunctionDefinition::new(name)
+            .with_description(description)
+            .with_strict(true);
+        function.parameters = Omittable::Value(obj);
+        Ok(Self::new(function))
     }
 }
 

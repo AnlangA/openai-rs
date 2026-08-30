@@ -13,7 +13,10 @@
       "quarantined": 1,
       "verified": 254
     },
-    "verified_units": 296
+    "webhook_implementation_statuses": {
+      "verified": 18
+    },
+    "verified_units": 299
   },
   "client_operations": [
     {
@@ -18966,10 +18969,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19001,10 +19014,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19036,10 +19059,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19071,10 +19104,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19106,10 +19149,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19141,10 +19194,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19176,10 +19239,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19211,10 +19284,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19246,10 +19329,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19281,10 +19374,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19316,10 +19419,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19351,10 +19464,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19386,10 +19509,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19421,10 +19554,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19456,10 +19599,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19491,10 +19644,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19526,10 +19689,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     },
@@ -19561,10 +19734,20 @@
       "lifecycle": "active",
       "feature": "webhooks",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-webhooks",
+        "units": [
+          "WebhookVerifier",
+          "VerifiedWebhook<WebhookEvent>",
+          "WebhookEvent[18]"
+        ],
+        "tests": [
+          "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
+          "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
+        ],
+        "registry_group": "webhook-receivers"
       },
       "manual_overrides": []
     }

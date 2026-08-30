@@ -1,0 +1,8 @@
+kind = "synthetic"
+operation_id = "downloadFile"
+direction = "response"
+reviewed_at = "2026-08-30"
+override = "OVR-0001"
+note = "Synthetic raw bytes proving downloadFile is application/octet-stream, not a JSON string."
+file = "response.bin"
+sha256 = "b620b09dc4e4f68dc8e539932127ab59c927f6d9a814c5212c5662b12b7ac2b3"

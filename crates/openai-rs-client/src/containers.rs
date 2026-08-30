@@ -81,30 +81,16 @@ impl Containers {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
             if let openai_rs_types::Omittable::Value(cursor) = &params.after {
-                seen.insert(cursor.as_str().to_owned());
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
             }
             loop {
                 let page = containers.list(params.clone()).await?;
-                let next = if page.has_more {
-                    let cursor = page.next_after().ok_or_else(|| {
-                        Error::InvalidConfiguration(
-                            "Container page advertises more results without last_id".into(),
-                        )
-                    })?;
-                    if cursor.is_empty() {
-                        Err(Error::InvalidConfiguration(
-                            "Container page returned an empty pagination cursor".into(),
-                        ))?;
-                    }
-                    if !seen.insert(cursor.to_owned()) {
-                        Err(Error::InvalidConfiguration(
-                            "Container pagination returned a repeated cursor".into(),
-                        ))?;
-                    }
-                    Some(cursor.to_owned())
-                } else {
-                    None
-                };
+                let next = crate::pagination::next_cursor(
+                    page.has_more,
+                    page.next_after(),
+                    &mut seen,
+                    "Container",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => {
@@ -220,30 +206,16 @@ impl ContainerFiles {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
             if let openai_rs_types::Omittable::Value(cursor) = &params.after {
-                seen.insert(cursor.as_str().to_owned());
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
             }
             loop {
                 let page = files.list(&container_id, params.clone()).await?;
-                let next = if page.has_more {
-                    let cursor = page.next_after().ok_or_else(|| {
-                        Error::InvalidConfiguration(
-                            "Container File page advertises more results without last_id".into(),
-                        )
-                    })?;
-                    if cursor.is_empty() {
-                        Err(Error::InvalidConfiguration(
-                            "Container File page returned an empty pagination cursor".into(),
-                        ))?;
-                    }
-                    if !seen.insert(cursor.to_owned()) {
-                        Err(Error::InvalidConfiguration(
-                            "Container File pagination returned a repeated cursor".into(),
-                        ))?;
-                    }
-                    Some(cursor.to_owned())
-                } else {
-                    None
-                };
+                let next = crate::pagination::next_cursor(
+                    page.has_more,
+                    page.next_after(),
+                    &mut seen,
+                    "Container File",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => {

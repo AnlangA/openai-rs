@@ -144,19 +144,23 @@ impl ChatKitThreads {
     pub fn list_pages(&self, params: ChatKitThreadListParams) -> ChatKitThreadPageStream {
         let threads = self.clone();
         Box::pin(async_stream::try_stream! {
-            if params.before.is_value() {
-                Err(Error::InvalidConfiguration(
-                    "automatic ChatKit thread pagination does not accept before".into(),
-                ))?;
-            }
+            crate::pagination::reject_before_cursor(
+                params.before.is_value(),
+                "ChatKit thread",
+            )?;
             let mut params = params;
             let mut seen = HashSet::<String>::new();
             if let openai_rs_types::Omittable::Value(cursor) = &params.after {
-                seen.insert(cursor.as_str().to_owned());
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
             }
             loop {
                 let page = threads.list(params.clone()).await?;
-                let next = next_thread_cursor(&page, &mut seen)?;
+                let next = crate::pagination::next_cursor(
+                    page.has_more,
+                    page.next_after().map(|cursor| cursor.as_str()),
+                    &mut seen,
+                    "ChatKit thread",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => params.after =
@@ -191,19 +195,23 @@ impl ChatKitThreads {
     ) -> ChatKitThreadItemPageStream {
         let threads = self.clone();
         Box::pin(async_stream::try_stream! {
-            if params.before.is_value() {
-                Err(Error::InvalidConfiguration(
-                    "automatic ChatKit item pagination does not accept before".into(),
-                ))?;
-            }
+            crate::pagination::reject_before_cursor(
+                params.before.is_value(),
+                "ChatKit item",
+            )?;
             let mut params = params;
             let mut seen = HashSet::<String>::new();
             if let openai_rs_types::Omittable::Value(cursor) = &params.after {
-                seen.insert(cursor.as_str().to_owned());
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
             }
             loop {
                 let page = threads.list_items(&thread_id, params.clone()).await?;
-                let next = next_item_cursor(&page, &mut seen)?;
+                let next = crate::pagination::next_cursor(
+                    page.has_more,
+                    page.next_after().map(|cursor| cursor.as_str()),
+                    &mut seen,
+                    "ChatKit item",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => params.after =
@@ -229,46 +237,6 @@ where
         .transport()
         .execute_json_with_static_header::<O, Q>(path, query, body, BETA_HEADER, BETA_VALUE)
         .await
-}
-
-fn next_thread_cursor(
-    page: &ChatKitThreadList,
-    seen: &mut HashSet<String>,
-) -> Result<Option<String>, Error> {
-    if !page.has_more {
-        return Ok(None);
-    }
-    let cursor = page.next_after().ok_or_else(|| {
-        Error::InvalidConfiguration(
-            "ChatKit thread page advertises more results without last_id".into(),
-        )
-    })?;
-    if cursor.as_str().is_empty() || !seen.insert(cursor.as_str().to_owned()) {
-        return Err(Error::InvalidConfiguration(
-            "ChatKit thread pagination returned an empty or repeated cursor".into(),
-        ));
-    }
-    Ok(Some(cursor.as_str().to_owned()))
-}
-
-fn next_item_cursor(
-    page: &ChatKitThreadItemList,
-    seen: &mut HashSet<String>,
-) -> Result<Option<String>, Error> {
-    if !page.has_more {
-        return Ok(None);
-    }
-    let cursor = page.next_after().ok_or_else(|| {
-        Error::InvalidConfiguration(
-            "ChatKit item page advertises more results without last_id".into(),
-        )
-    })?;
-    if cursor.as_str().is_empty() || !seen.insert(cursor.as_str().to_owned()) {
-        return Err(Error::InvalidConfiguration(
-            "ChatKit item pagination returned an empty or repeated cursor".into(),
-        ));
-    }
-    Ok(Some(cursor.as_str().to_owned()))
 }
 
 fn chatkit_thread_path(thread_id: &ChatKitThreadId) -> Result<[PathSegment<'_>; 3], Error> {

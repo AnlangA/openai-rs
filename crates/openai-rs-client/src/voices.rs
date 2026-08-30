@@ -159,27 +159,18 @@ impl VoiceConsents {
         Box::pin(async_stream::try_stream! {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
-            if let Some(cursor) = params.after_ref() {
-                seen.insert(cursor.as_str().to_owned());
-            }
+            crate::pagination::seed_seen(
+                &mut seen,
+                params.after_ref().map(|cursor| cursor.as_str()),
+            );
             loop {
                 let page = consents.list(params.clone()).await?;
-                let next = if page.has_more() {
-                    let cursor = page.last_id().ok_or_else(|| {
-                        Error::InvalidConfiguration(
-                            "voice-consent page advertises more results without a last_id".into(),
-                        )
-                    })?;
-                    let cursor = cursor.as_str().to_owned();
-                    if cursor.is_empty() || !seen.insert(cursor.clone()) {
-                        Err(Error::InvalidConfiguration(
-                            "voice-consent pagination returned an empty or repeated cursor".into(),
-                        ))?;
-                    }
-                    Some(cursor)
-                } else {
-                    None
-                };
+                let next = crate::pagination::next_cursor(
+                    page.has_more(),
+                    page.last_id().map(|id| id.as_str()),
+                    &mut seen,
+                    "voice-consent",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => params = params.clone().after(VoiceConsentId::new(cursor)),

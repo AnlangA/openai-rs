@@ -14,16 +14,6 @@ use crate::{
     responses::UnknownTaggedObject,
 };
 
-macro_rules! literal_tag {
-    ($name:ident, $variant:ident, $wire:literal) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-        enum $name {
-            #[serde(rename = $wire)]
-            $variant,
-        }
-    };
-}
-
 macro_rules! strict_tagged_union {
     (
         $(#[$meta:meta])*

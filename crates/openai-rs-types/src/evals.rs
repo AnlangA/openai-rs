@@ -57,16 +57,6 @@ opaque_id!(EvalId);
 opaque_id!(EvalRunId);
 opaque_id!(EvalRunOutputItemId);
 
-macro_rules! literal_tag {
-    ($name:ident, $variant:ident, $wire:literal) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-        enum $name {
-            #[serde(rename = $wire)]
-            $variant,
-        }
-    };
-}
-
 fn discriminator(value: &Value) -> Result<String, &'static str> {
     value
         .as_object()
@@ -76,100 +66,6 @@ fn discriminator(value: &Value) -> Result<String, &'static str> {
         .as_str()
         .map(str::to_owned)
         .ok_or("tagged eval object field `type` must be a string")
-}
-
-macro_rules! tagged_union {
-    ($(#[$meta:meta])* pub enum $name:ident {
-        $($variant:ident($ty:ty) => $tag:literal),+ $(,)?
-    }) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq)]
-        #[non_exhaustive]
-        pub enum $name {
-            $($variant($ty),)+
-            /// A future tagged variant retained verbatim.
-            Unknown(responses::UnknownTaggedObject),
-        }
-
-        impl Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: Serializer,
-            {
-                match self {
-                    $(Self::$variant(value) => value.serialize(serializer),)+
-                    Self::Unknown(value) => value.serialize(serializer),
-                }
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                let value = Value::deserialize(deserializer)?;
-                match discriminator(&value).map_err(D::Error::custom)?.as_str() {
-                    $($tag => serde_json::from_value(value)
-                        .map(Self::$variant)
-                        .map_err(D::Error::custom),)+
-                    _ => responses::UnknownTaggedObject::from_value(value)
-                        .map(Self::Unknown)
-                        .map_err(D::Error::custom),
-                }
-            }
-        }
-    };
-}
-
-macro_rules! tagged_union_reject_known {
-    ($(#[$meta:meta])* pub enum $name:ident {
-        $($variant:ident($ty:ty) => $tag:literal),+ $(,)?
-    } reject [$($rejected:literal),+ $(,)?]) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq)]
-        #[non_exhaustive]
-        pub enum $name {
-            $($variant($ty),)+
-            /// A genuinely future source tag retained verbatim.
-            Unknown(responses::UnknownTaggedObject),
-        }
-
-        impl Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: Serializer,
-            {
-                match self {
-                    $(Self::$variant(value) => value.serialize(serializer),)+
-                    Self::Unknown(value) => value.serialize(serializer),
-                }
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                let value = Value::deserialize(deserializer)?;
-                let tag = discriminator(&value).map_err(D::Error::custom)?;
-                match tag.as_str() {
-                    $($tag => serde_json::from_value(value)
-                        .map(Self::$variant)
-                        .map_err(D::Error::custom),)+
-                    $($rejected => Err(D::Error::custom(format_args!(
-                        "known source tag `{}` is not valid in {}",
-                        tag,
-                        stringify!($name),
-                    ))),)+
-                    _ => responses::UnknownTaggedObject::from_value(value)
-                        .map(Self::Unknown)
-                        .map_err(D::Error::custom),
-                }
-            }
-        }
-    };
 }
 
 open_string_enum! {

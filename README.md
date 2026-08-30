@@ -15,15 +15,16 @@ The workspace, crate boundaries, feature flags, MSRV policy, and contract-test
 infrastructure are present. The pre-release implementation includes typed
 Responses REST, SSE, and persistent WebSocket paths; Chat Completions; Files,
 Uploads, Batches, Vector Stores, Models, Embeddings, Moderations, media,
-Fine-tuning, Evals, Conversations, Containers, Skills, and Content Provenance
-resources; and the pinned GA Realtime transport, including its 11 client-event
+Fine-tuning, Conversations, Containers, Skills, and Content Provenance
+resources; Evals via default-off `legacy-evals`; and the pinned GA Realtime transport, including its 11 client-event
 and 46 server-event unions, WebSocket connection, WebRTC signaling, client-secret
 operations, and SIP call control. Administration, workload identity, and X.509
 are implemented behind separate default-off trust boundaries. The repository
 still does not claim a stable public API. Against the pinned OpenAPI inventory,
 all 254 applicable client operations are verified; 33 sunset/deprecated
 operations are explicitly omitted and one conflicting operation is
-quarantined.
+quarantined. The 18 webhook receiver operations are verified independently
+of that client disposition.
 
 | Area | Status |
 |---|---|
@@ -34,13 +35,13 @@ quarantined.
 | Chat Completions | Typed create/SSE, stored resources, messages, and pagination implemented |
 | Files and Uploads | Typed replayable/one-shot multipart, download, and upload lifecycle implemented |
 | Batches and Vector Stores | Typed resource methods, pagination/polling, and workflow helpers implemented |
-| Media, Fine-tuning, and Evals | Typed audio/image, fine-tuning job, and eval/run methods implemented |
+| Media and Fine-tuning | Typed audio/image and fine-tuning job methods implemented |
 | Conversations, Containers, Skills, Content Provenance | Typed resource, pagination, multipart/content-stream, and provenance-check methods implemented |
 | Realtime GA | 11 client events, 46 server events, WebSocket transport, client secrets, WebRTC SDP, and SIP call control implemented |
 | Administration | Separate `AdminClient`/`AdminApiKey`; 119 sealed operations plus 3 fine-tuning checkpoint-permission operations implemented |
 | Workload identity and X.509 | RFC 8693-backed `Client` auth and an isolated mTLS `X509Client` implemented |
-| Pinned operation disposition | 254 applicable operations verified; 33 sunset/deprecated operations omitted; 1 conflicting operation quarantined |
-| Default-off gated/compatibility APIs | Custom Voice, alpha Graders, beta ChatKit, beta multi-agent Responses, legacy Completions, and legacy Realtime are implemented only behind explicit features |
+| Pinned operation disposition | 254 applicable client operations verified; 33 sunset/deprecated operations omitted; 1 conflicting operation quarantined; 18 webhook receivers verified |
+| Default-off gated/compatibility APIs | Custom Voice, alpha Graders, beta ChatKit, beta multi-agent Responses, legacy Completions, legacy Evals (shutdown 2026-11-30), and legacy Realtime are implemented only behind explicit features |
 | RMCP bridge | Typed local Responses-function bridge implemented; transport, server, and auth feature flags pass through to the pinned `rmcp` dependency |
 | Codex app-server integration | Experimental JSONL client implemented for one exact audited Codex 0.144.5 macOS arm64 artifact |
 | Direct Codex Responses transport | Private experimental host-locked create/SSE and browser auth implemented, with separately gated device auth; off by default |
@@ -83,7 +84,7 @@ Default features are `client`, `rustls-tls`, and `structured-output`.
 | Platform transport | `client`, `rustls-tls`, `native-tls` | Standard OpenAI Platform API client |
 | Typed helpers | `structured-output`, `realtime`, `webhook-verification` | Structured output, GA Realtime transports, Responses WebSocket, and webhook verification |
 | Privileged identity boundaries | `admin`, `workload-identity`, `x509` | Implemented and default-off; Administration and X.509 use dedicated client/credential boundaries |
-| Gated and compatibility APIs | `custom-voice`, `alpha-graders`, `beta-chatkit`, `beta-responses-multi-agent`, `legacy-completions`, `legacy-realtime` | Implemented, default-off, and explicitly access-controlled, alpha, beta, or legacy |
+| Gated and compatibility APIs | `custom-voice`, `alpha-graders`, `beta-chatkit`, `beta-responses-multi-agent`, `legacy-completions`, `legacy-evals`, `legacy-realtime` | Implemented, default-off, and explicitly access-controlled, alpha, beta, or legacy |
 | RMCP | `rmcp`, `rmcp-stdio`, `rmcp-http-rustls`, `rmcp-http-native-tls`, `rmcp-server`, `rmcp-server-stdio`, `rmcp-auth` | Local bridge implemented; transport/server/auth selections are upstream `rmcp` feature pass-throughs; no implicit tool exposure |
 | Codex app-server | `codex-app-server`, `codex-access-token` | Experimental and isolated from Platform credentials |
 | Direct Codex | `experimental-codex-direct`, `experimental-codex-direct-device`, `experimental-codex-direct-keyring` | Unstable private-backend compatibility; off by default; app-server is preferred |
@@ -100,24 +101,68 @@ server-side permission, entitlement, or preview access. The authoritative
 implementation status is maintained in
 [docs/feature-status.md](docs/feature-status.md).
 
-## Responses MVP example
+## Responses main path example
 
-The current minimal typed flow is:
+The typed tool-call and follow-up inference loop requires no raw JSON or manual schema construction:
 
 ```rust
-use openai_rs::{responses::CreateResponseRequest, ApiKey, Client};
+use openai_rs::{
+    ApiKey, Client,
+    responses::{CreateResponseRequest, FunctionCallOutput, FunctionTool, ResponseInput},
+};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct WeatherArgs {
+    city: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct WeatherResult {
+    city: String,
+    temperature_c: i32,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = ApiKey::new(std::env::var("OPENAI_API_KEY")?)?;
     let client = Client::new(api_key)?;
-    let request = CreateResponseRequest::new(
-        "gpt-5.4",
-        "Explain why typed API clients are useful in one sentence.",
-    );
+
+    let tool = FunctionTool::for_type::<WeatherArgs>("get_weather", "Return current weather")?;
+
+    let request = CreateResponseRequest::new("gpt-5.4", "What is the weather in Shenzhen?")
+        .with_tool(tool);
 
     let response = client.responses().create(request).await?;
-    println!("{}", response.output_text());
+
+    // Typed function call dispatch without raw JSON
+    if let Some(call) = response.function_calls().next() {
+        let args: WeatherArgs = call.arguments_as()?;
+        let output = FunctionCallOutput::json(
+            call.call_id(),
+            &WeatherResult {
+                city: args.city,
+                temperature_c: 28,
+            },
+        )?;
+
+        let mut follow_up_items = response.to_input_items();
+        follow_up_items.push(output.into());
+
+        let follow_up = client
+            .responses()
+            .create(CreateResponseRequest::new(
+                "gpt-5.4",
+                ResponseInput::items(follow_up_items),
+            ))
+            .await?;
+
+        println!("{}", follow_up.output_text());
+    } else {
+        println!("{}", response.output_text());
+    }
+
     Ok(())
 }
 ```

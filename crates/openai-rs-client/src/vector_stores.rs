@@ -1,15 +1,6 @@
 //! Vector Store resources, pagination, search, and bounded polling.
 
-use std::{
-    collections::HashSet,
-    future::Future,
-    pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant},
-};
+use std::{collections::HashSet, pin::Pin};
 
 use futures_core::Stream;
 use http::{Method, StatusCode};
@@ -23,21 +14,19 @@ use openai_rs_types::{
     VectorStoreSearchResultsPage, VectorStoreStatus,
 };
 use serde_json::Value;
-use thiserror::Error as ThisError;
-use tokio::sync::Notify;
 
 use crate::{
-    ApiResponse, Client, Error,
+    ApiResponse, Client, Error, PollError, PollOptions,
     operation::{
         AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, RetryClass,
         private::Sealed,
     },
+    pagination,
+    poll::poll_resource_with_status,
     transport::PathSegment,
 };
 
 const OK: &[StatusCode] = &[StatusCode::OK];
-const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
-const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// Pages returned by `GET /vector_stores`.
 pub type VectorStorePageStream = Pin<
@@ -94,34 +83,20 @@ impl VectorStores {
     pub fn list_pages(&self, params: VectorStoreListParams) -> VectorStorePageStream {
         let stores = self.clone();
         Box::pin(async_stream::try_stream! {
-            if params.before_cursor().is_value() {
-                Err(Error::InvalidConfiguration(
-                    "automatic vector-store pagination does not accept a before cursor".into(),
-                ))?;
-            }
+            pagination::reject_before_cursor(params.before_cursor().is_value(), "vector-store")?;
             let mut params = params;
             let mut seen = HashSet::<String>::new();
             if let Omittable::Value(cursor) = params.after_cursor() {
-                seen.insert(cursor.as_str().to_owned());
+                pagination::seed_seen(&mut seen, Some(cursor.as_str()));
             }
             loop {
                 let page = stores.list(params.clone()).await?;
-                let next = if page.has_more() {
-                    let value = page.last_id().as_str().to_owned();
-                    if value.is_empty() {
-                        Err(Error::InvalidConfiguration(
-                            "vector-store page advertises more results without a last_id".into(),
-                        ))?;
-                    }
-                    if !seen.insert(value.clone()) {
-                        Err(Error::InvalidConfiguration(
-                            "vector-store pagination returned a repeated cursor".into(),
-                        ))?;
-                    }
-                    Some(value)
-                } else {
-                    None
-                };
+                let next = pagination::next_cursor(
+                    page.has_more(),
+                    Some(page.last_id().as_str()),
+                    &mut seen,
+                    "vector-store",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => params = params.clone().after(VectorStoreId::new(cursor)),
@@ -204,7 +179,7 @@ impl VectorStores {
         vector_store_id: &VectorStoreId,
         options: PollOptions,
     ) -> Result<ApiResponse<VectorStore>, PollError> {
-        poll_resource(
+        poll_resource_with_status(
             || self.retrieve(vector_store_id),
             |store| {
                 matches!(
@@ -212,6 +187,7 @@ impl VectorStores {
                     VectorStoreStatus::Completed | VectorStoreStatus::Expired
                 )
             },
+            |store| store.status().as_str().to_owned(),
             options,
         )
         .await
@@ -269,7 +245,12 @@ impl VectorStoreFiles {
             seed_file_pagination(&params, &mut seen)?;
             loop {
                 let page = files.list(&vector_store_id, params.clone()).await?;
-                let next = next_file_cursor(&page, &mut seen)?;
+                let next = pagination::next_cursor(
+                    page.has_more(),
+                    Some(page.last_id().as_str()),
+                    &mut seen,
+                    "vector-store file",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => params = params.clone().after(FileId::new(cursor)),
@@ -346,9 +327,10 @@ impl VectorStoreFiles {
         file_id: &FileId,
         options: PollOptions,
     ) -> Result<ApiResponse<VectorStoreFile>, PollError> {
-        poll_resource(
+        poll_resource_with_status(
             || self.retrieve(vector_store_id, file_id),
             |file| is_file_terminal(file.status()),
+            |file| file.status().as_str().to_owned(),
             options,
         )
         .await
@@ -450,7 +432,12 @@ impl VectorStoreFileBatches {
             seed_file_pagination(&params, &mut seen)?;
             loop {
                 let page = batches.list_files(&vector_store_id, &batch_id, params.clone()).await?;
-                let next = next_file_cursor(&page, &mut seen)?;
+                let next = pagination::next_cursor(
+                    page.has_more(),
+                    Some(page.last_id().as_str()),
+                    &mut seen,
+                    "vector-store file",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => params = params.clone().after(FileId::new(cursor)),
@@ -467,203 +454,13 @@ impl VectorStoreFileBatches {
         batch_id: &VectorStoreFileBatchId,
         options: PollOptions,
     ) -> Result<ApiResponse<VectorStoreFileBatch>, PollError> {
-        poll_resource(
+        poll_resource_with_status(
             || self.retrieve(vector_store_id, batch_id),
             |batch| is_file_terminal(batch.status()),
+            |batch| batch.status().as_str().to_owned(),
             options,
         )
         .await
-    }
-}
-
-/// Cooperative cancellation shared with one or more polling futures.
-#[derive(Clone, Default)]
-pub struct PollCancellationToken {
-    inner: Arc<PollCancellationInner>,
-}
-
-#[derive(Default)]
-struct PollCancellationInner {
-    cancelled: AtomicBool,
-    notify: Notify,
-}
-
-impl PollCancellationToken {
-    /// Creates an uncancelled token.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Cancels every poller holding a clone of this token.
-    pub fn cancel(&self) {
-        if !self.inner.cancelled.swap(true, Ordering::AcqRel) {
-            self.inner.notify.notify_waiters();
-        }
-    }
-
-    /// Returns whether cancellation was requested.
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.inner.cancelled.load(Ordering::Acquire)
-    }
-
-    async fn cancelled(&self) {
-        if self.is_cancelled() {
-            return;
-        }
-        let notified = self.inner.notify.notified();
-        if self.is_cancelled() {
-            return;
-        }
-        notified.await;
-    }
-}
-
-impl std::fmt::Debug for PollCancellationToken {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("PollCancellationToken")
-            .field("cancelled", &self.is_cancelled())
-            .finish()
-    }
-}
-
-/// Interval, deadline, and cancellation controls for resource polling.
-#[derive(Clone, Debug)]
-pub struct PollOptions {
-    interval: Duration,
-    timeout: Duration,
-    cancellation: Option<PollCancellationToken>,
-}
-
-impl PollOptions {
-    /// Creates options with a one-second interval and ten-minute deadline.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            interval: DEFAULT_POLL_INTERVAL,
-            timeout: DEFAULT_POLL_TIMEOUT,
-            cancellation: None,
-        }
-    }
-
-    /// Replaces the interval. Zero is rejected when polling starts.
-    #[must_use]
-    pub const fn with_interval(mut self, interval: Duration) -> Self {
-        self.interval = interval;
-        self
-    }
-
-    /// Replaces the overall polling deadline. Zero is rejected when polling
-    /// starts.
-    #[must_use]
-    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
-    /// Adds cooperative cancellation.
-    #[must_use]
-    pub fn with_cancellation(mut self, cancellation: PollCancellationToken) -> Self {
-        self.cancellation = Some(cancellation);
-        self
-    }
-
-    /// Polling interval.
-    #[must_use]
-    pub const fn interval(&self) -> Duration {
-        self.interval
-    }
-
-    /// Overall polling timeout.
-    #[must_use]
-    pub const fn timeout(&self) -> Duration {
-        self.timeout
-    }
-}
-
-impl Default for PollOptions {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Failures produced by a bounded polling helper.
-#[derive(Debug, ThisError)]
-#[non_exhaustive]
-pub enum PollError {
-    /// Interval and timeout must both be non-zero.
-    #[error("poll interval and timeout must be non-zero")]
-    InvalidConfiguration,
-    /// The caller-provided deadline elapsed.
-    #[error("resource polling deadline elapsed")]
-    DeadlineExceeded,
-    /// Cooperative cancellation was requested.
-    #[error("resource polling was cancelled")]
-    Cancelled,
-    /// A resource retrieval failed.
-    #[error(transparent)]
-    Client(#[from] Error),
-}
-
-async fn poll_resource<T, F, Fut, P>(
-    mut fetch: F,
-    terminal: P,
-    options: PollOptions,
-) -> Result<ApiResponse<T>, PollError>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = Result<ApiResponse<T>, Error>>,
-    P: Fn(&T) -> bool,
-{
-    if options.interval.is_zero() || options.timeout.is_zero() {
-        return Err(PollError::InvalidConfiguration);
-    }
-    let started = Instant::now();
-    loop {
-        if options
-            .cancellation
-            .as_ref()
-            .is_some_and(PollCancellationToken::is_cancelled)
-        {
-            return Err(PollError::Cancelled);
-        }
-        let remaining = options
-            .timeout
-            .checked_sub(started.elapsed())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or(PollError::DeadlineExceeded)?;
-        let response = if let Some(cancellation) = &options.cancellation {
-            tokio::select! {
-                _ = cancellation.cancelled() => return Err(PollError::Cancelled),
-                response = tokio::time::timeout(remaining, fetch()) => {
-                    response.map_err(|_| PollError::DeadlineExceeded)??
-                }
-            }
-        } else {
-            tokio::time::timeout(remaining, fetch())
-                .await
-                .map_err(|_| PollError::DeadlineExceeded)??
-        };
-        if terminal(response.body()) {
-            return Ok(response);
-        }
-
-        let remaining = options
-            .timeout
-            .checked_sub(started.elapsed())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or(PollError::DeadlineExceeded)?;
-        let delay = options.interval.min(remaining);
-        if let Some(cancellation) = &options.cancellation {
-            tokio::select! {
-                _ = cancellation.cancelled() => return Err(PollError::Cancelled),
-                () = tokio::time::sleep(delay) => {}
-            }
-        } else {
-            tokio::time::sleep(delay).await;
-        }
     }
 }
 
@@ -681,36 +478,9 @@ fn seed_file_pagination(
     seen: &mut HashSet<String>,
 ) -> Result<(), Error> {
     let value = serde_json::to_value(params).map_err(Error::Encode)?;
-    if value.get("before").is_some() {
-        return Err(Error::InvalidConfiguration(
-            "automatic vector-store file pagination does not accept a before cursor".into(),
-        ));
-    }
-    if let Some(cursor) = value.get("after").and_then(Value::as_str) {
-        seen.insert(cursor.to_owned());
-    }
+    pagination::reject_before_cursor(value.get("before").is_some(), "vector-store file")?;
+    pagination::seed_seen(seen, value.get("after").and_then(Value::as_str));
     Ok(())
-}
-
-fn next_file_cursor(
-    page: &ApiResponse<ListVectorStoreFilesResponse>,
-    seen: &mut HashSet<String>,
-) -> Result<Option<String>, Error> {
-    if !page.has_more() {
-        return Ok(None);
-    }
-    let value = page.last_id().as_str().to_owned();
-    if value.is_empty() {
-        return Err(Error::InvalidConfiguration(
-            "vector-store file page advertises more results without a last_id".into(),
-        ));
-    }
-    if !seen.insert(value.clone()) {
-        return Err(Error::InvalidConfiguration(
-            "vector-store file pagination returned a repeated cursor".into(),
-        ));
-    }
-    Ok(Some(value))
 }
 
 fn vector_store_path(vector_store_id: &VectorStoreId) -> Result<[PathSegment<'_>; 2], Error> {
@@ -970,7 +740,9 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::{ApiKey, RetryPolicy};
+    use std::time::Duration;
+
+    use crate::{ApiKey, PollCancellationToken, PollError, PollOptions, RetryPolicy};
 
     #[derive(Clone, Debug)]
     struct CapturedRequest {

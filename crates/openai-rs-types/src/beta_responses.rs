@@ -21,16 +21,6 @@ use crate::{
     },
 };
 
-macro_rules! literal_tag {
-    ($name:ident, $variant:ident, $wire:literal) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-        enum $name {
-            #[serde(rename = $wire)]
-            $variant,
-        }
-    };
-}
-
 macro_rules! impl_tagged_content {
     ($name:ident { $($variant:ident($ty:ty) => $wire:literal),+ $(,)? }) => {
         impl Serialize for $name {
@@ -2221,6 +2211,15 @@ impl BetaListInputItemsParams {
     pub fn order(mut self, order: BetaResponseItemOrder) -> Self {
         self.order = Omittable::Value(order);
         self
+    }
+
+    /// Returns the opaque cursor when present.
+    #[must_use]
+    pub fn after_ref(&self) -> Option<&str> {
+        match &self.after {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 }
 

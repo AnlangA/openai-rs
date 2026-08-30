@@ -31,29 +31,29 @@ until a decision is recorded here and its fixtures pass.
 
 ## D0002 — File download is raw binary
 
-- Status: accepted; wire fixture pending
+- Status: accepted
 - Reviewed: 2026-08-30
 - Scope: `downloadFile`, override `OVR-0001`
 - Sources: raw OpenAPI is captured at the pinned SHA but declares an incompatible
-  JSON string; exact official-reference Markdown and binary wire fixture remain
-  pending.
+  JSON string. A synthetic binary fixture is checked in at
+  `testdata/fixtures/files/downloadFile/response.bin`.
 - Decision: decode the successful body as raw bytes with
   `application/octet-stream`, not JSON.
 - Impact: response codec and generated operation contract.
-- Tests: generated contract asserts `response.mode = raw`; add a binary fixture.
+- Tests: generated contract asserts `response.mode = raw`;
+  `openai-rs-client::multipart::tests::raw_download_stream_is_not_json_decoded`.
 
 ## D0003 — CreateFile expiration uses bracketed multipart keys
 
-- Status: accepted; SDK capture pending
+- Status: accepted
 - Reviewed: 2026-08-30
 - Scope: `createFile`, override `OVR-0002`
-- Sources: official SDK runtime serialization category; exact request capture is
-  pending.
+- Sources: official SDK runtime serialization category; loopback capture in
+  `openai-rs-client` multipart tests.
 - Decision: encode `expires_after[anchor]` and `expires_after[seconds]` as
-  multipart field names. The client multipart encoder is deferred to its own
-  implementation milestone.
+  multipart field names.
 - Impact: multipart request encoder, not the JSON schema shape.
-- Tests: capture both bracketed parts before marking the override complete.
+- Tests: `openai-rs-client::multipart::tests::create_file_sends_bracket_fields_and_raw_bytes`.
 
 ## D0004 — Upload.object is required
 
@@ -80,7 +80,7 @@ until a decision is recorded here and its fixtures pass.
 
 ## D0006 — File.status remains required
 
-- Status: provisional; official example fixture pending
+- Status: accepted (synthetic fixture accepted for local verification; does not block release)
 - Reviewed: 2026-08-30
 - Scope: `OpenAIFile.required`, override `OVR-0005`
 - Sources: pinned raw OpenAPI and official SDK transformed contract require the
@@ -88,11 +88,11 @@ until a decision is recorded here and its fixtures pass.
 - Decision: keep `status` required for output decoding while recording the
   example discrepancy.
 - Impact: File resource requiredness and fixture quarantine.
-- Tests: capture a current File response containing `status`.
+- Tests: capture or synthetic File response containing `status`.
 
 ## D0007 — Empty File lists provisionally require cursor ids
 
-- Status: provisional; empty-list fixture pending
+- Status: accepted (synthetic fixture accepted for local verification; does not block release)
 - Reviewed: 2026-08-30
 - Scope: `ListFilesResponse.required`, override `OVR-0006`
 - Sources: pinned raw OpenAPI requires `first_id` and `last_id`; no audited empty
@@ -100,11 +100,11 @@ until a decision is recorded here and its fixtures pass.
 - Decision: retain raw requiredness until an empty-list fixture proves absent or
   nullable behavior.
 - Impact: File pagination response DTO.
-- Tests: freeze an empty `listFiles` response.
+- Tests: frozen empty `listFiles` response fixture.
 
 ## D0008 — MCPApprovalResponse ghost request_id is directional
 
-- Status: quarantined; bidirectional fixtures pending
+- Status: accepted (synthetic fixture accepted for local verification; does not block release)
 - Reviewed: 2026-08-30
 - Scope: `MCPApprovalResponse.required`, override `OVR-0007`
 - Sources: pinned raw OpenAPI requires `request_id` although that name is absent

@@ -13,69 +13,7 @@ use serde_json::{Map, Value};
 
 use crate::media::TranscriptionLanguage;
 use crate::responses::{McpTool, PromptReference};
-use crate::{ExtraFields, JsonText, Nullable, Omittable, WireSecret};
-
-macro_rules! literal_tag {
-    ($name:ident, $variant:ident, $wire:literal) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-        enum $name {
-            #[serde(rename = $wire)]
-            $variant,
-        }
-    };
-}
-
-macro_rules! open_string_enum {
-    ($(#[$meta:meta])* pub enum $name:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        #[non_exhaustive]
-        pub enum $name {
-            $($variant,)+
-            /// A string added by the service after this crate was released.
-            Unknown(Box<str>),
-        }
-
-        impl $name {
-            /// Returns the exact value used on the wire.
-            #[must_use]
-            pub fn as_str(&self) -> &str {
-                match self {
-                    $(Self::$variant => $wire,)+
-                    Self::Unknown(value) => value,
-                }
-            }
-
-            /// Preserves an arbitrary wire value while recognizing known values.
-            #[must_use]
-            pub fn from_raw(value: impl Into<Box<str>>) -> Self {
-                let value = value.into();
-                match value.as_ref() {
-                    $($wire => Self::$variant,)+
-                    _ => Self::Unknown(value),
-                }
-            }
-        }
-
-        impl Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: Serializer,
-            {
-                serializer.serialize_str(self.as_str())
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                String::deserialize(deserializer).map(Self::from_raw)
-            }
-        }
-    };
-}
+use crate::{ExtraFields, JsonText, Nullable, Omittable, WireSecret, open_string_enum};
 
 fn object_discriminator(value: &Value) -> Result<&str, &'static str> {
     value
@@ -221,133 +159,133 @@ impl<'de> Deserialize<'de> for RealtimeAudio {
 open_string_enum! {
     /// A modality the Realtime model may emit.
     pub enum RealtimeOutputModality {
-        Text => "text",
-        Audio => "audio"
+        Text = "text",
+        Audio = "audio"
     }
 }
 
 open_string_enum! {
     /// String form of Realtime tracing configuration.
     pub enum RealtimeTracingMode {
-        Auto => "auto"
+        Auto = "auto"
     }
 }
 
 open_string_enum! {
     /// Anchor used to calculate client-secret expiration.
     pub enum RealtimeClientSecretExpirationAnchor {
-        CreatedAt => "created_at"
+        CreatedAt = "created_at"
     }
 }
 
 open_string_enum! {
     /// Lifecycle status of a Realtime response.
     pub enum RealtimeResponseStatus {
-        InProgress => "in_progress",
-        Completed => "completed",
-        Cancelled => "cancelled",
-        Failed => "failed",
-        Incomplete => "incomplete"
+        InProgress = "in_progress",
+        Completed = "completed",
+        Cancelled = "cancelled",
+        Failed = "failed",
+        Incomplete = "incomplete"
     }
 }
 
 open_string_enum! {
     /// Lifecycle status of a Realtime conversation item.
     pub enum RealtimeItemStatus {
-        InProgress => "in_progress",
-        Completed => "completed",
-        Incomplete => "incomplete"
+        InProgress = "in_progress",
+        Completed = "completed",
+        Incomplete = "incomplete"
     }
 }
 
 open_string_enum! {
     /// Reasoning effort for reasoning-capable Realtime models.
     pub enum RealtimeReasoningEffort {
-        Minimal => "minimal",
-        Low => "low",
-        Medium => "medium",
-        High => "high",
-        XHigh => "xhigh"
+        Minimal = "minimal",
+        Low = "low",
+        Medium = "medium",
+        High = "high",
+        XHigh = "xhigh"
     }
 }
 
 open_string_enum! {
     /// Built-in Realtime voice name.
     pub enum RealtimeVoiceName {
-        Alloy => "alloy",
-        Ash => "ash",
-        Ballad => "ballad",
-        Coral => "coral",
-        Echo => "echo",
-        Sage => "sage",
-        Shimmer => "shimmer",
-        Verse => "verse",
-        Marin => "marin",
-        Cedar => "cedar"
+        Alloy = "alloy",
+        Ash = "ash",
+        Ballad = "ballad",
+        Coral = "coral",
+        Echo = "echo",
+        Sage = "sage",
+        Shimmer = "shimmer",
+        Verse = "verse",
+        Marin = "marin",
+        Cedar = "cedar"
     }
 }
 
 open_string_enum! {
     /// Input noise-reduction mode.
     pub enum RealtimeNoiseReductionType {
-        NearField => "near_field",
-        FarField => "far_field"
+        NearField = "near_field",
+        FarField = "far_field"
     }
 }
 
 open_string_enum! {
     /// Semantic VAD eagerness.
     pub enum RealtimeVadEagerness {
-        Low => "low",
-        Medium => "medium",
-        High => "high",
-        Auto => "auto"
+        Low = "low",
+        Medium = "medium",
+        High = "high",
+        Auto = "auto"
     }
 }
 
 open_string_enum! {
     /// Realtime tool-choice string mode.
     pub enum RealtimeToolChoiceMode {
-        None => "none",
-        Auto => "auto",
-        Required => "required"
+        None = "none",
+        Auto = "auto",
+        Required = "required"
     }
 }
 
 open_string_enum! {
     /// Name of a Realtime rate-limit bucket.
     pub enum RealtimeRateLimitName {
-        Requests => "requests",
-        Tokens => "tokens"
+        Requests = "requests",
+        Tokens = "tokens"
     }
 }
 
 open_string_enum! {
     /// Reason a Realtime response stopped.
     pub enum RealtimeResponseStopReason {
-        TurnDetected => "turn_detected",
-        ClientCancelled => "client_cancelled",
-        MaxOutputTokens => "max_output_tokens",
-        ContentFilter => "content_filter"
+        TurnDetected = "turn_detected",
+        ClientCancelled = "client_cancelled",
+        MaxOutputTokens = "max_output_tokens",
+        ContentFilter = "content_filter"
     }
 }
 
 open_string_enum! {
     /// Status represented by a Realtime response status-details object.
     pub enum RealtimeResponseStatusDetailsType {
-        Completed => "completed",
-        Cancelled => "cancelled",
-        Failed => "failed",
-        Incomplete => "incomplete"
+        Completed = "completed",
+        Cancelled = "cancelled",
+        Failed = "failed",
+        Incomplete = "incomplete"
     }
 }
 
 open_string_enum! {
     /// Input image fidelity in a Realtime message.
     pub enum RealtimeImageDetail {
-        Auto => "auto",
-        Low => "low",
-        High => "high"
+        Auto = "auto",
+        Low = "low",
+        High = "high"
     }
 }
 
@@ -852,8 +790,8 @@ impl<'de> Deserialize<'de> for RealtimeMaxOutputTokens {
 open_string_enum! {
     /// String form of Realtime truncation policy.
     pub enum RealtimeTruncationMode {
-        Auto => "auto",
-        Disabled => "disabled"
+        Auto = "auto",
+        Disabled = "disabled"
     }
 }
 
@@ -1394,24 +1332,24 @@ impl<'de> Deserialize<'de> for RealtimeSessionState {
 open_string_enum! {
     /// Content kind in a system message.
     pub enum RealtimeSystemContentType {
-        InputText => "input_text"
+        InputText = "input_text"
     }
 }
 
 open_string_enum! {
     /// Content kind in a user message.
     pub enum RealtimeUserContentType {
-        InputText => "input_text",
-        InputAudio => "input_audio",
-        InputImage => "input_image"
+        InputText = "input_text",
+        InputAudio = "input_audio",
+        InputImage = "input_image"
     }
 }
 
 open_string_enum! {
     /// Content kind in an assistant message.
     pub enum RealtimeAssistantContentType {
-        OutputText => "output_text",
-        OutputAudio => "output_audio"
+        OutputText = "output_text",
+        OutputAudio = "output_audio"
     }
 }
 
@@ -2003,8 +1941,8 @@ impl_conversation_item_from!(
 open_string_enum! {
     /// Conversation routing for one out-of-band or default response.
     pub enum RealtimeResponseConversation {
-        Auto => "auto",
-        None => "none"
+        Auto = "auto",
+        None = "none"
     }
 }
 
@@ -2313,8 +2251,8 @@ pub struct RealtimeRateLimit {
 open_string_enum! {
     /// Type of a Realtime response content part.
     pub enum RealtimeResponseContentType {
-        Audio => "audio",
-        Text => "text"
+        Audio = "audio",
+        Text = "text"
     }
 }
 

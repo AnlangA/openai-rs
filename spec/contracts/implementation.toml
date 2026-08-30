@@ -1,5 +1,7 @@
 # Explicit implementation registry. Entries are reviewed evidence, never inferred
-# from filenames or symbols. Operation ids must exist in the pinned OpenAPI.
+# from filenames or symbols. REST operation ids must exist in the pinned OpenAPI.
+# Webhook receivers are registered as webhook:{path}:{method} labels because the
+# pinned OpenAPI webhook map does not assign operationId values.
 
 schema_version = 1
 
@@ -476,6 +478,14 @@ tests = ["openai-rs-rmcp::bridge::tests::typed_function_call_round_trips_through
 
 [[non_rest]]
 id = "webhook-receiver"
+status = "verified"
+milestone = "M6-webhooks"
+units = ["WebhookVerifier", "VerifiedWebhook<WebhookEvent>", "WebhookEvent[18]"]
+tests = ["openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature", "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists", "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch", "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"]
+
+[[groups]]
+name = "webhook-receivers"
+operation_ids = ["webhook:batch_cancelled:post", "webhook:batch_completed:post", "webhook:batch_expired:post", "webhook:batch_failed:post", "webhook:eval_run_canceled:post", "webhook:eval_run_failed:post", "webhook:eval_run_succeeded:post", "webhook:fine_tuning_job_cancelled:post", "webhook:fine_tuning_job_failed:post", "webhook:fine_tuning_job_succeeded:post", "webhook:live_call_incoming:post", "webhook:realtime_call_incoming:post", "webhook:response_cancelled:post", "webhook:response_completed:post", "webhook:response_failed:post", "webhook:response_incomplete:post", "webhook:safety_alert_created:post", "webhook:safety_org_alert_created:post"]
 status = "verified"
 milestone = "M6-webhooks"
 units = ["WebhookVerifier", "VerifiedWebhook<WebhookEvent>", "WebhookEvent[18]"]

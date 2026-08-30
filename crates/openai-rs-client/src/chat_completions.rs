@@ -112,21 +112,12 @@ impl ChatCompletions {
             let mut seen = HashSet::new();
             loop {
                 let page = completions.list(params.clone()).await?;
-                let next = if page.has_more {
-                    let cursor = page.next_after().ok_or_else(|| {
-                        Error::InvalidConfiguration(
-                            "stored Chat page advertises more results without a last_id".into(),
-                        )
-                    })?.to_owned();
-                    if cursor.is_empty() || !seen.insert(cursor.clone()) {
-                        Err(Error::InvalidConfiguration(
-                            "stored Chat pagination returned an empty or repeated cursor".into(),
-                        ))?;
-                    }
-                    Some(cursor)
-                } else {
-                    None
-                };
+                let next = crate::pagination::next_cursor(
+                    page.has_more,
+                    page.next_after(),
+                    &mut seen,
+                    "stored Chat",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => params.after = Omittable::Value(cursor),
@@ -233,21 +224,12 @@ impl ChatCompletionMessages {
             let mut seen = HashSet::new();
             loop {
                 let page = messages.list(&completion_id, params.clone()).await?;
-                let next = if page.has_more {
-                    let cursor = page.next_after().ok_or_else(|| {
-                        Error::InvalidConfiguration(
-                            "stored Chat message page advertises more results without a last_id".into(),
-                        )
-                    })?.to_owned();
-                    if cursor.is_empty() || !seen.insert(cursor.clone()) {
-                        Err(Error::InvalidConfiguration(
-                            "stored Chat message pagination returned an empty or repeated cursor".into(),
-                        ))?;
-                    }
-                    Some(cursor)
-                } else {
-                    None
-                };
+                let next = crate::pagination::next_cursor(
+                    page.has_more,
+                    page.next_after(),
+                    &mut seen,
+                    "stored Chat message",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => params.after = Omittable::Value(cursor),

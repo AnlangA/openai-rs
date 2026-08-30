@@ -1,7 +1,7 @@
 //! Typed Rust SDK for the OpenAI API.
 
 pub use openai_rs_types as types;
-pub use openai_rs_types::responses;
+pub use openai_rs_types::responses::{self, OutputParseError};
 
 #[cfg(feature = "legacy-completions")]
 pub use openai_rs_types::legacy;
@@ -10,7 +10,10 @@ pub use openai_rs_types::legacy;
 pub use openai_rs_types::beta_responses;
 
 #[cfg(feature = "structured-output")]
-pub use openai_rs_types::{StructuredError, StructuredOutput, TypedFunction};
+pub use openai_rs_types::{
+    StructuredError, StructuredOutput, ToolContext, ToolExecutionError, ToolHandler, ToolRegistry,
+    ToolSpec, TypedFunction,
+};
 
 #[cfg(feature = "client")]
 pub use openai_rs_client::{
@@ -22,19 +25,24 @@ pub use openai_rs_client::{
     Containers, ContentProvenanceCheck, ContentProvenanceChecks, ContentProvenanceResult,
     ConversationItemPageStream, ConversationItems, Conversations,
     CreateContentProvenanceCheckRequest, CreateFileOneShotRequest, DeleteResponseResult,
-    Embeddings, Error, EvalPageStream, EvalRunOutputItemPageStream, EvalRunOutputItems,
-    EvalRunPageStream, EvalRunPollError, EvalRunPollOptions, EvalRuns, Evals, FileContentStream,
-    Files, FineTuning, FineTuningCheckpointPageStream, FineTuningEventPageStream,
+    Embeddings, Error, FileContentStream,
+    FilePageStream, Files, FineTuning, FineTuningCheckpointPageStream, FineTuningEventPageStream,
     FineTuningJobCheckpoints, FineTuningJobEvents, FineTuningJobPageStream, FineTuningJobs,
     FineTuningPollCancellationToken, FineTuningPollError, FineTuningPollOptions,
     ImageEditEventStream, ImageGenerationEventStream, Images, InputItems, InputTokens,
     MediaByteStream, MediaEventStream, MediaTextBody, Models, Moderations, OneShotMultipartSource,
-    PollCancellationToken, PollError, PollOptions, ResponseEventStream, ResponseMeta, Responses,
-    RetryPolicy, SkillContentStream, SkillPageStream, SkillVersionPageStream, SkillVersions,
-    Skills, SpeechEventStream, StreamError, SynthIdProvenanceResult, TlsBackend,
+    PollCancellationToken, PollError, PollOptions, ResponseEventStream, ResponseInputItemPageStream,
+    ResponseMeta, Responses, RetryPolicy, SkillContentStream, SkillPageStream,
+    SkillVersionPageStream, SkillVersions, Skills, SpeechEventStream, StreamError, SynthIdProvenanceResult, TlsBackend,
     TranscriptionEventStream, TranscriptionOutput, TranslationOutput, Uploads,
     VectorStoreFileBatches, VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream,
     VectorStores,
+};
+
+#[cfg(all(feature = "client", feature = "legacy-evals"))]
+pub use openai_rs_client::{
+    EvalPageStream, EvalRunOutputItemPageStream, EvalRunOutputItems, EvalRunPageStream,
+    EvalRunPollError, EvalRunPollOptions, EvalRuns, Evals,
 };
 
 #[cfg(all(feature = "client", feature = "x509"))]
@@ -67,8 +75,9 @@ pub use openai_rs_client::{
 
 #[cfg(all(feature = "client", feature = "beta-responses-multi-agent"))]
 pub use openai_rs_client::{
-    BetaResponseEventStream, BetaResponseInputItems, BetaResponseInputTokens, BetaResponses,
-    BetaResponsesWebSocket, BetaResponsesWebSocketConfig, BetaWebSocketReconnectPolicy,
+    BetaResponseEventStream, BetaResponseInputItemPageStream, BetaResponseInputItems,
+    BetaResponseInputTokens, BetaResponses, BetaResponsesWebSocket, BetaResponsesWebSocketConfig,
+    BetaWebSocketReconnectPolicy,
 };
 
 #[cfg(all(feature = "client", feature = "realtime"))]

@@ -94,11 +94,16 @@ impl Skills {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
             if let Omittable::Value(cursor) = &params.after {
-                seen.insert(cursor.clone());
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
             }
             loop {
                 let page = skills.list(params.clone()).await?;
-                let next = next_skill_cursor(page.has_more, page.next_after(), &mut seen, "Skill")?;
+                let next = crate::pagination::next_cursor(
+                    page.has_more,
+                    page.next_after(),
+                    &mut seen,
+                    "Skill",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => params.after = Omittable::Value(cursor),
@@ -215,11 +220,11 @@ impl SkillVersions {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
             if let Omittable::Value(cursor) = &params.after {
-                seen.insert(cursor.clone());
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
             }
             loop {
                 let page = versions.list(&skill_id, params.clone()).await?;
-                let next = next_skill_cursor(
+                let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after(),
                     &mut seen,
@@ -308,33 +313,6 @@ async fn prepare_skill_form(
         };
     }
     Ok(form)
-}
-
-fn next_skill_cursor(
-    has_more: bool,
-    cursor: Option<&str>,
-    seen: &mut HashSet<String>,
-    resource: &'static str,
-) -> Result<Option<String>, Error> {
-    if !has_more {
-        return Ok(None);
-    }
-    let cursor = cursor.ok_or_else(|| {
-        Error::InvalidConfiguration(
-            format!("{resource} page advertises more results without last_id").into(),
-        )
-    })?;
-    if cursor.is_empty() {
-        return Err(Error::InvalidConfiguration(
-            format!("{resource} page returned an empty pagination cursor").into(),
-        ));
-    }
-    if !seen.insert(cursor.to_owned()) {
-        return Err(Error::InvalidConfiguration(
-            format!("{resource} pagination returned a repeated cursor").into(),
-        ));
-    }
-    Ok(Some(cursor.to_owned()))
 }
 
 fn skill_path(skill_id: &SkillId) -> Result<[PathSegment<'_>; 2], Error> {

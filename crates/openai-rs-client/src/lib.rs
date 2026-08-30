@@ -23,6 +23,7 @@ mod content_provenance;
 mod conversations;
 mod core_resources;
 mod error;
+#[cfg(feature = "legacy-evals")]
 mod evals;
 mod files;
 mod fine_tuning;
@@ -31,6 +32,8 @@ mod legacy_realtime;
 mod media;
 mod multipart;
 mod operation;
+mod pagination;
+mod poll;
 #[cfg(feature = "realtime")]
 mod realtime;
 mod response_stream;
@@ -61,8 +64,9 @@ pub use batches::{
 };
 #[cfg(feature = "beta-responses-multi-agent")]
 pub use beta_responses::{
-    BetaResponseEventStream, BetaResponseInputItems, BetaResponseInputTokens, BetaResponses,
-    BetaResponsesWebSocket, BetaResponsesWebSocketConfig, BetaWebSocketReconnectPolicy,
+    BetaResponseEventStream, BetaResponseInputItemPageStream, BetaResponseInputItems,
+    BetaResponseInputTokens, BetaResponses, BetaResponsesWebSocket, BetaResponsesWebSocketConfig,
+    BetaWebSocketReconnectPolicy,
 };
 pub use chat_completions::{
     ChatCompletionMessagePageStream, ChatCompletionMessages, ChatCompletionPageStream,
@@ -84,11 +88,12 @@ pub use content_provenance::*;
 pub use conversations::{ConversationItemPageStream, ConversationItems, Conversations};
 pub use core_resources::{Embeddings, Models, Moderations};
 pub use error::{ApiError, BodyPreview, Error, StreamError};
+#[cfg(feature = "legacy-evals")]
 pub use evals::{
     EvalPageStream, EvalRunOutputItemPageStream, EvalRunOutputItems, EvalRunPageStream,
     EvalRunPollError, EvalRunPollOptions, EvalRuns, Evals,
 };
-pub use files::{Files, Uploads};
+pub use files::{FilePageStream, Files, Uploads};
 pub use fine_tuning::{
     FineTuning, FineTuningCheckpointPageStream, FineTuningEventPageStream,
     FineTuningJobCheckpoints, FineTuningJobEvents, FineTuningJobPageStream, FineTuningJobs,
@@ -107,12 +112,13 @@ pub use multipart::{
     OneShotMultipartSource,
 };
 pub use operation::{ApiResponse, RateLimitMetadata, ResponseMeta};
+pub use poll::{PollCancellationToken, PollError, PollOptions};
 #[cfg(feature = "realtime")]
 pub use realtime::{Realtime, RealtimeCallCreated, RealtimeWebSocket, RealtimeWebSocketConfig};
 pub use response_stream::ResponseEventStream;
 pub use responses::{
-    DeleteResponseResult, InputItems, InputTokens, Responses, RetrieveResponseParams,
-    RetrieveResponseStreamParams,
+    DeleteResponseResult, InputItems, InputTokens, ResponseInputItemPageStream, Responses,
+    RetrieveResponseParams, RetrieveResponseStreamParams,
 };
 #[cfg(feature = "realtime")]
 pub use responses_websocket::{
@@ -123,8 +129,8 @@ pub use skills::{
     SkillContentStream, SkillPageStream, SkillVersionPageStream, SkillVersions, Skills,
 };
 pub use vector_stores::{
-    PollCancellationToken, PollError, PollOptions, VectorStoreFileBatches,
-    VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream, VectorStores,
+    VectorStoreFileBatches, VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream,
+    VectorStores,
 };
 #[cfg(feature = "custom-voice")]
 pub use voices::{VoiceConsentPageStream, VoiceConsents, Voices};

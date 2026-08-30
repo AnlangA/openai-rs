@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
@@ -383,6 +383,208 @@ impl ExtraFieldsConflict {
     pub fn key(&self) -> &str {
         &self.key
     }
+}
+
+/// Constant `type` field used by tagged request and response objects.
+macro_rules! literal_tag {
+    ($name:ident, $wire:literal) => {
+        literal_tag!($name, Value, $wire);
+    };
+    ($name:ident, $variant:ident, $wire:literal) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        enum $name {
+            #[serde(rename = $wire)]
+            $variant,
+        }
+    };
+}
+
+/// Forward-compatible tagged union that retains unknown objects verbatim.
+macro_rules! tagged_union {
+    ($(#[$meta:meta])* pub enum $name:ident {
+        $($variant:ident($ty:ty) => $wire:literal),+ $(,)?
+    }) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq)]
+        #[non_exhaustive]
+        pub enum $name {
+            $($variant($ty),)+
+            /// A future variant retained as a complete semantic JSON object.
+            Unknown($crate::UnknownTaggedObject),
+        }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                match self {
+                    $(Self::$variant(value) => value.serialize(serializer),)+
+                    Self::Unknown(value) => value.serialize(serializer),
+                }
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let value = Value::deserialize(deserializer)?;
+                let discriminator =
+                    $crate::kernel::object_discriminator(&value).map_err(D::Error::custom)?;
+                match discriminator.as_str() {
+                    $($wire => serde_json::from_value::<$ty>(value)
+                        .map(Self::$variant)
+                        .map_err(D::Error::custom),)+
+                    _ => $crate::UnknownTaggedObject::from_value(value)
+                        .map(Self::Unknown)
+                        .map_err(D::Error::custom),
+                }
+            }
+        }
+    };
+}
+
+/// Tagged union that rejects known-but-invalid tags instead of keeping them.
+macro_rules! tagged_union_reject_known {
+    ($(#[$meta:meta])* pub enum $name:ident {
+        $($variant:ident($ty:ty) => $tag:literal),+ $(,)?
+    } reject [$($rejected:literal),+ $(,)?]) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq)]
+        #[non_exhaustive]
+        pub enum $name {
+            $($variant($ty),)+
+            /// A genuinely future source tag retained verbatim.
+            Unknown($crate::UnknownTaggedObject),
+        }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                match self {
+                    $(Self::$variant(value) => value.serialize(serializer),)+
+                    Self::Unknown(value) => value.serialize(serializer),
+                }
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let value = Value::deserialize(deserializer)?;
+                let tag = $crate::kernel::object_discriminator(&value).map_err(D::Error::custom)?;
+                match tag.as_str() {
+                    $($tag => serde_json::from_value(value)
+                        .map(Self::$variant)
+                        .map_err(D::Error::custom),)+
+                    $($rejected => Err(D::Error::custom(format_args!(
+                        "known source tag `{tag}` is not valid in {}",
+                        stringify!($name),
+                    ))),)+
+                    _ => $crate::UnknownTaggedObject::from_value(value)
+                        .map(Self::Unknown)
+                        .map_err(D::Error::custom),
+                }
+            }
+        }
+    };
+}
+
+pub(crate) fn object_discriminator(value: &Value) -> Result<String, &'static str> {
+    let object = value
+        .as_object()
+        .ok_or("tagged value must be a JSON object")?;
+    object
+        .get("type")
+        .ok_or("tagged object is missing string field `type`")?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or("tagged object field `type` must be a string")
+}
+
+/// A future tagged object, including its discriminator and every raw field.
+///
+/// The map is immutable through the public API, so `discriminator` can never
+/// drift from its retained `type` property.
+#[derive(Clone, PartialEq)]
+pub struct UnknownTaggedObject {
+    discriminator: Box<str>,
+    raw: Map<String, Value>,
+}
+
+impl UnknownTaggedObject {
+    /// Validates and retains an unknown tagged JSON object.
+    pub fn from_value(value: Value) -> Result<Self, UnknownTaggedObjectError> {
+        let discriminator = object_discriminator(&value)
+            .map_err(UnknownTaggedObjectError::Invalid)?
+            .into_boxed_str();
+        let Value::Object(raw) = value else {
+            return Err(UnknownTaggedObjectError::Invalid(
+                "tagged value must be a JSON object",
+            ));
+        };
+        Ok(Self { discriminator, raw })
+    }
+
+    /// Returns the exact unknown discriminator.
+    #[must_use]
+    pub fn discriminator(&self) -> &str {
+        &self.discriminator
+    }
+
+    /// Borrows all retained object fields, including `type`.
+    #[must_use]
+    pub const fn raw(&self) -> &Map<String, Value> {
+        &self.raw
+    }
+
+    /// Converts this value back into its semantic JSON object.
+    #[must_use]
+    pub fn into_value(self) -> Value {
+        Value::Object(self.raw)
+    }
+}
+
+impl fmt::Debug for UnknownTaggedObject {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UnknownTaggedObject")
+            .field("discriminator", &self.discriminator)
+            .field("field_count", &self.raw.len())
+            .finish()
+    }
+}
+
+impl Serialize for UnknownTaggedObject {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.raw.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for UnknownTaggedObject {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::from_value(Value::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
+/// A supplied value was not a tagged JSON object.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum UnknownTaggedObjectError {
+    /// The discriminator was absent or had the wrong JSON kind.
+    #[error("{0}")]
+    Invalid(&'static str),
 }
 
 #[cfg(test)]

@@ -1,10 +1,6 @@
 //! Stable Evals resources, pagination, and run polling.
 
-use std::{
-    collections::HashSet,
-    pin::Pin,
-    time::{Duration, Instant},
-};
+use std::{collections::HashSet, pin::Pin};
 
 use futures_core::Stream;
 use http::{Method, StatusCode};
@@ -14,21 +10,18 @@ use openai_rs_types::{
     EvalRunStatus, ListEvalRunOutputItemsParams, ListEvalRunsParams, ListEvalsParams,
     UpdateEvalRequest,
 };
-use thiserror::Error as ThisError;
-
 use crate::{
-    ApiResponse, Client, Error,
+    ApiResponse, Client, Error, PollError, PollOptions,
     operation::{
         AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, RetryClass,
         private::Sealed,
     },
+    poll,
     transport::PathSegment,
 };
 
 const OK: &[StatusCode] = &[StatusCode::OK];
 const CREATED: &[StatusCode] = &[StatusCode::CREATED];
-const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
-const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// Pages returned by `GET /evals`.
 pub type EvalPageStream =
@@ -109,12 +102,13 @@ impl Evals {
         Box::pin(async_stream::try_stream! {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
-            if let Some(cursor) = params.after_ref() {
-                seen.insert(cursor.as_str().to_owned());
-            }
+            crate::pagination::seed_seen(
+                &mut seen,
+                params.after_ref().map(EvalId::as_str),
+            );
             loop {
                 let page = evals.list(params.clone()).await?;
-                let next = next_cursor(
+                let next = crate::pagination::next_cursor(
                     page.has_more(),
                     page.last_id().map(EvalId::as_str),
                     &mut seen,
@@ -193,12 +187,13 @@ impl EvalRuns {
         Box::pin(async_stream::try_stream! {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
-            if let Some(cursor) = params.after_ref() {
-                seen.insert(cursor.as_str().to_owned());
-            }
+            crate::pagination::seed_seen(
+                &mut seen,
+                params.after_ref().map(EvalRunId::as_str),
+            );
             loop {
                 let page = runs.list(&eval_id, params.clone()).await?;
-                let next = next_cursor(
+                let next = crate::pagination::next_cursor(
                     page.has_more(),
                     page.last_id().map(EvalRunId::as_str),
                     &mut seen,
@@ -244,27 +239,15 @@ impl EvalRuns {
         &self,
         eval_id: &EvalId,
         run_id: &EvalRunId,
-        options: EvalRunPollOptions,
-    ) -> Result<ApiResponse<EvalRun>, EvalRunPollError> {
-        if options.interval.is_zero() || options.timeout.is_zero() {
-            return Err(EvalRunPollError::Client(Error::InvalidConfiguration(
-                "Eval run poll interval and timeout must be non-zero".into(),
-            )));
-        }
-        let started = Instant::now();
-        loop {
-            let run = self.retrieve(eval_id, run_id).await?;
-            if is_terminal(run.status()) {
-                return Ok(run);
-            }
-            if started.elapsed() >= options.timeout {
-                return Err(EvalRunPollError::TimedOut {
-                    timeout: options.timeout,
-                    last_status: run.status().as_str().to_owned(),
-                });
-            }
-            tokio::time::sleep(options.interval).await;
-        }
+        options: PollOptions,
+    ) -> Result<ApiResponse<EvalRun>, PollError> {
+        poll::poll_resource_with_status(
+            || self.retrieve(eval_id, run_id),
+            |run| is_terminal(run.status()),
+            |run| run.status().as_str().to_owned(),
+            options,
+        )
+        .await
     }
 
     /// Returns output-item operations.
@@ -325,12 +308,13 @@ impl EvalRunOutputItems {
         Box::pin(async_stream::try_stream! {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
-            if let Some(cursor) = params.after_ref() {
-                seen.insert(cursor.as_str().to_owned());
-            }
+            crate::pagination::seed_seen(
+                &mut seen,
+                params.after_ref().map(EvalRunOutputItemId::as_str),
+            );
             loop {
                 let page = items.list(&eval_id, &run_id, params.clone()).await?;
-                let next = next_cursor(
+                let next = crate::pagination::next_cursor(
                     page.has_more(),
                     page.last_id().map(EvalRunOutputItemId::as_str),
                     &mut seen,
@@ -349,92 +333,16 @@ impl EvalRunOutputItems {
 }
 
 /// Options controlling Eval run polling.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EvalRunPollOptions {
-    interval: Duration,
-    timeout: Duration,
-}
-
-impl EvalRunPollOptions {
-    /// Creates default polling options.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            interval: DEFAULT_POLL_INTERVAL,
-            timeout: DEFAULT_POLL_TIMEOUT,
-        }
-    }
-
-    /// Sets the delay between requests.
-    #[must_use]
-    pub const fn interval(mut self, interval: Duration) -> Self {
-        self.interval = interval;
-        self
-    }
-
-    /// Sets the overall timeout.
-    #[must_use]
-    pub const fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-}
-
-impl Default for EvalRunPollOptions {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub type EvalRunPollOptions = PollOptions;
 
 /// Failure while polling an Eval run.
-#[derive(Debug, ThisError)]
-#[non_exhaustive]
-pub enum EvalRunPollError {
-    /// A typed HTTP/API error.
-    #[error(transparent)]
-    Client(#[from] Error),
-    /// The overall polling deadline elapsed.
-    #[error("Eval run did not terminate within {timeout:?}; last status was `{last_status}`")]
-    TimedOut {
-        /// Configured timeout.
-        timeout: Duration,
-        /// Last observed open status value.
-        last_status: String,
-    },
-}
+pub type EvalRunPollError = PollError;
 
 fn is_terminal(status: &EvalRunStatus) -> bool {
     matches!(
         status,
         EvalRunStatus::Completed | EvalRunStatus::Canceled | EvalRunStatus::Failed
     )
-}
-
-fn next_cursor(
-    has_more: bool,
-    last_id: Option<&str>,
-    seen: &mut HashSet<String>,
-    resource: &str,
-) -> Result<Option<String>, Error> {
-    if !has_more {
-        return Ok(None);
-    }
-    let cursor = last_id.ok_or_else(|| {
-        Error::InvalidConfiguration(
-            format!("{resource} page advertises more results without a last_id").into(),
-        )
-    })?;
-    if cursor.is_empty() {
-        return Err(Error::InvalidConfiguration(
-            format!("{resource} page returned an empty last_id").into(),
-        ));
-    }
-    if !seen.insert(cursor.to_owned()) {
-        return Err(Error::InvalidConfiguration(
-            format!("{resource} pagination returned a repeated cursor").into(),
-        ));
-    }
-    Ok(Some(cursor.to_owned()))
 }
 
 fn eval_path(eval_id: &EvalId) -> Result<[PathSegment<'_>; 2], Error> {
@@ -652,6 +560,7 @@ mod tests {
         collections::VecDeque,
         convert::Infallible,
         sync::{Arc, Mutex},
+        time::Duration,
     };
 
     use bytes::Bytes;
@@ -1275,14 +1184,34 @@ mod tests {
                 &EvalId::new("eval_1"),
                 &EvalRunId::new("evalrun_1"),
                 EvalRunPollOptions::new()
-                    .interval(Duration::from_millis(1))
-                    .timeout(Duration::from_secs(1)),
+                    .with_interval(Duration::from_millis(1))
+                    .with_timeout(Duration::from_secs(1)),
             )
             .await
             .expect("poll completed run");
         assert_eq!(response.status(), &EvalRunStatus::Completed);
         assert!(captured.recv().await.is_some());
         assert!(captured.recv().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn run_poll_honors_cancellation_without_sending() {
+        let (client, mut captured) =
+            serve_sequence(vec![(StatusCode::OK, run_json("queued").to_string())]).await;
+        let token = crate::PollCancellationToken::new();
+        token.cancel();
+        let error = client
+            .evals()
+            .runs()
+            .poll(
+                &EvalId::new("eval_1"),
+                &EvalRunId::new("evalrun_1"),
+                EvalRunPollOptions::new().with_cancellation(token),
+            )
+            .await
+            .expect_err("cancelled poll");
+        assert!(matches!(error, EvalRunPollError::Cancelled));
+        assert!(captured.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -1323,17 +1252,5 @@ mod tests {
             .expect("delete encoded Eval id");
         let request = captured.recv().await.expect("delete request");
         assert_eq!(request.path_and_query, "/v1/evals/eval%2Fa%20b");
-    }
-
-    #[test]
-    fn cursor_guard_rejects_missing_empty_and_repeated_values() {
-        let mut seen = HashSet::new();
-        assert!(next_cursor(true, None, &mut seen, "Eval").is_err());
-        assert!(next_cursor(true, Some(""), &mut seen, "Eval").is_err());
-        assert_eq!(
-            next_cursor(true, Some("eval_1"), &mut seen, "Eval").expect("new cursor"),
-            Some(String::from("eval_1"))
-        );
-        assert!(next_cursor(true, Some("eval_1"), &mut seen, "Eval").is_err());
     }
 }

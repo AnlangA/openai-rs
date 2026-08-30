@@ -25,6 +25,8 @@ admin = ["client", "openai-rs-types/admin", "openai-rs-client/admin"]
 workload-identity = ["client", "openai-rs-client/workload-identity"]
 x509 = ["workload-identity", "rustls-tls", "openai-rs-client/x509"]
 legacy-completions = ["client", "openai-rs-types/legacy-completions", "openai-rs-client/legacy-completions"]
+legacy-evals = ["client", "openai-rs-client/legacy-evals"]
+evals = ["legacy-evals"]
 custom-voice = ["client", "openai-rs-types/custom-voice", "openai-rs-client/custom-voice"]
 alpha-graders = ["client", "openai-rs-client/alpha-graders"]
 beta-chatkit = ["client", "openai-rs-types/beta-chatkit", "openai-rs-client/beta-chatkit"]
@@ -51,7 +53,13 @@ openai-rs-rmcp = { path = "../openai-rs-rmcp", version = "=0.1.0", default-featu
 openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0", default-features = false }
 
 [dev-dependencies]
+schemars.workspace = true
+serde.workspace = true
 tokio.workspace = true
+
+[[example]]
+name = "responses"
+required-features = ["client", "structured-output"]
 
 [lints]
 workspace = true

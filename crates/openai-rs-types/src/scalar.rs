@@ -413,6 +413,12 @@ impl<T> JsonText<T> {
         &self.raw
     }
 
+    /// Borrows the exact string carried by the outer JSON value.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+
     /// Consumes the wrapper and returns its unparsed string.
     #[must_use]
     pub fn into_raw(self) -> Box<str> {
@@ -480,6 +486,24 @@ impl<T> Hash for JsonText<T> {
         H: Hasher,
     {
         self.raw.hash(state);
+    }
+}
+
+impl<T> From<String> for JsonText<T> {
+    fn from(value: String) -> Self {
+        Self::from_raw(value)
+    }
+}
+
+impl<T> From<&str> for JsonText<T> {
+    fn from(value: &str) -> Self {
+        Self::from_raw(value)
+    }
+}
+
+impl<T> From<Box<str>> for JsonText<T> {
+    fn from(value: Box<str>) -> Self {
+        Self::from_raw(value)
     }
 }
 

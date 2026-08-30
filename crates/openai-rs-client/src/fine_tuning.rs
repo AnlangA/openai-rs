@@ -4,16 +4,7 @@
 //! Their endpoints require an Admin API key and must be attached to a future
 //! `AdminClient`, never to this Platform-credential resource facade.
 
-use std::{
-    collections::HashSet,
-    future::Future,
-    pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant},
-};
+use std::{collections::HashSet, pin::Pin};
 
 use futures_core::Stream;
 use http::{Method, StatusCode};
@@ -27,21 +18,18 @@ use openai_rs_types::{
     },
 };
 use serde::{Serialize, ser::SerializeMap};
-use thiserror::Error as ThisError;
-use tokio::sync::Notify;
 
 use crate::{
-    ApiResponse, Client, Error,
+    ApiResponse, Client, Error, PollCancellationToken, PollError, PollOptions,
     operation::{
         AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, RetryClass,
         private::Sealed,
     },
+    poll,
     transport::PathSegment,
 };
 
 const OK: &[StatusCode] = &[StatusCode::OK];
-const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(5);
-const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Pages returned by `GET /fine_tuning/jobs`.
 pub type FineTuningJobPageStream = Pin<
@@ -144,26 +132,16 @@ impl FineTuningJobs {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
             if let Omittable::Value(cursor) = &params.after {
-                seen.insert(cursor.as_str().to_owned());
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
             }
             loop {
                 let page = jobs.list(params.clone()).await?;
-                let next = if page.has_more {
-                    let cursor = page.next_after().ok_or_else(|| {
-                        Error::InvalidConfiguration(
-                            "fine-tuning jobs page advertises more results without a final job".into(),
-                        )
-                    })?;
-                    let value = cursor.as_str().to_owned();
-                    if !seen.insert(value.clone()) {
-                        Err(Error::InvalidConfiguration(
-                            "fine-tuning jobs pagination returned a repeated cursor".into(),
-                        ))?;
-                    }
-                    Some(value)
-                } else {
-                    None
-                };
+                let next = crate::pagination::next_cursor(
+                    page.has_more,
+                    page.next_after().map(|cursor| cursor.as_str()),
+                    &mut seen,
+                    "fine-tuning jobs",
+                )?;
                 yield page;
                 match next {
                     Some(cursor) => {
@@ -240,9 +218,15 @@ impl FineTuningJobs {
     pub async fn poll(
         &self,
         fine_tuning_job_id: &FineTuningJobId,
-        options: FineTuningPollOptions,
-    ) -> Result<ApiResponse<FineTuningJob>, FineTuningPollError> {
-        poll_job(|| self.retrieve(fine_tuning_job_id), options).await
+        options: PollOptions,
+    ) -> Result<ApiResponse<FineTuningJob>, PollError> {
+        poll::poll_resource_with_status(
+            || self.retrieve(fine_tuning_job_id),
+            FineTuningJob::is_terminal,
+            |job| job.status.as_str().to_owned(),
+            options,
+        )
+        .await
     }
 }
 
@@ -287,11 +271,11 @@ impl FineTuningJobEvents {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
             if let Omittable::Value(cursor) = &params.after {
-                seen.insert(cursor.clone());
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
             }
             loop {
                 let page = events.list(&fine_tuning_job_id, params.clone()).await?;
-                let next = next_string_cursor(
+                let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after(),
                     &mut seen,
@@ -348,11 +332,11 @@ impl FineTuningJobCheckpoints {
             let mut params = params;
             let mut seen = HashSet::<String>::new();
             if let Omittable::Value(cursor) = &params.after {
-                seen.insert(cursor.clone());
+                crate::pagination::seed_seen(&mut seen, Some(cursor.as_str()));
             }
             loop {
                 let page = checkpoints.list(&fine_tuning_job_id, params.clone()).await?;
-                let next = next_string_cursor(
+                let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after(),
                     &mut seen,
@@ -368,205 +352,14 @@ impl FineTuningJobCheckpoints {
     }
 }
 
-fn next_string_cursor(
-    has_more: bool,
-    cursor: Option<&str>,
-    seen: &mut HashSet<String>,
-    resource: &'static str,
-) -> Result<Option<String>, Error> {
-    if !has_more {
-        return Ok(None);
-    }
-    let cursor = cursor
-        .filter(|cursor| !cursor.is_empty())
-        .ok_or_else(|| {
-            Error::InvalidConfiguration(
-                format!("{resource} page advertises more results without a cursor").into(),
-            )
-        })?
-        .to_owned();
-    if !seen.insert(cursor.clone()) {
-        return Err(Error::InvalidConfiguration(
-            format!("{resource} pagination returned a repeated cursor").into(),
-        ));
-    }
-    Ok(Some(cursor))
-}
-
 /// Cloneable cooperative cancellation signal for fine-tuning polling.
-#[derive(Clone, Debug, Default)]
-pub struct FineTuningPollCancellationToken {
-    inner: Arc<FineTuningPollCancellationInner>,
-}
-
-#[derive(Debug, Default)]
-struct FineTuningPollCancellationInner {
-    cancelled: AtomicBool,
-    notify: Notify,
-}
-
-impl FineTuningPollCancellationToken {
-    /// Creates a fresh cancellation token.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Requests cancellation and wakes pending poll waits.
-    pub fn cancel(&self) {
-        if !self.inner.cancelled.swap(true, Ordering::AcqRel) {
-            self.inner.notify.notify_waiters();
-        }
-    }
-
-    /// Whether cancellation has already been requested.
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.inner.cancelled.load(Ordering::Acquire)
-    }
-
-    async fn cancelled(&self) {
-        if self.is_cancelled() {
-            return;
-        }
-        self.inner.notify.notified().await;
-    }
-}
+pub type FineTuningPollCancellationToken = PollCancellationToken;
 
 /// Interval, deadline, and cancellation for fine-tuning polling.
-#[derive(Clone, Debug)]
-pub struct FineTuningPollOptions {
-    interval: Duration,
-    timeout: Duration,
-    cancellation: Option<FineTuningPollCancellationToken>,
-}
-
-impl FineTuningPollOptions {
-    /// Creates bounded defaults suitable for long-running fine-tuning jobs.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            interval: DEFAULT_POLL_INTERVAL,
-            timeout: DEFAULT_POLL_TIMEOUT,
-            cancellation: None,
-        }
-    }
-
-    /// Sets the delay between job retrievals.
-    #[must_use]
-    pub const fn with_interval(mut self, interval: Duration) -> Self {
-        self.interval = interval;
-        self
-    }
-
-    /// Sets the overall polling deadline.
-    #[must_use]
-    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
-    /// Adds cooperative cancellation.
-    #[must_use]
-    pub fn with_cancellation(mut self, cancellation: FineTuningPollCancellationToken) -> Self {
-        self.cancellation = Some(cancellation);
-        self
-    }
-
-    /// Polling interval.
-    #[must_use]
-    pub const fn interval(&self) -> Duration {
-        self.interval
-    }
-
-    /// Overall polling timeout.
-    #[must_use]
-    pub const fn timeout(&self) -> Duration {
-        self.timeout
-    }
-}
-
-impl Default for FineTuningPollOptions {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub type FineTuningPollOptions = PollOptions;
 
 /// Failures produced by bounded fine-tuning polling.
-#[derive(Debug, ThisError)]
-#[non_exhaustive]
-pub enum FineTuningPollError {
-    /// Interval and timeout must both be non-zero.
-    #[error("fine-tuning poll interval and timeout must be non-zero")]
-    InvalidConfiguration,
-    /// The caller-provided deadline elapsed.
-    #[error("fine-tuning polling deadline elapsed")]
-    DeadlineExceeded,
-    /// Cooperative cancellation was requested.
-    #[error("fine-tuning polling was cancelled")]
-    Cancelled,
-    /// A job retrieval failed.
-    #[error(transparent)]
-    Client(#[from] Error),
-}
-
-async fn poll_job<F, Fut>(
-    mut fetch: F,
-    options: FineTuningPollOptions,
-) -> Result<ApiResponse<FineTuningJob>, FineTuningPollError>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = Result<ApiResponse<FineTuningJob>, Error>>,
-{
-    if options.interval.is_zero() || options.timeout.is_zero() {
-        return Err(FineTuningPollError::InvalidConfiguration);
-    }
-    let started = Instant::now();
-    loop {
-        if options
-            .cancellation
-            .as_ref()
-            .is_some_and(FineTuningPollCancellationToken::is_cancelled)
-        {
-            return Err(FineTuningPollError::Cancelled);
-        }
-        let remaining = options
-            .timeout
-            .checked_sub(started.elapsed())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or(FineTuningPollError::DeadlineExceeded)?;
-        let response = if let Some(cancellation) = &options.cancellation {
-            tokio::select! {
-                _ = cancellation.cancelled() => return Err(FineTuningPollError::Cancelled),
-                response = tokio::time::timeout(remaining, fetch()) => {
-                    response.map_err(|_| FineTuningPollError::DeadlineExceeded)??
-                }
-            }
-        } else {
-            tokio::time::timeout(remaining, fetch())
-                .await
-                .map_err(|_| FineTuningPollError::DeadlineExceeded)??
-        };
-        if response.is_terminal() {
-            return Ok(response);
-        }
-
-        let remaining = options
-            .timeout
-            .checked_sub(started.elapsed())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or(FineTuningPollError::DeadlineExceeded)?;
-        let delay = options.interval.min(remaining);
-        if let Some(cancellation) = &options.cancellation {
-            tokio::select! {
-                _ = cancellation.cancelled() => return Err(FineTuningPollError::Cancelled),
-                () = tokio::time::sleep(delay) => {}
-            }
-        } else {
-            tokio::time::sleep(delay).await;
-        }
-    }
-}
+pub type FineTuningPollError = PollError;
 
 struct FineTuningJobListQuery<'a>(&'a ListFineTuningJobsParams);
 
@@ -787,6 +580,7 @@ mod tests {
             Arc, Mutex,
             atomic::{AtomicUsize, Ordering as AtomicOrdering},
         },
+        time::Duration,
     };
 
     use bytes::Bytes;
