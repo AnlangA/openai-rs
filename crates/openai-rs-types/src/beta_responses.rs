@@ -734,6 +734,18 @@ impl BetaAgentMessage {
     pub fn recipient(&self) -> &str {
         &self.recipient
     }
+
+    /// Returns message content in wire order.
+    #[must_use]
+    pub fn content(&self) -> &[BetaAgentMessageContent] {
+        &self.content
+    }
+
+    /// Returns the owning agent when present and non-null.
+    #[must_use]
+    pub fn owning_agent(&self) -> Option<&BetaAgent> {
+        non_null(&self.agent)
+    }
 }
 
 literal_tag!(MultiAgentCallTag, MultiAgentCall, "multi_agent_call");
@@ -796,6 +808,18 @@ impl BetaMultiAgentCall {
     #[must_use]
     pub fn call_id(&self) -> &str {
         &self.call_id
+    }
+
+    /// Returns the requested runtime action.
+    #[must_use]
+    pub const fn action(&self) -> &BetaMultiAgentAction {
+        &self.action
+    }
+
+    /// Returns the owning agent when present and non-null.
+    #[must_use]
+    pub fn agent(&self) -> Option<&BetaAgent> {
+        non_null(&self.agent)
     }
 }
 
@@ -922,6 +946,18 @@ impl BetaMultiAgentCallOutput {
     #[must_use]
     pub fn output(&self) -> &[BetaMultiAgentOutputText] {
         &self.output
+    }
+
+    /// Returns the runtime action that produced this output.
+    #[must_use]
+    pub const fn action(&self) -> &BetaMultiAgentAction {
+        &self.action
+    }
+
+    /// Returns the owning agent when present and non-null.
+    #[must_use]
+    pub fn agent(&self) -> Option<&BetaAgent> {
+        non_null(&self.agent)
     }
 }
 
@@ -1296,6 +1332,30 @@ impl BetaReasoningConfig {
     pub fn summary(mut self, summary: BetaReasoningSummary) -> Self {
         self.summary = Omittable::Value(Nullable::Value(summary));
         self
+    }
+
+    /// Returns the non-null reasoning context.
+    #[must_use]
+    pub fn context_ref(&self) -> Option<&BetaReasoningContext> {
+        non_null(&self.context)
+    }
+
+    /// Returns the non-null reasoning effort.
+    #[must_use]
+    pub fn effort_ref(&self) -> Option<&BetaReasoningEffort> {
+        non_null(&self.effort)
+    }
+
+    /// Returns the selected reasoning mode.
+    #[must_use]
+    pub fn mode_ref(&self) -> Option<&BetaReasoningMode> {
+        omitted_ref(&self.mode)
+    }
+
+    /// Returns the non-null reasoning summary style.
+    #[must_use]
+    pub fn summary_ref(&self) -> Option<&BetaReasoningSummary> {
+        non_null(&self.summary)
     }
 }
 
@@ -1787,6 +1847,20 @@ pub struct BetaModerationResult {
     output: BetaModerationOutcome,
 }
 
+impl BetaModerationResult {
+    /// Returns the input moderation outcome.
+    #[must_use]
+    pub const fn input(&self) -> &BetaModerationOutcome {
+        &self.input
+    }
+
+    /// Returns the output moderation outcome.
+    #[must_use]
+    pub const fn output(&self) -> &BetaModerationOutcome {
+        &self.output
+    }
+}
+
 literal_tag!(BetaResponseObjectTag, Response, "response");
 
 /// Complete beta Responses resource.
@@ -1898,6 +1972,12 @@ impl BetaResponse {
     #[must_use]
     pub fn max_tool_calls(&self) -> Option<u32> {
         non_null(&self.max_tool_calls).copied()
+    }
+
+    /// Returns typed moderation outcomes when present and non-null.
+    #[must_use]
+    pub fn moderation(&self) -> Option<&BetaModerationResult> {
+        non_null(&self.moderation)
     }
 
     /// Returns future fields retained during decoding.
