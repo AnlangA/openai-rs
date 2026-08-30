@@ -16,6 +16,8 @@ mod operation;
 mod response_stream;
 mod responses;
 #[cfg(feature = "realtime")]
+mod realtime;
+#[cfg(feature = "realtime")]
 mod responses_websocket;
 mod retry;
 pub mod sse;
@@ -46,6 +48,10 @@ pub use response_stream::ResponseEventStream;
 pub use responses::{
     DeleteResponseResult, InputItems, InputTokens, Responses, RetrieveResponseParams,
     RetrieveResponseStreamParams,
+};
+#[cfg(feature = "realtime")]
+pub use realtime::{
+    Realtime, RealtimeCallCreated, RealtimeWebSocket, RealtimeWebSocketConfig,
 };
 #[cfg(feature = "realtime")]
 pub use responses_websocket::{

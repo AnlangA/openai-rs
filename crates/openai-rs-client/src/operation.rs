@@ -21,6 +21,8 @@ pub(crate) enum RequestEncoding {
 pub(crate) enum ResponseMode {
     Json,
     EmptyOrJson,
+    #[cfg(feature = "realtime")]
+    Empty,
     Sse,
 }
 
@@ -29,6 +31,8 @@ pub(crate) enum ResponseMode {
 pub(crate) enum RetryClass {
     Safe,
     Replayable,
+    #[cfg(feature = "realtime")]
+    Never,
 }
 
 /// Static wire contract for one generated or handwritten operation.

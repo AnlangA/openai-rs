@@ -57,19 +57,27 @@ guidance](https://learn.chatgpt.com/docs/enterprise/access-tokens).
 
 ## Direct Codex transport
 
-The direct transport is explicitly experimental. It targets a private Codex
-backend contract, not the public Platform OpenAPI contract. It must:
+The direct transport is explicitly experimental, private, and disabled by
+default. It implements sealed Responses create/SSE against the one Codex origin,
+plus browser PKCE, bounded device-code auth, OIDC signature/issuer/audience
+verification, guarded singleflight refresh, and ephemeral credential storage.
+OS keyring persistence is a separate explicit feature. It targets a private
+Codex backend contract, not the public Platform OpenAPI contract.
+
+The implementation:
 
 - expose only a sealed, fixture-backed operation allowlist;
 - construct the exact host and path internally;
 - reject redirects and unknown destinations before adding credentials;
 - prevent callers from overriding credential, account, host, cookie, or
   originator headers;
-- keep its credential types incompatible with the Platform client; and
-- remain disabled by default and outside the `full` bundle.
+- keeps its credential types incompatible with the Platform client; and
+- remains outside the default and `full` bundles.
 
 It must never become a generic OpenAI-compatible proxy, credential forwarder,
-account pool, or resale gateway.
+account pool, or resale gateway. Prefer the official app-server integration when
+its runtime boundary is suitable; direct mode exists only for the narrower
+runtime-free local use case.
 
 ## RMCP
 

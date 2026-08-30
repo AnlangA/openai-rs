@@ -167,3 +167,19 @@ until a decision is recorded here and its fixtures pass.
 - Overrides: none.
 - Tests: request and response scalar/array typed and semantic JSON roundtrips,
   including a known-array malformed-payload rejection.
+
+## D0012 — Realtime session events follow the pinned OpenAPI response shape
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: Realtime session-created/session-updated server event payloads
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9`;
+  pinned Node/Python SDK aliases expose a request-shaped session type in some
+  generated event declarations.
+- Decision: decode the server event with the OpenAPI response-shaped session,
+  including its required id/object fields. Do not accept the SDK alias as proof
+  that a request-shaped object is valid server output.
+- Impact: Realtime server-event DTO requiredness.
+- Overrides: none.
+- Tests: 46-branch server-event manifest test plus known-malformed session-event
+  fixture.

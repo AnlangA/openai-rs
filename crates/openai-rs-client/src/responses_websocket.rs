@@ -27,7 +27,7 @@ const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_INITIAL_RECONNECTS: u32 = 10;
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(60);
 
-type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+pub(crate) type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// Explicit policy for retrying only the initial WebSocket handshake.
 ///
@@ -374,7 +374,7 @@ fn websocket_url(base_url: &Url) -> Result<Url, Error> {
     Ok(url)
 }
 
-fn websocket_request(
+pub(crate) fn websocket_request(
     url: &Url,
     authorization: HeaderValue,
     organization: Option<HeaderValue>,
@@ -424,7 +424,7 @@ fn validate_stream_id(encoded: &str) -> Result<(), Error> {
 }
 
 #[cfg(any(feature = "rustls-tls", feature = "native-tls"))]
-async fn connect_socket(
+pub(crate) async fn connect_socket(
     request: tungstenite::http::Request<()>,
     config: TungsteniteConfig,
     connector: Connector,
@@ -434,7 +434,7 @@ async fn connect_socket(
 }
 
 #[cfg(not(any(feature = "rustls-tls", feature = "native-tls")))]
-async fn connect_socket(
+pub(crate) async fn connect_socket(
     request: tungstenite::http::Request<()>,
     config: TungsteniteConfig,
     _connector: Connector,
@@ -442,7 +442,10 @@ async fn connect_socket(
     tokio_tungstenite::connect_async_with_config(request, Some(config), false).await
 }
 
-fn websocket_connector(scheme: &str, backend: Option<TlsBackend>) -> Result<Connector, Error> {
+pub(crate) fn websocket_connector(
+    scheme: &str,
+    backend: Option<TlsBackend>,
+) -> Result<Connector, Error> {
     if scheme == "ws" {
         return Ok(Connector::Plain);
     }
@@ -471,14 +474,14 @@ fn websocket_connector(scheme: &str, backend: Option<TlsBackend>) -> Result<Conn
     }
 }
 
-fn retryable_connect_error(error: &tungstenite::Error) -> bool {
+pub(crate) fn retryable_connect_error(error: &tungstenite::Error) -> bool {
     matches!(
         error,
         tungstenite::Error::Io(_) | tungstenite::Error::Tls(_)
     )
 }
 
-fn map_websocket_error(error: tungstenite::Error) -> Error {
+pub(crate) fn map_websocket_error(error: tungstenite::Error) -> Error {
     match error {
         tungstenite::Error::Http(response) => Error::WebSocketHandshake {
             status: response.status(),

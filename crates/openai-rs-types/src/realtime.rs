@@ -333,6 +333,16 @@ open_string_enum! {
 }
 
 open_string_enum! {
+    /// Status represented by a Realtime response status-details object.
+    pub enum RealtimeResponseStatusDetailsType {
+        Completed => "completed",
+        Cancelled => "cancelled",
+        Failed => "failed",
+        Incomplete => "incomplete"
+    }
+}
+
+open_string_enum! {
     /// Input image fidelity in a Realtime message.
     pub enum RealtimeImageDetail {
         Auto => "auto",
@@ -695,6 +705,30 @@ pub struct RealtimeSessionAudio {
     pub input: Omittable<RealtimeAudioInputConfig>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output: Omittable<RealtimeAudioOutputConfig>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// Effective output-audio settings returned for a Realtime session.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeSessionAudioOutputState {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub format: Omittable<RealtimeAudioFormat>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub voice: Omittable<RealtimeVoiceName>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub speed: Omittable<f64>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// Effective input and output audio settings returned for a session.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeSessionAudioState {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub input: Omittable<RealtimeAudioInputConfig>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub output: Omittable<RealtimeSessionAudioOutputState>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1275,7 +1309,7 @@ pub struct RealtimeSession {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub instructions: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub audio: Omittable<RealtimeSessionAudio>,
+    pub audio: Omittable<RealtimeSessionAudioState>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub include: Omittable<Vec<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2028,7 +2062,7 @@ pub struct RealtimeResponseStatusDetails {
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
-    pub kind: Omittable<RealtimeResponseStatus>,
+    pub kind: Omittable<RealtimeResponseStatusDetailsType>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub reason: Omittable<RealtimeResponseStopReason>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -3644,6 +3678,8 @@ impl_extra_fields!(
     RealtimeAudioInputConfig,
     RealtimeAudioOutputConfig,
     RealtimeSessionAudio,
+    RealtimeSessionAudioOutputState,
+    RealtimeSessionAudioState,
     RealtimeTranscriptionAudio,
     RealtimeResponseCreateAudioOutput,
     RealtimeResponseCreateAudio,

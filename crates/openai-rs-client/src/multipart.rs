@@ -19,7 +19,7 @@ use openai_rs_types::{
     MultipartMediaTypeError, Omittable, ReplayableMultipartSource, UploadId, UploadPart,
 };
 use reqwest::multipart::{Form, Part};
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::io::ReaderStream;
 use url::Url;
@@ -396,9 +396,12 @@ impl MultipartTransport {
     ) -> Result<ApiResponse<FileObject>, Error> {
         let source = PreparedReplayableSource::prepare(request.file()).await?;
         let fields = CreateFileFields::new(request.purpose(), request.expires_after())?;
-        let prepared = PreparedMultipartRequest::create_file(source, fields);
-        let url = self.operation_url(&[PathSegment::literal("files")])?;
-        let response = self.send_replayable(url, &prepared).await?;
+        let prepared = fields
+            .apply_prepared(ReplayableMultipartForm::new())
+            .part("file", source);
+        let response = self
+            .send_replayable_form(&[PathSegment::literal("files")], &prepared, JSON_MIME)
+            .await?;
         self.decode_json(response).await
     }
 
@@ -406,11 +409,12 @@ impl MultipartTransport {
         &self,
         request: CreateFileOneShotRequest,
     ) -> Result<ApiResponse<FileObject>, Error> {
-        let url = self.operation_url(&[PathSegment::literal("files")])?;
         let (source, purpose, expires_after) = request.into_parts();
         let fields = CreateFileFields::new(&purpose, &expires_after)?;
         let form = fields.apply(Form::new()).part("file", source.into_part()?);
-        let response = self.send_one_shot(url, form).await?;
+        let response = self
+            .send_one_shot_form(&[PathSegment::literal("files")], form, JSON_MIME)
+            .await?;
         self.decode_json(response).await
     }
 
@@ -424,10 +428,11 @@ impl MultipartTransport {
             PathSegment::parameter("upload_id", upload_id.as_str())?,
             PathSegment::literal("parts"),
         ];
-        let url = self.operation_url(&path)?;
         let source = PreparedReplayableSource::prepare(request.data()).await?;
-        let prepared = PreparedMultipartRequest::add_part(source);
-        let response = self.send_replayable(url, &prepared).await?;
+        let prepared = ReplayableMultipartForm::new().part("data", source);
+        let response = self
+            .send_replayable_form(&path, &prepared, JSON_MIME)
+            .await?;
         self.decode_json(response).await
     }
 
@@ -441,9 +446,8 @@ impl MultipartTransport {
             PathSegment::parameter("upload_id", upload_id.as_str())?,
             PathSegment::literal("parts"),
         ];
-        let url = self.operation_url(&path)?;
         let form = Form::new().part("data", request.into_inner().into_part()?);
-        let response = self.send_one_shot(url, form).await?;
+        let response = self.send_one_shot_form(&path, form, JSON_MIME).await?;
         self.decode_json(response).await
     }
 
@@ -459,18 +463,20 @@ impl MultipartTransport {
             .map(FileContentStream::from_response)
     }
 
-    async fn send_replayable(
+    pub(crate) async fn send_replayable_form(
         &self,
-        url: Url,
-        prepared: &PreparedMultipartRequest,
+        path: &[PathSegment<'_>],
+        prepared: &ReplayableMultipartForm,
+        accept: &'static str,
     ) -> Result<reqwest::Response, Error> {
+        let url = self.operation_url(path)?;
         let started = Instant::now();
         let mut retries = 0;
         loop {
             let remaining = remaining_time(started, self.overall_timeout)?;
             let form = prepared.build_form().await?;
             let request = self
-                .request(reqwest::Method::POST, url.clone(), JSON_MIME)
+                .request(reqwest::Method::POST, url.clone(), accept)
                 .timeout(remaining)
                 .multipart(form)
                 .build()
@@ -518,9 +524,15 @@ impl MultipartTransport {
         }
     }
 
-    async fn send_one_shot(&self, url: Url, form: Form) -> Result<reqwest::Response, Error> {
+    pub(crate) async fn send_one_shot_form(
+        &self,
+        path: &[PathSegment<'_>],
+        form: Form,
+        accept: &'static str,
+    ) -> Result<reqwest::Response, Error> {
+        let url = self.operation_url(path)?;
         let request = self
-            .request(reqwest::Method::POST, url, JSON_MIME)
+            .request(reqwest::Method::POST, url, accept)
             .timeout(self.overall_timeout)
             .multipart(form)
             .build()
@@ -535,6 +547,73 @@ impl MultipartTransport {
             Ok(response)
         } else {
             self.api_error(response).await
+        }
+    }
+
+    /// Sends a replayable JSON POST while allowing an operation-specific
+    /// response `Accept` value (for example raw speech audio).
+    pub(crate) async fn send_replayable_json<T>(
+        &self,
+        path: &[PathSegment<'_>],
+        body: &T,
+        accept: &'static str,
+    ) -> Result<reqwest::Response, Error>
+    where
+        T: Serialize + ?Sized,
+    {
+        let url = self.operation_url(path)?;
+        let encoded = serde_json::to_vec(body).map_err(Error::Encode)?;
+        let started = Instant::now();
+        let mut retries = 0;
+        loop {
+            let remaining = remaining_time(started, self.overall_timeout)?;
+            let request = self
+                .request(reqwest::Method::POST, url.clone(), accept)
+                .timeout(remaining)
+                .header(header::CONTENT_TYPE, JSON_MIME)
+                .body(encoded.clone())
+                .build()
+                .map_err(Error::from_reqwest)?;
+            self.ensure_same_origin(request.url())?;
+            let response = match self.http.execute(request).await {
+                Ok(response) => response,
+                Err(error)
+                    if self.retry_policy.retry_replayable_mutations
+                        && retries < self.retry_policy.max_retries
+                        && (error.is_connect() || error.is_timeout()) =>
+                {
+                    let delay = local_retry_delay(retries);
+                    if !can_wait(started, delay, self.overall_timeout) {
+                        return Err(Error::from_reqwest(error));
+                    }
+                    retries += 1;
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Err(error) => return Err(Error::from_reqwest(error)),
+            };
+            if response.status() == StatusCode::OK {
+                return Ok(response);
+            }
+            if self.retry_policy.retry_replayable_mutations
+                && retries < self.retry_policy.max_retries
+                && should_retry_response(&response)
+            {
+                let delay = retry_delay(
+                    response.headers(),
+                    retries,
+                    self.retry_policy.max_server_delay,
+                );
+                if let Some(delay) = delay
+                    && can_wait(started, delay, self.overall_timeout)
+                {
+                    retries += 1;
+                    drop(response);
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+            }
+            return self.api_error(response).await;
         }
     }
 
@@ -635,7 +714,10 @@ impl MultipartTransport {
         }
     }
 
-    async fn decode_json<T>(&self, response: reqwest::Response) -> Result<ApiResponse<T>, Error>
+    pub(crate) async fn decode_json<T>(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<ApiResponse<T>, Error>
     where
         T: DeserializeOwned,
     {
@@ -652,6 +734,17 @@ impl MultipartTransport {
             ),
         })?;
         Ok(ApiResponse::new(decoded, meta))
+    }
+
+    /// Buffers a successful non-JSON media body using the configured JSON/body
+    /// safety limit while preserving response metadata.
+    pub(crate) async fn decode_bytes(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<ApiResponse<Box<[u8]>>, Error> {
+        let meta = ResponseMeta::from_headers(response.status(), response.headers());
+        let body = read_success(response, self.max_json_body_bytes, &meta).await?;
+        Ok(ApiResponse::new(body.into_boxed_slice(), meta))
     }
 
     async fn api_error(&self, response: reqwest::Response) -> Result<reqwest::Response, Error> {
@@ -682,37 +775,47 @@ impl fmt::Debug for MultipartTransport {
     }
 }
 
-struct PreparedMultipartRequest {
-    source: PreparedReplayableSource,
-    kind: PreparedRequestKind,
+/// A replayable multipart form assembled from validated text fields and
+/// prepared byte/path sources. A fresh reqwest boundary and fresh path handle
+/// are produced for every attempt.
+pub(crate) struct ReplayableMultipartForm {
+    text_fields: Vec<(Box<str>, String)>,
+    parts: Vec<(Box<str>, PreparedReplayableSource)>,
 }
 
-enum PreparedRequestKind {
-    CreateFile(CreateFileFields),
-    AddPart,
-}
-
-impl PreparedMultipartRequest {
-    fn create_file(source: PreparedReplayableSource, fields: CreateFileFields) -> Self {
+impl ReplayableMultipartForm {
+    pub(crate) const fn new() -> Self {
         Self {
-            source,
-            kind: PreparedRequestKind::CreateFile(fields),
+            text_fields: Vec::new(),
+            parts: Vec::new(),
         }
     }
 
-    fn add_part(source: PreparedReplayableSource) -> Self {
-        Self {
-            source,
-            kind: PreparedRequestKind::AddPart,
-        }
+    #[must_use]
+    pub(crate) fn text(mut self, name: impl Into<Box<str>>, value: impl Into<String>) -> Self {
+        self.text_fields.push((name.into(), value.into()));
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn part(
+        mut self,
+        name: impl Into<Box<str>>,
+        source: PreparedReplayableSource,
+    ) -> Self {
+        self.parts.push((name.into(), source));
+        self
     }
 
     async fn build_form(&self) -> Result<Form, Error> {
-        let part = self.source.build_part().await?;
-        Ok(match &self.kind {
-            PreparedRequestKind::CreateFile(fields) => fields.apply(Form::new()).part("file", part),
-            PreparedRequestKind::AddPart => Form::new().part("data", part),
-        })
+        let mut form = Form::new();
+        for (name, value) in &self.text_fields {
+            form = form.text(name.to_string(), value.clone());
+        }
+        for (name, source) in &self.parts {
+            form = form.part(name.to_string(), source.build_part().await?);
+        }
+        Ok(form)
     }
 }
 
@@ -753,9 +856,19 @@ impl CreateFileFields {
         }
         form
     }
+
+    fn apply_prepared(&self, mut form: ReplayableMultipartForm) -> ReplayableMultipartForm {
+        form = form.text("purpose", self.purpose.clone());
+        if let Some((anchor, seconds)) = &self.expiration {
+            form = form
+                .text("expires_after[anchor]", anchor.clone())
+                .text("expires_after[seconds]", seconds.clone());
+        }
+        form
+    }
 }
 
-struct PreparedReplayableSource {
+pub(crate) struct PreparedReplayableSource {
     inner: PreparedSourceInner,
     file_name: MultipartFileName,
     media_type: Option<MultipartMediaType>,
@@ -771,7 +884,7 @@ enum PreparedSourceInner {
 }
 
 impl PreparedReplayableSource {
-    async fn prepare(source: &ReplayableMultipartSource) -> Result<Self, Error> {
+    pub(crate) async fn prepare(source: &ReplayableMultipartSource) -> Result<Self, Error> {
         match source {
             ReplayableMultipartSource::Bytes {
                 data,
@@ -808,7 +921,7 @@ impl PreparedReplayableSource {
         }
     }
 
-    async fn build_part(&self) -> Result<Part, Error> {
+    pub(crate) async fn build_part(&self) -> Result<Part, Error> {
         let body = match &self.inner {
             PreparedSourceInner::Bytes(data) => {
                 reqwest::Body::from(Bytes::from_owner(Arc::clone(data)))

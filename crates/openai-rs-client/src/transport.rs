@@ -165,6 +165,28 @@ impl Transport {
         self.decode_optional_json(response).await
     }
 
+    #[cfg(feature = "realtime")]
+    pub(crate) async fn execute_empty<O, Q>(
+        &self,
+        path: &[PathSegment<'_>],
+        query: Option<&Q>,
+        body: Option<&O::Request>,
+    ) -> Result<ApiResponse<()>, Error>
+    where
+        O: Operation,
+        Q: Serialize + ?Sized,
+    {
+        if O::META.response_mode != crate::operation::ResponseMode::Empty {
+            return Err(Error::InvalidConfiguration(
+                "empty decoder used for an incompatible operation".into(),
+            ));
+        }
+        let response = self.send::<O, Q>(path, query, body).await?;
+        let meta = ResponseMeta::from_headers(response.status(), response.headers());
+        let _body = read_success(response, self.max_json_body_bytes, &meta).await?;
+        Ok(ApiResponse::new((), meta))
+    }
+
     /// Sends an operation after validating its static contract. Kept separate
     /// from decoding so the streaming layer can reuse authentication, safe URL
     /// construction, status handling, and metadata extraction.
@@ -209,9 +231,10 @@ impl Transport {
             append_query(&mut url, query)?;
         }
         let accept = match meta.response_mode {
-            crate::operation::ResponseMode::Json | crate::operation::ResponseMode::EmptyOrJson => {
-                JSON_MIME
-            }
+            crate::operation::ResponseMode::Json
+            | crate::operation::ResponseMode::EmptyOrJson => JSON_MIME,
+            #[cfg(feature = "realtime")]
+            crate::operation::ResponseMode::Empty => JSON_MIME,
             crate::operation::ResponseMode::Sse => SSE_MIME,
         };
         let encoded_body = body
@@ -299,11 +322,15 @@ impl Transport {
     }
 
     async fn api_error(&self, response: reqwest::Response) -> Result<reqwest::Response, Error> {
+        Err(self.error_from_response(response).await)
+    }
+
+    pub(crate) async fn error_from_response(&self, response: reqwest::Response) -> Error {
         let response_meta = ResponseMeta::from_headers(response.status(), response.headers());
-        let (body, truncated) = read_up_to(response, self.max_error_body_bytes)
-            .await
-            .map_err(|error| Error::from_response_body(error, &response_meta))?;
-        Err(ApiError::from_body(response_meta, &body, truncated).into())
+        match read_up_to(response, self.max_error_body_bytes).await {
+            Ok((body, truncated)) => ApiError::from_body(response_meta, &body, truncated).into(),
+            Err(error) => Error::from_response_body(error, &response_meta),
+        }
     }
 
     pub(crate) async fn decode_json<T>(
@@ -354,7 +381,82 @@ impl Transport {
         Ok(ApiResponse::new(decoded, meta))
     }
 
-    fn operation_url(&self, path: &[PathSegment<'_>]) -> Result<Url, Error> {
+    #[cfg(feature = "realtime")]
+    pub(crate) async fn decode_text(
+        &self,
+        response: reqwest::Response,
+        expected_mime: &'static str,
+    ) -> Result<ApiResponse<String>, Error> {
+        let meta = ResponseMeta::from_headers(response.status(), response.headers());
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok());
+        if !content_type.is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case(expected_mime))
+        }) {
+            return Err(Error::UnexpectedContentType {
+                expected: expected_mime,
+                actual: content_type.map(Box::<str>::from),
+                status: meta.status(),
+                request_id: meta.request_id().map(Box::<str>::from),
+            });
+        }
+        let body = read_success(response, self.max_json_body_bytes, &meta).await?;
+        let text = String::from_utf8(body).map_err(|error| Error::InvalidUtf8 {
+            status: meta.status(),
+            request_id: meta.request_id().map(Box::<str>::from),
+            body: BodyPreview::from_bytes(error.as_bytes(), false),
+        })?;
+        Ok(ApiResponse::new(text, meta))
+    }
+
+    #[cfg(feature = "realtime")]
+    pub(crate) const fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    #[cfg(feature = "realtime")]
+    pub(crate) const fn overall_timeout(&self) -> Duration {
+        self.overall_timeout
+    }
+
+    #[cfg(feature = "realtime")]
+    pub(crate) fn request_builder(
+        &self,
+        method: reqwest::Method,
+        url: Url,
+        accept: &'static str,
+    ) -> reqwest::RequestBuilder {
+        let mut request = self
+            .http
+            .request(method, url)
+            .header(header::AUTHORIZATION, self.authorization.clone())
+            .header(header::ACCEPT, accept);
+        if let Some(organization) = &self.organization {
+            request = request.header("OpenAI-Organization", organization.clone());
+        }
+        if let Some(project) = &self.project {
+            request = request.header("OpenAI-Project", project.clone());
+        }
+        request
+    }
+
+    #[cfg(feature = "realtime")]
+    pub(crate) fn ensure_same_origin(&self, url: &Url) -> Result<(), Error> {
+        if same_origin(url, &self.base_url) {
+            Ok(())
+        } else {
+            Err(Error::InvalidConfiguration(
+                "request URL escaped the configured authentication origin".into(),
+            ))
+        }
+    }
+
+    pub(crate) fn operation_url(&self, path: &[PathSegment<'_>]) -> Result<Url, Error> {
         let mut url = self.base_url.clone();
         {
             let mut segments = url.path_segments_mut().map_err(|()| {
@@ -479,6 +581,8 @@ fn retryable_operation(class: RetryClass, policy: RetryPolicy) -> bool {
     match class {
         RetryClass::Safe => true,
         RetryClass::Replayable => policy.retry_replayable_mutations,
+        #[cfg(feature = "realtime")]
+        RetryClass::Never => false,
     }
 }
 

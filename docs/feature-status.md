@@ -16,12 +16,12 @@ Status terms:
 
 | Feature | Default | Status | Notes |
 |---|---:|---|---|
-| `client` | Yes | MVP | Enables the Platform API client facade. Coverage currently includes Responses plus Models, Embeddings, and Moderations. |
+| `client` | Yes | MVP | Enables the Platform API client facade. Coverage includes Responses, Chat Completions, Files/Uploads, Batches, Vector Stores, Models, Embeddings, and Moderations. |
 | `rustls-tls` | Yes | MVP | Rustls-backed Platform transport. Implies `client`. |
 | `native-tls` | No | Scaffold | Native TLS transport selection. Implies `client`. |
 | `structured-output` | Yes | MVP | Typed schema generation and strict-subset normalization are implemented; keyword/limit coverage remains pre-release. |
-| `realtime` | No | Planned | Reserves Realtime types and transport boundaries; it does not imply GA Realtime coverage today. |
-| `webhook-verification` | No | Planned | Reserves webhook models and verification support. |
+| `realtime` | No | MVP types | Complete pinned GA client/server event unions plus session, audio, transcription, client-secret, SDP/call, and SIP DTOs. The dedicated Realtime connection client remains in progress. |
+| `webhook-verification` | No | MVP | Typed webhook verification with explicit secret handling. |
 | `admin` | No | Planned | Administration operations require a separate credential and client boundary. |
 | `workload-identity` | No | Planned | Platform workload identity only; not a Codex subscription credential. |
 | `x509` | No | Planned | Extends workload identity with X.509/mTLS support. |
@@ -49,13 +49,15 @@ tools; applications must explicitly register or allowlist tools.
 |---|---|---|
 | `codex-app-server` | Experimental | JSON-RPC client plus one audited mapping for Codex 0.144.5 on `aarch64-apple-darwin`. Only the exact executable and vendored schema hashes in the compatibility manifest are accepted; every other runtime fails closed. |
 | `codex-access-token` | Experimental | Trusted local Business/Enterprise automation only. The runtime receives `CODEX_ACCESS_TOKEN` or a prior `codex login --with-access-token` login; this is not an `account/login/start` variant. |
-| `experimental-codex-direct` | Experimental | Direct, host-locked access to the private Codex Responses backend. Not a public OpenAI API contract. |
-| `experimental-codex-direct-device` | Experimental | Adds device-code UX to the direct backend and has an independent beta boundary. |
+| `experimental-codex-direct` | Experimental | Host-locked Responses create/SSE, browser PKCE, OIDC verification, singleflight refresh, and ephemeral credential storage for the private Codex backend. Not a public OpenAI API contract. |
+| `experimental-codex-direct-device` | Experimental | Adds bounded device-code authentication to the direct backend. |
+| `experimental-codex-direct-keyring` | Experimental | Adds explicit OS keyring persistence; the default direct store remains ephemeral. |
 
 The default and `full` feature sets do not enable Codex support. Codex
 credentials must never be accepted by the standard Platform `Client`, and
 app-server transport authentication must remain separate from model
-credentials.
+credentials. Direct mode is off by default; prefer app-server whenever its
+runtime boundary fits the application.
 
 ## API coverage policy
 
@@ -69,9 +71,15 @@ specification. Until then:
   pinned stable union are typed.
 - Models list/retrieve/delete, Embeddings create, and Moderations create have
   typed client resource methods.
-- Chat Completions and Files/Uploads have typed wire models, including stream
-  and replayable multipart shapes, but their HTTP resource facades are not wired
-  yet.
+- Chat Completions includes non-streaming/SSE creation, stored completion
+  resources, messages, and pagination.
+- Files/Uploads includes replayable and one-shot multipart requests, streaming
+  downloads, and upload-part/complete/cancel lifecycle methods.
+- Batches includes JSONL workflow helpers; Vector Stores includes store, file,
+  file-batch, pagination, search, and polling methods.
+- Realtime has complete pinned 11-branch client and 46-branch server event
+  unions and the related GA DTOs; its dedicated connection client is not yet
+  complete.
 - Additional operations are added only with typed request/response and error
   fixtures.
 - Other resource families remain incomplete even if their feature boundary is

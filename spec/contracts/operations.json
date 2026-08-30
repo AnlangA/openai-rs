@@ -9,11 +9,10 @@
     "webhook": 18,
     "total": 306,
     "implementation_statuses": {
-      "partial": 9,
-      "planned": 267,
-      "verified": 12
+      "planned": 241,
+      "verified": 47
     },
-    "verified_units": 15
+    "verified_units": 57
   },
   "client_operations": [
     {
@@ -693,10 +692,15 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-batches-client",
+        "units": [
+          "ListBatches",
+          "BatchPageStream"
+        ],
+        "tests": [
+          "openai-rs-client::batches::tests::list_batches_encodes_cursor_query"
+        ]
       },
       "manual_overrides": []
     },
@@ -732,10 +736,16 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-batches-client",
+        "units": [
+          "CreateBatch",
+          "TypedBatchSubmission"
+        ],
+        "tests": [
+          "openai-rs-client::batches::tests::create_batch_sends_typed_json",
+          "openai-rs-client::batches::tests::typed_lines_are_written_to_bounded_temporary_jsonl"
+        ]
       },
       "manual_overrides": []
     },
@@ -774,10 +784,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-batches-client",
+        "units": [
+          "RetrieveBatch"
+        ],
+        "tests": [
+          "openai-rs-client Batch route manifest test"
+        ]
       },
       "manual_overrides": []
     },
@@ -816,10 +830,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-batches-client",
+        "units": [
+          "CancelBatch"
+        ],
+        "tests": [
+          "openai-rs-client::batches::tests::cancel_batch_encodes_id_as_one_segment"
+        ]
       },
       "manual_overrides": []
     },
@@ -900,10 +918,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M5-chat-client",
+        "units": [
+          "ListChatCompletions"
+        ],
+        "tests": [
+          "openai-rs-client::chat_completions::tests::stored_list_encodes_deep_object_metadata_and_typed_cursor"
+        ]
       },
       "manual_overrides": []
     },
@@ -941,10 +963,16 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M5-chat-client",
+        "units": [
+          "CreateChatCompletion",
+          "CreateStreamingChatCompletion"
+        ],
+        "tests": [
+          "openai-rs-client::chat_completions::tests::create_uses_typed_non_streaming_contract",
+          "openai-rs-client::chat_completions::tests::create_stream_requires_done_and_decodes_chunks"
+        ]
       },
       "manual_overrides": []
     },
@@ -983,10 +1011,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M5-chat-client",
+        "units": [
+          "GetChatCompletion"
+        ],
+        "tests": [
+          "openai-rs-client stored Chat route manifest test"
+        ]
       },
       "manual_overrides": []
     },
@@ -1033,10 +1065,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M5-chat-client",
+        "units": [
+          "UpdateChatCompletion"
+        ],
+        "tests": [
+          "openai-rs-client::chat_completions::tests::stored_update_and_delete_use_encoded_id_and_typed_bodies"
+        ]
       },
       "manual_overrides": []
     },
@@ -1075,10 +1111,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M5-chat-client",
+        "units": [
+          "DeleteChatCompletion"
+        ],
+        "tests": [
+          "openai-rs-client::chat_completions::tests::stored_update_and_delete_use_encoded_id_and_typed_bodies"
+        ]
       },
       "manual_overrides": []
     },
@@ -1147,10 +1187,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M5-chat-client",
+        "units": [
+          "GetChatCompletionMessages"
+        ],
+        "tests": [
+          "openai-rs-client::chat_completions::tests::stored_messages_list_uses_typed_page_query"
+        ]
       },
       "manual_overrides": []
     },
@@ -3255,14 +3299,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
-        "milestone": "M3-files-client",
+        "status": "verified",
+        "milestone": "M5-files-client",
         "units": [
-          "types-only"
+          "ListFiles"
         ],
         "tests": [
-          "openai-rs-types::files::tests::file_list_params_build_without_manual_json",
-          "openai-rs-types::files::tests::list_page_and_delete_response_keep_future_fields; client operation pending"
+          "openai-rs-client::files::tests::list_files_encodes_typed_query_and_platform_auth"
         ]
       },
       "manual_overrides": [
@@ -3301,14 +3344,15 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
-        "milestone": "M3-files-client",
+        "status": "verified",
+        "milestone": "M5-files-client",
         "units": [
-          "types-only"
+          "CreateFile",
+          "CreateFileOneShot"
         ],
         "tests": [
-          "openai-rs-types::files::tests::expiration_policy_validates_range_and_shape",
-          "openai-rs-types::files::tests::multipart_requests_keep_binary_out_of_json; client multipart encoder pending"
+          "openai-rs-client::multipart::tests::create_file_sends_bracket_fields_and_raw_bytes",
+          "openai-rs-client::multipart::tests::path_replacement_after_prepare_fails_closed"
         ]
       },
       "manual_overrides": [
@@ -3350,13 +3394,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
-        "milestone": "M3-files-client",
+        "status": "verified",
+        "milestone": "M5-files-client",
         "units": [
-          "types-only"
+          "RetrieveFile"
         ],
         "tests": [
-          "openai-rs-types::files::tests::file_object_preserves_unknown_enums_and_extra_fields; client operation pending"
+          "openai-rs-client Files route manifest test",
+          "openai-rs-types::files::tests::file_object_preserves_unknown_enums_and_extra_fields"
         ]
       },
       "manual_overrides": []
@@ -3396,13 +3441,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
-        "milestone": "M3-files-client",
+        "status": "verified",
+        "milestone": "M5-files-client",
         "units": [
-          "types-only"
+          "DeleteFile"
         ],
         "tests": [
-          "openai-rs-types::files::tests::list_page_and_delete_response_keep_future_fields; client operation pending"
+          "openai-rs-client Files route manifest test",
+          "openai-rs-types::files::tests::list_page_and_delete_response_keep_future_fields"
         ]
       },
       "manual_overrides": []
@@ -3440,15 +3486,15 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
-        "milestone": "M3-files-client",
+        "status": "verified",
+        "milestone": "M5-files-client",
         "units": [
-          "types-only",
-          "raw-response-contract"
+          "DownloadFile",
+          "FileContentStream"
         ],
         "tests": [
-          "openai-rs-types::files::tests::raw_file_content_is_not_mistaken_for_json_or_logged",
-          "OVR-0001 contract generated; client raw download pending"
+          "openai-rs-client::multipart::tests::raw_download_stream_is_not_json_decoded",
+          "OVR-0001"
         ]
       },
       "manual_overrides": [
@@ -14374,14 +14420,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
-        "milestone": "M3-files-client",
+        "status": "verified",
+        "milestone": "M5-files-client",
         "units": [
-          "types-only"
+          "CreateUpload"
         ],
         "tests": [
-          "openai-rs-types::files::tests::upload_create_and_complete_requests_have_strict_json",
-          "openai-rs-types::files::tests::upload_object_is_required_by_the_sdk_contract_override; client operation pending"
+          "openai-rs-client::files::tests::create_upload_sends_exact_json_contract",
+          "OVR-0003"
         ]
       },
       "manual_overrides": [
@@ -14423,13 +14469,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
-        "milestone": "M3-files-client",
+        "status": "verified",
+        "milestone": "M5-files-client",
         "units": [
-          "types-only"
+          "CancelUpload"
         ],
         "tests": [
-          "openai-rs-types::files::tests::upload_and_part_preserve_unknown_values_and_fields; client operation pending"
+          "openai-rs-client Uploads route manifest test",
+          "openai-rs-types::files::tests::upload_and_part_preserve_unknown_values_and_fields"
         ]
       },
       "manual_overrides": []
@@ -14477,13 +14524,13 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
-        "milestone": "M3-files-client",
+        "status": "verified",
+        "milestone": "M5-files-client",
         "units": [
-          "types-only"
+          "CompleteUpload"
         ],
         "tests": [
-          "openai-rs-types::files::tests::upload_create_and_complete_requests_have_strict_json; client operation pending"
+          "openai-rs-client::files::tests::complete_upload_encodes_id_as_one_segment_and_preserves_part_order"
         ]
       },
       "manual_overrides": []
@@ -14531,13 +14578,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "partial",
-        "milestone": "M3-files-client",
+        "status": "verified",
+        "milestone": "M5-files-client",
         "units": [
-          "types-only"
+          "AddUploadPart",
+          "AddUploadPartOneShot"
         ],
         "tests": [
-          "openai-rs-types::files::tests::multipart_requests_keep_binary_out_of_json; client operation pending"
+          "openai-rs-client::multipart::tests::upload_part_uses_data_field_and_unmodified_binary_bytes"
         ]
       },
       "manual_overrides": []
@@ -14607,10 +14655,15 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "ListVectorStores",
+          "VectorStorePageStream"
+        ],
+        "tests": [
+          "openai-rs-client::vector_stores::tests::vector_store_crud_list_search_contracts"
+        ]
       },
       "manual_overrides": []
     },
@@ -14646,10 +14699,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "CreateVectorStore"
+        ],
+        "tests": [
+          "openai-rs-client::vector_stores::tests::vector_store_crud_list_search_contracts"
+        ]
       },
       "manual_overrides": []
     },
@@ -14688,10 +14745,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "GetVectorStore"
+        ],
+        "tests": [
+          "openai-rs-client Vector Store 16-operation manifest test"
+        ]
       },
       "manual_overrides": []
     },
@@ -14738,10 +14799,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "ModifyVectorStore"
+        ],
+        "tests": [
+          "openai-rs-client Vector Store 16-operation manifest test"
+        ]
       },
       "manual_overrides": []
     },
@@ -14780,10 +14845,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "DeleteVectorStore"
+        ],
+        "tests": [
+          "openai-rs-client Vector Store 16-operation manifest test"
+        ]
       },
       "manual_overrides": []
     },
@@ -14830,10 +14899,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "CreateVectorStoreFileBatch"
+        ],
+        "tests": [
+          "openai-rs-client::vector_stores::tests::file_batch_routes_and_polling_are_bounded"
+        ]
       },
       "manual_overrides": []
     },
@@ -14882,10 +14955,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "GetVectorStoreFileBatch"
+        ],
+        "tests": [
+          "openai-rs-client::vector_stores::tests::file_batch_routes_and_polling_are_bounded"
+        ]
       },
       "manual_overrides": []
     },
@@ -14934,10 +15011,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "CancelVectorStoreFileBatch"
+        ],
+        "tests": [
+          "openai-rs-client::vector_stores::tests::file_batch_routes_and_polling_are_bounded"
+        ]
       },
       "manual_overrides": []
     },
@@ -15036,10 +15117,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "ListFilesInVectorStoreBatch"
+        ],
+        "tests": [
+          "openai-rs-client Vector Store 16-operation manifest test"
+        ]
       },
       "manual_overrides": []
     },
@@ -15128,10 +15213,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "ListVectorStoreFiles"
+        ],
+        "tests": [
+          "openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"
+        ]
       },
       "manual_overrides": []
     },
@@ -15178,10 +15267,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "CreateVectorStoreFile"
+        ],
+        "tests": [
+          "openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"
+        ]
       },
       "manual_overrides": []
     },
@@ -15230,10 +15323,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "GetVectorStoreFile"
+        ],
+        "tests": [
+          "openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"
+        ]
       },
       "manual_overrides": []
     },
@@ -15290,10 +15387,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "UpdateVectorStoreFileAttributes"
+        ],
+        "tests": [
+          "openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"
+        ]
       },
       "manual_overrides": []
     },
@@ -15342,10 +15443,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "DeleteVectorStoreFile"
+        ],
+        "tests": [
+          "openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"
+        ]
       },
       "manual_overrides": []
     },
@@ -15394,10 +15499,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "RetrieveVectorStoreFileContent"
+        ],
+        "tests": [
+          "openai-rs-client::vector_stores::tests::attached_file_routes_cover_attributes_content_and_pagination"
+        ]
       },
       "manual_overrides": []
     },
@@ -15444,10 +15553,14 @@
       "lifecycle": "active",
       "feature": "default",
       "implementation": {
-        "status": "planned",
-        "milestone": "unassigned",
-        "units": [],
-        "tests": []
+        "status": "verified",
+        "milestone": "M6-vector-stores-client",
+        "units": [
+          "SearchVectorStore"
+        ],
+        "tests": [
+          "openai-rs-client::vector_stores::tests::vector_store_crud_list_search_contracts"
+        ]
       },
       "manual_overrides": []
     },

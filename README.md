@@ -15,9 +15,10 @@ The workspace, crate boundaries, feature flags, MSRV policy, and initial
 contract-test infrastructure are present. The pre-release MVP includes typed
 Responses create, retrieve, delete, cancel, compact, input-item listing, and
 input-token counting operations; a public SSE path with the 58-event stable
-union; and typed Models, Embeddings, and Moderations resource methods. Chat
-Completions and Files/Uploads wire types are present, but their HTTP resource
-facades are not wired yet. Most other resource families and optional features
+union; Chat Completions create/SSE and stored-completion methods; Files,
+Uploads, Batches, Vector Stores, Models, Embeddings, and Moderations resource
+methods; and the complete pinned GA Realtime 11-client/46-server event type
+layer. A dedicated Realtime connection client and many other resource families
 remain in progress, scaffolded, or planned.
 
 | Area | Status |
@@ -26,13 +27,15 @@ remain in progress, scaffolded, or planned.
 | Typed Responses REST slice | Implemented for the MVP; contract coverage is still growing |
 | Responses SSE streaming | Public MVP path and 58-event stable union implemented |
 | Models, Embeddings, Moderations | Typed MVP resource methods implemented |
-| Chat Completions | Typed request/response/stream models implemented; HTTP facade pending |
-| Files and Uploads | Typed wire/multipart models implemented; HTTP facade pending |
+| Chat Completions | Typed create/SSE, stored resources, messages, and pagination implemented |
+| Files and Uploads | Typed replayable/one-shot multipart, download, and upload lifecycle implemented |
+| Batches and Vector Stores | Typed resource methods, pagination/polling, and workflow helpers implemented |
+| Realtime GA | 11 client events, 46 server events, session/call/SIP DTOs implemented; connection client pending |
 | Full OpenAPI resource coverage | Not implemented |
-| Realtime, administration, and webhook helpers | Feature boundaries reserved; not complete |
+| Administration and later resource families | Feature boundaries reserved; not complete |
 | RMCP bridge | Typed local bridge MVP implemented; transport/server integration remains pre-release |
 | Codex app-server integration | Experimental; only one exact Codex 0.144.5 macOS arm64 artifact is audited |
-| Direct Codex Responses transport | Experimental, private-backend compatibility work only |
+| Direct Codex Responses transport | Private experimental host-locked create/SSE and hardened auth; off by default |
 
 See [feature status](docs/feature-status.md) for the exact Cargo feature matrix
 and [architecture boundaries](docs/architecture.md) for credential and protocol
@@ -70,10 +73,10 @@ Default features are `client`, `rustls-tls`, and `structured-output`.
 | Feature group | Features | Boundary |
 |---|---|---|
 | Platform transport | `client`, `rustls-tls`, `native-tls` | Standard OpenAI Platform API client |
-| Typed helpers | `structured-output`, `realtime`, `webhook-verification`, `admin`, `workload-identity`, `x509` | Several are reserved for later milestones |
+| Typed helpers | `structured-output`, `realtime`, `webhook-verification`, `admin`, `workload-identity`, `x509` | Realtime types and webhook verification exist; several later identity/admin surfaces remain planned |
 | RMCP | `rmcp`, `rmcp-stdio`, `rmcp-http-rustls`, `rmcp-http-native-tls`, `rmcp-server`, `rmcp-server-stdio`, `rmcp-auth` | Optional; no implicit tool exposure |
 | Codex app-server | `codex-app-server`, `codex-access-token` | Experimental and isolated from Platform credentials |
-| Direct Codex | `experimental-codex-direct`, `experimental-codex-direct-device` | Unstable private-backend compatibility; off by default |
+| Direct Codex | `experimental-codex-direct`, `experimental-codex-direct-device`, `experimental-codex-direct-keyring` | Unstable private-backend compatibility; off by default; app-server is preferred |
 | Convenience bundle | `full` | Non-Codex client bundle; it is not every feature and does not imply complete endpoint coverage |
 
 Enabling a feature only selects code and dependencies. It does not by itself
@@ -116,7 +119,8 @@ message.
 - A Codex access token is not a Platform API key and is not an app-server
   WebSocket transport token.
 - The direct Codex feature targets a private, non-OpenAPI backend contract and
-  must remain host- and operation-locked.
+  remains host- and operation-locked, experimental, and off by default. Prefer
+  the official app-server path when it meets the integration requirements.
 
 This project has no `sub2api` dependency. It does not embed, invoke, proxy
 through, or derive implementation code from `sub2api`; gateway, account-pool,

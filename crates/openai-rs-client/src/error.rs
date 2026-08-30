@@ -457,6 +457,13 @@ pub enum Error {
         request_id: Option<Box<str>>,
     },
 
+    #[error("response text is not valid UTF-8 (status {status})")]
+    InvalidUtf8 {
+        status: StatusCode,
+        request_id: Option<Box<str>>,
+        body: BodyPreview,
+    },
+
     #[error("invalid client configuration: {0}")]
     InvalidConfiguration(Box<str>),
 
@@ -531,6 +538,7 @@ impl Error {
             Self::Api(error) => Some(error.status()),
             Self::Decode { meta_status, .. } => Some(*meta_status),
             Self::BodyTooLarge { status, .. } => Some(*status),
+            Self::InvalidUtf8 { status, .. } => Some(*status),
             Self::ResponseBody { status, .. } => Some(*status),
             Self::UnexpectedContentType { status, .. } => Some(*status),
             #[cfg(feature = "realtime")]
@@ -557,6 +565,7 @@ impl Error {
             Self::Api(error) => error.request_id(),
             Self::Decode { request_id, .. }
             | Self::BodyTooLarge { request_id, .. }
+            | Self::InvalidUtf8 { request_id, .. }
             | Self::ResponseBody { request_id, .. }
             | Self::UnexpectedContentType { request_id, .. } => request_id.as_deref(),
             Self::Sse { request_id, .. } => request_id.as_deref(),
