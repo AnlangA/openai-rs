@@ -29,8 +29,14 @@ pub mod realtime;
 #[cfg(feature = "legacy-completions")]
 pub mod legacy;
 
+#[cfg(feature = "legacy-realtime")]
+pub mod legacy_realtime;
+
 #[cfg(feature = "custom-voice")]
 pub mod voices;
+
+#[cfg(feature = "beta-chatkit")]
+pub mod chatkit;
 
 #[cfg(feature = "structured-output")]
 pub mod structured;
@@ -55,8 +61,14 @@ pub use realtime::*;
 #[cfg(feature = "legacy-completions")]
 pub use legacy::*;
 
+#[cfg(feature = "legacy-realtime")]
+pub use legacy_realtime::*;
+
 #[cfg(feature = "custom-voice")]
 pub use voices::*;
+
+#[cfg(feature = "beta-chatkit")]
+pub use chatkit::*;
 
 #[cfg(feature = "structured-output")]
 pub use structured::{StructuredError, StructuredOutput, TypedFunction, normalize_strict_schema};

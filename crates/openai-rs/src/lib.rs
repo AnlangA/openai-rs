@@ -53,6 +53,12 @@ pub mod experimental {
     pub use openai_rs_types::evals::experimental::*;
 }
 
+#[cfg(all(feature = "client", feature = "beta-chatkit"))]
+pub use openai_rs_client::{
+    ChatKit, ChatKitSessions, ChatKitThreadItemPageStream, ChatKitThreadPageStream,
+    ChatKitThreads,
+};
+
 #[cfg(all(feature = "client", feature = "realtime"))]
 pub use openai_rs_client::{
     Realtime, RealtimeCallCreated, RealtimeWebSocket, RealtimeWebSocketConfig,

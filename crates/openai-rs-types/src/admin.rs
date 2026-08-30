@@ -2023,6 +2023,16 @@ macro_rules! admin_op {
 }
 
 /// Complete frozen Administration operation-to-DTO manifest.
+///
+/// Generated from `spec/contracts/operations.json` SHA-256
+/// `789d8e83ac0ac8ad2d5d44b88b4496b463bda56df730ecade45d8789429cc061`.
+pub const ADMIN_OPERATION_CONTRACT_SOURCE_SHA256: &str =
+    "789d8e83ac0ac8ad2d5d44b88b4496b463bda56df730ecade45d8789429cc061";
+
+/// SHA-256 of the normalized 119-row method/path/mode/status/schema projection.
+pub const ADMIN_OPERATION_CONTRACT_NORMALIZED_SHA256: &str =
+    "595e0eba78c7f7a0e31f46d2eeb5f52140159491d06d284cd3c5b5882b748cf3";
+
 pub const ADMIN_OPERATION_MANIFEST: &[AdminOperationDto] = &[
     admin_op!(
         "CreateanAPIkeyforaserviceaccount",
@@ -2905,9 +2915,8 @@ mod tests {
             assert_eq!(operation.response_mode, "json");
             assert_eq!(operation.success_statuses, &[200]);
             assert_eq!(operation.response_content_types, &["application/json"]);
-            if operation.request_mode == "none" {
-                assert!(operation.request_schema_refs.is_empty());
-            } else if operation.operation_id == "admin-api-keys-create" {
+            if operation.request_mode == "none" || operation.operation_id == "admin-api-keys-create"
+            {
                 assert!(operation.request_schema_refs.is_empty());
             } else {
                 assert_eq!(operation.request_schema_refs.len(), 1);

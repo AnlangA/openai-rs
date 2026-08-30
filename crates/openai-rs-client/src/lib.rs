@@ -11,6 +11,8 @@ mod auth;
 mod batches;
 mod chat_completions;
 mod chat_stream;
+#[cfg(feature = "beta-chatkit")]
+mod chatkit;
 mod client;
 #[cfg(feature = "legacy-completions")]
 mod completions;
@@ -58,6 +60,11 @@ pub use chat_completions::{
     ChatCompletions,
 };
 pub use chat_stream::ChatCompletionEventStream;
+#[cfg(feature = "beta-chatkit")]
+pub use chatkit::{
+    ChatKit, ChatKitSessions, ChatKitThreadItemPageStream, ChatKitThreadPageStream,
+    ChatKitThreads,
+};
 pub use client::{Client, ClientBuilder, TlsBackend};
 #[cfg(feature = "legacy-completions")]
 pub use completions::{CompletionEventStream, Completions};

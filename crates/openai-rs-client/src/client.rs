@@ -11,6 +11,8 @@ use crate::Completions;
 use crate::Voices;
 #[cfg(feature = "alpha-graders")]
 use crate::AlphaGraders;
+#[cfg(feature = "beta-chatkit")]
+use crate::ChatKit;
 use crate::{
     ApiKey, Audio, Batches, ChatCompletions, Containers, ContentProvenanceChecks, Conversations,
     Embeddings, Error, Evals, Files, FineTuning, Images, Models, Moderations, Responses,
@@ -101,6 +103,13 @@ impl Client {
     #[must_use]
     pub fn alpha_graders(&self) -> AlphaGraders {
         AlphaGraders::new(self.clone())
+    }
+
+    /// Returns access-controlled Beta ChatKit operations.
+    #[cfg(feature = "beta-chatkit")]
+    #[must_use]
+    pub fn chatkit(&self) -> ChatKit {
+        ChatKit::new(self.clone())
     }
 
     /// Returns the GA Realtime API facade.

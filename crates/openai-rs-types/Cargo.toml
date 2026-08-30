@@ -18,6 +18,8 @@ webhooks = []
 admin = []
 legacy-completions = []
 custom-voice = []
+beta-chatkit = []
+legacy-realtime = ["realtime"]
 
 [dependencies]
 base64.workspace = true

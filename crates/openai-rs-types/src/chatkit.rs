@@ -12,8 +12,7 @@ use serde_json::{Number, Value};
 use thiserror::Error;
 
 use crate::{
-    ExtraFields, JsonText, ModelId, Nullable, Omittable, WireSecret,
-    responses::UnknownTaggedObject,
+    ExtraFields, JsonText, ModelId, Nullable, Omittable, WireSecret, responses::UnknownTaggedObject,
 };
 
 crate::opaque_string_id! {
@@ -902,10 +901,7 @@ impl ChatKitThreadListParams {
     }
 
     /// Filters by one validated user identifier.
-    pub fn with_user(
-        mut self,
-        user: impl Into<Box<str>>,
-    ) -> Result<Self, ChatKitValidationError> {
+    pub fn with_user(mut self, user: impl Into<Box<str>>) -> Result<Self, ChatKitValidationError> {
         self.user = Omittable::Value(ChatKitUserId::new(user)?);
         Ok(self)
     }
@@ -1202,9 +1198,17 @@ pub struct ChatKitResponseOutputText {
 }
 
 literal_tag!(UserMessageTag, UserMessage, "chatkit.user_message");
-literal_tag!(AssistantMessageTag, AssistantMessage, "chatkit.assistant_message");
+literal_tag!(
+    AssistantMessageTag,
+    AssistantMessage,
+    "chatkit.assistant_message"
+);
 literal_tag!(WidgetTag, Widget, "chatkit.widget");
-literal_tag!(ClientToolCallTag, ClientToolCall, "chatkit.client_tool_call");
+literal_tag!(
+    ClientToolCallTag,
+    ClientToolCall,
+    "chatkit.client_tool_call"
+);
 literal_tag!(TaskTag, Task, "chatkit.task");
 literal_tag!(TaskGroupTag, TaskGroup, "chatkit.task_group");
 
@@ -1429,6 +1433,240 @@ impl ChatKitThreadItemList {
         match &self.last_id {
             Nullable::Value(value) => Some(value),
             Nullable::Null => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+    use serde::de::DeserializeOwned;
+    use serde_json::{Value, json};
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    assert_impl_all!(CreateChatKitSessionRequest: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ChatKitSession: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ChatKitThread: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ChatKitThreadItem: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ChatKitThreadList: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ChatKitThreadItemList: Serialize, DeserializeOwned, Send, Sync);
+
+    fn session_json() -> Value {
+        json!({
+            "id": "cksess_123",
+            "object": "chatkit.session",
+            "expires_at": 1712349876,
+            "client_secret": "ek_private_value",
+            "workflow": {
+                "id": "workflow_alpha",
+                "version": null,
+                "state_variables": null,
+                "tracing": {"enabled": true}
+            },
+            "user": "user_789",
+            "rate_limits": {"max_requests_per_1_minute": 60},
+            "max_requests_per_1_minute": 60,
+            "status": "active",
+            "chatkit_configuration": {
+                "automatic_thread_titling": {"enabled": true},
+                "file_upload": {"enabled": true, "max_file_size": 16, "max_files": 20},
+                "history": {"enabled": true, "recent_threads": null}
+            }
+        })
+    }
+
+    #[test]
+    fn create_session_needs_no_handwritten_json_and_validates_bounds() {
+        let mut state = ChatKitStateVariables::new();
+        state
+            .insert(
+                "tenant",
+                ChatKitStateValue::string("blue").expect("state string"),
+            )
+            .expect("state variable");
+        let workflow = ChatKitWorkflowRequest::new("workflow_alpha")
+            .with_version("2026-01-01")
+            .with_state_variables(state);
+        let configuration = ChatKitConfigurationRequest {
+            automatic_thread_titling: Omittable::Value(ChatKitAutomaticThreadTitlingRequest {
+                enabled: Omittable::Value(false),
+            }),
+            file_upload: Omittable::Value(ChatKitFileUploadRequest {
+                enabled: Omittable::Value(true),
+                max_file_size: Omittable::Value(ChatKitFileSizeMb::new(32).expect("file size")),
+                max_files: Omittable::Value(ChatKitPositiveLimit::new(4).expect("file count")),
+            }),
+            history: Omittable::Omitted,
+        };
+        let request = CreateChatKitSessionRequest::new(workflow, "user_789")
+            .expect("session request")
+            .with_expiration(ChatKitExpiresAfterRequest::new(600).expect("expiration"))
+            .with_configuration(configuration);
+        let value = serde_json::to_value(request).expect("serialize request");
+        assert_eq!(value["workflow"]["state_variables"]["tenant"], "blue");
+        assert_eq!(value["expires_after"]["seconds"], 600);
+        assert!(value.get("rate_limits").is_none());
+        assert!(ChatKitExpiresAfterRequest::new(0).is_err());
+        assert!(ChatKitFileSizeMb::new(513).is_err());
+        assert!(CreateChatKitSessionRequest::new(ChatKitWorkflowRequest::new("wf"), "").is_err());
+    }
+
+    #[test]
+    fn session_secret_is_redacted_and_required_nulls_roundtrip() {
+        let value = session_json();
+        let session: ChatKitSession = serde_json::from_value(value.clone()).expect("session");
+        let debug = format!("{session:?}");
+        assert!(!debug.contains("ek_private_value"));
+        assert!(matches!(session.workflow.version, Nullable::Null));
+        assert!(matches!(session.workflow.state_variables, Nullable::Null));
+        assert_eq!(serde_json::to_value(session).expect("roundtrip"), value);
+    }
+
+    #[test]
+    fn thread_status_is_strict_for_known_and_lossless_for_future() {
+        let thread = json!({
+            "id": "cthr_1",
+            "object": "chatkit.thread",
+            "created_at": 1,
+            "title": null,
+            "status": {"type": "locked", "reason": null},
+            "user": "user_1",
+            "future": {"retained": true}
+        });
+        let decoded: ChatKitThread = serde_json::from_value(thread.clone()).expect("thread");
+        assert!(matches!(decoded.status, ChatKitThreadStatus::Locked(_)));
+        assert_eq!(serde_json::to_value(decoded).expect("roundtrip"), thread);
+
+        assert!(serde_json::from_value::<ChatKitThreadStatus>(json!({"type":"locked"})).is_err());
+        let future = json!({"type":"archived", "reason":"future"});
+        let decoded: ChatKitThreadStatus =
+            serde_json::from_value(future.clone()).expect("future status");
+        assert!(matches!(decoded, ChatKitThreadStatus::Unknown(_)));
+        assert_eq!(serde_json::to_value(decoded).expect("roundtrip"), future);
+    }
+
+    fn item_base(id: &str, kind: &str) -> serde_json::Map<String, Value> {
+        let Value::Object(value) = json!({
+            "id": id,
+            "object": "chatkit.thread_item",
+            "created_at": 1,
+            "thread_id": "cthr_1",
+            "type": kind
+        }) else {
+            unreachable!();
+        };
+        value
+    }
+
+    #[test]
+    fn all_six_thread_item_variants_decode_and_roundtrip() {
+        let mut user = item_base("item_user", "chatkit.user_message");
+        user.insert(
+            "content".into(),
+            json!([{"type":"input_text","text":"hello"}]),
+        );
+        user.insert("attachments".into(), json!([]));
+        user.insert("inference_options".into(), Value::Null);
+
+        let mut assistant = item_base("item_assistant", "chatkit.assistant_message");
+        assistant.insert(
+            "content".into(),
+            json!([{"type":"output_text","text":"hi","annotations":[]}]),
+        );
+
+        let mut widget = item_base("item_widget", "chatkit.widget");
+        widget.insert("widget".into(), json!("{\"type\":\"card\"}"));
+
+        let mut tool = item_base("item_tool", "chatkit.client_tool_call");
+        tool.insert("status".into(), json!("in_progress"));
+        tool.insert("call_id".into(), json!("call_1"));
+        tool.insert("name".into(), json!("lookup"));
+        tool.insert("arguments".into(), json!("{\"q\":\"rust\"}"));
+        tool.insert("output".into(), Value::Null);
+
+        let mut task = item_base("item_task", "chatkit.task");
+        task.insert("task_type".into(), json!("thought"));
+        task.insert("heading".into(), Value::Null);
+        task.insert("summary".into(), json!("working"));
+
+        let mut group = item_base("item_group", "chatkit.task_group");
+        group.insert(
+            "tasks".into(),
+            json!([{"type":"custom","heading":"step","summary":null}]),
+        );
+
+        let values = [user, assistant, widget, tool, task, group]
+            .into_iter()
+            .map(Value::Object)
+            .collect::<Vec<_>>();
+        let decoded = values
+            .iter()
+            .cloned()
+            .map(serde_json::from_value::<ChatKitThreadItem>)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("all item variants");
+        assert!(matches!(decoded[0], ChatKitThreadItem::UserMessage(_)));
+        assert!(matches!(decoded[1], ChatKitThreadItem::AssistantMessage(_)));
+        assert!(matches!(decoded[2], ChatKitThreadItem::Widget(_)));
+        assert!(matches!(decoded[3], ChatKitThreadItem::ClientToolCall(_)));
+        assert!(matches!(decoded[4], ChatKitThreadItem::Task(_)));
+        assert!(matches!(decoded[5], ChatKitThreadItem::TaskGroup(_)));
+        assert_eq!(
+            decoded
+                .into_iter()
+                .map(|value| serde_json::to_value(value).expect("serialize item"))
+                .collect::<Vec<_>>(),
+            values
+        );
+    }
+
+    #[test]
+    fn malformed_known_item_fails_and_future_item_roundtrips() {
+        assert!(
+            serde_json::from_value::<ChatKitThreadItem>(json!({
+                "id":"item_1","object":"chatkit.thread_item","created_at":1,
+                "thread_id":"cthr_1","type":"chatkit.task","task_type":"custom",
+                "heading":null
+            }))
+            .is_err()
+        );
+        let future = json!({
+            "id":"item_future","object":"chatkit.thread_item","created_at":1,
+            "thread_id":"cthr_1","type":"chatkit.timeline","events":[]
+        });
+        let decoded: ChatKitThreadItem =
+            serde_json::from_value(future.clone()).expect("future item");
+        assert!(matches!(decoded, ChatKitThreadItem::Unknown(_)));
+        assert_eq!(serde_json::to_value(decoded).expect("roundtrip"), future);
+    }
+
+    #[test]
+    fn page_cursors_are_required_nullable() {
+        let value = json!({
+            "object":"list","data":[],"first_id":null,"last_id":null,"has_more":false
+        });
+        let page: ChatKitThreadItemList =
+            serde_json::from_value(value.clone()).expect("empty page");
+        assert!(page.next_after().is_none());
+        assert_eq!(serde_json::to_value(page).expect("roundtrip"), value);
+
+        assert!(
+            serde_json::from_value::<ChatKitThreadItemList>(json!({
+                "object":"list","data":[],"first_id":null,"has_more":false
+            }))
+            .is_err()
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn open_session_status_roundtrips(raw in "[a-z_]{1,24}") {
+            let status = ChatKitSessionStatus::from_raw(raw.clone());
+            let encoded = serde_json::to_vec(&status).expect("encode");
+            let decoded: ChatKitSessionStatus = serde_json::from_slice(&encoded).expect("decode");
+            prop_assert_eq!(decoded.as_str(), raw);
         }
     }
 }

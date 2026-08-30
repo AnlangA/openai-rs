@@ -31,6 +31,8 @@ x509 = ["workload-identity", "rustls-tls"]
 legacy-completions = ["openai-rs-types/legacy-completions"]
 custom-voice = ["openai-rs-types/custom-voice"]
 alpha-graders = []
+beta-chatkit = ["openai-rs-types/beta-chatkit"]
+legacy-realtime = ["openai-rs-types/legacy-realtime"]
 
 [dependencies]
 async-stream.workspace = true

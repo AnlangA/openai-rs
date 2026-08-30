@@ -154,6 +154,7 @@ impl Transport {
 
     /// Executes a JSON operation with one operation-owned static header.
     /// Callers cannot use this to override authentication or codec headers.
+    #[cfg(feature = "beta-chatkit")]
     pub(crate) async fn execute_json_with_static_header<O, Q>(
         &self,
         path: &[PathSegment<'_>],
