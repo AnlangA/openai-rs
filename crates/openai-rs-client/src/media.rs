@@ -894,3 +894,406 @@ operation!(GenerateImage, request = CreateImageRequest<MediaNonStreaming>, respo
 operation!(GenerateImageStream, request = CreateImageRequest<MediaStreaming>, response = ImageGenerationStreamEvent, route = "/images/generations", response_mode = ResponseMode::Sse);
 operation!(EditImageJson, request = CreateImageEditJsonRequest<MediaNonStreaming>, response = ImagesResponse, route = "/images/edits", response_mode = ResponseMode::Json);
 operation!(EditImageJsonStream, request = CreateImageEditJsonRequest<MediaStreaming>, response = ImageEditStreamEvent, route = "/images/edits", response_mode = ResponseMode::Sse);
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        sync::{Arc, Mutex},
+    };
+
+    use bytes::Bytes;
+    use futures_util::StreamExt;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use openai_rs_types::{
+        ReplayableMultipartSource,
+        media::{
+            CreateImageEditJsonRequest, CreateImageEditMultipartRequest, CreateImageRequest,
+            CreateSpeechRequest, CreateTranscriptionRequest, CreateTranslationRequest,
+            ImageEditStreamEvent, ImageGenerationStreamEvent, ImageReference, PartialImageCount,
+            SpeechStreamEvent, TranscriptionStreamEvent, TranslationResponseFormat,
+        },
+    };
+    use serde_json::{Value, json};
+    use tokio::{net::TcpListener, sync::oneshot};
+    use url::Url;
+
+    use super::*;
+    use crate::{ApiKey, RetryPolicy};
+
+    #[derive(Debug)]
+    struct CapturedRequest {
+        method: Method,
+        path: String,
+        accept: Option<String>,
+        content_type: Option<String>,
+        authorization: Option<String>,
+        body: Vec<u8>,
+    }
+
+    async fn serve_once(
+        content_type: &'static str,
+        body: Bytes,
+    ) -> (Client, oneshot::Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind media server");
+        let address = listener.local_addr().expect("media server address");
+        let (sender, receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept media request");
+            let sender = Arc::new(Mutex::new(Some(sender)));
+            let service = service_fn(move |request: Request<Incoming>| {
+                let sender = Arc::clone(&sender);
+                let body = body.clone();
+                async move {
+                    let method = request.method().clone();
+                    let path = request.uri().path().to_owned();
+                    let accept = request
+                        .headers()
+                        .get(header::ACCEPT)
+                        .and_then(|value| value.to_str().ok())
+                        .map(ToOwned::to_owned);
+                    let request_content_type = request
+                        .headers()
+                        .get(header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok())
+                        .map(ToOwned::to_owned);
+                    let authorization = request
+                        .headers()
+                        .get(header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                        .map(ToOwned::to_owned);
+                    let request_body = request
+                        .into_body()
+                        .collect()
+                        .await
+                        .expect("collect media request")
+                        .to_bytes()
+                        .to_vec();
+                    if let Some(sender) = sender.lock().expect("media capture lock").take() {
+                        let _ = sender.send(CapturedRequest {
+                            method,
+                            path,
+                            accept,
+                            content_type: request_content_type,
+                            authorization,
+                            body: request_body,
+                        });
+                    }
+                    Ok::<_, Infallible>(
+                        hyper::Response::builder()
+                            .status(StatusCode::OK)
+                            .header(header::CONTENT_TYPE, content_type)
+                            .header("x-request-id", "req_media")
+                            .body(Full::new(body))
+                            .expect("media response"),
+                    )
+                }
+            });
+            http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await
+                .expect("serve media request");
+        });
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("media base URL");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test API key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(RetryPolicy::disabled())
+            .build()
+            .expect("media client");
+        (client, receiver)
+    }
+
+    fn bytes_source(
+        bytes: &'static [u8],
+        file_name: &str,
+        media_type: &str,
+    ) -> ReplayableMultipartSource {
+        ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(bytes))
+            .try_with_file_name(file_name)
+            .expect("media filename")
+            .try_with_media_type(media_type)
+            .expect("media MIME")
+    }
+
+    #[tokio::test]
+    async fn speech_raw_uses_json_request_and_streams_audio() {
+        let audio = Bytes::from_static(b"\0RIFF\xffaudio");
+        let (client, captured) = serve_once("audio/wav", audio.clone()).await;
+        let request = CreateSpeechRequest::new("gpt-4o-mini-tts", "hello", "coral");
+        let stream = client
+            .audio()
+            .speech(request)
+            .await
+            .expect("speech response");
+        assert_eq!(stream.content_type(), Some("audio/wav"));
+        let response = stream.collect(1024).await.expect("collect speech audio");
+        assert_eq!(response.as_ref(), audio.as_ref());
+
+        let captured = captured.await.expect("captured speech request");
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path, "/v1/audio/speech");
+        assert_eq!(captured.accept.as_deref(), Some(AUDIO_MIME));
+        assert_eq!(captured.content_type.as_deref(), Some(JSON_MIME));
+        let body: Value = serde_json::from_slice(&captured.body).expect("speech JSON");
+        assert_eq!(body["input"], "hello");
+        assert_eq!(body["voice"], "coral");
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+    }
+
+    #[tokio::test]
+    async fn speech_sse_decodes_delta_and_terminal_event() {
+        let body = Bytes::from_static(
+            concat!(
+                "event: speech.audio.delta\n",
+                "data: {\"type\":\"speech.audio.delta\",\"audio\":\"UklGRg==\"}\n\n",
+                "event: speech.audio.done\n",
+                "data: {\"type\":\"speech.audio.done\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}\n\n"
+            )
+            .as_bytes(),
+        );
+        let (client, captured) = serve_once(SSE_MIME, body).await;
+        let request =
+            CreateSpeechRequest::new("gpt-4o-mini-tts", "hello", "coral").into_streaming();
+        let mut stream = client
+            .audio()
+            .speech_stream(request)
+            .await
+            .expect("speech SSE handshake");
+        assert!(matches!(
+            stream.next().await.expect("delta").expect("typed delta"),
+            SpeechStreamEvent::AudioDelta(_)
+        ));
+        assert!(matches!(
+            stream.next().await.expect("done").expect("typed done"),
+            SpeechStreamEvent::AudioDone(_)
+        ));
+        assert!(stream.next().await.is_none());
+        let captured = captured.await.expect("captured speech SSE request");
+        assert_eq!(captured.accept.as_deref(), Some(SSE_MIME));
+    }
+
+    #[tokio::test]
+    async fn transcription_multipart_uses_bracket_arrays_and_raw_audio() {
+        let (client, captured) =
+            serve_once(JSON_MIME, Bytes::from_static(br#"{"text":"hello"}"#)).await;
+        let request = CreateTranscriptionRequest::new(
+            bytes_source(b"raw-audio", "meeting.wav", "audio/wav"),
+            "gpt-4o-transcribe",
+        )
+        .with_language("en")
+        .with_logprobs();
+        let response = client
+            .audio()
+            .transcribe(request)
+            .await
+            .expect("transcription response");
+        assert!(matches!(response.body(), TranscriptionOutput::Json(_)));
+
+        let captured = captured.await.expect("captured transcription request");
+        assert_eq!(captured.path, "/v1/audio/transcriptions");
+        let content_type = captured.content_type.expect("multipart content type");
+        assert!(content_type.starts_with("multipart/form-data; boundary="));
+        let text = String::from_utf8_lossy(&captured.body);
+        assert!(text.contains("name=\"model\"\r\n\r\ngpt-4o-transcribe"));
+        assert!(text.contains("name=\"language\"\r\n\r\nen"));
+        assert!(text.contains("name=\"include[]\"\r\n\r\nlogprobs"));
+        assert!(text.contains("name=\"file\"; filename=\"meeting.wav\""));
+        assert!(
+            captured
+                .body
+                .windows(b"raw-audio".len())
+                .any(|window| window == b"raw-audio")
+        );
+    }
+
+    #[tokio::test]
+    async fn transcription_sse_and_translation_text_are_mode_safe() {
+        let transcription_events = Bytes::from_static(
+            concat!(
+                "event: transcript.text.delta\n",
+                "data: {\"type\":\"transcript.text.delta\",\"delta\":\"hel\"}\n\n",
+                "event: transcript.text.done\n",
+                "data: {\"type\":\"transcript.text.done\",\"text\":\"hello\"}\n\n"
+            )
+            .as_bytes(),
+        );
+        let (client, transcription_capture) = serve_once(SSE_MIME, transcription_events).await;
+        let request = CreateTranscriptionRequest::new(
+            bytes_source(b"audio", "speech.mp3", "audio/mpeg"),
+            "gpt-4o-transcribe",
+        )
+        .into_streaming();
+        let mut stream = client
+            .audio()
+            .transcribe_stream(request)
+            .await
+            .expect("transcription SSE");
+        assert!(matches!(
+            stream.next().await.expect("delta").expect("typed delta"),
+            TranscriptionStreamEvent::TextDelta(_)
+        ));
+        assert!(matches!(
+            stream.next().await.expect("done").expect("typed done"),
+            TranscriptionStreamEvent::TextDone(_)
+        ));
+        assert!(stream.next().await.is_none());
+        let captured = transcription_capture
+            .await
+            .expect("captured transcription SSE");
+        assert_eq!(captured.accept.as_deref(), Some(SSE_MIME));
+        assert!(String::from_utf8_lossy(&captured.body).contains("name=\"stream\"\r\n\r\ntrue"));
+
+        let (client, translation_capture) = serve_once(
+            "application/x-subrip",
+            Bytes::from_static(b"1\n00:00:00,000 --> 00:00:01,000\nhello\n"),
+        )
+        .await;
+        let request = CreateTranslationRequest::new(
+            bytes_source(b"audio", "speech.mp3", "audio/mpeg"),
+            "whisper-1",
+        )
+        .with_response_format(TranslationResponseFormat::Srt);
+        let response = client
+            .audio()
+            .translate(request)
+            .await
+            .expect("translation SRT");
+        let TranslationOutput::Srt(text) = response.body() else {
+            panic!("expected SRT output")
+        };
+        assert!(text.as_str().expect("UTF-8 SRT").contains("hello"));
+        let captured = translation_capture.await.expect("captured translation");
+        assert_eq!(captured.path, "/v1/audio/translations");
+        assert_eq!(captured.accept.as_deref(), Some("application/x-subrip"));
+    }
+
+    #[tokio::test]
+    async fn image_json_generation_and_edit_use_typed_bodies() {
+        let (client, generated_capture) =
+            serve_once(JSON_MIME, Bytes::from_static(br#"{"created":1,"data":[]}"#)).await;
+        client
+            .images()
+            .generate(CreateImageRequest::new("A lighthouse"))
+            .await
+            .expect("image generation");
+        let captured = generated_capture.await.expect("captured generation");
+        assert_eq!(captured.path, "/v1/images/generations");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captured.body).expect("generation JSON"),
+            json!({"prompt":"A lighthouse"})
+        );
+
+        let (client, edit_capture) =
+            serve_once(JSON_MIME, Bytes::from_static(br#"{"created":1,"data":[]}"#)).await;
+        client
+            .images()
+            .edit_json(CreateImageEditJsonRequest::new(
+                ImageReference::file("file_1"),
+                "Add snow",
+            ))
+            .await
+            .expect("JSON image edit");
+        let captured = edit_capture.await.expect("captured JSON edit");
+        assert_eq!(captured.path, "/v1/images/edits");
+        let body: Value = serde_json::from_slice(&captured.body).expect("edit JSON");
+        assert_eq!(body["images"][0]["file_id"], "file_1");
+        assert_eq!(body["prompt"], "Add snow");
+    }
+
+    #[tokio::test]
+    async fn multipart_image_edit_uses_image_array_mask_and_partial_sse() {
+        let partial = Bytes::from_static(
+            concat!(
+                "event: image_edit.partial_image\n",
+                "data: {\"type\":\"image_edit.partial_image\",\"b64_json\":\"UE5H\",\"created_at\":1,\"size\":\"1024x1024\",\"quality\":\"high\",\"background\":\"opaque\",\"output_format\":\"png\",\"partial_image_index\":0}\n\n",
+                "data: [DONE]\n\n"
+            )
+            .as_bytes(),
+        );
+        let (client, captured) = serve_once(SSE_MIME, partial).await;
+        let request = CreateImageEditMultipartRequest::from_images(
+            [
+                bytes_source(b"image-one", "one.png", "image/png"),
+                bytes_source(b"image-two", "two.png", "image/png"),
+            ],
+            "Combine",
+        )
+        .expect("multipart image request")
+        .with_mask(bytes_source(b"mask", "mask.png", "image/png"))
+        .into_streaming()
+        .with_partial_images(PartialImageCount::new(1).expect("partial count"));
+        let mut stream = client
+            .images()
+            .edit_multipart_stream(request)
+            .await
+            .expect("multipart image SSE");
+        assert!(matches!(
+            stream
+                .next()
+                .await
+                .expect("partial")
+                .expect("typed partial"),
+            ImageEditStreamEvent::Partial(_)
+        ));
+        assert!(stream.next().await.is_none());
+
+        let captured = captured.await.expect("captured multipart edit");
+        assert_eq!(captured.path, "/v1/images/edits");
+        assert_eq!(captured.accept.as_deref(), Some(SSE_MIME));
+        let text = String::from_utf8_lossy(&captured.body);
+        assert_eq!(text.matches("name=\"image[]\"").count(), 2);
+        assert!(text.contains("name=\"mask\"; filename=\"mask.png\""));
+        assert!(text.contains("name=\"prompt\"\r\n\r\nCombine"));
+        assert!(text.contains("name=\"stream\"\r\n\r\ntrue"));
+        assert!(text.contains("name=\"partial_images\"\r\n\r\n1"));
+        assert!(
+            captured
+                .body
+                .windows(b"image-one".len())
+                .any(|window| window == b"image-one")
+        );
+    }
+
+    #[tokio::test]
+    async fn image_generation_partial_sse_decodes_typed_event() {
+        let body = Bytes::from_static(
+            concat!(
+                "event: image_generation.partial_image\n",
+                "data: {\"type\":\"image_generation.partial_image\",\"b64_json\":\"UE5H\",\"created_at\":1,\"size\":\"1024x1024\",\"quality\":\"high\",\"background\":\"opaque\",\"output_format\":\"png\",\"partial_image_index\":0}\n\n",
+                "data: [DONE]\n\n"
+            )
+            .as_bytes(),
+        );
+        let (client, captured) = serve_once(SSE_MIME, body).await;
+        let request = CreateImageRequest::new("A lighthouse")
+            .into_streaming()
+            .with_partial_images(PartialImageCount::new(1).expect("partial count"));
+        let mut stream = client
+            .images()
+            .generate_stream(request)
+            .await
+            .expect("generation SSE");
+        assert!(matches!(
+            stream
+                .next()
+                .await
+                .expect("partial")
+                .expect("typed partial"),
+            ImageGenerationStreamEvent::Partial(_)
+        ));
+        assert!(stream.next().await.is_none());
+        let captured = captured.await.expect("captured generation SSE");
+        assert_eq!(captured.accept.as_deref(), Some(SSE_MIME));
+        let body: Value = serde_json::from_slice(&captured.body).expect("generation stream JSON");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["partial_images"], 1);
+    }
+}

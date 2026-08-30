@@ -12,15 +12,19 @@ pub use openai_rs_client::{
     AddUploadPartOneShotRequest, ChatCompletionEventStream, ChatCompletionMessages,
     ChatCompletionMessagePageStream, ChatCompletionPageStream, ChatCompletions,
     BatchPageStream, BatchSubmission, BatchSubmissionError, BatchSubmissionOptions, Batches,
-    CreateFileOneShotRequest, Embeddings, Error, FileContentStream, Files, InputItems,
-    InputTokens, Models, Moderations, OneShotMultipartSource, PollCancellationToken, PollError,
-    PollOptions, ResponseEventStream, ResponseMeta, Responses, RetryPolicy, StreamError,
-    TlsBackend, Uploads, VectorStoreFileBatches, VectorStoreFilePageStream, VectorStoreFiles,
-    VectorStorePageStream, VectorStores,
+    Audio, CreateFileOneShotRequest, Embeddings, Error, FileContentStream, Files,
+    ImageEditEventStream, ImageGenerationEventStream, Images, InputItems, InputTokens,
+    MediaByteStream, MediaEventStream, MediaTextBody, Models, Moderations,
+    OneShotMultipartSource, PollCancellationToken, PollError, PollOptions, ResponseEventStream,
+    ResponseMeta, Responses, RetryPolicy, SpeechEventStream, StreamError, TlsBackend,
+    TranscriptionEventStream, TranscriptionOutput, TranslationOutput, Uploads,
+    VectorStoreFileBatches, VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream,
+    VectorStores,
 };
 
 #[cfg(all(feature = "client", feature = "realtime"))]
 pub use openai_rs_client::{
+    Realtime, RealtimeCallCreated, RealtimeWebSocket, RealtimeWebSocketConfig,
     ResponsesWebSocket, ResponsesWebSocketConfig, WebSocketReconnectPolicy,
 };
 

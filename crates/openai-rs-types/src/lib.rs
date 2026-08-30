@@ -1,5 +1,8 @@
 //! Lossless wire types and Serde primitives for the OpenAI API.
 
+#[cfg(feature = "admin")]
+pub mod admin;
+
 pub mod batches;
 pub mod chat;
 pub mod containers;

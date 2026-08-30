@@ -458,7 +458,20 @@ impl MultipartTransport {
             PathSegment::literal("content"),
         ];
         let url = self.operation_url(&path)?;
-        self.send_download(url)
+        self.send_download(url, BINARY_MIME)
+            .await
+            .map(FileContentStream::from_response)
+    }
+
+    /// Sends a safe, authenticated GET for a typed resource path and exposes
+    /// the successful body as the shared bounded raw-content stream.
+    pub(crate) async fn download_path(
+        &self,
+        path: &[PathSegment<'_>],
+        accept: &'static str,
+    ) -> Result<FileContentStream, Error> {
+        let url = self.operation_url(path)?;
+        self.send_download(url, accept)
             .await
             .map(FileContentStream::from_response)
     }
@@ -617,13 +630,17 @@ impl MultipartTransport {
         }
     }
 
-    async fn send_download(&self, url: Url) -> Result<reqwest::Response, Error> {
+    async fn send_download(
+        &self,
+        url: Url,
+        accept: &'static str,
+    ) -> Result<reqwest::Response, Error> {
         let started = Instant::now();
         let mut retries = 0;
         loop {
             let remaining = remaining_time(started, self.overall_timeout)?;
             let request = self
-                .request(reqwest::Method::GET, url.clone(), BINARY_MIME)
+                .request(reqwest::Method::GET, url.clone(), accept)
                 .timeout(remaining)
                 .build()
                 .map_err(Error::from_reqwest)?;

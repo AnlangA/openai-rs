@@ -122,6 +122,56 @@ macro_rules! tagged_union {
     };
 }
 
+macro_rules! tagged_union_reject_known {
+    ($(#[$meta:meta])* pub enum $name:ident {
+        $($variant:ident($ty:ty) => $tag:literal),+ $(,)?
+    } reject [$($rejected:literal),+ $(,)?]) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq)]
+        #[non_exhaustive]
+        pub enum $name {
+            $($variant($ty),)+
+            /// A genuinely future source tag retained verbatim.
+            Unknown(responses::UnknownTaggedObject),
+        }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                match self {
+                    $(Self::$variant(value) => value.serialize(serializer),)+
+                    Self::Unknown(value) => value.serialize(serializer),
+                }
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let value = Value::deserialize(deserializer)?;
+                let tag = discriminator(&value).map_err(D::Error::custom)?;
+                match tag.as_str() {
+                    $($tag => serde_json::from_value(value)
+                        .map(Self::$variant)
+                        .map_err(D::Error::custom),)+
+                    $($rejected => Err(D::Error::custom(format_args!(
+                        "known source tag `{}` is not valid in {}",
+                        tag,
+                        stringify!($name),
+                    ))),)+
+                    _ => responses::UnknownTaggedObject::from_value(value)
+                        .map(Self::Unknown)
+                        .map_err(D::Error::custom),
+                }
+            }
+        }
+    };
+}
+
 open_string_enum! {
     /// Role used in an eval grader prompt.
     pub enum EvalMessageRole {
@@ -129,6 +179,14 @@ open_string_enum! {
         Assistant = "assistant",
         System = "system",
         Developer = "developer",
+    }
+}
+
+open_string_enum! {
+    /// Pass/fail filter accepted by the output-item list endpoint.
+    pub enum EvalOutputItemFilterStatus {
+        Pass = "pass",
+        Fail = "fail",
     }
 }
 
@@ -1523,30 +1581,30 @@ impl Default for EvalResponsesSource {
     }
 }
 
-tagged_union! {
+tagged_union_reject_known! {
     /// Source accepted by a JSONL run.
     pub enum EvalJsonlSource {
         FileContent(EvalFileContentSource) => "file_content",
         FileId(EvalFileIdSource) => "file_id"
-    }
+    } reject ["stored_completions", "responses"]
 }
 
-tagged_union! {
+tagged_union_reject_known! {
     /// Source accepted by a Completions run.
     pub enum EvalCompletionsSource {
         FileContent(EvalFileContentSource) => "file_content",
         FileId(EvalFileIdSource) => "file_id",
         StoredCompletions(EvalStoredCompletionsSource) => "stored_completions",
-    }
+    } reject ["responses"]
 }
 
-tagged_union! {
+tagged_union_reject_known! {
     /// Source accepted by a Responses run.
     pub enum EvalResponsesRunSource {
         FileContent(EvalFileContentSource) => "file_content",
         FileId(EvalFileIdSource) => "file_id",
         Responses(Box<EvalResponsesSource>) => "responses"
-    }
+    } reject ["stored_completions"]
 }
 
 literal_tag!(EvalTemplateMessagesTag, Template, "template");
@@ -1607,44 +1665,13 @@ literal_tag!(EvalCompletionsRunDataSourceTag, Completions, "completions");
 literal_tag!(EvalResponsesRunDataSourceTag, Responses, "responses");
 
 /// JSONL pass-through run data source.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvalJsonlRunDataSource {
     #[serde(rename = "type")]
     kind: EvalJsonlRunDataSourceTag,
     source: EvalJsonlSource,
     #[serde(flatten)]
     extra: ExtraFields,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-struct EvalJsonlRunDataSourceWire {
-    #[serde(rename = "type")]
-    kind: EvalJsonlRunDataSourceTag,
-    source: EvalJsonlSource,
-    #[serde(flatten)]
-    extra: ExtraFields,
-}
-
-impl<'de> Deserialize<'de> for EvalJsonlRunDataSource {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = EvalJsonlRunDataSourceWire::deserialize(deserializer)?;
-        if let EvalJsonlSource::Unknown(value) = &wire.source {
-            if matches!(value.discriminator(), "stored_completions" | "responses") {
-                return Err(D::Error::custom(format_args!(
-                    "known source tag `{}` is not valid for a jsonl run",
-                    value.discriminator()
-                )));
-            }
-        }
-        Ok(Self {
-            kind: wire.kind,
-            source: wire.source,
-            extra: wire.extra,
-        })
-    }
 }
 
 impl EvalJsonlRunDataSource {
@@ -2140,7 +2167,7 @@ pub struct ListEvalRunOutputItemsParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     limit: Omittable<u32>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    status: Omittable<EvalOutputItemStatus>,
+    status: Omittable<EvalOutputItemFilterStatus>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     order: Omittable<EvalSortOrder>,
 }
@@ -2154,7 +2181,7 @@ impl ListEvalRunOutputItemsParams {
 
     /// Filters by pass/fail/error status.
     #[must_use]
-    pub fn status(mut self, status: EvalOutputItemStatus) -> Self {
+    pub fn status(mut self, status: EvalOutputItemFilterStatus) -> Self {
         self.status = Omittable::Value(status);
         self
     }
@@ -2389,6 +2416,7 @@ mod tests {
         assert_json_dto::<EvalRunList>();
         assert_json_dto::<ListEvalRunsParams>();
         assert_json_dto::<EvalOutputItemStatus>();
+        assert_json_dto::<EvalOutputItemFilterStatus>();
         assert_json_dto::<EvalOutputItemResult>();
         assert_json_dto::<EvalSampleInputMessage>();
         assert_json_dto::<EvalSampleOutputMessage>();
@@ -2640,6 +2668,15 @@ mod tests {
             serde_json::from_value::<EvalJsonlRunDataSource>(json!({
                 "type": "jsonl",
                 "source": {"type": "responses"}
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<EvalCompletionsSource>(json!({"type": "responses"})).is_err()
+        );
+        assert!(
+            serde_json::from_value::<EvalResponsesRunSource>(json!({
+                "type": "stored_completions"
             }))
             .is_err()
         );

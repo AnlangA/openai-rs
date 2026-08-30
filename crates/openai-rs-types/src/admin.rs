@@ -10,7 +10,7 @@ use std::{collections::BTreeMap, fmt};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Value};
 
-use crate::{ExtraFields, ModelId, Nullable, Omittable, WireSecret, responses::UnknownTaggedObject};
+use crate::{ExtraFields, ModelId, Nullable, Omittable, WireSecret};
 
 fn discriminator<'a>(value: &'a Value, field: &str) -> Result<&'a str, &'static str> {
     let Value::Object(object) = value else {
@@ -255,7 +255,11 @@ crate::open_string_enum! {
 /// Owner summary on an Admin API key.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AdminApiKeyOwner {
-    #[serde(default, rename = "type", skip_serializing_if = "Omittable::is_omitted")]
+    #[serde(
+        default,
+        rename = "type",
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
     pub kind: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub object: Omittable<String>,
@@ -409,7 +413,11 @@ pub struct AuditActorSession {
 /// API key audit actor.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditActorApiKey {
-    #[serde(default, rename = "type", skip_serializing_if = "Omittable::is_omitted")]
+    #[serde(
+        default,
+        rename = "type",
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
     pub kind: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
@@ -424,7 +432,11 @@ pub struct AuditActorApiKey {
 /// Actor that caused an audit event.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditLogActor {
-    #[serde(default, rename = "type", skip_serializing_if = "Omittable::is_omitted")]
+    #[serde(
+        default,
+        rename = "type",
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
     pub kind: Omittable<AuditActorType>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub session: Omittable<AuditActorSession>,
@@ -572,7 +584,7 @@ pub struct ToggleCertificatesRequest {
     pub certificate_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CertificateScopeResponse {
     pub object: AdminListObject,
     pub data: Vec<Certificate>,
@@ -1527,3 +1539,1474 @@ pub struct SpendLimitDeletedResource {
 
 pub type OrganizationSpendLimitDeletedResource = SpendLimitDeletedResource;
 pub type ProjectSpendLimitDeletedResource = SpendLimitDeletedResource;
+
+crate::open_string_enum! {
+    /// Usage bucket width.
+    pub enum UsageBucketWidth {
+        Minute = "1m",
+        Hour = "1h",
+        Day = "1d"
+    }
+}
+
+/// Superset of stable dimensions returned when usage endpoints group results.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UsageDimensions {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub project_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub user_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub api_key_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub model: Omittable<Nullable<ModelId>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub batch: Omittable<Nullable<bool>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub service_tier: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub source: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub size: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub vector_store_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub context_level: Omittable<Nullable<String>>,
+}
+
+/// Shared query superset for Usage endpoints.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UsageQueryParams {
+    pub start_time: u64,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub end_time: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub bucket_width: Omittable<UsageBucketWidth>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub project_ids: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub user_ids: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub api_key_ids: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub models: Omittable<Vec<ModelId>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub batch: Omittable<bool>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub group_by: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub limit: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub page: Omittable<String>,
+}
+
+impl UsageQueryParams {
+    /// Construct the required inclusive start timestamp.
+    #[must_use]
+    pub fn new(start_time: u64) -> Self {
+        Self {
+            start_time,
+            end_time: Omittable::Omitted,
+            bucket_width: Omittable::Omitted,
+            project_ids: Omittable::Omitted,
+            user_ids: Omittable::Omitted,
+            api_key_ids: Omittable::Omitted,
+            models: Omittable::Omitted,
+            batch: Omittable::Omitted,
+            group_by: Omittable::Omitted,
+            limit: Omittable::Omitted,
+            page: Omittable::Omitted,
+        }
+    }
+}
+
+literal_tag!(
+    UsageCompletionsTag,
+    Value,
+    "organization.usage.completions.result"
+);
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UsageCompletionsResult {
+    #[serde(rename = "object")]
+    kind: UsageCompletionsTag,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub num_model_requests: u64,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub input_cached_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub input_cache_write_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub input_uncached_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub input_text_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub output_text_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub input_cached_text_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub input_audio_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub input_cached_audio_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub output_audio_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub input_image_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub input_cached_image_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub output_image_tokens: Omittable<u64>,
+    #[serde(flatten)]
+    pub dimensions: UsageDimensions,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+macro_rules! simple_usage_result {
+    ($name:ident, $tag:ident, $wire:literal, $metric:ident, requests) => {
+        literal_tag!($tag, Value, $wire);
+        #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+        pub struct $name {
+            #[serde(rename = "object")]
+            kind: $tag,
+            pub $metric: u64,
+            pub num_model_requests: u64,
+            #[serde(flatten)]
+            pub dimensions: UsageDimensions,
+            #[serde(default, flatten)]
+            extra: ExtraFields,
+        }
+    };
+    ($name:ident, $tag:ident, $wire:literal, $metric:ident) => {
+        literal_tag!($tag, Value, $wire);
+        #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+        pub struct $name {
+            #[serde(rename = "object")]
+            kind: $tag,
+            pub $metric: u64,
+            #[serde(flatten)]
+            pub dimensions: UsageDimensions,
+            #[serde(default, flatten)]
+            extra: ExtraFields,
+        }
+    };
+}
+
+simple_usage_result!(
+    UsageEmbeddingsResult,
+    UsageEmbeddingsTag,
+    "organization.usage.embeddings.result",
+    input_tokens,
+    requests
+);
+simple_usage_result!(
+    UsageModerationsResult,
+    UsageModerationsTag,
+    "organization.usage.moderations.result",
+    input_tokens,
+    requests
+);
+simple_usage_result!(
+    UsageImagesResult,
+    UsageImagesTag,
+    "organization.usage.images.result",
+    images,
+    requests
+);
+simple_usage_result!(
+    UsageAudioSpeechesResult,
+    UsageAudioSpeechesTag,
+    "organization.usage.audio_speeches.result",
+    characters,
+    requests
+);
+simple_usage_result!(
+    UsageAudioTranscriptionsResult,
+    UsageAudioTranscriptionsTag,
+    "organization.usage.audio_transcriptions.result",
+    seconds,
+    requests
+);
+simple_usage_result!(
+    UsageVectorStoresResult,
+    UsageVectorStoresTag,
+    "organization.usage.vector_stores.result",
+    usage_bytes
+);
+simple_usage_result!(
+    UsageCodeInterpreterSessionsResult,
+    UsageCodeInterpreterTag,
+    "organization.usage.code_interpreter_sessions.result",
+    num_sessions
+);
+simple_usage_result!(
+    UsageFileSearchCallsResult,
+    UsageFileSearchTag,
+    "organization.usage.file_search_calls.result",
+    num_requests
+);
+
+literal_tag!(
+    UsageWebSearchTag,
+    Value,
+    "organization.usage.web_search_calls.result"
+);
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UsageWebSearchCallsResult {
+    #[serde(rename = "object")]
+    kind: UsageWebSearchTag,
+    pub num_model_requests: u64,
+    pub num_requests: u64,
+    #[serde(flatten)]
+    pub dimensions: UsageDimensions,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+/// Monetary amount in a costs result.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CostAmount {
+    pub value: f64,
+    pub currency: String,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+crate::open_string_enum! {
+    /// Unit attached to an aggregated cost quantity.
+    pub enum CostQuantityUnit {
+        Tokens = "tokens",
+        ThousandTokens = "1000_tokens",
+        DurationSeconds = "duration_seconds",
+        DurationMinutes = "duration_minutes",
+        DurationHours = "duration_hours",
+        GibibyteHours = "gibibyte_hours",
+        Images = "images",
+        Characters = "characters"
+    }
+}
+
+literal_tag!(CostsResultTag, Value, "organization.costs.result");
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CostsResult {
+    #[serde(rename = "object")]
+    kind: CostsResultTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub amount: Omittable<CostAmount>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub line_item: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub project_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub api_key_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub quantity: Omittable<Nullable<f64>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub quantity_unit: Omittable<Nullable<CostQuantityUnit>>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+strict_tagged_union! {
+    field = "object";
+    /// One usage/cost result inside a time bucket.
+    pub enum UsageResult {
+        Completions(Box<UsageCompletionsResult>) = "organization.usage.completions.result",
+        Embeddings(UsageEmbeddingsResult) = "organization.usage.embeddings.result",
+        Moderations(UsageModerationsResult) = "organization.usage.moderations.result",
+        Images(UsageImagesResult) = "organization.usage.images.result",
+        AudioSpeeches(UsageAudioSpeechesResult) = "organization.usage.audio_speeches.result",
+        AudioTranscriptions(UsageAudioTranscriptionsResult) = "organization.usage.audio_transcriptions.result",
+        VectorStores(UsageVectorStoresResult) = "organization.usage.vector_stores.result",
+        CodeInterpreterSessions(UsageCodeInterpreterSessionsResult) = "organization.usage.code_interpreter_sessions.result",
+        FileSearchCalls(UsageFileSearchCallsResult) = "organization.usage.file_search_calls.result",
+        WebSearchCalls(UsageWebSearchCallsResult) = "organization.usage.web_search_calls.result",
+        Costs(CostsResult) = "organization.costs.result"
+    }
+}
+
+literal_tag!(UsageBucketTag, Value, "bucket");
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UsageTimeBucket {
+    #[serde(rename = "object")]
+    kind: UsageBucketTag,
+    pub start_time: u64,
+    pub end_time: u64,
+    pub results: Vec<UsageResult>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+literal_tag!(UsagePageTag, Value, "page");
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UsageResponse {
+    #[serde(rename = "object")]
+    kind: UsagePageTag,
+    pub data: Vec<UsageTimeBucket>,
+    pub has_more: bool,
+    pub next_page: Nullable<String>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl UsageResponse {
+    /// Cursor for the next usage page.
+    #[must_use]
+    pub fn next_page(&self) -> Option<&str> {
+        if !self.has_more {
+            return None;
+        }
+        match &self.next_page {
+            Nullable::Value(page) => Some(page),
+            Nullable::Null => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Standard administration error envelope used by non-success responses.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ErrorResponse {
+    pub error: AdminJsonObject,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+pub type SpendLimitCurrency = SpendCurrency;
+pub type SpendLimitInterval = SpendInterval;
+
+/// One frozen stable Administration operation and its body/success DTO names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdminOperationDto {
+    pub operation_id: &'static str,
+    pub method: &'static str,
+    pub path: &'static str,
+    pub request_schema: &'static str,
+    pub response_schema: &'static str,
+}
+
+macro_rules! admin_op {
+    ($id:literal, $method:literal, $path:literal, $request:literal, $response:literal) => {
+        AdminOperationDto {
+            operation_id: $id,
+            method: $method,
+            path: $path,
+            request_schema: $request,
+            response_schema: $response,
+        }
+    };
+}
+
+/// Complete frozen Administration operation-to-DTO manifest.
+pub const ADMIN_OPERATION_MANIFEST: &[AdminOperationDto] = &[
+    admin_op!(
+        "CreateanAPIkeyforaserviceaccount",
+        "POST",
+        "/organization/projects/{project_id}/service_accounts/{service_account_id}/api_keys",
+        "CreateProjectServiceAccountApiKeyBody",
+        "ServiceAccountApiKeyBody"
+    ),
+    admin_op!(
+        "Deleteorganizationspendlimit",
+        "DELETE",
+        "/organization/spend_limit",
+        "()",
+        "OrganizationSpendLimitDeletedResource"
+    ),
+    admin_op!(
+        "Deleteprojectspendlimit",
+        "DELETE",
+        "/organization/projects/{project_id}/spend_limit",
+        "()",
+        "ProjectSpendLimitDeletedResource"
+    ),
+    admin_op!(
+        "Getorganizationspendlimit",
+        "GET",
+        "/organization/spend_limit",
+        "()",
+        "OrganizationSpendLimitResource"
+    ),
+    admin_op!(
+        "Getprojectspendlimit",
+        "GET",
+        "/organization/projects/{project_id}/spend_limit",
+        "()",
+        "ProjectSpendLimitResource"
+    ),
+    admin_op!(
+        "Updateorganizationspendlimit",
+        "POST",
+        "/organization/spend_limit",
+        "UpdateOrganizationSpendLimitBody",
+        "OrganizationSpendLimitResource"
+    ),
+    admin_op!(
+        "Updateprojectspendlimit",
+        "POST",
+        "/organization/projects/{project_id}/spend_limit",
+        "UpdateProjectSpendLimitBody",
+        "ProjectSpendLimitResource"
+    ),
+    admin_op!(
+        "activateOrganizationCertificates",
+        "POST",
+        "/organization/certificates/activate",
+        "ToggleCertificatesRequest",
+        "OrganizationCertificateActivationResponse"
+    ),
+    admin_op!(
+        "activateProjectCertificates",
+        "POST",
+        "/organization/projects/{project_id}/certificates/activate",
+        "ToggleCertificatesRequest",
+        "OrganizationProjectCertificateActivationResponse"
+    ),
+    admin_op!(
+        "add-group-user",
+        "POST",
+        "/organization/groups/{group_id}/users",
+        "CreateGroupUserBody",
+        "GroupUserAssignment"
+    ),
+    admin_op!(
+        "add-project-group",
+        "POST",
+        "/organization/projects/{project_id}/groups",
+        "InviteProjectGroupBody",
+        "ProjectGroup"
+    ),
+    admin_op!(
+        "admin-api-keys-create",
+        "POST",
+        "/organization/admin_api_keys",
+        "AdminApiKeyCreateRequest",
+        "AdminApiKeyCreateResponse"
+    ),
+    admin_op!(
+        "admin-api-keys-delete",
+        "DELETE",
+        "/organization/admin_api_keys/{key_id}",
+        "()",
+        "()"
+    ),
+    admin_op!(
+        "admin-api-keys-get",
+        "GET",
+        "/organization/admin_api_keys/{key_id}",
+        "()",
+        "AdminApiKey"
+    ),
+    admin_op!(
+        "admin-api-keys-list",
+        "GET",
+        "/organization/admin_api_keys",
+        "AdminListParams",
+        "ApiKeyList"
+    ),
+    admin_op!(
+        "archive-project",
+        "POST",
+        "/organization/projects/{project_id}/archive",
+        "()",
+        "Project"
+    ),
+    admin_op!(
+        "assign-group-role",
+        "POST",
+        "/organization/groups/{group_id}/roles",
+        "PublicAssignOrganizationGroupRoleBody",
+        "GroupRoleAssignment"
+    ),
+    admin_op!(
+        "assign-project-group-role",
+        "POST",
+        "/projects/{project_id}/groups/{group_id}/roles",
+        "PublicAssignOrganizationGroupRoleBody",
+        "GroupRoleAssignment"
+    ),
+    admin_op!(
+        "assign-project-user-role",
+        "POST",
+        "/projects/{project_id}/users/{user_id}/roles",
+        "PublicAssignOrganizationGroupRoleBody",
+        "UserRoleAssignment"
+    ),
+    admin_op!(
+        "assign-user-role",
+        "POST",
+        "/organization/users/{user_id}/roles",
+        "PublicAssignOrganizationGroupRoleBody",
+        "UserRoleAssignment"
+    ),
+    admin_op!(
+        "create-group",
+        "POST",
+        "/organization/groups",
+        "CreateGroupBody",
+        "GroupResponse"
+    ),
+    admin_op!(
+        "create-organization-spend-alert",
+        "POST",
+        "/organization/spend_alerts",
+        "CreateSpendAlertBody",
+        "OrganizationSpendAlert"
+    ),
+    admin_op!(
+        "create-project",
+        "POST",
+        "/organization/projects",
+        "ProjectCreateRequest",
+        "Project"
+    ),
+    admin_op!(
+        "create-project-role",
+        "POST",
+        "/projects/{project_id}/roles",
+        "PublicCreateOrganizationRoleBody",
+        "Role"
+    ),
+    admin_op!(
+        "create-project-service-account",
+        "POST",
+        "/organization/projects/{project_id}/service_accounts",
+        "ProjectServiceAccountCreateRequest",
+        "ProjectServiceAccountCreateResponse"
+    ),
+    admin_op!(
+        "create-project-spend-alert",
+        "POST",
+        "/organization/projects/{project_id}/spend_alerts",
+        "CreateSpendAlertBody",
+        "ProjectSpendAlert"
+    ),
+    admin_op!(
+        "create-project-user",
+        "POST",
+        "/organization/projects/{project_id}/users",
+        "ProjectUserCreateRequest",
+        "ProjectUser"
+    ),
+    admin_op!(
+        "create-role",
+        "POST",
+        "/organization/roles",
+        "PublicCreateOrganizationRoleBody",
+        "Role"
+    ),
+    admin_op!(
+        "deactivateOrganizationCertificates",
+        "POST",
+        "/organization/certificates/deactivate",
+        "ToggleCertificatesRequest",
+        "OrganizationCertificateDeactivationResponse"
+    ),
+    admin_op!(
+        "deactivateProjectCertificates",
+        "POST",
+        "/organization/projects/{project_id}/certificates/deactivate",
+        "ToggleCertificatesRequest",
+        "OrganizationProjectCertificateDeactivationResponse"
+    ),
+    admin_op!(
+        "delete-group",
+        "DELETE",
+        "/organization/groups/{group_id}",
+        "()",
+        "GroupDeletedResource"
+    ),
+    admin_op!(
+        "delete-invite",
+        "DELETE",
+        "/organization/invites/{invite_id}",
+        "()",
+        "InviteDeleteResponse"
+    ),
+    admin_op!(
+        "delete-organization-spend-alert",
+        "DELETE",
+        "/organization/spend_alerts/{alert_id}",
+        "()",
+        "OrganizationSpendAlertDeletedResource"
+    ),
+    admin_op!(
+        "delete-project-api-key",
+        "DELETE",
+        "/organization/projects/{project_id}/api_keys/{api_key_id}",
+        "()",
+        "ProjectApiKeyDeleteResponse"
+    ),
+    admin_op!(
+        "delete-project-model-permissions",
+        "DELETE",
+        "/organization/projects/{project_id}/model_permissions",
+        "()",
+        "ProjectModelPermissionsDeleteResponse"
+    ),
+    admin_op!(
+        "delete-project-role",
+        "DELETE",
+        "/projects/{project_id}/roles/{role_id}",
+        "()",
+        "RoleDeletedResource"
+    ),
+    admin_op!(
+        "delete-project-service-account",
+        "DELETE",
+        "/organization/projects/{project_id}/service_accounts/{service_account_id}",
+        "()",
+        "ProjectServiceAccountDeleteResponse"
+    ),
+    admin_op!(
+        "delete-project-spend-alert",
+        "DELETE",
+        "/organization/projects/{project_id}/spend_alerts/{alert_id}",
+        "()",
+        "ProjectSpendAlertDeletedResource"
+    ),
+    admin_op!(
+        "delete-project-user",
+        "DELETE",
+        "/organization/projects/{project_id}/users/{user_id}",
+        "()",
+        "ProjectUserDeleteResponse"
+    ),
+    admin_op!(
+        "delete-role",
+        "DELETE",
+        "/organization/roles/{role_id}",
+        "()",
+        "RoleDeletedResource"
+    ),
+    admin_op!(
+        "delete-user",
+        "DELETE",
+        "/organization/users/{user_id}",
+        "()",
+        "UserDeleteResponse"
+    ),
+    admin_op!(
+        "deleteCertificate",
+        "DELETE",
+        "/organization/certificates/{certificate_id}",
+        "()",
+        "DeleteCertificateResponse"
+    ),
+    admin_op!(
+        "getCertificate",
+        "GET",
+        "/organization/certificates/{certificate_id}",
+        "()",
+        "Certificate"
+    ),
+    admin_op!(
+        "inviteUser",
+        "POST",
+        "/organization/invites",
+        "InviteRequest",
+        "Invite"
+    ),
+    admin_op!(
+        "list-audit-logs",
+        "GET",
+        "/organization/audit_logs",
+        "AuditLogListParams",
+        "ListAuditLogsResponse"
+    ),
+    admin_op!(
+        "list-group-role-assignments",
+        "GET",
+        "/organization/groups/{group_id}/roles",
+        "AdminListParams",
+        "RoleListResource"
+    ),
+    admin_op!(
+        "list-group-users",
+        "GET",
+        "/organization/groups/{group_id}/users",
+        "AdminListParams",
+        "UserListResource"
+    ),
+    admin_op!(
+        "list-groups",
+        "GET",
+        "/organization/groups",
+        "AdminListParams",
+        "GroupListResource"
+    ),
+    admin_op!(
+        "list-invites",
+        "GET",
+        "/organization/invites",
+        "AdminListParams",
+        "InviteListResponse"
+    ),
+    admin_op!(
+        "list-organization-spend-alerts",
+        "GET",
+        "/organization/spend_alerts",
+        "AdminListParams",
+        "OrganizationSpendAlertListResource"
+    ),
+    admin_op!(
+        "list-project-api-keys",
+        "GET",
+        "/organization/projects/{project_id}/api_keys",
+        "AdminListParams",
+        "ProjectApiKeyListResponse"
+    ),
+    admin_op!(
+        "list-project-group-role-assignments",
+        "GET",
+        "/projects/{project_id}/groups/{group_id}/roles",
+        "AdminListParams",
+        "RoleListResource"
+    ),
+    admin_op!(
+        "list-project-groups",
+        "GET",
+        "/organization/projects/{project_id}/groups",
+        "AdminListParams",
+        "ProjectGroupListResource"
+    ),
+    admin_op!(
+        "list-project-rate-limits",
+        "GET",
+        "/organization/projects/{project_id}/rate_limits",
+        "AdminListParams",
+        "ProjectRateLimitListResponse"
+    ),
+    admin_op!(
+        "list-project-roles",
+        "GET",
+        "/projects/{project_id}/roles",
+        "AdminListParams",
+        "PublicRoleListResource"
+    ),
+    admin_op!(
+        "list-project-service-accounts",
+        "GET",
+        "/organization/projects/{project_id}/service_accounts",
+        "AdminListParams",
+        "ProjectServiceAccountListResponse"
+    ),
+    admin_op!(
+        "list-project-spend-alerts",
+        "GET",
+        "/organization/projects/{project_id}/spend_alerts",
+        "AdminListParams",
+        "ProjectSpendAlertListResource"
+    ),
+    admin_op!(
+        "list-project-user-role-assignments",
+        "GET",
+        "/projects/{project_id}/users/{user_id}/roles",
+        "AdminListParams",
+        "RoleListResource"
+    ),
+    admin_op!(
+        "list-project-users",
+        "GET",
+        "/organization/projects/{project_id}/users",
+        "AdminListParams",
+        "ProjectUserListResponse"
+    ),
+    admin_op!(
+        "list-projects",
+        "GET",
+        "/organization/projects",
+        "AdminListParams",
+        "ProjectListResponse"
+    ),
+    admin_op!(
+        "list-roles",
+        "GET",
+        "/organization/roles",
+        "AdminListParams",
+        "PublicRoleListResource"
+    ),
+    admin_op!(
+        "list-user-role-assignments",
+        "GET",
+        "/organization/users/{user_id}/roles",
+        "AdminListParams",
+        "RoleListResource"
+    ),
+    admin_op!(
+        "list-users",
+        "GET",
+        "/organization/users",
+        "AdminListParams",
+        "UserListResponse"
+    ),
+    admin_op!(
+        "listOrganizationCertificates",
+        "GET",
+        "/organization/certificates",
+        "AdminListParams",
+        "ListCertificatesResponse"
+    ),
+    admin_op!(
+        "listProjectCertificates",
+        "GET",
+        "/organization/projects/{project_id}/certificates",
+        "AdminListParams",
+        "ListProjectCertificatesResponse"
+    ),
+    admin_op!(
+        "modify-project",
+        "POST",
+        "/organization/projects/{project_id}",
+        "ProjectUpdateRequest",
+        "Project"
+    ),
+    admin_op!(
+        "modify-project-user",
+        "POST",
+        "/organization/projects/{project_id}/users/{user_id}",
+        "ProjectUserUpdateRequest",
+        "ProjectUser"
+    ),
+    admin_op!(
+        "modify-user",
+        "POST",
+        "/organization/users/{user_id}",
+        "UserRoleUpdateRequest",
+        "User"
+    ),
+    admin_op!(
+        "modifyCertificate",
+        "POST",
+        "/organization/certificates/{certificate_id}",
+        "ModifyCertificateRequest",
+        "Certificate"
+    ),
+    admin_op!(
+        "remove-group-user",
+        "DELETE",
+        "/organization/groups/{group_id}/users/{user_id}",
+        "()",
+        "GroupUserDeletedResource"
+    ),
+    admin_op!(
+        "remove-project-group",
+        "DELETE",
+        "/organization/projects/{project_id}/groups/{group_id}",
+        "()",
+        "ProjectGroupDeletedResource"
+    ),
+    admin_op!(
+        "retrieve-group",
+        "GET",
+        "/organization/groups/{group_id}",
+        "()",
+        "GroupResponse"
+    ),
+    admin_op!(
+        "retrieve-group-role",
+        "GET",
+        "/organization/groups/{group_id}/roles/{role_id}",
+        "()",
+        "AssignedRoleDetails"
+    ),
+    admin_op!(
+        "retrieve-group-user",
+        "GET",
+        "/organization/groups/{group_id}/users/{user_id}",
+        "()",
+        "GroupMemberUser"
+    ),
+    admin_op!(
+        "retrieve-invite",
+        "GET",
+        "/organization/invites/{invite_id}",
+        "()",
+        "Invite"
+    ),
+    admin_op!(
+        "retrieve-organization-data-retention",
+        "GET",
+        "/organization/data_retention",
+        "()",
+        "OrganizationDataRetention"
+    ),
+    admin_op!(
+        "retrieve-organization-spend-alert",
+        "GET",
+        "/organization/spend_alerts/{alert_id}",
+        "()",
+        "OrganizationSpendAlert"
+    ),
+    admin_op!(
+        "retrieve-project",
+        "GET",
+        "/organization/projects/{project_id}",
+        "()",
+        "Project"
+    ),
+    admin_op!(
+        "retrieve-project-api-key",
+        "GET",
+        "/organization/projects/{project_id}/api_keys/{api_key_id}",
+        "()",
+        "ProjectApiKey"
+    ),
+    admin_op!(
+        "retrieve-project-data-retention",
+        "GET",
+        "/organization/projects/{project_id}/data_retention",
+        "()",
+        "ProjectDataRetention"
+    ),
+    admin_op!(
+        "retrieve-project-group",
+        "GET",
+        "/organization/projects/{project_id}/groups/{group_id}",
+        "()",
+        "ProjectGroup"
+    ),
+    admin_op!(
+        "retrieve-project-group-role",
+        "GET",
+        "/projects/{project_id}/groups/{group_id}/roles/{role_id}",
+        "()",
+        "AssignedRoleDetails"
+    ),
+    admin_op!(
+        "retrieve-project-hosted-tool-permissions",
+        "GET",
+        "/organization/projects/{project_id}/hosted_tool_permissions",
+        "()",
+        "ProjectHostedToolPermissions"
+    ),
+    admin_op!(
+        "retrieve-project-model-permissions",
+        "GET",
+        "/organization/projects/{project_id}/model_permissions",
+        "()",
+        "ProjectModelPermissions"
+    ),
+    admin_op!(
+        "retrieve-project-role",
+        "GET",
+        "/projects/{project_id}/roles/{role_id}",
+        "()",
+        "Role"
+    ),
+    admin_op!(
+        "retrieve-project-service-account",
+        "GET",
+        "/organization/projects/{project_id}/service_accounts/{service_account_id}",
+        "()",
+        "ProjectServiceAccount"
+    ),
+    admin_op!(
+        "retrieve-project-spend-alert",
+        "GET",
+        "/organization/projects/{project_id}/spend_alerts/{alert_id}",
+        "()",
+        "ProjectSpendAlert"
+    ),
+    admin_op!(
+        "retrieve-project-user",
+        "GET",
+        "/organization/projects/{project_id}/users/{user_id}",
+        "()",
+        "ProjectUser"
+    ),
+    admin_op!(
+        "retrieve-project-user-role",
+        "GET",
+        "/projects/{project_id}/users/{user_id}/roles/{role_id}",
+        "()",
+        "AssignedRoleDetails"
+    ),
+    admin_op!(
+        "retrieve-role",
+        "GET",
+        "/organization/roles/{role_id}",
+        "()",
+        "Role"
+    ),
+    admin_op!(
+        "retrieve-user",
+        "GET",
+        "/organization/users/{user_id}",
+        "()",
+        "User"
+    ),
+    admin_op!(
+        "retrieve-user-role",
+        "GET",
+        "/organization/users/{user_id}/roles/{role_id}",
+        "()",
+        "AssignedRoleDetails"
+    ),
+    admin_op!(
+        "unassign-group-role",
+        "DELETE",
+        "/organization/groups/{group_id}/roles/{role_id}",
+        "()",
+        "DeletedRoleAssignmentResource"
+    ),
+    admin_op!(
+        "unassign-project-group-role",
+        "DELETE",
+        "/projects/{project_id}/groups/{group_id}/roles/{role_id}",
+        "()",
+        "DeletedRoleAssignmentResource"
+    ),
+    admin_op!(
+        "unassign-project-user-role",
+        "DELETE",
+        "/projects/{project_id}/users/{user_id}/roles/{role_id}",
+        "()",
+        "DeletedRoleAssignmentResource"
+    ),
+    admin_op!(
+        "unassign-user-role",
+        "DELETE",
+        "/organization/users/{user_id}/roles/{role_id}",
+        "()",
+        "DeletedRoleAssignmentResource"
+    ),
+    admin_op!(
+        "update-group",
+        "POST",
+        "/organization/groups/{group_id}",
+        "UpdateGroupBody",
+        "GroupResourceWithSuccess"
+    ),
+    admin_op!(
+        "update-organization-data-retention",
+        "POST",
+        "/organization/data_retention",
+        "UpdateOrganizationDataRetentionBody",
+        "OrganizationDataRetention"
+    ),
+    admin_op!(
+        "update-organization-spend-alert",
+        "POST",
+        "/organization/spend_alerts/{alert_id}",
+        "CreateSpendAlertBody",
+        "OrganizationSpendAlert"
+    ),
+    admin_op!(
+        "update-project-data-retention",
+        "POST",
+        "/organization/projects/{project_id}/data_retention",
+        "UpdateProjectDataRetentionBody",
+        "ProjectDataRetention"
+    ),
+    admin_op!(
+        "update-project-hosted-tool-permissions",
+        "POST",
+        "/organization/projects/{project_id}/hosted_tool_permissions",
+        "ProjectHostedToolPermissionsUpdateRequest",
+        "ProjectHostedToolPermissions"
+    ),
+    admin_op!(
+        "update-project-model-permissions",
+        "POST",
+        "/organization/projects/{project_id}/model_permissions",
+        "ProjectModelPermissionsUpdateRequest",
+        "ProjectModelPermissions"
+    ),
+    admin_op!(
+        "update-project-rate-limits",
+        "POST",
+        "/organization/projects/{project_id}/rate_limits/{rate_limit_id}",
+        "ProjectRateLimitUpdateRequest",
+        "ProjectRateLimit"
+    ),
+    admin_op!(
+        "update-project-role",
+        "POST",
+        "/projects/{project_id}/roles/{role_id}",
+        "PublicUpdateOrganizationRoleBody",
+        "Role"
+    ),
+    admin_op!(
+        "update-project-service-account",
+        "POST",
+        "/organization/projects/{project_id}/service_accounts/{service_account_id}",
+        "UpdateProjectServiceAccountBody",
+        "ProjectServiceAccount"
+    ),
+    admin_op!(
+        "update-project-spend-alert",
+        "POST",
+        "/organization/projects/{project_id}/spend_alerts/{alert_id}",
+        "CreateSpendAlertBody",
+        "ProjectSpendAlert"
+    ),
+    admin_op!(
+        "update-role",
+        "POST",
+        "/organization/roles/{role_id}",
+        "PublicUpdateOrganizationRoleBody",
+        "Role"
+    ),
+    admin_op!(
+        "uploadCertificate",
+        "POST",
+        "/organization/certificates",
+        "UploadCertificateRequest",
+        "Certificate"
+    ),
+    admin_op!(
+        "usage-audio-speeches",
+        "GET",
+        "/organization/usage/audio_speeches",
+        "UsageQueryParams",
+        "UsageResponse"
+    ),
+    admin_op!(
+        "usage-audio-transcriptions",
+        "GET",
+        "/organization/usage/audio_transcriptions",
+        "UsageQueryParams",
+        "UsageResponse"
+    ),
+    admin_op!(
+        "usage-code-interpreter-sessions",
+        "GET",
+        "/organization/usage/code_interpreter_sessions",
+        "UsageQueryParams",
+        "UsageResponse"
+    ),
+    admin_op!(
+        "usage-completions",
+        "GET",
+        "/organization/usage/completions",
+        "UsageQueryParams",
+        "UsageResponse"
+    ),
+    admin_op!(
+        "usage-costs",
+        "GET",
+        "/organization/costs",
+        "UsageQueryParams",
+        "UsageResponse"
+    ),
+    admin_op!(
+        "usage-embeddings",
+        "GET",
+        "/organization/usage/embeddings",
+        "UsageQueryParams",
+        "UsageResponse"
+    ),
+    admin_op!(
+        "usage-file-search-calls",
+        "GET",
+        "/organization/usage/file_search_calls",
+        "UsageQueryParams",
+        "UsageResponse"
+    ),
+    admin_op!(
+        "usage-images",
+        "GET",
+        "/organization/usage/images",
+        "UsageQueryParams",
+        "UsageResponse"
+    ),
+    admin_op!(
+        "usage-moderations",
+        "GET",
+        "/organization/usage/moderations",
+        "UsageQueryParams",
+        "UsageResponse"
+    ),
+    admin_op!(
+        "usage-vector-stores",
+        "GET",
+        "/organization/usage/vector_stores",
+        "UsageQueryParams",
+        "UsageResponse"
+    ),
+    admin_op!(
+        "usage-web-search-calls",
+        "GET",
+        "/organization/usage/web_search_calls",
+        "UsageQueryParams",
+        "UsageResponse"
+    ),
+];
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use serde::{Serialize, de::DeserializeOwned};
+    use serde_json::{Value, json};
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    assert_impl_all!(AdminApiKey: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(AdminApiKeyCreateResponse: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(AuditLog: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(Certificate: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(User: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(Role: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(Invite: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(Project: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ProjectRateLimit: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ProjectHostedToolPermissions: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(SpendAlert: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(UsageResponse: Serialize, DeserializeOwned, Send, Sync);
+
+    fn ok<T, E: fmt::Display>(result: Result<T, E>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(error) => panic!("unexpected error: {error}"),
+        }
+    }
+
+    #[test]
+    fn operation_manifest_covers_every_frozen_admin_operation_once() {
+        assert_eq!(ADMIN_OPERATION_MANIFEST.len(), 119);
+        let mut ids = HashSet::new();
+        let mut method_paths = HashSet::new();
+        for operation in ADMIN_OPERATION_MANIFEST {
+            assert!(ids.insert(operation.operation_id));
+            assert!(method_paths.insert((operation.method, operation.path)));
+            assert!(matches!(operation.method, "GET" | "POST" | "DELETE"));
+            assert!(operation.path.starts_with('/'));
+            assert!(!operation.request_schema.is_empty());
+            assert!(!operation.response_schema.is_empty());
+        }
+        assert!(ids.contains("admin-api-keys-create"));
+        assert!(ids.contains("list-audit-logs"));
+        assert!(ids.contains("usage-costs"));
+        assert!(ids.contains("update-project-hosted-tool-permissions"));
+    }
+
+    #[test]
+    fn admin_key_requiredness_and_secret_redaction_are_exact() {
+        let fixture = json!({
+            "object": "organization.admin_api_key",
+            "id": "key_1",
+            "name": null,
+            "redacted_value": "sk-admin...xyz",
+            "created_at": 1,
+            "expires_at": null,
+            "owner": {},
+            "value": "sk-admin-secret",
+            "key_future": true
+        });
+        let response = ok(serde_json::from_value::<AdminApiKeyCreateResponse>(
+            fixture.clone(),
+        ));
+        let debug = format!("{response:?}");
+        assert!(!debug.contains("sk-admin-secret"));
+        assert_eq!(ok(serde_json::to_value(response)), fixture);
+
+        let mut missing = fixture;
+        match &mut missing {
+            Value::Object(object) => {
+                object.remove("expires_at");
+            }
+            _ => panic!("fixture must be object"),
+        }
+        assert!(serde_json::from_value::<AdminApiKeyCreateResponse>(missing).is_err());
+    }
+
+    #[test]
+    fn certificate_pem_is_wire_serializable_but_never_debugged() {
+        let upload = UploadCertificateRequest {
+            certificate: WireSecret::from("-----BEGIN CERTIFICATE----- secret"),
+            name: Omittable::Value("client".to_owned()),
+        };
+        let encoded = ok(serde_json::to_value(&upload));
+        assert_eq!(encoded["certificate"], "-----BEGIN CERTIFICATE----- secret");
+        assert!(!format!("{upload:?}").contains("secret"));
+
+        let fixture = json!({
+            "object": "certificate",
+            "id": "cert_1",
+            "name": null,
+            "created_at": 1,
+            "certificate_details": {
+                "valid_at": 1,
+                "expires_at": 2,
+                "content": "PEM-secret",
+                "details_future": true
+            },
+            "certificate_future": true
+        });
+        let certificate = ok(serde_json::from_value::<Certificate>(fixture.clone()));
+        assert!(!format!("{certificate:?}").contains("PEM-secret"));
+        assert!(certificate.extra().contains_key("certificate_future"));
+        assert_eq!(ok(serde_json::to_value(certificate)), fixture);
+    }
+
+    #[test]
+    fn audit_common_envelope_and_event_specific_payload_are_lossless() {
+        let fixture = json!({
+            "id": "audit_1",
+            "type": "tenant.policy.updated",
+            "effective_at": 10,
+            "actor": null,
+            "project": {"id": "proj_1", "name": "default"},
+            "tenant.policy.updated": {
+                "id": "policy_1",
+                "changes_requested": {"mode": "strict"}
+            },
+            "audit_future": true
+        });
+        let audit = ok(serde_json::from_value::<AuditLog>(fixture.clone()));
+        assert_eq!(audit.kind.as_str(), "tenant.policy.updated");
+        assert!(matches!(audit.actor, Omittable::Value(Nullable::Null)));
+        assert!(audit.extra().contains_key("tenant.policy.updated"));
+        assert!(audit.extra().contains_key("audit_future"));
+        assert_eq!(ok(serde_json::to_value(audit)), fixture);
+    }
+
+    #[test]
+    fn projects_permissions_and_updates_preserve_three_states() {
+        let fixture = json!({
+            "id": "proj_1",
+            "object": "organization.project",
+            "created_at": 1,
+            "name": null,
+            "status": "future_status",
+            "residency": "MARS_STORAGE",
+            "project_future": 1
+        });
+        let project = ok(serde_json::from_value::<Project>(fixture.clone()));
+        assert!(matches!(project.name, Omittable::Value(Nullable::Null)));
+        match &project.residency {
+            Omittable::Value(value) => assert_eq!(value.as_str(), "MARS_STORAGE"),
+            Omittable::Omitted => panic!("fixture must contain residency"),
+        }
+        assert!(project.extra().contains_key("project_future"));
+        assert_eq!(ok(serde_json::to_value(project)), fixture);
+
+        let missing = ok(serde_json::from_value::<
+            ProjectHostedToolPermissionsUpdateRequest,
+        >(json!({})));
+        assert!(missing.file_search.is_omitted());
+        let null = ok(serde_json::from_value::<
+            ProjectHostedToolPermissionsUpdateRequest,
+        >(json!({"file_search": null})));
+        assert!(matches!(null.file_search, Omittable::Value(Nullable::Null)));
+
+        assert!(
+            serde_json::from_value::<ProjectModelPermissionsUpdateRequest>(json!({
+                "mode": "allow_list"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn role_invite_and_rate_limit_requiredness_are_typed() {
+        let role_fixture = json!({
+            "object": "role",
+            "id": "role_1",
+            "name": "auditor",
+            "description": null,
+            "permissions": ["api.usage.read"],
+            "resource_type": "organization",
+            "predefined_role": false,
+            "role_future": true
+        });
+        let role = ok(serde_json::from_value::<Role>(role_fixture.clone()));
+        assert!(role.extra().contains_key("role_future"));
+        assert_eq!(ok(serde_json::to_value(role)), role_fixture);
+
+        assert!(
+            serde_json::from_value::<Invite>(json!({
+                "object": "organization.invite",
+                "id": "inv_1"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<ProjectRateLimit>(json!({
+                "object": "project.rate_limit",
+                "id": "rl_1",
+                "model": "gpt-5.6",
+                "max_requests_per_1_minute": 10
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn usage_bucket_routes_known_results_strictly_and_future_results_losslessly() {
+        let fixture = json!({
+            "object": "page",
+            "data": [{
+                "object": "bucket",
+                "start_time": 0,
+                "end_time": 3600,
+                "results": [
+                    {
+                        "object": "organization.usage.completions.result",
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "num_model_requests": 1,
+                        "project_id": "proj_1",
+                        "usage_future": true
+                    },
+                    {
+                        "object": "organization.costs.result",
+                        "amount": {"value": 0.01, "currency": "usd"},
+                        "line_item": null
+                    },
+                    {
+                        "object": "organization.usage.future.result",
+                        "units": 7
+                    }
+                ],
+                "bucket_future": true
+            }],
+            "has_more": true,
+            "next_page": "cursor_2",
+            "page_future": true
+        });
+        let page = ok(serde_json::from_value::<UsageResponse>(fixture.clone()));
+        assert_eq!(page.next_page(), Some("cursor_2"));
+        assert!(matches!(
+            page.data[0].results[0],
+            UsageResult::Completions(_)
+        ));
+        assert!(matches!(page.data[0].results[1], UsageResult::Costs(_)));
+        match &page.data[0].results[2] {
+            UsageResult::Unknown(value) => {
+                assert_eq!(value.discriminator(), "organization.usage.future.result");
+            }
+            _ => panic!("future usage result must remain unknown"),
+        }
+        assert!(page.extra().contains_key("page_future"));
+        assert_eq!(ok(serde_json::to_value(page)), fixture);
+
+        assert!(
+            serde_json::from_value::<UsageResult>(json!({
+                "object": "organization.usage.completions.result",
+                "output_tokens": 2,
+                "num_model_requests": 1
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn usage_query_requires_start_time_and_preserves_pagination() {
+        assert!(serde_json::from_value::<UsageQueryParams>(json!({})).is_err());
+        let params = UsageQueryParams::new(100);
+        assert_eq!(ok(serde_json::to_value(params)), json!({"start_time": 100}));
+    }
+}
