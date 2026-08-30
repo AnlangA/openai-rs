@@ -294,10 +294,30 @@ impl CreateConversationRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+struct UpdateConversationRequestWire {
+    metadata: Nullable<ConversationMetadata>,
+}
+
 /// Body for `POST /conversations/{conversation_id}`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UpdateConversationRequest {
     metadata: Nullable<ConversationMetadata>,
+}
+
+impl<'de> Deserialize<'de> for UpdateConversationRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = UpdateConversationRequestWire::deserialize(deserializer)?;
+        if let Nullable::Value(metadata) = &wire.metadata {
+            validate_metadata(metadata).map_err(D::Error::custom)?;
+        }
+        Ok(Self {
+            metadata: wire.metadata,
+        })
+    }
 }
 
 impl UpdateConversationRequest {
@@ -1508,8 +1528,20 @@ impl RetrieveConversationItemParams {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+struct ListConversationItemsParamsWire {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    limit: Omittable<u32>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    order: Omittable<ConversationItemOrder>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    after: Omittable<ConversationItemId>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    include: Omittable<Vec<ConversationItemInclude>>,
+}
+
 /// Query parameters for listing persisted conversation items.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ListConversationItemsParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     limit: Omittable<u32>,
@@ -1519,6 +1551,28 @@ pub struct ListConversationItemsParams {
     after: Omittable<ConversationItemId>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     include: Omittable<Vec<ConversationItemInclude>>,
+}
+
+impl<'de> Deserialize<'de> for ListConversationItemsParams {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = ListConversationItemsParamsWire::deserialize(deserializer)?;
+        if let Omittable::Value(limit) = wire.limit {
+            if !(1..=100).contains(&limit) {
+                return Err(D::Error::custom(
+                    ConversationValidationError::InvalidListLimit { limit },
+                ));
+            }
+        }
+        Ok(Self {
+            limit: wire.limit,
+            order: wire.order,
+            after: wire.after,
+            include: wire.include,
+        })
+    }
 }
 
 impl ListConversationItemsParams {
@@ -1735,11 +1789,23 @@ mod tests {
             UpdateConversationRequest::new(metadata),
             Err(ConversationValidationError::TooManyMetadataProperties { .. })
         ));
+        let oversized_metadata = (0..=MAX_CONVERSATION_METADATA_PROPERTIES)
+            .map(|index| (format!("key_{index}"), String::from("value")))
+            .collect::<ConversationMetadata>();
+        assert!(
+            serde_json::from_value::<UpdateConversationRequest>(json!({
+                "metadata": oversized_metadata
+            }))
+            .is_err()
+        );
 
         assert!(matches!(
             ListConversationItemsParams::new().limit(0),
             Err(ConversationValidationError::InvalidListLimit { limit: 0 })
         ));
+        assert!(
+            serde_json::from_value::<ListConversationItemsParams>(json!({"limit": 101})).is_err()
+        );
         assert!(ListConversationItemsParams::new().limit(100).is_ok());
     }
 
@@ -1848,7 +1914,7 @@ mod tests {
             .to_response_input_item()
             .expect("convert assistant resource to Responses input");
         assert!(matches!(
-            input,
+            &input,
             responses::ResponseInputItem::OutputMessage(_)
         ));
         assert_eq!(

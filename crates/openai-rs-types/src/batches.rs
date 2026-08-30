@@ -146,6 +146,18 @@ pub enum BatchValidationError {
     /// A custom identifier is empty.
     #[error("batch custom_id must not be empty")]
     EmptyCustomId,
+    /// A success-body constructor received a non-success HTTP status.
+    #[error("batch success body requires a 2xx status, got {status_code}")]
+    InvalidSuccessStatus {
+        /// Rejected status.
+        status_code: u16,
+    },
+    /// An error-body constructor received a success HTTP status.
+    #[error("batch error body requires a non-2xx status, got {status_code}")]
+    InvalidErrorStatus {
+        /// Rejected status.
+        status_code: u16,
+    },
 }
 
 /// Validated string-to-string metadata used by batch objects and requests.
@@ -1180,25 +1192,37 @@ pub struct BatchLineResponse<O> {
 
 impl<O> BatchLineResponse<O> {
     /// Creates a typed successful response value.
-    #[must_use]
-    pub fn new(status_code: u16, request_id: impl Into<String>, body: O) -> Self {
-        Self {
+    pub fn new(
+        status_code: u16,
+        request_id: impl Into<String>,
+        body: O,
+    ) -> Result<Self, BatchValidationError> {
+        if !(200..300).contains(&status_code) {
+            return Err(BatchValidationError::InvalidSuccessStatus { status_code });
+        }
+        Ok(Self {
             status_code,
             request_id: request_id.into(),
             body: BatchLineResponseBody::Success(body),
             extra: ExtraFields::default(),
-        }
+        })
     }
 
     /// Creates a non-success HTTP result while retaining the error body.
-    #[must_use]
-    pub fn error(status_code: u16, request_id: impl Into<String>, body: Value) -> Self {
-        Self {
+    pub fn error(
+        status_code: u16,
+        request_id: impl Into<String>,
+        body: Value,
+    ) -> Result<Self, BatchValidationError> {
+        if (200..300).contains(&status_code) {
+            return Err(BatchValidationError::InvalidErrorStatus { status_code });
+        }
+        Ok(Self {
             status_code,
             request_id: request_id.into(),
             body: BatchLineResponseBody::Error(body),
             extra: ExtraFields::default(),
-        }
+        })
     }
 
     /// HTTP status code returned for the request.
@@ -1971,6 +1995,31 @@ mod tests {
                 "id": "batch_req_1", "custom_id": "line-1", "response": null, "error": null
             }))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn non_success_http_body_does_not_require_the_success_dto() {
+        assert!(BatchLineResponse::new(400, "req", true).is_err());
+        assert!(BatchLineResponse::<bool>::error(200, "req", json!({})).is_err());
+        let result: BatchResultLine<bool> = serde_json::from_value(json!({
+            "id": "batch_req_bad",
+            "custom_id": "line-bad",
+            "response": {
+                "status_code": 400,
+                "request_id": "req_bad",
+                "body": {"error": {"message": "invalid request"}}
+            },
+            "error": null
+        }))
+        .expect("non-success body remains readable");
+        let BatchLineOutcome::Response(response) = result.outcome() else {
+            panic!("expected HTTP response outcome");
+        };
+        assert!(response.success_body().is_none());
+        assert_eq!(
+            response.error_body(),
+            Some(&json!({"error": {"message": "invalid request"}}))
         );
     }
 

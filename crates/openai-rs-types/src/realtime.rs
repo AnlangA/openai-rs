@@ -12,7 +12,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Value};
 
 use crate::media::TranscriptionLanguage;
-use crate::responses::McpTool;
+use crate::responses::{McpTool, PromptReference};
 use crate::{ExtraFields, JsonText, Nullable, Omittable, WireSecret};
 
 macro_rules! literal_tag {
@@ -227,6 +227,20 @@ open_string_enum! {
 }
 
 open_string_enum! {
+    /// String form of Realtime tracing configuration.
+    pub enum RealtimeTracingMode {
+        Auto => "auto"
+    }
+}
+
+open_string_enum! {
+    /// Anchor used to calculate client-secret expiration.
+    pub enum RealtimeClientSecretExpirationAnchor {
+        CreatedAt => "created_at"
+    }
+}
+
+open_string_enum! {
     /// Lifecycle status of a Realtime response.
     pub enum RealtimeResponseStatus {
         InProgress => "in_progress",
@@ -437,12 +451,41 @@ impl<'de> Deserialize<'de> for RealtimeAudioFormat {
     }
 }
 
+impl From<RealtimePcmAudioFormat> for RealtimeAudioFormat {
+    fn from(value: RealtimePcmAudioFormat) -> Self {
+        Self::Pcm(value)
+    }
+}
+
+impl From<RealtimePcmuAudioFormat> for RealtimeAudioFormat {
+    fn from(value: RealtimePcmuAudioFormat) -> Self {
+        Self::Pcmu(value)
+    }
+}
+
+impl From<RealtimePcmaAudioFormat> for RealtimeAudioFormat {
+    fn from(value: RealtimePcmaAudioFormat) -> Self {
+        Self::Pcma(value)
+    }
+}
+
 /// Reference to a custom voice.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeCustomVoice {
     pub id: String,
     #[serde(flatten)]
     extra: ExtraFields,
+}
+
+impl RealtimeCustomVoice {
+    /// Creates a custom voice reference.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            extra: ExtraFields::new(),
+        }
+    }
 }
 
 /// A built-in voice name or custom voice reference.
@@ -605,6 +648,18 @@ impl<'de> Deserialize<'de> for RealtimeTurnDetection {
     }
 }
 
+impl From<RealtimeServerVad> for RealtimeTurnDetection {
+    fn from(value: RealtimeServerVad) -> Self {
+        Self::ServerVad(value)
+    }
+}
+
+impl From<RealtimeSemanticVad> for RealtimeTurnDetection {
+    fn from(value: RealtimeSemanticVad) -> Self {
+        Self::SemanticVad(value)
+    }
+}
+
 /// Realtime input-audio configuration.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeAudioInputConfig {
@@ -669,6 +724,27 @@ pub struct RealtimeReasoning {
     pub effort: Omittable<RealtimeReasoningEffort>,
     #[serde(flatten)]
     extra: ExtraFields,
+}
+
+/// Granular tracing configuration.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeTracingConfig {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub workflow_name: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub group_id: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub metadata: Omittable<BTreeMap<String, Value>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// Automatic or granular trace configuration. Use `Nullable::Null` to disable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RealtimeTracing {
+    Mode(RealtimeTracingMode),
+    Config(RealtimeTracingConfig),
 }
 
 /// Integer output-token limit or the wire string `"inf"`.
@@ -1024,7 +1100,7 @@ pub struct RealtimeSessionCreateRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub include: Omittable<Vec<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub tracing: Omittable<Value>,
+    pub tracing: Omittable<Nullable<RealtimeTracing>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tools: Omittable<Vec<RealtimeTool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -1038,7 +1114,7 @@ pub struct RealtimeSessionCreateRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub truncation: Omittable<RealtimeTruncation>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub prompt: Omittable<Value>,
+    pub prompt: Omittable<PromptReference>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1168,7 +1244,7 @@ pub struct RealtimeSession {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub include: Omittable<Vec<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub tracing: Omittable<Nullable<Value>>,
+    pub tracing: Omittable<Nullable<RealtimeTracing>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tools: Omittable<Vec<RealtimeTool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -1180,7 +1256,7 @@ pub struct RealtimeSession {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub truncation: Omittable<RealtimeTruncation>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub prompt: Omittable<Value>,
+    pub prompt: Omittable<PromptReference>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1496,6 +1572,33 @@ pub struct RealtimeConversationItemFunctionCall {
     extra: ExtraFields,
 }
 
+impl RealtimeConversationItemFunctionCall {
+    /// Creates a function call from its complete argument string.
+    #[must_use]
+    pub fn new(name: impl Into<String>, arguments: JsonText) -> Self {
+        Self {
+            id: Omittable::Omitted,
+            object: Omittable::Omitted,
+            kind: RealtimeFunctionCallItemTag::FunctionCall,
+            status: Omittable::Omitted,
+            call_id: Omittable::Omitted,
+            name: name.into(),
+            arguments,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Serializes typed function arguments into the protocol string field.
+    pub fn from_serializable<T: Serialize>(
+        name: impl Into<String>,
+        arguments: &T,
+    ) -> Result<Self, serde_json::Error> {
+        serde_json::to_string(arguments)
+            .map(JsonText::from_raw)
+            .map(|arguments| Self::new(name, arguments))
+    }
+}
+
 /// Output for a preceding Realtime function call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeConversationItemFunctionCallOutput {
@@ -1773,7 +1876,7 @@ pub struct RealtimeResponseCreateParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub metadata: Omittable<BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub prompt: Omittable<Value>,
+    pub prompt: Omittable<PromptReference>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input: Omittable<Vec<RealtimeConversationItem>>,
     #[serde(flatten)]
@@ -2082,7 +2185,7 @@ pub struct RealtimeResponseContentPart {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeClientSecretExpiration {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub anchor: Omittable<String>,
+    pub anchor: Omittable<RealtimeClientSecretExpirationAnchor>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub seconds: Omittable<i64>,
     #[serde(flatten)]
@@ -2126,6 +2229,14 @@ impl fmt::Debug for RealtimeCreateClientSecretResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RealtimeSdp(pub String);
+
+impl RealtimeSdp {
+    /// Borrows the SDP text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Multipart request for creating a WebRTC Realtime call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2445,6 +2556,17 @@ impl Default for RealtimeClientEventResponseCancel {
     }
 }
 
+impl RealtimeClientEventResponseCancel {
+    /// Cancels a specific response instead of the default in-progress response.
+    #[must_use]
+    pub fn for_response(response_id: impl Into<String>) -> Self {
+        Self {
+            response_id: Omittable::Value(response_id.into()),
+            ..Self::default()
+        }
+    }
+}
+
 client_event_struct! {
     /// Starts a Realtime model response.
     RealtimeClientEventResponseCreate,
@@ -2464,6 +2586,17 @@ impl Default for RealtimeClientEventResponseCreate {
             kind: RealtimeClientResponseCreateTag::ResponseCreate,
             response: Omittable::Omitted,
             extra: ExtraFields::new(),
+        }
+    }
+}
+
+impl RealtimeClientEventResponseCreate {
+    /// Creates a response with explicit per-response configuration.
+    #[must_use]
+    pub fn with_response(response: RealtimeResponseCreateParams) -> Self {
+        Self {
+            response: Omittable::Value(response),
+            ..Self::default()
         }
     }
 }
@@ -3392,6 +3525,7 @@ impl_extra_fields!(
     RealtimeTranscriptionAudio,
     RealtimeResponseAudioConfig,
     RealtimeReasoning,
+    RealtimeTracingConfig,
     RealtimeTruncationTokenLimits,
     RealtimeRetentionRatioTruncation,
     RealtimeFunctionTool,
@@ -3478,6 +3612,29 @@ mod tests {
                     .to_owned()
             })
             .collect()
+    }
+
+    fn openapi_tags(branches: &[&str]) -> Vec<String> {
+        let openapi: Value = serde_json::from_str(include_str!(
+            "../../../spec/upstream/openapi-2026-08-29.json"
+        ))
+        .expect("pinned OpenAPI is valid JSON");
+        let schemas = openapi["components"]["schemas"]
+            .as_object()
+            .expect("OpenAPI schemas are an object");
+        let mut tags: Vec<String> = branches
+            .iter()
+            .map(|branch| {
+                schemas[*branch]["properties"]["type"]["enum"]
+                    .as_array()
+                    .and_then(|values| values.first())
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| panic!("{branch} has one string type enum"))
+                    .to_owned()
+            })
+            .collect();
+        tags.sort();
+        tags
     }
 
     fn function_output_item() -> Value {
@@ -3699,6 +3856,26 @@ mod tests {
         assert_eq!(REALTIME_SERVER_EVENT_BRANCHES.len(), 46);
         assert_eq!(REALTIME_CLIENT_EVENT_TAGS.len(), 11);
         assert_eq!(REALTIME_SERVER_EVENT_TAGS.len(), 46);
+
+        let mut expected_client_tags: Vec<String> = REALTIME_CLIENT_EVENT_TAGS
+            .iter()
+            .map(|tag| (*tag).to_owned())
+            .collect();
+        expected_client_tags.sort();
+        assert_eq!(
+            openapi_tags(REALTIME_CLIENT_EVENT_BRANCHES),
+            expected_client_tags
+        );
+
+        let mut expected_server_tags: Vec<String> = REALTIME_SERVER_EVENT_TAGS
+            .iter()
+            .map(|tag| (*tag).to_owned())
+            .collect();
+        expected_server_tags.sort();
+        assert_eq!(
+            openapi_tags(REALTIME_SERVER_EVENT_BRANCHES),
+            expected_server_tags
+        );
     }
 
     #[test]
@@ -3757,6 +3934,22 @@ mod tests {
             panic!("future tag must remain unknown");
         };
         assert_eq!(unknown.discriminator(), "future.realtime.event");
+        assert_eq!(serde_json::to_value(decoded).expect("encode"), fixture);
+    }
+
+    #[test]
+    fn known_event_retains_future_fields() {
+        let fixture = json!({
+            "event_id": "event_1",
+            "type": "input_audio_buffer.cleared",
+            "future": {"value": 7}
+        });
+        let decoded: RealtimeServerEvent =
+            serde_json::from_value(fixture.clone()).expect("known event decodes");
+        let RealtimeServerEvent::InputAudioBufferCleared(event) = &decoded else {
+            panic!("known event routed to the wrong variant");
+        };
+        assert!(event.extra_fields().contains_key("future"));
         assert_eq!(serde_json::to_value(decoded).expect("encode"), fixture);
     }
 

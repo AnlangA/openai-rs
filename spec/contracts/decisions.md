@@ -116,21 +116,22 @@ until a decision is recorded here and its fixtures pass.
 - Tests: input compile/serde test, output requiredness test, then input/output wire
   fixtures.
 
-## D0009 — Batch nullable examples remain quarantined
+## D0009 — Batch lifecycle fields accept explicit null
 
-- Status: provisional; live response fixture pending
+- Status: accepted; live response fixture still requested
 - Reviewed: 2026-08-30
 - Scope: `Batch.errors` and optional lifecycle timestamp fields
 - Sources: the pinned raw OpenAPI and pinned official SDK types describe these
   fields as optional but non-null; an official Batch example renders some of
   them as explicit `null`.
-- Decision: retain the stricter machine-contract interpretation for now. Do not
-  silently widen every optional timestamp/error field to nullable from an
-  example alone.
+- Decision: model `errors` and optional lifecycle timestamps as
+  `Omittable<Nullable<T>>`. This preserves all three states instead of using
+  `Option<T>` and matches the official example's explicit-null behavior while
+  retaining missing-field compatibility.
 - Impact: Batch response decoding and fixture quarantine.
-- Overrides: none until a current wire fixture establishes service behavior.
-- Tests: current strict missing/non-null tests; add a captured Batch response
-  before accepting or rejecting a nullability override.
+- Overrides: directional handwritten DTO override pending a generated override id.
+- Tests: missing/null/value lifecycle tests; still add a captured Batch response
+  to confirm every affected field.
 
 ## D0010 — Vector-store metadata example omission remains quarantined
 
@@ -145,3 +146,16 @@ until a decision is recorded here and its fixtures pass.
 - Overrides: none.
 - Tests: required-nullable unit test; add a captured empty-metadata Vector Store
   response before changing the contract.
+
+## D0011 — Vector Store search query is string-or-array
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `VectorStoreSearchRequest.query`
+- Sources: pinned OpenAPI/official SDK schema branches permit both one string and
+  an array of strings; older examples show only the scalar form.
+- Decision: expose a lossless typed union for scalar and array query forms. Do
+  not normalize a one-element array into a string during roundtrip.
+- Impact: Vector Store search request DTO and builders.
+- Overrides: none.
+- Tests: scalar/array typed and semantic JSON roundtrips.

@@ -12,8 +12,7 @@ use http::{Method, StatusCode};
 use openai_rs_types::{
     Batch, BatchEndpoint, BatchFileExpirationAfter, BatchId, BatchJsonlError, BatchJsonlWriter,
     BatchLine, BatchMetadata, CreateBatchRequest, CreateFileRequest, FileObject, FilePurpose,
-    ListBatchesResponse, ReplayableMultipartSource,
-    batches::BatchListParams,
+    ListBatchesResponse, ReplayableMultipartSource, batches::BatchListParams,
 };
 use serde::Serialize;
 use thiserror::Error as ThisError;
@@ -167,19 +166,15 @@ impl Batches {
         I::IntoIter: Send + 'static,
     {
         let expected_endpoint = options.endpoint.clone();
-        let temporary = tokio::task::spawn_blocking(move || {
-            write_temporary_jsonl(lines, &expected_endpoint)
-        })
-        .await
-        .map_err(BatchSubmissionError::Worker)??;
+        let temporary =
+            tokio::task::spawn_blocking(move || write_temporary_jsonl(lines, &expected_endpoint))
+                .await
+                .map_err(BatchSubmissionError::Worker)??;
         self.submit_jsonl_path(temporary.path(), options).await
     }
 
     /// Opens the raw output JSONL stream when a completed batch advertises one.
-    pub async fn download_output(
-        &self,
-        batch: &Batch,
-    ) -> Result<Option<FileContentStream>, Error> {
+    pub async fn download_output(&self, batch: &Batch) -> Result<Option<FileContentStream>, Error> {
         match batch.output_file_id() {
             Some(file_id) => self.client.files().download(file_id).await.map(Some),
             None => Ok(None),
@@ -187,10 +182,7 @@ impl Batches {
     }
 
     /// Opens the raw error JSONL stream when a batch advertises one.
-    pub async fn download_errors(
-        &self,
-        batch: &Batch,
-    ) -> Result<Option<FileContentStream>, Error> {
+    pub async fn download_errors(&self, batch: &Batch) -> Result<Option<FileContentStream>, Error> {
         match batch.error_file_id() {
             Some(file_id) => self.client.files().download(file_id).await.map(Some),
             None => Ok(None),
@@ -226,14 +218,14 @@ impl BatchSubmissionOptions {
 
     /// Sends `metadata: null` explicitly.
     #[must_use]
-    pub const fn with_metadata_null(mut self) -> Self {
+    pub fn with_metadata_null(mut self) -> Self {
         self.metadata = Some(None);
         self
     }
 
     /// Sets the generated output/error file expiration.
     #[must_use]
-    pub const fn with_output_expiration(mut self, expiration: BatchFileExpirationAfter) -> Self {
+    pub fn with_output_expiration(mut self, expiration: BatchFileExpirationAfter) -> Self {
         self.output_expiration = Some(expiration);
         self
     }
@@ -337,10 +329,7 @@ where
 }
 
 fn batch_path(batch_id: &BatchId) -> Result<[PathSegment<'_>; 2], Error> {
-    Ok([
-        PathSegment::literal("batches"),
-        batch_id_segment(batch_id)?,
-    ])
+    Ok([PathSegment::literal("batches"), batch_id_segment(batch_id)?])
 }
 
 fn batch_id_segment(batch_id: &BatchId) -> Result<PathSegment<'_>, Error> {
@@ -418,3 +407,239 @@ operation!(
     request_encoding = RequestEncoding::None,
     retry = RetryClass::Replayable,
 );
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        io::{Read, Seek},
+        sync::{Arc, Mutex},
+    };
+
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use openai_rs_types::{
+        BatchEndpoint, BatchId, BatchLine, BatchListLimit, BatchListParams, CreateBatchRequest,
+        responses::CreateResponseRequest,
+    };
+    use serde_json::{Value, json};
+    use tokio::{net::TcpListener, sync::oneshot};
+    use url::Url;
+
+    use super::*;
+    use crate::{ApiKey, RetryPolicy};
+
+    #[derive(Debug)]
+    struct CapturedRequest {
+        method: Method,
+        path_and_query: String,
+        authorization: Option<String>,
+        body: Vec<u8>,
+    }
+
+    async fn serve_once(body: &'static str) -> (Client, oneshot::Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind batch contract server");
+        let address = listener.local_addr().expect("batch contract address");
+        let (sender, receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept batch request");
+            let sender = Arc::new(Mutex::new(Some(sender)));
+            let service = service_fn(move |request: Request<Incoming>| {
+                let sender = Arc::clone(&sender);
+                async move {
+                    let method = request.method().clone();
+                    let path_and_query = request
+                        .uri()
+                        .path_and_query()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    let authorization = request
+                        .headers()
+                        .get(http::header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                        .map(ToOwned::to_owned);
+                    let request_body = request
+                        .into_body()
+                        .collect()
+                        .await
+                        .expect("collect batch request")
+                        .to_bytes()
+                        .to_vec();
+                    if let Some(sender) = sender.lock().expect("capture sender lock").take() {
+                        let _ = sender.send(CapturedRequest {
+                            method,
+                            path_and_query,
+                            authorization,
+                            body: request_body,
+                        });
+                    }
+                    Ok::<_, Infallible>(
+                        hyper::Response::builder()
+                            .status(StatusCode::OK)
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .header("x-request-id", "req_batch")
+                            .body(Full::new(Bytes::from_static(body.as_bytes())))
+                            .expect("batch response"),
+                    )
+                }
+            });
+            http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await
+                .expect("serve batch request");
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("batch contract base URL");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test API key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(RetryPolicy::disabled())
+            .build()
+            .expect("batch contract client");
+        (client, receiver)
+    }
+
+    fn batch_json(id: &str, status: &str) -> String {
+        json!({
+            "id": id,
+            "object": "batch",
+            "endpoint": "/v1/responses",
+            "input_file_id": "file_input",
+            "completion_window": "24h",
+            "status": status,
+            "created_at": 1
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn create_batch_sends_typed_json() {
+        let body = Box::leak(batch_json("batch_1", "in_progress").into_boxed_str());
+        let (client, captured) = serve_once(body).await;
+        let request = CreateBatchRequest::new("file_input", BatchEndpoint::Responses);
+
+        let response = client
+            .batches()
+            .create(request)
+            .await
+            .expect("create batch response");
+        assert_eq!(response.id().as_str(), "batch_1");
+        assert_eq!(response.request_id(), Some("req_batch"));
+
+        let captured = captured.await.expect("captured create batch request");
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/batches");
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        let body: Value = serde_json::from_slice(&captured.body).expect("batch request JSON");
+        assert_eq!(
+            body,
+            json!({
+                "input_file_id": "file_input",
+                "endpoint": "/v1/responses",
+                "completion_window": "24h"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn list_batches_encodes_cursor_query() {
+        let (client, captured) = serve_once(
+            r#"{"object":"list","data":[],"first_id":"batch_first","last_id":"batch_last","has_more":false}"#,
+        )
+        .await;
+        let params = BatchListParams::new()
+            .after(BatchId::new("batch cursor"))
+            .with_limit(BatchListLimit::new(2).expect("valid batch limit"));
+
+        let response = client
+            .batches()
+            .list(params)
+            .await
+            .expect("batch list response");
+        assert!(response.data().is_empty());
+
+        let captured = captured.await.expect("captured list batches request");
+        assert_eq!(captured.method, Method::GET);
+        let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
+            .expect("captured batch list URL");
+        assert_eq!(url.path(), "/v1/batches");
+        let query = url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("after".into(), "batch cursor".into())));
+        assert!(query.contains(&("limit".into(), "2".into())));
+        assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancel_batch_encodes_id_as_one_segment() {
+        let body = Box::leak(batch_json("batch/a b", "cancelling").into_boxed_str());
+        let (client, captured) = serve_once(body).await;
+        let response = client
+            .batches()
+            .cancel(&BatchId::new("batch/a b"))
+            .await
+            .expect("cancel batch response");
+        assert_eq!(response.id().as_str(), "batch/a b");
+
+        let captured = captured.await.expect("captured cancel batch request");
+        assert_eq!(captured.method, Method::POST);
+        assert_eq!(captured.path_and_query, "/v1/batches/batch%2Fa%20b/cancel");
+        assert!(captured.body.is_empty());
+    }
+
+    #[test]
+    fn typed_lines_are_written_to_bounded_temporary_jsonl() {
+        let lines = vec![
+            BatchLine::new(
+                "request-1",
+                BatchEndpoint::Responses,
+                CreateResponseRequest::new("test-model", "hello"),
+            )
+            .expect("first typed line"),
+            BatchLine::new(
+                "request-2",
+                BatchEndpoint::Responses,
+                CreateResponseRequest::new("test-model", "world"),
+            )
+            .expect("second typed line"),
+        ];
+        let mut temporary =
+            write_temporary_jsonl(lines, &BatchEndpoint::Responses).expect("write typed JSONL");
+        let mut encoded = String::new();
+        temporary
+            .as_file_mut()
+            .rewind()
+            .expect("rewind temporary JSONL");
+        temporary
+            .as_file_mut()
+            .read_to_string(&mut encoded)
+            .expect("read temporary JSONL");
+        let records = encoded.lines().collect::<Vec<_>>();
+        assert_eq!(records.len(), 2);
+        assert!(records[0].contains("\"custom_id\":\"request-1\""));
+        assert!(records[1].contains("\"custom_id\":\"request-2\""));
+        assert!(encoded.ends_with('\n'));
+    }
+
+    #[test]
+    fn typed_submission_rejects_endpoint_mismatch_before_upload() {
+        let line = BatchLine::new(
+            "request-1",
+            BatchEndpoint::Embeddings,
+            json!({"model": "text-embedding-3-small", "input": "hello"}),
+        )
+        .expect("typed line");
+        let error = write_temporary_jsonl([line], &BatchEndpoint::Responses)
+            .expect_err("mixed endpoint must fail");
+        assert!(matches!(
+            error,
+            BatchSubmissionError::Jsonl(BatchJsonlError::MixedEndpoints { .. })
+        ));
+    }
+}

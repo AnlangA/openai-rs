@@ -9,9 +9,10 @@ pub use openai_rs_types::{StructuredError, StructuredOutput, TypedFunction};
 #[cfg(feature = "client")]
 pub use openai_rs_client::{
     ApiError, ApiKey, ApiKeyError, ApiResponse, Client, ClientBuilder, DeleteResponseResult,
-    AddUploadPartOneShotRequest, CreateFileOneShotRequest, Embeddings, Error, FileContentStream,
-    Files, InputItems, InputTokens, Models, Moderations, OneShotMultipartSource,
-    ResponseEventStream, ResponseMeta, Responses, RetryPolicy, StreamError, TlsBackend, Uploads,
+    AddUploadPartOneShotRequest, ChatCompletionEventStream, ChatCompletionMessages,
+    ChatCompletions, CreateFileOneShotRequest, Embeddings, Error, FileContentStream, Files,
+    InputItems, InputTokens, Models, Moderations, OneShotMultipartSource, ResponseEventStream,
+    ResponseMeta, Responses, RetryPolicy, StreamError, TlsBackend, Uploads,
 };
 
 #[cfg(all(feature = "client", feature = "realtime"))]

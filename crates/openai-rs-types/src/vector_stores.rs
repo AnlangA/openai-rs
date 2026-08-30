@@ -1077,10 +1077,41 @@ impl CreateVectorStoreRequest {
         self
     }
 
+    /// Omits metadata after it was configured.
+    #[must_use]
+    pub fn clear_metadata(mut self) -> Self {
+        self.metadata = Omittable::Omitted;
+        self
+    }
+
     /// Exact initial-file presence state.
     #[must_use]
     pub const fn file_ids(&self) -> &Omittable<VectorStoreInitialFileIds> {
         &self.file_ids
+    }
+
+    /// Exact name presence state.
+    #[must_use]
+    pub const fn name(&self) -> &Omittable<String> {
+        &self.name
+    }
+
+    /// Exact description presence state.
+    #[must_use]
+    pub const fn description(&self) -> &Omittable<String> {
+        &self.description
+    }
+
+    /// Exact expiration-policy presence state.
+    #[must_use]
+    pub const fn expires_after(&self) -> &Omittable<VectorStoreExpirationAfter> {
+        &self.expires_after
+    }
+
+    /// Exact chunking-strategy presence state.
+    #[must_use]
+    pub const fn chunking_strategy(&self) -> &Omittable<VectorStoreChunkingStrategyRequest> {
+        &self.chunking_strategy
     }
 
     /// Exact metadata presence/nullability state.
@@ -1123,6 +1154,13 @@ impl UpdateVectorStoreRequest {
         self
     }
 
+    /// Omits the name patch.
+    #[must_use]
+    pub fn clear_name(mut self) -> Self {
+        self.name = Omittable::Omitted;
+        self
+    }
+
     /// Sets the expiration policy.
     #[must_use]
     pub fn with_expiration(mut self, expiration: VectorStoreExpirationAfter) -> Self {
@@ -1137,6 +1175,13 @@ impl UpdateVectorStoreRequest {
         self
     }
 
+    /// Omits the expiration patch.
+    #[must_use]
+    pub fn clear_expiration(mut self) -> Self {
+        self.expires_after = Omittable::Omitted;
+        self
+    }
+
     /// Replaces metadata.
     #[must_use]
     pub fn with_metadata(mut self, metadata: VectorStoreMetadata) -> Self {
@@ -1148,6 +1193,13 @@ impl UpdateVectorStoreRequest {
     #[must_use]
     pub fn with_metadata_null(mut self) -> Self {
         self.metadata = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Omits the metadata patch.
+    #[must_use]
+    pub fn clear_metadata(mut self) -> Self {
+        self.metadata = Omittable::Omitted;
         self
     }
 
@@ -1586,6 +1638,13 @@ impl CreateVectorStoreFileRequest {
         self
     }
 
+    /// Omits attributes after they were configured.
+    #[must_use]
+    pub fn clear_attributes(mut self) -> Self {
+        self.attributes = Omittable::Omitted;
+        self
+    }
+
     /// File being attached.
     #[must_use]
     pub const fn file_id(&self) -> &FileId {
@@ -1813,10 +1872,37 @@ impl VectorStoreFileListParams {
         self
     }
 
+    /// Effective server page size.
+    #[must_use]
+    pub const fn effective_limit(&self) -> u32 {
+        match self.limit {
+            Omittable::Omitted => DEFAULT_VECTOR_STORE_LIST_LIMIT,
+            Omittable::Value(value) => value.get(),
+        }
+    }
+
     /// Exact page-limit state.
     #[must_use]
     pub const fn limit(&self) -> &Omittable<VectorStoreListLimit> {
         &self.limit
+    }
+
+    /// Exact order state.
+    #[must_use]
+    pub const fn order(&self) -> &Omittable<VectorStoreSortOrder> {
+        &self.order
+    }
+
+    /// Exact forward cursor state.
+    #[must_use]
+    pub const fn after_cursor(&self) -> &Omittable<FileId> {
+        &self.after
+    }
+
+    /// Exact backward cursor state.
+    #[must_use]
+    pub const fn before_cursor(&self) -> &Omittable<FileId> {
+        &self.before
     }
 
     /// Exact status-filter state.
@@ -2008,6 +2094,53 @@ impl CreateVectorStoreFileBatchRequest {
         self.attributes = Omittable::Value(Nullable::Value(attributes));
         Ok(self)
     }
+
+    /// Applies explicit `null` global attributes to the bare-ID form.
+    pub fn with_attributes_null(mut self) -> Result<Self, VectorStoreValidationError> {
+        if self.files.is_value() {
+            return Err(VectorStoreValidationError::InvalidBatchInputChoice);
+        }
+        self.attributes = Omittable::Value(Nullable::Null);
+        Ok(self)
+    }
+
+    /// Omits global chunking after it was configured.
+    #[must_use]
+    pub fn clear_chunking_strategy(mut self) -> Self {
+        self.chunking_strategy = Omittable::Omitted;
+        self
+    }
+
+    /// Omits global attributes after they were configured.
+    #[must_use]
+    pub fn clear_attributes(mut self) -> Self {
+        self.attributes = Omittable::Omitted;
+        self
+    }
+
+    /// Exact bare-ID input state.
+    #[must_use]
+    pub const fn file_ids(&self) -> &Omittable<VectorStoreBatchFileIds> {
+        &self.file_ids
+    }
+
+    /// Exact per-file input state.
+    #[must_use]
+    pub const fn files(&self) -> &Omittable<VectorStoreBatchFiles> {
+        &self.files
+    }
+
+    /// Exact global chunking state.
+    #[must_use]
+    pub const fn chunking_strategy(&self) -> &Omittable<VectorStoreChunkingStrategyRequest> {
+        &self.chunking_strategy
+    }
+
+    /// Exact optional-nullable global attributes state.
+    #[must_use]
+    pub const fn attributes(&self) -> &Omittable<Nullable<VectorStoreFileAttributes>> {
+        &self.attributes
+    }
 }
 
 #[derive(Deserialize)]
@@ -2112,6 +2245,21 @@ pub enum VectorStoreSearchQuery {
     /// One query string.
     Text(String),
     /// Multiple query strings.
+    Texts(Vec<String>),
+}
+
+/// Query representation returned by vector-store search.
+///
+/// The pinned component schema declares an array while the same pinned
+/// endpoint's official example returns one string. Both shapes are retained
+/// without normalization until that upstream discrepancy is resolved.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+#[non_exhaustive]
+pub enum VectorStoreSearchQueryOutput {
+    /// One query string.
+    Text(String),
+    /// One or more query strings.
     Texts(Vec<String>),
 }
 
@@ -2348,10 +2496,22 @@ impl VectorStoreSearchRequest {
         &self.rewrite_query
     }
 
+    /// Exact maximum-result state.
+    #[must_use]
+    pub const fn max_num_results(&self) -> &Omittable<VectorStoreMaxResults> {
+        &self.max_num_results
+    }
+
     /// Exact filter state.
     #[must_use]
     pub const fn filter(&self) -> &Omittable<VectorStoreFilter> {
         &self.filters
+    }
+
+    /// Exact ranking-options state.
+    #[must_use]
+    pub const fn ranking_options(&self) -> &Omittable<VectorStoreRankingOptions> {
+        &self.ranking_options
     }
 }
 
@@ -2439,7 +2599,7 @@ impl VectorStoreSearchResult {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VectorStoreSearchResultsPage {
     object: VectorStoreSearchPageObjectType,
-    search_query: Vec<String>,
+    search_query: VectorStoreSearchQueryOutput,
     data: Vec<VectorStoreSearchResult>,
     has_more: bool,
     next_page: Nullable<String>,
@@ -2456,7 +2616,7 @@ impl VectorStoreSearchResultsPage {
 
     /// Query or rewritten queries actually searched.
     #[must_use]
-    pub fn search_query(&self) -> &[String] {
+    pub const fn search_query(&self) -> &VectorStoreSearchQueryOutput {
         &self.search_query
     }
 
@@ -2824,15 +2984,37 @@ mod tests {
 
     #[test]
     fn search_page_requires_nullable_next_page() {
-        let page: VectorStoreSearchResultsPage = serde_json::from_value(json!({
+        let official_example_shape = json!({
             "object": "vector_store.search_results.page",
-            "search_query": ["query"],
+            "search_query": "query",
+            "data": [],
+            "has_more": false,
+            "next_page": null
+        });
+        let page: VectorStoreSearchResultsPage =
+            serde_json::from_value(official_example_shape.clone()).expect("decode page");
+        assert!(page.next_page().is_null());
+        assert!(matches!(
+            page.search_query(),
+            VectorStoreSearchQueryOutput::Text(value) if value == "query"
+        ));
+        assert_eq!(
+            serde_json::to_value(page).expect("re-encode"),
+            official_example_shape
+        );
+
+        let array_page: VectorStoreSearchResultsPage = serde_json::from_value(json!({
+            "object": "vector_store.search_results.page",
+            "search_query": ["query", "rewritten query"],
             "data": [],
             "has_more": false,
             "next_page": null
         }))
-        .expect("decode page");
-        assert!(page.next_page().is_null());
+        .expect("decode component-schema array");
+        assert!(matches!(
+            array_page.search_query(),
+            VectorStoreSearchQueryOutput::Texts(values) if values.len() == 2
+        ));
 
         assert!(
             serde_json::from_value::<VectorStoreSearchResultsPage>(json!({
