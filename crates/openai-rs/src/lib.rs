@@ -6,6 +6,9 @@ pub use openai_rs_types::responses;
 #[cfg(feature = "legacy-completions")]
 pub use openai_rs_types::legacy;
 
+#[cfg(feature = "beta-responses-multi-agent")]
+pub use openai_rs_types::beta_responses;
+
 #[cfg(feature = "structured-output")]
 pub use openai_rs_types::{StructuredError, StructuredOutput, TypedFunction};
 
@@ -61,6 +64,12 @@ pub mod experimental {
 pub use openai_rs_client::{
     ChatKit, ChatKitSessions, ChatKitThreadItemPageStream, ChatKitThreadPageStream,
     ChatKitThreads,
+};
+
+#[cfg(all(feature = "client", feature = "beta-responses-multi-agent"))]
+pub use openai_rs_client::{
+    BetaResponseEventStream, BetaResponseInputItems, BetaResponseInputTokens, BetaResponses,
+    BetaResponsesWebSocket, BetaResponsesWebSocketConfig, BetaWebSocketReconnectPolicy,
 };
 
 #[cfg(all(feature = "client", feature = "realtime"))]

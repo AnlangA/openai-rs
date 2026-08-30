@@ -19,6 +19,7 @@ admin = []
 legacy-completions = []
 custom-voice = []
 beta-chatkit = []
+beta-responses-multi-agent = []
 legacy-realtime = ["realtime"]
 
 [dependencies]

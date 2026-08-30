@@ -4,6 +4,8 @@
 pub mod admin;
 
 pub mod batches;
+#[cfg(feature = "beta-responses-multi-agent")]
+pub mod beta_responses;
 pub mod chat;
 pub mod containers;
 pub mod content_provenance;
@@ -41,14 +43,14 @@ pub mod chatkit;
 #[cfg(feature = "structured-output")]
 pub mod structured;
 
-pub use kernel::{ExtraFields, ExtraFieldsConflict, Nullable, Omittable};
 pub use batches::*;
 pub use content_provenance::*;
 pub use conversations::*;
-pub use evals::*;
-pub use responses::*;
 pub use core::*;
+pub use evals::*;
 pub use files::*;
+pub use kernel::{ExtraFields, ExtraFieldsConflict, Nullable, Omittable};
+pub use responses::*;
 pub use scalar::{
     BatchId, FileId, FineTuningJobId, JsonText, ModelId, ResponseId, UploadId, VectorStoreId,
 };

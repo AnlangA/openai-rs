@@ -108,27 +108,27 @@ impl Transport {
         self.sse_limits
     }
 
-    #[cfg(feature = "realtime")]
+    #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
     pub(crate) async fn authorization(&self) -> Result<crate::auth::AuthLease, Error> {
         self.auth.authorization().await
     }
 
-    #[cfg(feature = "realtime")]
+    #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
     pub(crate) async fn invalidate_authorization(&self, generation: Option<u64>) -> bool {
         self.auth.invalidate_if_generation(generation).await
     }
 
-    #[cfg(feature = "realtime")]
+    #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
     pub(crate) fn organization(&self) -> Option<HeaderValue> {
         self.organization.clone()
     }
 
-    #[cfg(feature = "realtime")]
+    #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
     pub(crate) fn project(&self) -> Option<HeaderValue> {
         self.project.clone()
     }
 
-    #[cfg(feature = "realtime")]
+    #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
     pub(crate) const fn tls_backend(&self) -> Option<TlsBackend> {
         self.tls_backend
     }

@@ -28,6 +28,7 @@ legacy-completions = ["client", "openai-rs-types/legacy-completions", "openai-rs
 custom-voice = ["client", "openai-rs-types/custom-voice", "openai-rs-client/custom-voice"]
 alpha-graders = ["client", "openai-rs-client/alpha-graders"]
 beta-chatkit = ["client", "openai-rs-types/beta-chatkit", "openai-rs-client/beta-chatkit"]
+beta-responses-multi-agent = ["client", "openai-rs-types/beta-responses-multi-agent", "openai-rs-client/beta-responses-multi-agent"]
 legacy-realtime = ["client", "openai-rs-types/legacy-realtime", "openai-rs-client/legacy-realtime"]
 codex-app-server = ["dep:openai-rs-codex", "openai-rs-codex/app-server"]
 codex-access-token = ["codex-app-server", "openai-rs-codex/access-token"]

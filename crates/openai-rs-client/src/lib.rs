@@ -9,6 +9,8 @@ mod admin;
 mod alpha_graders;
 mod auth;
 mod batches;
+#[cfg(feature = "beta-responses-multi-agent")]
+mod beta_responses;
 mod chat_completions;
 mod chat_stream;
 #[cfg(feature = "beta-chatkit")]
@@ -16,8 +18,6 @@ mod chatkit;
 mod client;
 #[cfg(feature = "legacy-completions")]
 mod completions;
-#[cfg(feature = "legacy-realtime")]
-mod legacy_realtime;
 mod containers;
 mod content_provenance;
 mod conversations;
@@ -26,6 +26,8 @@ mod error;
 mod evals;
 mod files;
 mod fine_tuning;
+#[cfg(feature = "legacy-realtime")]
+mod legacy_realtime;
 mod media;
 mod multipart;
 mod operation;
@@ -33,7 +35,7 @@ mod operation;
 mod realtime;
 mod response_stream;
 mod responses;
-#[cfg(feature = "realtime")]
+#[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
 mod responses_websocket;
 mod retry;
 mod skills;
@@ -57,6 +59,11 @@ pub use auth::{ApiKey, ApiKeyError};
 pub use batches::{
     BatchPageStream, BatchSubmission, BatchSubmissionError, BatchSubmissionOptions, Batches,
 };
+#[cfg(feature = "beta-responses-multi-agent")]
+pub use beta_responses::{
+    BetaResponseEventStream, BetaResponseInputItems, BetaResponseInputTokens, BetaResponses,
+    BetaResponsesWebSocket, BetaResponsesWebSocketConfig, BetaWebSocketReconnectPolicy,
+};
 pub use chat_completions::{
     ChatCompletionMessagePageStream, ChatCompletionMessages, ChatCompletionPageStream,
     ChatCompletions,
@@ -64,15 +71,11 @@ pub use chat_completions::{
 pub use chat_stream::ChatCompletionEventStream;
 #[cfg(feature = "beta-chatkit")]
 pub use chatkit::{
-    ChatKit, ChatKitSessions, ChatKitThreadItemPageStream, ChatKitThreadPageStream,
-    ChatKitThreads,
+    ChatKit, ChatKitSessions, ChatKitThreadItemPageStream, ChatKitThreadPageStream, ChatKitThreads,
 };
 pub use client::{Client, ClientBuilder, TlsBackend};
 #[cfg(feature = "legacy-completions")]
 pub use completions::{CompletionEventStream, Completions};
-#[cfg(feature = "legacy-realtime")]
-#[allow(deprecated)]
-pub use legacy_realtime::LegacyRealtimeSessions;
 pub use containers::{
     ContainerFileContentStream, ContainerFilePageStream, ContainerFiles, ContainerPageStream,
     Containers,
@@ -91,6 +94,9 @@ pub use fine_tuning::{
     FineTuningJobCheckpoints, FineTuningJobEvents, FineTuningJobPageStream, FineTuningJobs,
     FineTuningPollCancellationToken, FineTuningPollError, FineTuningPollOptions,
 };
+#[cfg(feature = "legacy-realtime")]
+#[allow(deprecated)]
+pub use legacy_realtime::LegacyRealtimeSessions;
 pub use media::{
     Audio, ImageEditEventStream, ImageGenerationEventStream, Images, MediaByteStream,
     MediaEventStream, MediaTextBody, SpeechEventStream, TranscriptionEventStream,

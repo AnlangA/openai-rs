@@ -62,8 +62,8 @@ where
     pub fn new(name: impl Into<String>) -> Result<Self, StructuredError> {
         let name = name.into();
         validate_name(&name)?;
-        let mut schema = serde_json::to_value(schemars::schema_for!(T))
-            .map_err(StructuredError::Encode)?;
+        let mut schema =
+            serde_json::to_value(schemars::schema_for!(T)).map_err(StructuredError::Encode)?;
         normalize_strict_schema(&mut schema)?;
         Ok(Self {
             name,
@@ -142,10 +142,10 @@ where
     pub fn new(name: impl Into<String>) -> Result<Self, StructuredError> {
         let name = name.into();
         validate_name(&name)?;
-        let mut parameters = serde_json::to_value(schemars::schema_for!(A))
-            .map_err(StructuredError::Encode)?;
-        let mut output = serde_json::to_value(schemars::schema_for!(R))
-            .map_err(StructuredError::Encode)?;
+        let mut parameters =
+            serde_json::to_value(schemars::schema_for!(A)).map_err(StructuredError::Encode)?;
+        let mut output =
+            serde_json::to_value(schemars::schema_for!(R)).map_err(StructuredError::Encode)?;
         normalize_strict_schema(&mut parameters)?;
         normalize_strict_schema(&mut output)?;
         Ok(Self {
@@ -304,7 +304,10 @@ fn normalize(value: &mut Value, path: &str) -> Result<(), StructuredError> {
                 }
             }
             Value::Object(_) | Value::Bool(_)
-                if matches!(key.as_str(), "items" | "contains" | "not" | "if" | "then" | "else") =>
+                if matches!(
+                    key.as_str(),
+                    "items" | "contains" | "not" | "if" | "then" | "else"
+                ) =>
             {
                 normalize(child, &format!("{path}/{key}"))?;
             }

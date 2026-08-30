@@ -476,18 +476,18 @@ pub enum Error {
     #[error(transparent)]
     Accumulator(Box<openai_rs_types::responses::ResponseAccumulatorError>),
 
-    #[cfg(feature = "realtime")]
+    #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
     #[error("WebSocket handshake failed with HTTP {status}")]
     WebSocketHandshake {
         status: StatusCode,
         request_id: Option<Box<str>>,
     },
 
-    #[cfg(feature = "realtime")]
+    #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
     #[error("WebSocket transport failed: {0}")]
     WebSocketTransport(Box<str>),
 
-    #[cfg(feature = "realtime")]
+    #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
     #[error("invalid WebSocket protocol state: {0}")]
     WebSocketProtocol(&'static str),
 
@@ -552,7 +552,7 @@ impl Error {
             Self::InvalidUtf8 { status, .. } => Some(*status),
             Self::ResponseBody { status, .. } => Some(*status),
             Self::UnexpectedContentType { status, .. } => Some(*status),
-            #[cfg(feature = "realtime")]
+            #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
             Self::WebSocketHandshake { status, .. } => Some(*status),
             #[cfg(feature = "workload-identity")]
             Self::WorkloadIdentity(error) => error.status(),
@@ -567,7 +567,7 @@ impl Error {
             | Self::Accumulator(_)
             | Self::InvalidConfiguration(_)
             | Self::InvalidPathParameter { .. } => None,
-            #[cfg(feature = "realtime")]
+            #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
             Self::WebSocketTransport(_) | Self::WebSocketProtocol(_) => None,
         }
     }
@@ -584,7 +584,7 @@ impl Error {
             Self::Sse { request_id, .. } => request_id.as_deref(),
             Self::Stream(error) => error.request_id(),
             Self::StreamProtocol { request_id, .. } => request_id.as_deref(),
-            #[cfg(feature = "realtime")]
+            #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
             Self::WebSocketHandshake { request_id, .. } => request_id.as_deref(),
             Self::Transport(_)
             | Self::Timeout(_)
@@ -594,7 +594,7 @@ impl Error {
             | Self::Accumulator(_)
             | Self::InvalidConfiguration(_)
             | Self::InvalidPathParameter { .. } => None,
-            #[cfg(feature = "realtime")]
+            #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
             Self::WebSocketTransport(_) | Self::WebSocketProtocol(_) => None,
             #[cfg(feature = "workload-identity")]
             Self::WorkloadIdentity(_) => None,

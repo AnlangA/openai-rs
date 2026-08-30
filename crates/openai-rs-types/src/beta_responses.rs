@@ -13,11 +13,10 @@ use serde_json::{Map, Value};
 use crate::{
     ExtraFields, JsonText, Nullable, Omittable,
     responses::{
-        ConversationObjectReference, ConversationReference, IncompleteDetails, InputContent,
-        PromptReference, ResponseError, ResponseInputItem, ResponseInstructions,
-        ResponseItemStatus, ResponseOutputItem, ResponseStatus, ResponseStreamEvent,
-        ResponseStreamOptions, ResponseTextConfig, ResponseTool, ResponseUsage, ToolChoice,
-        TruncationStrategy, UnknownTaggedObject,
+        ConversationObjectReference, ConversationReference, IncompleteDetails, PromptReference,
+        ResponseError, ResponseInputItem, ResponseInstructions, ResponseOutputItem, ResponseStatus,
+        ResponseStreamEvent, ResponseStreamOptions, ResponseTextConfig, ResponseTool,
+        ResponseUsage, ToolChoice, TruncationStrategy, UnknownTaggedObject,
     },
 };
 
@@ -602,7 +601,7 @@ impl BetaMultiAgentCall {
     ) -> Result<Self, serde_json::Error> {
         Ok(Self {
             action,
-            arguments: JsonText::from_serializable(arguments)?,
+            arguments: JsonText::from_serializable(arguments)?.cast(),
             call_id: call_id.into(),
             kind: MultiAgentCallTag::MultiAgentCall,
             id: Omittable::Omitted,
@@ -2806,5 +2805,269 @@ fn non_null<T>(value: &Omittable<Nullable<T>>) -> Option<&T> {
     match value {
         Omittable::Value(Nullable::Value(value)) => Some(value),
         Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::{Serialize, de::DeserializeOwned};
+    use serde_json::{Value, json};
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    fn response_fixture(output: Value) -> Value {
+        json!({
+            "id": "resp_beta_1",
+            "created_at": 1,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-test",
+            "object": "response",
+            "output": output,
+            "parallel_tool_calls": true,
+            "temperature": null,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": null,
+            "background": null,
+            "max_tool_calls": 7,
+            "reasoning": {
+                "context": "all_turns",
+                "effort": "max",
+                "mode": "pro",
+                "summary": "concise"
+            },
+            "service_tier": null,
+            "status": "in_progress"
+        })
+    }
+
+    fn assert_json_dto<T>()
+    where
+        T: Serialize + DeserializeOwned + Send + Sync,
+    {
+    }
+
+    #[test]
+    fn beta_manifests_pin_union_sizes_and_reuse() {
+        assert_eq!(BETA_RESPONSE_INPUT_MANIFEST.len(), 35);
+        assert_eq!(BETA_RESPONSE_OUTPUT_MANIFEST.len(), 31);
+        assert_eq!(BETA_RESPONSE_STREAM_EVENT_MANIFEST.len(), 58);
+        assert_eq!(BETA_RESPONSES_WEBSOCKET_ADDITIONAL_SCHEMAS.len(), 3);
+
+        assert_json_dto::<BetaResponseInputItem>();
+        assert_json_dto::<BetaResponseOutputItem>();
+        assert_json_dto::<BetaResponseStreamEvent>();
+        assert_json_dto::<BetaResponsesClientEvent>();
+        assert_json_dto::<BetaResponsesServerEvent>();
+        assert_impl_all!(BetaResponsesClientEvent: Send, Sync);
+        assert_impl_all!(BetaResponsesServerEvent: Send, Sync);
+    }
+
+    #[test]
+    fn preview_metadata_is_typed_on_stable_item_branches() {
+        let fixture = json!({
+            "type": "message",
+            "role": "user",
+            "content": "hello",
+            "agent": {"agent_name": "root/research"},
+            "phase": "commentary"
+        });
+        let item: BetaResponseInputItem =
+            serde_json::from_value(fixture.clone()).expect("decode beta message");
+        let BetaResponseInputItem::Stable(item) = &item else {
+            panic!("message must reuse stable input codec");
+        };
+        assert_eq!(
+            item.metadata().agent().map(BetaAgent::agent_name),
+            Some("root/research")
+        );
+        assert_eq!(
+            item.metadata().phase().map(BetaMessagePhase::as_str),
+            Some("commentary")
+        );
+        assert_eq!(serde_json::to_value(item).expect("round trip"), fixture);
+    }
+
+    #[test]
+    fn multi_agent_items_encode_arguments_without_manual_json_formatting() {
+        #[derive(Serialize)]
+        struct Spawn<'a> {
+            task_name: &'a str,
+            message: &'a str,
+        }
+
+        let call = BetaMultiAgentCall::from_serializable(
+            BetaMultiAgentAction::SpawnAgent,
+            "call_1",
+            &Spawn {
+                task_name: "research",
+                message: "inspect schemas",
+            },
+        )
+        .expect("serialize arguments");
+        let item = BetaResponseInputItem::from(call);
+        let value = serde_json::to_value(&item).expect("serialize call");
+        assert_eq!(value["type"], "multi_agent_call");
+        assert_eq!(value["action"], "spawn_agent");
+        let arguments: Value =
+            serde_json::from_str(value["arguments"].as_str().expect("argument string"))
+                .expect("inner JSON");
+        assert_eq!(arguments["task_name"], "research");
+
+        let decoded: BetaResponseInputItem =
+            serde_json::from_value(value.clone()).expect("decode call");
+        assert_eq!(serde_json::to_value(decoded).expect("round trip"), value);
+        assert!(
+            serde_json::from_value::<BetaResponseInputItem>(json!({
+                "type": "multi_agent_call",
+                "action": "spawn_agent"
+            }))
+            .is_err(),
+            "known beta tags must validate required fields"
+        );
+    }
+
+    #[test]
+    fn beta_response_exposes_multi_agent_output_and_reasoning_fields() {
+        let fixture = response_fixture(json!([{
+            "type": "multi_agent_call",
+            "action": "list_agents",
+            "arguments": "{}",
+            "call_id": "call_2",
+            "id": "item_2",
+            "agent": {"agent_name": "root"}
+        }]));
+        let response: BetaResponse =
+            serde_json::from_value(fixture.clone()).expect("decode beta response");
+        assert_eq!(response.id(), "resp_beta_1");
+        assert_eq!(response.max_tool_calls(), Some(7));
+        assert_eq!(
+            response
+                .reasoning()
+                .and_then(|reasoning| non_null(&reasoning.context))
+                .map(BetaReasoningContext::as_str),
+            Some("all_turns")
+        );
+        assert!(matches!(
+            response.output(),
+            [BetaResponseOutputItem::MultiAgentCall(_)]
+        ));
+        assert_eq!(
+            serde_json::to_value(response).expect("round trip response"),
+            fixture
+        );
+    }
+
+    #[test]
+    fn lifecycle_event_reuses_stable_discriminator_with_typed_agent_snapshot() {
+        let fixture = json!({
+            "type": "response.created",
+            "sequence_number": 1,
+            "agent": {"agent_name": "root/subagent"},
+            "response": response_fixture(json!([]))
+        });
+        let event: BetaResponseStreamEvent =
+            serde_json::from_value(fixture.clone()).expect("decode lifecycle event");
+        assert_eq!(event.sequence_number(), Some(1));
+        assert_eq!(
+            event.agent().map(BetaAgent::agent_name),
+            Some("root/subagent")
+        );
+        assert_eq!(event.response().map(BetaResponse::id), Some("resp_beta_1"));
+        assert_eq!(serde_json::to_value(event).expect("round trip"), fixture);
+    }
+
+    #[test]
+    fn create_and_count_requests_keep_beta_only_fields_typed() {
+        let routed = BetaAgentMessage::new(
+            "root",
+            "root/research",
+            [BetaAgentInputText::new("please inspect")],
+        );
+        let request =
+            BetaCreateResponseRequest::new("gpt-test", vec![BetaResponseInputItem::from(routed)])
+                .multi_agent(BetaMultiAgentConfig::new(true).max_concurrent_subagents(4))
+                .reasoning(
+                    BetaReasoningConfig::new()
+                        .context(BetaReasoningContext::AllTurns)
+                        .mode(BetaReasoningMode::Pro),
+                );
+        let value = serde_json::to_value(&request).expect("serialize create");
+        assert_eq!(value["multi_agent"]["enabled"], true);
+        assert_eq!(value["multi_agent"]["max_concurrent_subagents"], 4);
+        assert_eq!(value["input"][0]["type"], "agent_message");
+        assert!(value.get("stream").is_none());
+
+        let streaming = request.into_streaming();
+        let streaming_value = serde_json::to_value(streaming).expect("serialize stream create");
+        assert_eq!(streaming_value["stream"], true);
+
+        let count = BetaCountInputTokensRequest::new("gpt-test", "hello")
+            .personality("friendly")
+            .reasoning(BetaReasoningConfig::new().effort(BetaReasoningEffort::Max));
+        let count_value = serde_json::to_value(count).expect("serialize count");
+        assert_eq!(count_value["personality"], "friendly");
+        assert_eq!(count_value["reasoning"]["effort"], "max");
+    }
+
+    #[test]
+    fn websocket_inject_events_are_structurally_routed() {
+        let inject = BetaResponsesClientEvent::inject(BetaResponseInjectEvent::new(
+            "resp_beta_1",
+            [BetaResponseInputItem::from(BetaMultiAgentCallOutput::new(
+                BetaMultiAgentAction::WaitAgent,
+                "call_3",
+                [BetaMultiAgentOutputText::new("done")],
+            ))],
+        ));
+        let inject_value = serde_json::to_value(&inject).expect("serialize inject");
+        assert_eq!(inject_value["type"], "response.inject");
+        assert_eq!(inject_value["input"][0]["type"], "multi_agent_call_output");
+
+        let created: BetaResponsesServerEvent = serde_json::from_value(json!({
+            "type": "response.inject.created",
+            "response_id": "resp_beta_1",
+            "sequence_number": 9,
+            "stream_id": "lane.1"
+        }))
+        .expect("decode inject created");
+        assert!(matches!(
+            created,
+            BetaResponsesServerEvent::InjectCreated(_)
+        ));
+        assert_eq!(created.stream_id(), Some("lane.1"));
+
+        let websocket_error: BetaResponsesServerEvent = serde_json::from_value(json!({
+            "type": "error",
+            "error": {
+                "code": "bad_event",
+                "message": "invalid event",
+                "param": null,
+                "type": "invalid_request_error"
+            },
+            "status": 400
+        }))
+        .expect("decode structural WebSocket error");
+        assert!(matches!(
+            websocket_error,
+            BetaResponsesServerEvent::WebSocketError(_)
+        ));
+    }
+
+    #[test]
+    fn future_stable_and_beta_tags_remain_lossless() {
+        let fixture = json!({
+            "type": "future_multi_agent_item",
+            "id": "future_1",
+            "agent": {"agent_name": "future-agent"},
+            "payload": {"ok": true}
+        });
+        let item: BetaResponseInputItem =
+            serde_json::from_value(fixture.clone()).expect("decode future input");
+        assert_eq!(serde_json::to_value(item).expect("round trip"), fixture);
     }
 }

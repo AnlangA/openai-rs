@@ -413,8 +413,7 @@ pub struct ModerationResult {
     pub category_scores: BTreeMap<String, f64>,
     /// Modalities that contributed to each category, when returned.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub category_applied_input_types:
-        Omittable<BTreeMap<String, Vec<ModerationAppliedInputType>>>,
+    pub category_applied_input_types: Omittable<BTreeMap<String, Vec<ModerationAppliedInputType>>>,
     /// Forward-compatible response properties.
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -477,8 +476,8 @@ mod tests {
 
     #[test]
     fn moderation_request_needs_no_json_construction() {
-        let request = CreateModerationRequest::new("classify me")
-            .with_model("omni-moderation-latest");
+        let request =
+            CreateModerationRequest::new("classify me").with_model("omni-moderation-latest");
         assert_eq!(
             serde_json::to_value(request).expect("serialize"),
             json!({"input": "classify me", "model": "omni-moderation-latest"})
@@ -501,11 +500,12 @@ mod tests {
         let decoded: CreateModerationResponse =
             serde_json::from_value(fixture.clone()).expect("decode");
         assert!(decoded.results[0].categories["future/category"]);
-        assert!(decoded.results[0].extra().contains_key("future_result_field"));
-        assert_eq!(
-            serde_json::to_value(decoded).expect("re-encode"),
-            fixture
+        assert!(
+            decoded.results[0]
+                .extra()
+                .contains_key("future_result_field")
         );
+        assert_eq!(serde_json::to_value(decoded).expect("re-encode"), fixture);
     }
 
     #[test]

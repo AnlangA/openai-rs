@@ -208,7 +208,7 @@ pub struct LegacyRealtimeFunctionTool {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     description: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    parameters: Omittable<serde_json::Value>,
+    parameters: Omittable<BTreeMap<String, serde_json::Value>>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
@@ -233,7 +233,7 @@ impl LegacyRealtimeFunctionTool {
 
     /// Sets a JSON Schema object.
     #[must_use]
-    pub fn with_parameters(mut self, parameters: serde_json::Value) -> Self {
+    pub fn with_parameters(mut self, parameters: BTreeMap<String, serde_json::Value>) -> Self {
         self.parameters = Omittable::Value(parameters);
         self
     }
@@ -592,10 +592,6 @@ pub struct LegacyRealtimeSessionCreateRequest {
     temperature: Omittable<LegacyRealtimeTemperature>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     max_response_output_tokens: Omittable<LegacyRealtimeMaxResponseOutputTokens>,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    truncation: Omittable<RealtimeTruncation>,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    prompt: Omittable<Nullable<LegacyRealtimePromptReference>>,
 }
 
 impl LegacyRealtimeSessionCreateRequest {
@@ -745,27 +741,6 @@ impl LegacyRealtimeSessionCreateRequest {
         tokens: LegacyRealtimeMaxResponseOutputTokens,
     ) -> Self {
         self.max_response_output_tokens = Omittable::Value(tokens);
-        self
-    }
-
-    /// Sets legacy truncation configuration.
-    #[must_use]
-    pub fn with_truncation(mut self, truncation: RealtimeTruncation) -> Self {
-        self.truncation = Omittable::Value(truncation);
-        self
-    }
-
-    /// Sets a prompt reference.
-    #[must_use]
-    pub fn with_prompt(mut self, prompt: LegacyRealtimePromptReference) -> Self {
-        self.prompt = Omittable::Value(Nullable::Value(prompt));
-        self
-    }
-
-    /// Explicitly clears the prompt reference.
-    #[must_use]
-    pub fn with_prompt_null(mut self) -> Self {
-        self.prompt = Omittable::Value(Nullable::Null);
         self
     }
 

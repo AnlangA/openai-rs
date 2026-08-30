@@ -21,7 +21,7 @@ use openai_rs_types::{
     },
     responses::DeletedResponse,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
@@ -873,7 +873,7 @@ fn response_path(response_id: &ResponseId) -> Result<[PathSegment<'_>; 2], Error
 }
 
 fn response_id_segment(response_id: &ResponseId) -> Result<PathSegment<'_>, Error> {
-    PathSegment::encoded(response_id.as_str()).map_err(Error::InvalidPathSegment)
+    PathSegment::parameter("response_id", response_id.as_str())
 }
 
 fn invalid_configuration(message: impl Into<Box<str>>) -> Error {

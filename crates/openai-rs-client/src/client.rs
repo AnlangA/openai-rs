@@ -3,19 +3,21 @@ use std::{fmt, sync::Arc, time::Duration};
 use http::HeaderValue;
 use url::{Host, Url};
 
-#[cfg(feature = "realtime")]
-use crate::Realtime;
+#[cfg(feature = "alpha-graders")]
+use crate::AlphaGraders;
+#[cfg(feature = "beta-responses-multi-agent")]
+use crate::BetaResponses;
+#[cfg(feature = "beta-chatkit")]
+use crate::ChatKit;
 #[cfg(feature = "legacy-completions")]
 use crate::Completions;
 #[cfg(feature = "legacy-realtime")]
 #[allow(deprecated)]
 use crate::LegacyRealtimeSessions;
+#[cfg(feature = "realtime")]
+use crate::Realtime;
 #[cfg(feature = "custom-voice")]
 use crate::Voices;
-#[cfg(feature = "alpha-graders")]
-use crate::AlphaGraders;
-#[cfg(feature = "beta-chatkit")]
-use crate::ChatKit;
 use crate::{
     ApiKey, Audio, Batches, ChatCompletions, Containers, ContentProvenanceChecks, Conversations,
     Embeddings, Error, Evals, Files, FineTuning, Images, Models, Moderations, Responses,
@@ -85,6 +87,13 @@ impl Client {
     #[must_use]
     pub fn responses(&self) -> Responses {
         Responses::new(self.clone())
+    }
+
+    /// Returns the explicitly feature-gated multi-agent Responses preview.
+    #[cfg(feature = "beta-responses-multi-agent")]
+    #[must_use]
+    pub fn beta_responses(&self) -> BetaResponses {
+        BetaResponses::new(self.clone())
     }
 
     /// Returns the legacy Completions resource facade.
