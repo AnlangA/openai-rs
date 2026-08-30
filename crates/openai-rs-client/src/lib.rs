@@ -36,6 +36,8 @@ mod vector_stores;
 mod webhooks;
 #[cfg(feature = "workload-identity")]
 mod workload_identity;
+#[cfg(feature = "x509")]
+mod x509;
 
 #[cfg(feature = "admin")]
 pub use admin::*;
@@ -103,4 +105,9 @@ pub use workload_identity::{
     SubjectToken, SubjectTokenProvider, SubjectTokenProviderError, SubjectTokenProviderFn,
     SubjectTokenType, SubjectTokenValidationError, WorkloadIdentityConfig,
     WorkloadIdentityConfigError, WorkloadIdentityError,
+};
+#[cfg(feature = "x509")]
+pub use x509::{
+    X509Client, X509ClientBuilder, X509Error, X509IdentityPem, X509Models, X509OAuthCode,
+    X509Region, X509Responses,
 };

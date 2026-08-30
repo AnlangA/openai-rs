@@ -856,6 +856,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_waiters_share_one_provider_failure() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider_calls = Arc::clone(&calls);
+        let provider = SubjectTokenProviderFn::new(SubjectTokenType::Id, move || {
+            let provider_calls = Arc::clone(&provider_calls);
+            async move {
+                provider_calls.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                Err(SubjectTokenProviderError::new())
+            }
+        });
+        let config =
+            WorkloadIdentityConfig::new("idp_test", "svc_test", provider).expect("workload config");
+        let auth =
+            WorkloadIdentityAuth::new(config, None, Duration::from_secs(1), Duration::from_secs(1))
+                .expect("workload auth");
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let auth = Arc::clone(&auth);
+            tasks.push(tokio::spawn(async move { auth.token().await }));
+        }
+        for task in tasks {
+            assert!(task.await.expect("join provider waiter").is_err());
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn api_401_invalidates_generation_and_replays_once() {
         let (exchange_url, exchanges, _) = exchange_server(vec![
             Reply {

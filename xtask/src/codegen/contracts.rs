@@ -13,6 +13,7 @@ const OPERATIONS_PATH: &str = "spec/contracts/operations.json";
 const DISCRIMINATORS_PATH: &str = "spec/contracts/discriminators.json";
 const NULLABILITY_PATH: &str = "spec/contracts/nullability.json";
 const SCHEMA_IR_PATH: &str = "spec/contracts/schema-ir.json";
+const NON_REST_PATH: &str = "spec/contracts/non-rest-implementation.json";
 const IMPLEMENTATION_PATH: &str = "spec/contracts/implementation.toml";
 const EXPECTED_CLIENT_OPERATIONS: usize = 288;
 const EXPECTED_WEBHOOK_OPERATIONS: usize = 18;
@@ -48,6 +49,16 @@ struct OperationsArtifact {
     counts: OperationCounts,
     client_operations: Vec<OperationContract>,
     webhook_operations: Vec<OperationContract>,
+}
+
+#[derive(Serialize)]
+struct NonRestArtifact {
+    schema_version: u32,
+    source: SourceIdentity,
+    count: usize,
+    implementation_statuses: BTreeMap<String, usize>,
+    verified_units: usize,
+    units: Vec<NonRestImplementation>,
 }
 
 #[derive(Serialize)]
@@ -112,6 +123,20 @@ struct ImplementationStatus {
     milestone: String,
     units: Vec<String>,
     tests: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registry_group: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct NonRestImplementation {
+    id: String,
+    #[serde(flatten)]
+    implementation: ImplementationStatus,
+}
+
+struct ImplementationRegistry {
+    operations: BTreeMap<String, ImplementationStatus>,
+    non_rest: Vec<NonRestImplementation>,
 }
 
 #[derive(Serialize)]
@@ -212,17 +237,40 @@ pub(super) fn render(repository_root: &Path) -> Result<Vec<RenderedArtifact>> {
     })?;
 
     let implementation_registry = load_implementation_registry(repository_root)?;
-    let operations = build_operations(&document, &implementation_registry)?;
+    let operations = build_operations(&document, &implementation_registry.operations)?;
+    let non_rest = build_non_rest(&implementation_registry.non_rest);
     let discriminators = build_discriminators(&document)?;
     let nullability = build_nullability(&document)?;
     let schema_ir = build_schema_ir(&document)?;
 
     Ok(vec![
         artifact(OPERATIONS_PATH, &operations)?,
+        artifact(NON_REST_PATH, &non_rest)?,
         artifact(DISCRIMINATORS_PATH, &discriminators)?,
         artifact(NULLABILITY_PATH, &nullability)?,
         artifact(SCHEMA_IR_PATH, &schema_ir)?,
     ])
+}
+
+fn build_non_rest(units: &[NonRestImplementation]) -> NonRestArtifact {
+    let mut implementation_statuses = BTreeMap::new();
+    let mut verified_units = BTreeSet::new();
+    for unit in units {
+        *implementation_statuses
+            .entry(unit.implementation.status.clone())
+            .or_insert(0) += 1;
+        if unit.implementation.status == "verified" {
+            verified_units.extend(unit.implementation.units.iter().cloned());
+        }
+    }
+    NonRestArtifact {
+        schema_version: 1,
+        source: source_identity(),
+        count: units.len(),
+        implementation_statuses,
+        verified_units: verified_units.len(),
+        units: units.to_vec(),
+    }
 }
 
 fn source_identity() -> SourceIdentity {
@@ -276,13 +324,13 @@ fn build_operations(
         )));
     }
     let mut implementation_statuses = BTreeMap::new();
-    let mut verified_units = 0;
+    let mut verified_units = BTreeSet::new();
     for operation in &client_operations {
         *implementation_statuses
             .entry(operation.implementation.status.clone())
             .or_insert(0) += 1;
         if operation.implementation.status == "verified" {
-            verified_units += operation.implementation.units.len();
+            verified_units.extend(operation.implementation.units.iter().cloned());
         }
     }
 
@@ -294,7 +342,7 @@ fn build_operations(
             webhook: webhook_operations.len(),
             total: client_operations.len() + webhook_operations.len(),
             implementation_statuses,
-            verified_units,
+            verified_units: verified_units.len(),
         },
         client_operations,
         webhook_operations,
@@ -389,6 +437,7 @@ fn planned_implementation() -> ImplementationStatus {
         milestone: "unassigned".to_owned(),
         units: Vec::new(),
         tests: Vec::new(),
+        registry_group: None,
     }
 }
 

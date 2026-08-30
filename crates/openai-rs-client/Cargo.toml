@@ -27,7 +27,8 @@ realtime = ["openai-rs-types/realtime", "dep:tokio-tungstenite"]
 webhook-verification = ["openai-rs-types/webhooks", "dep:base64", "dep:hmac", "dep:sha2"]
 admin = ["openai-rs-types/admin"]
 workload-identity = []
-x509 = ["workload-identity"]
+x509 = ["workload-identity", "rustls-tls"]
+legacy-completions = ["openai-rs-types/legacy-completions"]
 
 [dependencies]
 async-stream.workspace = true
