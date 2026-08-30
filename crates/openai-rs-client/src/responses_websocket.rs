@@ -176,9 +176,10 @@ impl ResponsesWebSocket {
 
         let mut retries = 0;
         loop {
+            let authorization = transport.authorization().await?;
             let request = websocket_request(
                 &url,
-                transport.authorization(),
+                authorization.header,
                 transport.organization(),
                 transport.project(),
             )?;

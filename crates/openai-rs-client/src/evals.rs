@@ -754,6 +754,7 @@ mod tests {
         let client = Client::builder(key)
             .base_url(base_url)
             .allow_insecure_loopback(true)
+            .retry_policy(crate::RetryPolicy::disabled())
             .build()
             .expect("build loopback client");
         (client, receiver)

@@ -4,6 +4,8 @@
 //! live in the separate `openai-rs-codex` crate and cannot cross this boundary.
 
 mod auth;
+#[cfg(feature = "admin")]
+mod admin;
 mod batches;
 mod chat_completions;
 mod chat_stream;
@@ -30,10 +32,14 @@ mod skills;
 pub mod sse;
 pub(crate) mod transport;
 mod vector_stores;
+#[cfg(feature = "workload-identity")]
+mod workload_identity;
 #[cfg(feature = "webhook-verification")]
 mod webhooks;
 
 pub use auth::{ApiKey, ApiKeyError};
+#[cfg(feature = "admin")]
+pub use admin::*;
 pub use batches::{
     BatchPageStream, BatchSubmission, BatchSubmissionError, BatchSubmissionOptions, Batches,
 };
@@ -87,6 +93,12 @@ pub use skills::{SkillContentStream, SkillPageStream, SkillVersionPageStream, Sk
 pub use vector_stores::{
     PollCancellationToken, PollError, PollOptions, VectorStoreFileBatches,
     VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream, VectorStores,
+};
+#[cfg(feature = "workload-identity")]
+pub use workload_identity::{
+    SubjectToken, SubjectTokenProvider, SubjectTokenProviderError, SubjectTokenProviderFn,
+    SubjectTokenType, SubjectTokenValidationError, WorkloadIdentityConfig,
+    WorkloadIdentityConfigError, WorkloadIdentityError,
 };
 #[cfg(feature = "webhook-verification")]
 pub use webhooks::{WebhookVerificationError, WebhookVerifier};

@@ -8,9 +8,11 @@ use crate::Realtime;
 use crate::{
     ApiKey, Audio, Batches, ChatCompletions, Containers, ContentProvenanceChecks, Conversations,
     Embeddings, Error, Evals, Files, FineTuning, Images, Models, Moderations, Responses,
-    RetryPolicy, Skills, Uploads, VectorStores,
+    RetryPolicy, Skills, Uploads, VectorStores, auth::AuthProvider,
     multipart::MultipartTransport, sse::SseLimits, transport::Transport,
 };
+#[cfg(feature = "workload-identity")]
+use crate::{WorkloadIdentityConfig, workload_identity::WorkloadIdentityAuth};
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -53,6 +55,19 @@ impl Client {
     /// Builds a client with secure defaults and the official Platform base URL.
     pub fn new(api_key: ApiKey) -> Result<Self, Error> {
         Self::builder(api_key).build()
+    }
+
+    /// Builds a Platform client backed by RFC 8693 workload identity.
+    #[cfg(feature = "workload-identity")]
+    pub fn from_workload_identity(config: WorkloadIdentityConfig) -> Result<Self, Error> {
+        Self::workload_identity_builder(config).build()
+    }
+
+    /// Starts a builder that never accepts or stores an API key.
+    #[cfg(feature = "workload-identity")]
+    #[must_use]
+    pub fn workload_identity_builder(config: WorkloadIdentityConfig) -> ClientBuilder {
+        ClientBuilder::from_workload_identity(config)
     }
 
     /// Returns the Responses resource facade.
@@ -191,7 +206,7 @@ impl fmt::Debug for Client {
 
 /// Secure-by-default builder for [`Client`].
 pub struct ClientBuilder {
-    api_key: ApiKey,
+    credential: ClientCredential,
     base_url: Option<Url>,
     allow_insecure_loopback: bool,
     organization: Option<String>,
@@ -205,11 +220,36 @@ pub struct ClientBuilder {
     sse_limits: SseLimits,
 }
 
+enum ClientCredential {
+    ApiKey(ApiKey),
+    #[cfg(feature = "workload-identity")]
+    Workload(WorkloadIdentityConfig),
+}
+
 impl ClientBuilder {
     #[must_use]
     pub fn new(api_key: ApiKey) -> Self {
         Self {
-            api_key,
+            credential: ClientCredential::ApiKey(api_key),
+            base_url: None,
+            allow_insecure_loopback: false,
+            organization: None,
+            project: None,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            max_json_body_bytes: DEFAULT_MAX_JSON_BODY_BYTES,
+            max_error_body_bytes: DEFAULT_MAX_ERROR_BODY_BYTES,
+            tls_backend: default_tls_backend(),
+            retry_policy: RetryPolicy::default(),
+            sse_limits: SseLimits::default(),
+        }
+    }
+
+    #[cfg(feature = "workload-identity")]
+    #[must_use]
+    pub fn from_workload_identity(config: WorkloadIdentityConfig) -> Self {
+        Self {
+            credential: ClientCredential::Workload(config),
             base_url: None,
             allow_insecure_loopback: false,
             organization: None,
@@ -333,10 +373,6 @@ impl ClientBuilder {
             base_url.set_path(&path);
         }
 
-        let authorization = self
-            .api_key
-            .authorization_header()
-            .map_err(|error| invalid_configuration(error.to_string()))?;
         let organization = optional_sensitive_header(self.organization, "organization")?;
         let project = optional_sensitive_header(self.project, "project")?;
 
@@ -356,10 +392,23 @@ impl ClientBuilder {
         .build()
         .map_err(Error::from_reqwest)?;
 
+        let auth = match self.credential {
+            ClientCredential::ApiKey(api_key) => AuthProvider::api_key(api_key),
+            #[cfg(feature = "workload-identity")]
+            ClientCredential::Workload(config) => AuthProvider::workload(
+                WorkloadIdentityAuth::new(
+                    config,
+                    self.tls_backend,
+                    self.connect_timeout,
+                    self.request_timeout,
+                )?,
+            ),
+        };
+
         let multipart = MultipartTransport::new(
             http.clone(),
             base_url.clone(),
-            authorization.clone(),
+            auth.clone(),
             organization.clone(),
             project.clone(),
             self.max_json_body_bytes,
@@ -372,7 +421,7 @@ impl ClientBuilder {
                 transport: Transport::new(
                     http,
                     base_url,
-                    authorization,
+                    auth,
                     organization,
                     project,
                     self.max_json_body_bytes,
@@ -396,7 +445,7 @@ impl fmt::Debug for ClientBuilder {
             .map(|url| url.origin().ascii_serialization());
         formatter
             .debug_struct("ClientBuilder")
-            .field("api_key", &"[REDACTED]")
+            .field("credential", &"[REDACTED]")
             .field("base_origin", &base_origin)
             .field("allow_insecure_loopback", &self.allow_insecure_loopback)
             .field(

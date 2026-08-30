@@ -5,6 +5,9 @@ use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+#[cfg(feature = "workload-identity")]
+use crate::workload_identity::{TokenLease, WorkloadIdentityAuth};
+
 /// A Platform API key.
 ///
 /// The inner value is never exposed through `Debug`, `Display`, or Serde. This
@@ -41,6 +44,81 @@ impl ApiKey {
             HeaderValue::from_str(value.as_str()).map_err(|_| ApiKeyError::InvalidHeaderValue)?;
         header.set_sensitive(true);
         Ok(header)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum AuthProvider {
+    ApiKey(ApiKey),
+    #[cfg(feature = "workload-identity")]
+    Workload(std::sync::Arc<WorkloadIdentityAuth>),
+}
+
+impl AuthProvider {
+    pub(crate) const fn api_key(api_key: ApiKey) -> Self {
+        Self::ApiKey(api_key)
+    }
+
+    #[cfg(feature = "workload-identity")]
+    pub(crate) fn workload(auth: std::sync::Arc<WorkloadIdentityAuth>) -> Self {
+        Self::Workload(auth)
+    }
+
+    pub(crate) async fn authorization(&self) -> Result<AuthLease, crate::Error> {
+        match self {
+            Self::ApiKey(api_key) => api_key
+                .authorization_header()
+                .map(|header| AuthLease {
+                    header,
+                    generation: None,
+                })
+                .map_err(|error| crate::Error::InvalidConfiguration(error.to_string().into())),
+            #[cfg(feature = "workload-identity")]
+            Self::Workload(auth) => auth.token().await.map(AuthLease::from),
+        }
+    }
+
+    pub(crate) async fn invalidate_if_generation(&self, generation: Option<u64>) -> bool {
+        match (self, generation) {
+            #[cfg(feature = "workload-identity")]
+            (Self::Workload(auth), Some(generation)) => {
+                auth.invalidate_if_generation(generation).await
+            }
+            _ => false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_header_for_test(header: HeaderValue) -> Self {
+        let value = header.to_str().unwrap_or_default();
+        let token = value.strip_prefix("Bearer ").unwrap_or(value);
+        Self::ApiKey(ApiKey::new(token).expect("static test authorization is valid"))
+    }
+}
+
+impl fmt::Debug for AuthProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ApiKey(_) => formatter.write_str("AuthProvider::ApiKey([REDACTED])"),
+            #[cfg(feature = "workload-identity")]
+            Self::Workload(_) => formatter.write_str("AuthProvider::Workload([REDACTED])"),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct AuthLease {
+    pub header: HeaderValue,
+    pub generation: Option<u64>,
+}
+
+#[cfg(feature = "workload-identity")]
+impl From<TokenLease> for AuthLease {
+    fn from(lease: TokenLease) -> Self {
+        Self {
+            header: lease.header,
+            generation: lease.generation,
+        }
     }
 }
 

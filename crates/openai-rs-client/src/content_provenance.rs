@@ -303,7 +303,10 @@ impl ContentProvenanceChecks {
 
 #[cfg(test)]
 mod tests {
-    use std::{convert::Infallible, sync::Arc};
+    use std::{
+        convert::Infallible,
+        sync::{Arc, Mutex},
+    };
 
     use bytes::Bytes;
     use http::{Method, StatusCode};
@@ -337,9 +340,10 @@ mod tests {
         let (sender, receiver) = oneshot::channel();
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept provenance request");
+            let sender = Arc::new(Mutex::new(Some(sender)));
             let service = service_fn(move |request: Request<Incoming>| {
                 let response_body = response_body.clone();
-                let mut sender = Some(sender);
+                let sender = Arc::clone(&sender);
                 async move {
                     let method = request.method().clone();
                     let path = request.uri().path().to_owned();
@@ -360,7 +364,7 @@ mod tests {
                         .expect("collect provenance request")
                         .to_bytes()
                         .to_vec();
-                    if let Some(sender) = sender.take() {
+                    if let Some(sender) = sender.lock().expect("provenance sender lock").take() {
                         let _ = sender.send(CapturedRequest {
                             method,
                             path,

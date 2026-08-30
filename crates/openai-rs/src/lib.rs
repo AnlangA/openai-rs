@@ -19,7 +19,16 @@ pub use openai_rs_client::{
     ResponseMeta, Responses, RetryPolicy, SpeechEventStream, StreamError, TlsBackend,
     TranscriptionEventStream, TranscriptionOutput, TranslationOutput, Uploads,
     VectorStoreFileBatches, VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream,
-    VectorStores,
+    VectorStores, ContainerFileContentStream, ContainerFilePageStream, ContainerFiles,
+    ContainerPageStream, Containers, SkillContentStream, SkillPageStream, SkillVersionPageStream,
+    SkillVersions, Skills, ConversationItemPageStream, ConversationItems, Conversations,
+    ContentProvenanceChecks, ContentProvenanceCheck, ContentProvenanceResult,
+    CreateContentProvenanceCheckRequest, C2paProvenanceResult, SynthIdProvenanceResult,
+    EvalPageStream, EvalRunOutputItemPageStream, EvalRunOutputItems, EvalRunPageStream,
+    EvalRunPollError, EvalRunPollOptions, EvalRuns, Evals, FineTuning,
+    FineTuningCheckpointPageStream, FineTuningEventPageStream, FineTuningJobCheckpoints,
+    FineTuningJobEvents, FineTuningJobPageStream, FineTuningJobs,
+    FineTuningPollCancellationToken, FineTuningPollError, FineTuningPollOptions,
 };
 
 #[cfg(all(feature = "client", feature = "realtime"))]

@@ -11,6 +11,7 @@ use url::Url;
 
 use crate::{
     ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy, TlsBackend,
+    auth::{AuthLease, AuthProvider},
     operation::{AuthScope, Operation, RequestEncoding, RetryClass},
     sse::SseLimits,
 };
@@ -58,7 +59,7 @@ impl<'a> PathSegment<'a> {
 pub(crate) struct Transport {
     http: reqwest::Client,
     base_url: Url,
-    authorization: HeaderValue,
+    auth: AuthProvider,
     organization: Option<HeaderValue>,
     project: Option<HeaderValue>,
     max_json_body_bytes: usize,
@@ -74,7 +75,7 @@ impl Transport {
     pub(crate) fn new(
         http: reqwest::Client,
         base_url: Url,
-        authorization: HeaderValue,
+        auth: AuthProvider,
         organization: Option<HeaderValue>,
         project: Option<HeaderValue>,
         max_json_body_bytes: usize,
@@ -87,7 +88,7 @@ impl Transport {
         Self {
             http,
             base_url,
-            authorization,
+            auth,
             organization,
             project,
             max_json_body_bytes,
@@ -108,8 +109,12 @@ impl Transport {
     }
 
     #[cfg(feature = "realtime")]
-    pub(crate) fn authorization(&self) -> HeaderValue {
-        self.authorization.clone()
+    pub(crate) async fn authorization(&self) -> Result<AuthLease, Error> {
+        self.auth.authorization().await
+    }
+
+    pub(crate) async fn invalidate_authorization(&self, lease: &AuthLease) -> bool {
+        self.auth.invalidate_if_generation(lease.generation).await
     }
 
     #[cfg(feature = "realtime")]
@@ -244,6 +249,7 @@ impl Transport {
             .map_err(Error::Encode)?;
         let started = Instant::now();
         let mut retries = 0;
+        let mut auth_refreshed = false;
 
         loop {
             let remaining = self
@@ -251,11 +257,12 @@ impl Transport {
                 .checked_sub(started.elapsed())
                 .filter(|remaining| !remaining.is_zero())
                 .ok_or(Error::DeadlineExceeded)?;
+            let authorization = self.auth.authorization().await?;
             let mut request = self
                 .http
                 .request(meta.method.clone(), url.clone())
                 .timeout(remaining)
-                .header(header::AUTHORIZATION, self.authorization.clone())
+                .header(header::AUTHORIZATION, authorization.header.clone())
                 .header(header::ACCEPT, accept);
             if let Some(organization) = &self.organization {
                 request = request.header("OpenAI-Organization", organization.clone());
@@ -292,6 +299,19 @@ impl Transport {
                 }
                 Err(error) => return Err(Error::from_reqwest(error)),
             };
+
+            if response.status() == http::StatusCode::UNAUTHORIZED
+                && authorization.generation.is_some()
+                && !auth_refreshed
+            {
+                let _ = self
+                    .auth
+                    .invalidate_if_generation(authorization.generation)
+                    .await;
+                auth_refreshed = true;
+                drop(response);
+                continue;
+            }
 
             if meta.success_statuses.contains(&response.status()) {
                 return Ok(response);
@@ -431,11 +451,12 @@ impl Transport {
         method: reqwest::Method,
         url: Url,
         accept: &'static str,
+        authorization: HeaderValue,
     ) -> reqwest::RequestBuilder {
         let mut request = self
             .http
             .request(method, url)
-            .header(header::AUTHORIZATION, self.authorization.clone())
+            .header(header::AUTHORIZATION, authorization)
             .header(header::ACCEPT, accept);
         if let Some(organization) = &self.organization {
             request = request.header("OpenAI-Organization", organization.clone());
@@ -486,7 +507,7 @@ impl fmt::Debug for Transport {
         formatter
             .debug_struct("Transport")
             .field("base_origin", &base_origin)
-            .field("authorization", &"[REDACTED]")
+            .field("auth", &self.auth)
             .field(
                 "organization",
                 &self.organization.as_ref().map(|_| "[REDACTED]"),

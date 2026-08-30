@@ -5,7 +5,7 @@
 //! `AdminClient`, never to this Platform-credential resource facade.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::HashSet,
     future::Future,
     pin::Pin,
     sync::{
@@ -575,10 +575,17 @@ impl Serialize for FineTuningJobListQuery<'_> {
     where
         S: serde::Serializer,
     {
+        use serde::ser::Error as _;
+
         let params = self.0;
         let metadata_len = match &params.metadata {
             Omittable::Value(Nullable::Value(metadata)) => metadata.len(),
             Omittable::Value(Nullable::Null) | Omittable::Omitted => 0,
+            _ => {
+                return Err(S::Error::custom(
+                    "unsupported fine-tuning metadata presence state",
+                ));
+            }
         };
         let mut map = serializer.serialize_map(Some(3 + metadata_len))?;
         if let Omittable::Value(after) = &params.after {
@@ -597,6 +604,11 @@ impl Serialize for FineTuningJobListQuery<'_> {
                 map.serialize_entry("metadata", &serde_json::Value::Null)?;
             }
             Omittable::Omitted => {}
+            _ => {
+                return Err(S::Error::custom(
+                    "unsupported fine-tuning metadata presence state",
+                ));
+            }
         }
         map.end()
     }
@@ -769,6 +781,7 @@ const FINE_TUNING_OPERATION_MANIFEST: &[(&str, &str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeMap,
         convert::Infallible,
         sync::{
             Arc, Mutex,
@@ -847,17 +860,18 @@ mod tests {
                                     body,
                                 });
                             let index = next_response.fetch_add(1, AtomicOrdering::SeqCst);
-                            let response_body = responses.get(index).cloned().unwrap_or_else(|| {
-                                json!({
-                                    "error": {
-                                        "message": "unexpected fine-tuning request",
-                                        "type": "test_error",
-                                        "param": null,
-                                        "code": "unexpected"
-                                    }
-                                })
-                                .to_string()
-                            });
+                            let response_body =
+                                responses.get(index).cloned().unwrap_or_else(|| {
+                                    json!({
+                                        "error": {
+                                            "message": "unexpected fine-tuning request",
+                                            "type": "test_error",
+                                            "param": null,
+                                            "code": "unexpected"
+                                        }
+                                    })
+                                    .to_string()
+                                });
                             let status = if index < responses.len() {
                                 StatusCode::OK
                             } else {
@@ -996,6 +1010,15 @@ mod tests {
         assert!(query.contains(&("limit".into(), "2".into())));
         assert!(query.contains(&("metadata[tenant]".into(), "acme".into())));
         assert!(captures[0].body.is_empty());
+
+        let null_params = ListFineTuningJobsParams {
+            after: Omittable::Omitted,
+            limit: Omittable::Omitted,
+            metadata: Omittable::Value(Nullable::Null),
+        };
+        let encoded = serde_json::to_value(FineTuningJobListQuery(&null_params))
+            .expect("explicit-null metadata query encodes");
+        assert_eq!(encoded, json!({"metadata": null}));
     }
 
     #[tokio::test]

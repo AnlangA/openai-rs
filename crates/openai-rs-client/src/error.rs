@@ -490,6 +490,10 @@ pub enum Error {
     #[cfg(feature = "realtime")]
     #[error("invalid WebSocket protocol state: {0}")]
     WebSocketProtocol(&'static str),
+
+    #[cfg(feature = "workload-identity")]
+    #[error(transparent)]
+    WorkloadIdentity(std::sync::Arc<crate::WorkloadIdentityError>),
 }
 
 impl From<ApiError> for Error {
@@ -507,6 +511,13 @@ impl From<StreamError> for Error {
 impl From<openai_rs_types::responses::ResponseAccumulatorError> for Error {
     fn from(error: openai_rs_types::responses::ResponseAccumulatorError) -> Self {
         Self::Accumulator(Box::new(error))
+    }
+}
+
+#[cfg(feature = "workload-identity")]
+impl From<std::sync::Arc<crate::WorkloadIdentityError>> for Error {
+    fn from(error: std::sync::Arc<crate::WorkloadIdentityError>) -> Self {
+        Self::WorkloadIdentity(error)
     }
 }
 
@@ -543,6 +554,8 @@ impl Error {
             Self::UnexpectedContentType { status, .. } => Some(*status),
             #[cfg(feature = "realtime")]
             Self::WebSocketHandshake { status, .. } => Some(*status),
+            #[cfg(feature = "workload-identity")]
+            Self::WorkloadIdentity(error) => error.status(),
             Self::Transport(_)
             | Self::Timeout(_)
             | Self::DeadlineExceeded
@@ -583,6 +596,8 @@ impl Error {
             | Self::InvalidPathParameter { .. } => None,
             #[cfg(feature = "realtime")]
             Self::WebSocketTransport(_) | Self::WebSocketProtocol(_) => None,
+            #[cfg(feature = "workload-identity")]
+            Self::WorkloadIdentity(_) => None,
         }
     }
 

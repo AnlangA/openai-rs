@@ -113,8 +113,14 @@ impl Realtime {
                 ));
             }
         }
+        let authorization = transport.authorization().await?;
         let request = transport
-            .request_builder(reqwest::Method::POST, url, "application/sdp")
+            .request_builder(
+                reqwest::Method::POST,
+                url,
+                "application/sdp",
+                authorization.header.clone(),
+            )
             .timeout(transport.overall_timeout())
             .multipart(form)
             .build()
@@ -126,6 +132,9 @@ impl Realtime {
             .await
             .map_err(Error::from_reqwest)?;
         if response.status() != CREATED {
+            if response.status() == StatusCode::UNAUTHORIZED {
+                let _ = transport.invalidate_authorization(&authorization).await;
+            }
             return Err(transport.error_from_response(response).await);
         }
         let location = response
@@ -343,9 +352,10 @@ impl RealtimeWebSocket {
         let url = realtime_websocket_url(client.base_url(), &model)?;
         let transport = client.transport();
         let connector = websocket_connector(url.scheme(), transport.tls_backend())?;
+        let authorization = transport.authorization().await?;
         let request = websocket_request(
             &url,
-            transport.authorization(),
+            authorization.header,
             transport.organization(),
             transport.project(),
         )?;

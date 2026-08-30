@@ -170,7 +170,7 @@ impl ContainerFiles {
         let path = container_files_path(container_id)?;
         self.client
             .transport()
-            .execute_json::<AttachContainerFile, ()>(&path, None, Some(&request))
+            .execute_json::<CreateContainerFile, ()>(&path, None, Some(&request))
             .await
     }
 
@@ -415,7 +415,7 @@ operation!(
     retry = RetryClass::Replayable,
 );
 operation!(
-    AttachContainerFile,
+    CreateContainerFile,
     request = CreateContainerFileFromIdRequest,
     response = ContainerFileResource,
     method = Method::POST,
@@ -720,6 +720,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn container_page_stream_advances_the_opaque_cursor() {
+        let (client, captures) = serve_script(vec![
+            StubResponse::json(
+                json!({
+                    "object":"list","data":[],"first_id":"cntr_1",
+                    "last_id":"cntr_2","has_more":true
+                })
+                .to_string(),
+            ),
+            StubResponse::json(
+                json!({
+                    "object":"list","data":[],"first_id":"cntr_3",
+                    "last_id":"cntr_3","has_more":false
+                })
+                .to_string(),
+            ),
+        ])
+        .await;
+        let params = ContainerListParams {
+            name: Omittable::Value("sandbox".into()),
+            ..ContainerListParams::default()
+        };
+        let pages = Containers::new(client)
+            .list_pages(params)
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().all(Result::is_ok));
+
+        let captures = captures.lock().expect("capture lock");
+        let second = Url::parse(&format!("http://loopback{}", captures[1].path_and_query))
+            .expect("second page URL");
+        let query = second.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("after".into(), "cntr_2".into())));
+        assert!(query.contains(&("name".into(), "sandbox".into())));
+    }
+
+    #[tokio::test]
     async fn container_file_attach_list_retrieve_and_delete_match_contract() {
         let container_id = ContainerId::new("cntr/a b");
         let file_id = ContainerFileId::new("cfile/x y");
@@ -812,8 +850,13 @@ mod tests {
 
     #[tokio::test]
     async fn container_file_content_streams_and_collects_with_a_bound() {
-        let (client, captures) = serve_script(vec![StubResponse::binary(b"raw-container")]).await;
-        let mut stream = ContainerFiles::new(client)
+        let (client, captures) = serve_script(vec![
+            StubResponse::binary(b"raw-container"),
+            StubResponse::binary(b"raw-container"),
+        ])
+        .await;
+        let files = ContainerFiles::new(client);
+        let mut stream = files
             .content(
                 &ContainerId::new("cntr_1"),
                 &ContainerFileId::new("cfile_1"),
@@ -822,8 +865,19 @@ mod tests {
             .expect("content stream");
         let first = stream.next().await.expect("chunk").expect("bytes");
         assert_eq!(first, Bytes::from_static(b"raw-container"));
+        let bounded = files
+            .content(
+                &ContainerId::new("cntr_1"),
+                &ContainerFileId::new("cfile_1"),
+            )
+            .await
+            .expect("bounded content stream")
+            .collect(4)
+            .await;
+        assert!(bounded.is_err());
 
         let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 2);
         assert_eq!(
             captures[0].path_and_query,
             "/v1/containers/cntr_1/files/cfile_1/content"

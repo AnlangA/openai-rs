@@ -108,7 +108,7 @@ impl Skills {
         let path = skill_path(skill_id)?;
         self.client
             .transport()
-            .execute_json::<RetrieveSkill, ()>(&path, None, None)
+            .execute_json::<GetSkill, ()>(&path, None, None)
             .await
     }
 
@@ -176,7 +176,7 @@ impl SkillVersions {
         request: CreateSkillVersionRequest,
     ) -> Result<ApiResponse<SkillVersionResource>, Error> {
         let path = skill_versions_path(skill_id)?;
-        let form = prepare_skill_form(request.files(), request.default.clone()).await?;
+        let form = prepare_skill_form(request.files(), request.default).await?;
         let response = self
             .client
             .multipart_transport()
@@ -237,7 +237,7 @@ impl SkillVersions {
         let path = skill_version_path(skill_id, version)?;
         self.client
             .transport()
-            .execute_json::<RetrieveSkillVersion, ()>(&path, None, None)
+            .execute_json::<GetSkillVersion, ()>(&path, None, None)
             .await
     }
 
@@ -395,7 +395,7 @@ operation!(
     retry = RetryClass::Safe,
 );
 operation!(
-    RetrieveSkill,
+    GetSkill,
     request = (),
     response = SkillResource,
     method = Method::GET,
@@ -431,7 +431,7 @@ operation!(
     retry = RetryClass::Safe,
 );
 operation!(
-    RetrieveSkillVersion,
+    GetSkillVersion,
     request = (),
     response = SkillVersionResource,
     method = Method::GET,
@@ -460,6 +460,7 @@ mod tests {
     };
 
     use bytes::Bytes;
+    use futures_util::StreamExt;
     use http_body_util::{BodyExt, Full};
     use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
     use hyper_util::rt::TokioIo;
@@ -727,6 +728,46 @@ mod tests {
             json!({"default_version":"2"})
         );
         assert_eq!(captures[3].method, Method::DELETE);
+    }
+
+    #[tokio::test]
+    async fn skill_page_stream_advances_cursor_and_preserves_query() {
+        let (client, captures) = serve_script(vec![
+            StubResponse::json(
+                json!({
+                    "object":"list","data":[],"first_id":"skill_1",
+                    "last_id":"skill_2","has_more":true
+                })
+                .to_string(),
+            ),
+            StubResponse::json(
+                json!({
+                    "object":"list","data":[],"first_id":"skill_3",
+                    "last_id":"skill_3","has_more":false
+                })
+                .to_string(),
+            ),
+        ])
+        .await;
+        let params = SkillListParams {
+            limit: Omittable::Value(SkillListLimit::new(2).expect("limit")),
+            order: Omittable::Value(SkillListOrder::Descending),
+            after: Omittable::Omitted,
+        };
+        let pages = Skills::new(client)
+            .list_pages(params)
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().all(Result::is_ok));
+
+        let captures = captures.lock().expect("capture lock");
+        let second = Url::parse(&format!("http://loopback{}", captures[1].path_and_query))
+            .expect("second page URL");
+        let query = second.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("after".into(), "skill_2".into())));
+        assert!(query.contains(&("limit".into(), "2".into())));
+        assert!(query.contains(&("order".into(), "desc".into())));
     }
 
     #[tokio::test]
