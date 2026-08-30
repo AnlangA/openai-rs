@@ -8,8 +8,8 @@ use crate::Realtime;
 use crate::{
     ApiKey, Audio, Batches, ChatCompletions, Containers, ContentProvenanceChecks, Conversations,
     Embeddings, Error, Evals, Files, FineTuning, Images, Models, Moderations, Responses,
-    RetryPolicy, Skills, Uploads, VectorStores, auth::AuthProvider,
-    multipart::MultipartTransport, sse::SseLimits, transport::Transport,
+    RetryPolicy, Skills, Uploads, VectorStores, auth::AuthProvider, multipart::MultipartTransport,
+    sse::SseLimits, transport::Transport,
 };
 #[cfg(feature = "workload-identity")]
 use crate::{WorkloadIdentityConfig, workload_identity::WorkloadIdentityAuth};
@@ -395,14 +395,14 @@ impl ClientBuilder {
         let auth = match self.credential {
             ClientCredential::ApiKey(api_key) => AuthProvider::api_key(api_key),
             #[cfg(feature = "workload-identity")]
-            ClientCredential::Workload(config) => AuthProvider::workload(
-                WorkloadIdentityAuth::new(
+            ClientCredential::Workload(config) => {
+                AuthProvider::workload(WorkloadIdentityAuth::new(
                     config,
                     self.tls_backend,
                     self.connect_timeout,
                     self.request_timeout,
-                )?,
-            ),
+                )?)
+            }
         };
 
         let multipart = MultipartTransport::new(

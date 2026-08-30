@@ -175,8 +175,10 @@ impl ResponsesWebSocket {
         };
 
         let mut retries = 0;
+        let mut auth_refreshed = false;
         loop {
             let authorization = transport.authorization().await?;
+            let generation = authorization.generation;
             let request = websocket_request(
                 &url,
                 authorization.header,
@@ -193,6 +195,14 @@ impl ResponsesWebSocket {
                         max_message_bytes: config.max_message_bytes,
                         closed: false,
                     });
+                }
+                Ok(Err(error))
+                    if generation.is_some()
+                        && !auth_refreshed
+                        && is_unauthorized_websocket_error(&error) =>
+                {
+                    let _ = transport.invalidate_authorization(generation).await;
+                    auth_refreshed = true;
                 }
                 Ok(Err(error)) if retries < max_retries && retryable_connect_error(&error) => {
                     retries += 1;
@@ -479,6 +489,14 @@ pub(crate) fn retryable_connect_error(error: &tungstenite::Error) -> bool {
     matches!(
         error,
         tungstenite::Error::Io(_) | tungstenite::Error::Tls(_)
+    )
+}
+
+pub(crate) fn is_unauthorized_websocket_error(error: &tungstenite::Error) -> bool {
+    matches!(
+        error,
+        tungstenite::Error::Http(response)
+            if response.status() == http::StatusCode::UNAUTHORIZED
     )
 }
 

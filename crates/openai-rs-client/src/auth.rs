@@ -87,13 +87,6 @@ impl AuthProvider {
             _ => false,
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn from_header_for_test(header: HeaderValue) -> Self {
-        let value = header.to_str().unwrap_or_default();
-        let token = value.strip_prefix("Bearer ").unwrap_or(value);
-        Self::ApiKey(ApiKey::new(token).expect("static test authorization is valid"))
-    }
 }
 
 impl fmt::Debug for AuthProvider {

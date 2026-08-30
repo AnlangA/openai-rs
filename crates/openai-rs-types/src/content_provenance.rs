@@ -344,16 +344,16 @@ mod tests {
 
     #[test]
     fn multipart_request_is_replayable_and_debug_redacted() {
-        let bytes = CreateContentProvenanceCheckRequest::new(
-            ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(&b"secret bytes"[..])),
-        );
+        let data: Arc<[u8]> = Arc::from(&b"secret bytes"[..]);
+        let bytes =
+            CreateContentProvenanceCheckRequest::new(ReplayableMultipartSource::from_bytes(data));
         let bytes_debug = format!("{bytes:?}");
         assert!(bytes_debug.contains("bytes"));
         assert!(!bytes_debug.contains("secret"));
 
-        let path = CreateContentProvenanceCheckRequest::new(
-            ReplayableMultipartSource::from_path("/private/customer/audio.wav"),
-        );
+        let path = CreateContentProvenanceCheckRequest::new(ReplayableMultipartSource::from_path(
+            "/private/customer/audio.wav",
+        ));
         let path_debug = format!("{path:?}");
         assert!(path_debug.contains("path"));
         assert!(!path_debug.contains("customer"));

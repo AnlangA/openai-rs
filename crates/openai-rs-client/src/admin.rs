@@ -118,7 +118,22 @@ pub trait AdminOperation: admin_operation_private::Sealed + Send + Sync + 'stati
 
 mod admin_operation_private {
     pub trait Sealed {}
+    pub trait QuerySealed {}
 }
+
+/// Sealed typed query accepted by Administration requests.
+pub trait AdminQuery: admin_operation_private::QuerySealed + Serialize {}
+
+macro_rules! admin_query {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl admin_operation_private::QuerySealed for $ty {}
+            impl AdminQuery for $ty {}
+        )+
+    };
+}
+
+admin_query!(AdminListParams, AuditLogListParams, UsageQueryParams);
 
 macro_rules! admin_operation {
     ($name:ident, $id:literal, $method:ident, $route:literal, $request:ty, $response:ty, $encoding:ident, $mode:ident) => {
@@ -1622,7 +1637,7 @@ impl<O: AdminOperation> AdminRequest<O> {
     }
 
     /// Encode a typed query object.
-    pub fn query<Q: Serialize + ?Sized>(mut self, query: &Q) -> Result<Self, Error> {
+    pub fn query<Q: AdminQuery + ?Sized>(mut self, query: &Q) -> Result<Self, Error> {
         self.query = encode_query(query)?;
         Ok(self)
     }
@@ -2433,4 +2448,381 @@ impl AdminUsage {
     usage_method!(file_search_calls, operations::OpUsageFileSearchCalls);
     usage_method!(web_search_calls, operations::OpUsageWebSearchCalls);
     usage_method!(costs, operations::OpUsageCosts);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use bytes::Bytes;
+    use http::StatusCode;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Request, Response, body::Incoming, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use tokio::{net::TcpListener, task::JoinHandle};
+
+    use super::*;
+
+    assert_impl_all!(AdminApiKey: Clone, Send, Sync);
+    assert_not_impl_any!(AdminApiKey: Serialize, DeserializeOwned);
+    assert_impl_all!(AdminClient: Clone, Send, Sync);
+
+    #[derive(Clone, Debug)]
+    struct CapturedRequest {
+        method: Method,
+        path_and_query: String,
+        authorization: Option<String>,
+        body: Vec<u8>,
+    }
+
+    async fn spawn_server() -> (Url, Arc<Mutex<Vec<CapturedRequest>>>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback server");
+        let address = listener.local_addr().expect("loopback address");
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let task_captured = Arc::clone(&captured);
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let connection_captured = Arc::clone(&task_captured);
+                tokio::spawn(async move {
+                    let service = service_fn(move |request: Request<Incoming>| {
+                        let request_captured = Arc::clone(&connection_captured);
+                        async move {
+                            let method = request.method().clone();
+                            let path_and_query = request.uri().path_and_query().map_or_else(
+                                || request.uri().path().to_owned(),
+                                ToString::to_string,
+                            );
+                            let authorization = request
+                                .headers()
+                                .get(header::AUTHORIZATION)
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned);
+                            let body = request
+                                .into_body()
+                                .collect()
+                                .await
+                                .expect("collect request")
+                                .to_bytes()
+                                .to_vec();
+                            request_captured
+                                .lock()
+                                .expect("capture lock")
+                                .push(CapturedRequest {
+                                    method,
+                                    path_and_query: path_and_query.clone(),
+                                    authorization,
+                                    body,
+                                });
+
+                            let (status, response_body) = if path_and_query
+                                .starts_with("/v1/organization/users")
+                            {
+                                (
+                                    StatusCode::OK,
+                                    r#"{"object":"list","data":[],"has_more":false}"#,
+                                )
+                            } else if path_and_query == "/v1/organization/groups" {
+                                (
+                                    StatusCode::OK,
+                                    r#"{"id":"group_1","name":"engineering","created_at":1,"is_scim_managed":false,"group_type":"group"}"#,
+                                )
+                            } else if path_and_query == "/v1/organization/admin_api_keys/key_1" {
+                                (StatusCode::NO_CONTENT, "")
+                            } else if path_and_query == "/v1/organization/admin_api_keys" {
+                                (
+                                    StatusCode::OK,
+                                    r#"{"object":"organization.admin_api_key","id":"key_1","redacted_value":"sk-admin...","created_at":1,"expires_at":null,"owner":{},"value":"sk-admin-new-secret"}"#,
+                                )
+                            } else if path_and_query.starts_with("/v1/organization/roles") {
+                                (
+                                    StatusCode::UNAUTHORIZED,
+                                    r#"{"error":{"message":"secret failure body","type":"auth_error","code":"invalid_admin_key"}}"#,
+                                )
+                            } else {
+                                (StatusCode::NOT_FOUND, r#"{"error":{"message":"missing"}}"#)
+                            };
+                            let response = Response::builder()
+                                .status(status)
+                                .header(header::CONTENT_TYPE, "application/json")
+                                .header("x-request-id", "req_admin_test")
+                                .body(Full::new(Bytes::copy_from_slice(response_body.as_bytes())))
+                                .expect("response");
+                            Ok::<_, std::convert::Infallible>(response)
+                        }
+                    });
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        let url = Url::parse(&format!("http://{address}/v1/")).expect("server URL");
+        (url, captured, task)
+    }
+
+    fn key() -> AdminApiKey {
+        AdminApiKey::new("admin-test-placeholder-key").expect("valid admin key")
+    }
+
+    #[test]
+    fn credential_and_builder_debug_are_redacted_and_base_is_strict() {
+        assert!(!format!("{:?}", key()).contains("placeholder"));
+        let builder = AdminClient::builder(key());
+        assert!(!format!("{builder:?}").contains("placeholder"));
+
+        let loopback = Url::parse("http://127.0.0.1:1234/v1/").expect("test URL");
+        assert!(
+            AdminClient::builder(key())
+                .base_url(loopback.clone())
+                .build()
+                .is_err()
+        );
+        assert!(
+            AdminClient::builder(key())
+                .base_url(loopback)
+                .allow_insecure_loopback(true)
+                .build()
+                .is_ok()
+        );
+        let localhost = Url::parse("http://localhost:1234/v1/").expect("test URL");
+        assert!(
+            AdminClient::builder(key())
+                .base_url(localhost)
+                .allow_insecure_loopback(true)
+                .build()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn query_encoder_supports_arrays_null_and_deep_objects() {
+        let query = serde_json::json!({
+            "project_ids": ["proj_1", "proj_2"],
+            "metadata": {"team": "sdk"},
+            "after": null
+        });
+        let pairs = encode_query(&query).expect("encode query");
+        assert!(pairs.contains(&("project_ids".to_owned(), "proj_1".to_owned())));
+        assert!(pairs.contains(&("project_ids".to_owned(), "proj_2".to_owned())));
+        assert!(pairs.contains(&("metadata[team]".to_owned(), "sdk".to_owned())));
+        assert!(pairs.contains(&("after".to_owned(), String::new())));
+    }
+
+    #[tokio::test]
+    async fn loopback_get_post_delete_and_secret_response_use_admin_auth() {
+        let (base_url, captured, task) = spawn_server().await;
+        let client = AdminClient::builder(key())
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("build admin client");
+
+        let users = client
+            .users()
+            .list(&AdminListParams::default())
+            .await
+            .expect("list users");
+        assert!(users.data.is_empty());
+
+        let group = client
+            .groups()
+            .create(CreateGroupBody {
+                name: "engineering".to_owned(),
+            })
+            .await
+            .expect("create group");
+        assert_eq!(group.name, "engineering");
+
+        client.api_keys().delete("key_1").await.expect("delete key");
+
+        let created = client
+            .api_keys()
+            .create(AdminApiKeyCreateRequest::new("automation"))
+            .await
+            .expect("create key");
+        assert!(!format!("{:?}", created.body()).contains("new-secret"));
+
+        let captured = captured.lock().expect("capture lock");
+        assert_eq!(captured.len(), 4);
+        assert_eq!(captured[0].method, Method::GET);
+        assert_eq!(captured[1].method, Method::POST);
+        assert_eq!(captured[2].method, Method::DELETE);
+        assert_eq!(captured[3].method, Method::POST);
+        assert_eq!(captured[0].path_and_query, "/v1/organization/users");
+        assert_eq!(captured[1].path_and_query, "/v1/organization/groups");
+        assert_eq!(
+            captured[2].path_and_query,
+            "/v1/organization/admin_api_keys/key_1"
+        );
+        assert_eq!(
+            captured[3].path_and_query,
+            "/v1/organization/admin_api_keys"
+        );
+        for request in captured.iter() {
+            assert_eq!(
+                request.authorization.as_deref(),
+                Some("Bearer admin-test-placeholder-key")
+            );
+        }
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captured[1].body).expect("group JSON")["name"],
+            "engineering"
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn loopback_errors_are_typed_and_redacted() {
+        let (base_url, _captured, task) = spawn_server().await;
+        let client = AdminClient::builder(key())
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("build admin client");
+        let error = client
+            .roles()
+            .list(&AdminListParams::default())
+            .await
+            .expect_err("server returns an error");
+        assert_eq!(error.status(), Some(StatusCode::UNAUTHORIZED));
+        assert_eq!(error.request_id(), Some("req_admin_test"));
+        assert!(!format!("{error:?}").contains("secret failure body"));
+        task.abort();
+    }
+
+    fn assert_operation<O: AdminOperation>() {
+        assert_eq!(O::AUTH, AdminAuthScope::Admin);
+        assert!(!O::ID.is_empty());
+        assert!(O::ROUTE.starts_with('/'));
+    }
+
+    #[test]
+    fn every_manifest_entry_has_a_unique_compiling_operation_marker() {
+        assert_eq!(ADMIN_OPERATION_MANIFEST.len(), 119);
+        assert_operation::<operations::OpCreateanAPIkeyforaserviceaccount>();
+        assert_operation::<operations::OpDeleteorganizationspendlimit>();
+        assert_operation::<operations::OpDeleteprojectspendlimit>();
+        assert_operation::<operations::OpGetorganizationspendlimit>();
+        assert_operation::<operations::OpGetprojectspendlimit>();
+        assert_operation::<operations::OpUpdateorganizationspendlimit>();
+        assert_operation::<operations::OpUpdateprojectspendlimit>();
+        assert_operation::<operations::OpActivateOrganizationCertificates>();
+        assert_operation::<operations::OpActivateProjectCertificates>();
+        assert_operation::<operations::OpAddGroupUser>();
+        assert_operation::<operations::OpAddProjectGroup>();
+        assert_operation::<operations::OpAdminApiKeysCreate>();
+        assert_operation::<operations::OpAdminApiKeysDelete>();
+        assert_operation::<operations::OpAdminApiKeysGet>();
+        assert_operation::<operations::OpAdminApiKeysList>();
+        assert_operation::<operations::OpArchiveProject>();
+        assert_operation::<operations::OpAssignGroupRole>();
+        assert_operation::<operations::OpAssignProjectGroupRole>();
+        assert_operation::<operations::OpAssignProjectUserRole>();
+        assert_operation::<operations::OpAssignUserRole>();
+        assert_operation::<operations::OpCreateGroup>();
+        assert_operation::<operations::OpCreateOrganizationSpendAlert>();
+        assert_operation::<operations::OpCreateProject>();
+        assert_operation::<operations::OpCreateProjectRole>();
+        assert_operation::<operations::OpCreateProjectServiceAccount>();
+        assert_operation::<operations::OpCreateProjectSpendAlert>();
+        assert_operation::<operations::OpCreateProjectUser>();
+        assert_operation::<operations::OpCreateRole>();
+        assert_operation::<operations::OpDeactivateOrganizationCertificates>();
+        assert_operation::<operations::OpDeactivateProjectCertificates>();
+        assert_operation::<operations::OpDeleteGroup>();
+        assert_operation::<operations::OpDeleteInvite>();
+        assert_operation::<operations::OpDeleteOrganizationSpendAlert>();
+        assert_operation::<operations::OpDeleteProjectApiKey>();
+        assert_operation::<operations::OpDeleteProjectModelPermissions>();
+        assert_operation::<operations::OpDeleteProjectRole>();
+        assert_operation::<operations::OpDeleteProjectServiceAccount>();
+        assert_operation::<operations::OpDeleteProjectSpendAlert>();
+        assert_operation::<operations::OpDeleteProjectUser>();
+        assert_operation::<operations::OpDeleteRole>();
+        assert_operation::<operations::OpDeleteUser>();
+        assert_operation::<operations::OpDeleteCertificate>();
+        assert_operation::<operations::OpGetCertificate>();
+        assert_operation::<operations::OpInviteUser>();
+        assert_operation::<operations::OpListAuditLogs>();
+        assert_operation::<operations::OpListGroupRoleAssignments>();
+        assert_operation::<operations::OpListGroupUsers>();
+        assert_operation::<operations::OpListGroups>();
+        assert_operation::<operations::OpListInvites>();
+        assert_operation::<operations::OpListOrganizationSpendAlerts>();
+        assert_operation::<operations::OpListProjectApiKeys>();
+        assert_operation::<operations::OpListProjectGroupRoleAssignments>();
+        assert_operation::<operations::OpListProjectGroups>();
+        assert_operation::<operations::OpListProjectRateLimits>();
+        assert_operation::<operations::OpListProjectRoles>();
+        assert_operation::<operations::OpListProjectServiceAccounts>();
+        assert_operation::<operations::OpListProjectSpendAlerts>();
+        assert_operation::<operations::OpListProjectUserRoleAssignments>();
+        assert_operation::<operations::OpListProjectUsers>();
+        assert_operation::<operations::OpListProjects>();
+        assert_operation::<operations::OpListRoles>();
+        assert_operation::<operations::OpListUserRoleAssignments>();
+        assert_operation::<operations::OpListUsers>();
+        assert_operation::<operations::OpListOrganizationCertificates>();
+        assert_operation::<operations::OpListProjectCertificates>();
+        assert_operation::<operations::OpModifyProject>();
+        assert_operation::<operations::OpModifyProjectUser>();
+        assert_operation::<operations::OpModifyUser>();
+        assert_operation::<operations::OpModifyCertificate>();
+        assert_operation::<operations::OpRemoveGroupUser>();
+        assert_operation::<operations::OpRemoveProjectGroup>();
+        assert_operation::<operations::OpRetrieveGroup>();
+        assert_operation::<operations::OpRetrieveGroupRole>();
+        assert_operation::<operations::OpRetrieveGroupUser>();
+        assert_operation::<operations::OpRetrieveInvite>();
+        assert_operation::<operations::OpRetrieveOrganizationDataRetention>();
+        assert_operation::<operations::OpRetrieveOrganizationSpendAlert>();
+        assert_operation::<operations::OpRetrieveProject>();
+        assert_operation::<operations::OpRetrieveProjectApiKey>();
+        assert_operation::<operations::OpRetrieveProjectDataRetention>();
+        assert_operation::<operations::OpRetrieveProjectGroup>();
+        assert_operation::<operations::OpRetrieveProjectGroupRole>();
+        assert_operation::<operations::OpRetrieveProjectHostedToolPermissions>();
+        assert_operation::<operations::OpRetrieveProjectModelPermissions>();
+        assert_operation::<operations::OpRetrieveProjectRole>();
+        assert_operation::<operations::OpRetrieveProjectServiceAccount>();
+        assert_operation::<operations::OpRetrieveProjectSpendAlert>();
+        assert_operation::<operations::OpRetrieveProjectUser>();
+        assert_operation::<operations::OpRetrieveProjectUserRole>();
+        assert_operation::<operations::OpRetrieveRole>();
+        assert_operation::<operations::OpRetrieveUser>();
+        assert_operation::<operations::OpRetrieveUserRole>();
+        assert_operation::<operations::OpUnassignGroupRole>();
+        assert_operation::<operations::OpUnassignProjectGroupRole>();
+        assert_operation::<operations::OpUnassignProjectUserRole>();
+        assert_operation::<operations::OpUnassignUserRole>();
+        assert_operation::<operations::OpUpdateGroup>();
+        assert_operation::<operations::OpUpdateOrganizationDataRetention>();
+        assert_operation::<operations::OpUpdateOrganizationSpendAlert>();
+        assert_operation::<operations::OpUpdateProjectDataRetention>();
+        assert_operation::<operations::OpUpdateProjectHostedToolPermissions>();
+        assert_operation::<operations::OpUpdateProjectModelPermissions>();
+        assert_operation::<operations::OpUpdateProjectRateLimits>();
+        assert_operation::<operations::OpUpdateProjectRole>();
+        assert_operation::<operations::OpUpdateProjectServiceAccount>();
+        assert_operation::<operations::OpUpdateProjectSpendAlert>();
+        assert_operation::<operations::OpUpdateRole>();
+        assert_operation::<operations::OpUploadCertificate>();
+        assert_operation::<operations::OpUsageAudioSpeeches>();
+        assert_operation::<operations::OpUsageAudioTranscriptions>();
+        assert_operation::<operations::OpUsageCodeInterpreterSessions>();
+        assert_operation::<operations::OpUsageCompletions>();
+        assert_operation::<operations::OpUsageCosts>();
+        assert_operation::<operations::OpUsageEmbeddings>();
+        assert_operation::<operations::OpUsageFileSearchCalls>();
+        assert_operation::<operations::OpUsageImages>();
+        assert_operation::<operations::OpUsageModerations>();
+        assert_operation::<operations::OpUsageVectorStores>();
+        assert_operation::<operations::OpUsageWebSearchCalls>();
+    }
 }

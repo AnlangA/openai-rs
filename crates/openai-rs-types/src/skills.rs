@@ -5,7 +5,7 @@
 //! implement JSON Serde. Skill content is a raw HTTP body represented by
 //! [`SkillContent`].
 
-use std::fmt;
+use std::{collections::HashSet, fmt};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -324,6 +324,91 @@ pub struct SkillUploadFileCountError {
     count: usize,
 }
 
+/// A validated relative path retained as a multipart filename for directory
+/// Skill uploads.
+///
+/// This deliberately differs from the generic [`crate::files::MultipartFileName`]:
+/// directory uploads need `/` separators, while ordinary multipart filenames
+/// must remain basenames.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SafeRelativeSkillPath(Box<str>);
+
+impl SafeRelativeSkillPath {
+    /// Validates a normalized, non-traversing relative path.
+    pub fn new(value: impl Into<String>) -> Result<Self, SkillUploadPathError> {
+        let value = value.into();
+        let valid = !value.is_empty()
+            && value.len() <= 1024
+            && !value.starts_with('/')
+            && !value.ends_with('/')
+            && !value.contains('\\')
+            && !value.contains(':')
+            && !value.contains('"')
+            && !value.chars().any(char::is_control)
+            && value
+                .split('/')
+                .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
+        if !valid {
+            return Err(SkillUploadPathError);
+        }
+        Ok(Self(value.into_boxed_str()))
+    }
+
+    /// Returns the normalized relative path used on the multipart wire.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SafeRelativeSkillPath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SafeRelativeSkillPath([REDACTED])")
+    }
+}
+
+/// A Skill directory path was absolute, traversing, malformed, or unsafe for a
+/// multipart header.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[error("Skill upload path must be a normalized safe relative path")]
+pub struct SkillUploadPathError;
+
+/// A directory upload had an invalid file count or repeated relative path.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SkillDirectoryUploadError {
+    /// The upload contained zero or more than 500 files.
+    #[error(transparent)]
+    FileCount(#[from] SkillUploadFileCountError),
+    /// Two sources would be sent with the same relative multipart filename.
+    #[error("Skill directory upload contains a duplicate relative path")]
+    DuplicatePath,
+}
+
+fn validate_directory_entries(
+    entries: impl IntoIterator<Item = (SafeRelativeSkillPath, ReplayableMultipartSource)>,
+) -> Result<(Vec<ReplayableMultipartSource>, Vec<SafeRelativeSkillPath>), SkillDirectoryUploadError>
+{
+    let entries: Vec<_> = entries.into_iter().collect();
+    if entries.is_empty() || entries.len() > 500 {
+        return Err(SkillUploadFileCountError {
+            count: entries.len(),
+        }
+        .into());
+    }
+    let mut unique = HashSet::with_capacity(entries.len());
+    let mut files = Vec::with_capacity(entries.len());
+    let mut paths = Vec::with_capacity(entries.len());
+    for (path, file) in entries {
+        if !unique.insert(path.clone()) {
+            return Err(SkillDirectoryUploadError::DuplicatePath);
+        }
+        paths.push(path);
+        files.push(file);
+    }
+    Ok((files, paths))
+}
+
 impl SkillUploadFileCountError {
     /// Rejected file count.
     #[must_use]
@@ -339,13 +424,17 @@ impl SkillUploadFileCountError {
 #[derive(Clone, PartialEq)]
 pub struct CreateSkillRequest {
     files: Vec<ReplayableMultipartSource>,
+    relative_paths: Option<Vec<SafeRelativeSkillPath>>,
 }
 
 impl CreateSkillRequest {
     /// Upload a single zip bundle or one directory file.
     #[must_use]
     pub fn new(file: ReplayableMultipartSource) -> Self {
-        Self { files: vec![file] }
+        Self {
+            files: vec![file],
+            relative_paths: None,
+        }
     }
 
     /// Upload one to 500 directory files.
@@ -356,13 +445,33 @@ impl CreateSkillRequest {
         if files.is_empty() || files.len() > 500 {
             return Err(SkillUploadFileCountError { count: files.len() });
         }
-        Ok(Self { files })
+        Ok(Self {
+            files,
+            relative_paths: None,
+        })
+    }
+
+    /// Uploads a directory while preserving each validated relative path.
+    pub fn from_directory_files(
+        files: impl IntoIterator<Item = (SafeRelativeSkillPath, ReplayableMultipartSource)>,
+    ) -> Result<Self, SkillDirectoryUploadError> {
+        let (files, relative_paths) = validate_directory_entries(files)?;
+        Ok(Self {
+            files,
+            relative_paths: Some(relative_paths),
+        })
     }
 
     /// Ordered multipart file fields.
     #[must_use]
     pub fn files(&self) -> &[ReplayableMultipartSource] {
         &self.files
+    }
+
+    /// Relative multipart paths for a directory upload, in file order.
+    #[must_use]
+    pub fn relative_paths(&self) -> Option<&[SafeRelativeSkillPath]> {
+        self.relative_paths.as_deref()
     }
 }
 
@@ -379,6 +488,7 @@ impl fmt::Debug for CreateSkillRequest {
 #[derive(Clone, PartialEq)]
 pub struct CreateSkillVersionRequest {
     files: Vec<ReplayableMultipartSource>,
+    relative_paths: Option<Vec<SafeRelativeSkillPath>>,
     /// Whether this version becomes the default.
     pub default: Omittable<bool>,
 }
@@ -389,6 +499,7 @@ impl CreateSkillVersionRequest {
     pub fn new(file: ReplayableMultipartSource) -> Self {
         Self {
             files: vec![file],
+            relative_paths: None,
             default: Omittable::Omitted,
         }
     }
@@ -403,6 +514,19 @@ impl CreateSkillVersionRequest {
         }
         Ok(Self {
             files,
+            relative_paths: None,
+            default: Omittable::Omitted,
+        })
+    }
+
+    /// Uploads a directory version while preserving validated relative paths.
+    pub fn from_directory_files(
+        files: impl IntoIterator<Item = (SafeRelativeSkillPath, ReplayableMultipartSource)>,
+    ) -> Result<Self, SkillDirectoryUploadError> {
+        let (files, relative_paths) = validate_directory_entries(files)?;
+        Ok(Self {
+            files,
+            relative_paths: Some(relative_paths),
             default: Omittable::Omitted,
         })
     }
@@ -418,6 +542,12 @@ impl CreateSkillVersionRequest {
     #[must_use]
     pub fn files(&self) -> &[ReplayableMultipartSource] {
         &self.files
+    }
+
+    /// Relative multipart paths for a directory upload, in file order.
+    #[must_use]
+    pub fn relative_paths(&self) -> Option<&[SafeRelativeSkillPath]> {
+        self.relative_paths.as_deref()
     }
 }
 

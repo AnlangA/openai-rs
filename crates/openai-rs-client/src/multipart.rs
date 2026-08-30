@@ -25,7 +25,9 @@ use tokio_util::io::ReaderStream;
 use url::Url;
 
 use crate::transport::{PathSegment, deserialize_json};
-use crate::{ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy};
+use crate::{
+    ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy, auth::AuthProvider,
+};
 
 const JSON_MIME: &str = "application/json";
 const BINARY_MIME: &str = "application/binary";
@@ -355,7 +357,7 @@ impl fmt::Debug for FileContentStream {
 pub(crate) struct MultipartTransport {
     http: reqwest::Client,
     base_url: Url,
-    authorization: HeaderValue,
+    auth: AuthProvider,
     organization: Option<HeaderValue>,
     project: Option<HeaderValue>,
     max_json_body_bytes: usize,
@@ -369,7 +371,7 @@ impl MultipartTransport {
     pub(crate) fn new(
         http: reqwest::Client,
         base_url: Url,
-        authorization: HeaderValue,
+        auth: AuthProvider,
         organization: Option<HeaderValue>,
         project: Option<HeaderValue>,
         max_json_body_bytes: usize,
@@ -380,7 +382,7 @@ impl MultipartTransport {
         Self {
             http,
             base_url,
-            authorization,
+            auth,
             organization,
             project,
             max_json_body_bytes,
@@ -485,11 +487,18 @@ impl MultipartTransport {
         let url = self.operation_url(path)?;
         let started = Instant::now();
         let mut retries = 0;
+        let mut auth_refreshed = false;
         loop {
             let remaining = remaining_time(started, self.overall_timeout)?;
             let form = prepared.build_form().await?;
+            let authorization = self.auth.authorization().await?;
             let request = self
-                .request(reqwest::Method::POST, url.clone(), accept)
+                .request(
+                    reqwest::Method::POST,
+                    url.clone(),
+                    accept,
+                    authorization.header.clone(),
+                )
                 .timeout(remaining)
                 .multipart(form)
                 .build()
@@ -512,6 +521,18 @@ impl MultipartTransport {
                 }
                 Err(error) => return Err(Error::from_reqwest(error)),
             };
+            if response.status() == StatusCode::UNAUTHORIZED
+                && authorization.generation.is_some()
+                && !auth_refreshed
+            {
+                let _ = self
+                    .auth
+                    .invalidate_if_generation(authorization.generation)
+                    .await;
+                auth_refreshed = true;
+                drop(response);
+                continue;
+            }
             if response.status() == StatusCode::OK {
                 return Ok(response);
             }
@@ -544,8 +565,14 @@ impl MultipartTransport {
         accept: &'static str,
     ) -> Result<reqwest::Response, Error> {
         let url = self.operation_url(path)?;
+        let authorization = self.auth.authorization().await?;
         let request = self
-            .request(reqwest::Method::POST, url, accept)
+            .request(
+                reqwest::Method::POST,
+                url,
+                accept,
+                authorization.header.clone(),
+            )
             .timeout(self.overall_timeout)
             .multipart(form)
             .build()
@@ -556,6 +583,12 @@ impl MultipartTransport {
             .execute(request)
             .await
             .map_err(Error::from_reqwest)?;
+        if response.status() == StatusCode::UNAUTHORIZED {
+            let _ = self
+                .auth
+                .invalidate_if_generation(authorization.generation)
+                .await;
+        }
         if response.status() == StatusCode::OK {
             Ok(response)
         } else {
@@ -578,10 +611,17 @@ impl MultipartTransport {
         let encoded = serde_json::to_vec(body).map_err(Error::Encode)?;
         let started = Instant::now();
         let mut retries = 0;
+        let mut auth_refreshed = false;
         loop {
             let remaining = remaining_time(started, self.overall_timeout)?;
+            let authorization = self.auth.authorization().await?;
             let request = self
-                .request(reqwest::Method::POST, url.clone(), accept)
+                .request(
+                    reqwest::Method::POST,
+                    url.clone(),
+                    accept,
+                    authorization.header.clone(),
+                )
                 .timeout(remaining)
                 .header(header::CONTENT_TYPE, JSON_MIME)
                 .body(encoded.clone())
@@ -605,6 +645,18 @@ impl MultipartTransport {
                 }
                 Err(error) => return Err(Error::from_reqwest(error)),
             };
+            if response.status() == StatusCode::UNAUTHORIZED
+                && authorization.generation.is_some()
+                && !auth_refreshed
+            {
+                let _ = self
+                    .auth
+                    .invalidate_if_generation(authorization.generation)
+                    .await;
+                auth_refreshed = true;
+                drop(response);
+                continue;
+            }
             if response.status() == StatusCode::OK {
                 return Ok(response);
             }
@@ -637,10 +689,17 @@ impl MultipartTransport {
     ) -> Result<reqwest::Response, Error> {
         let started = Instant::now();
         let mut retries = 0;
+        let mut auth_refreshed = false;
         loop {
             let remaining = remaining_time(started, self.overall_timeout)?;
+            let authorization = self.auth.authorization().await?;
             let request = self
-                .request(reqwest::Method::GET, url.clone(), accept)
+                .request(
+                    reqwest::Method::GET,
+                    url.clone(),
+                    accept,
+                    authorization.header.clone(),
+                )
                 .timeout(remaining)
                 .build()
                 .map_err(Error::from_reqwest)?;
@@ -661,6 +720,18 @@ impl MultipartTransport {
                 }
                 Err(error) => return Err(Error::from_reqwest(error)),
             };
+            if response.status() == StatusCode::UNAUTHORIZED
+                && authorization.generation.is_some()
+                && !auth_refreshed
+            {
+                let _ = self
+                    .auth
+                    .invalidate_if_generation(authorization.generation)
+                    .await;
+                auth_refreshed = true;
+                drop(response);
+                continue;
+            }
             if response.status() == StatusCode::OK {
                 return Ok(response);
             }
@@ -688,11 +759,12 @@ impl MultipartTransport {
         method: reqwest::Method,
         url: Url,
         accept: &'static str,
+        authorization: HeaderValue,
     ) -> reqwest::RequestBuilder {
         let mut request = self
             .http
             .request(method, url)
-            .header(header::AUTHORIZATION, self.authorization.clone())
+            .header(header::AUTHORIZATION, authorization)
             .header(header::ACCEPT, accept);
         if let Some(organization) = &self.organization {
             request = request.header("OpenAI-Organization", organization.clone());
@@ -778,7 +850,7 @@ impl fmt::Debug for MultipartTransport {
         formatter
             .debug_struct("MultipartTransport")
             .field("base_origin", &self.base_url.origin().ascii_serialization())
-            .field("authorization", &"[REDACTED]")
+            .field("auth", &self.auth)
             .field(
                 "organization",
                 &self.organization.as_ref().map(|_| "[REDACTED]"),
@@ -797,7 +869,7 @@ impl fmt::Debug for MultipartTransport {
 /// are produced for every attempt.
 pub(crate) struct ReplayableMultipartForm {
     text_fields: Vec<(Box<str>, String)>,
-    parts: Vec<(Box<str>, PreparedReplayableSource)>,
+    parts: Vec<(Box<str>, PreparedReplayableSource, Option<Box<str>>)>,
 }
 
 impl ReplayableMultipartForm {
@@ -820,7 +892,21 @@ impl ReplayableMultipartForm {
         name: impl Into<Box<str>>,
         source: PreparedReplayableSource,
     ) -> Self {
-        self.parts.push((name.into(), source));
+        self.parts.push((name.into(), source, None));
+        self
+    }
+
+    /// Adds a part whose filename has already been validated by an
+    /// operation-specific type (for example a safe relative Skill path).
+    #[must_use]
+    pub(crate) fn part_with_file_name(
+        mut self,
+        name: impl Into<Box<str>>,
+        source: PreparedReplayableSource,
+        file_name: impl Into<Box<str>>,
+    ) -> Self {
+        self.parts
+            .push((name.into(), source, Some(file_name.into())));
         self
     }
 
@@ -829,8 +915,12 @@ impl ReplayableMultipartForm {
         for (name, value) in &self.text_fields {
             form = form.text(name.to_string(), value.clone());
         }
-        for (name, source) in &self.parts {
-            form = form.part(name.to_string(), source.build_part().await?);
+        for (name, source, file_name) in &self.parts {
+            let mut part = source.build_part().await?;
+            if let Some(file_name) = file_name {
+                part = part.file_name(file_name.to_string());
+            }
+            form = form.part(name.to_string(), part);
         }
         Ok(form)
     }
@@ -1234,6 +1324,7 @@ mod tests {
     use tokio::{net::TcpListener, sync::oneshot};
 
     use super::*;
+    use crate::ApiKey;
 
     assert_not_impl_any!(OneShotMultipartSource: Clone, serde::Serialize);
     assert_not_impl_any!(CreateFileOneShotRequest: Clone, serde::Serialize);
@@ -1317,7 +1408,7 @@ mod tests {
                 .build()
                 .expect("multipart test HTTP client"),
             base_url,
-            HeaderValue::from_static("Bearer test-placeholder-key"),
+            AuthProvider::api_key(ApiKey::new("test-placeholder-key").expect("test key")),
             None,
             None,
             1024 * 1024,
@@ -1493,7 +1584,7 @@ mod tests {
         let transport = MultipartTransport::new(
             reqwest::Client::new(),
             Url::parse("https://api.openai.com/v1/").expect("test base URL"),
-            HeaderValue::from_static("Bearer test-placeholder-key"),
+            AuthProvider::api_key(ApiKey::new("test-placeholder-key").expect("test key")),
             None,
             None,
             1024,

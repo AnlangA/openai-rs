@@ -8,9 +8,9 @@ use openai_rs_types::{
     Omittable,
     skills::{
         CreateSkillRequest, CreateSkillVersionRequest, DeletedSkillResource,
-        DeletedSkillVersionResource, SetDefaultSkillVersionBody, SkillId, SkillListParams,
-        SkillListResource, SkillResource, SkillVersionListResource, SkillVersionNumber,
-        SkillVersionResource,
+        DeletedSkillVersionResource, SafeRelativeSkillPath, SetDefaultSkillVersionBody, SkillId,
+        SkillListParams, SkillListResource, SkillResource, SkillVersionListResource,
+        SkillVersionNumber, SkillVersionResource,
     },
 };
 
@@ -57,7 +57,12 @@ impl Skills {
         request: CreateSkillRequest,
     ) -> Result<ApiResponse<SkillResource>, Error> {
         let path = [PathSegment::literal("skills")];
-        let form = prepare_skill_form(request.files(), Omittable::Omitted).await?;
+        let form = prepare_skill_form(
+            request.files(),
+            request.relative_paths(),
+            Omittable::Omitted,
+        )
+        .await?;
         let response = self
             .client
             .multipart_transport()
@@ -176,7 +181,8 @@ impl SkillVersions {
         request: CreateSkillVersionRequest,
     ) -> Result<ApiResponse<SkillVersionResource>, Error> {
         let path = skill_versions_path(skill_id)?;
-        let form = prepare_skill_form(request.files(), request.default).await?;
+        let form =
+            prepare_skill_form(request.files(), request.relative_paths(), request.default).await?;
         let response = self
             .client
             .multipart_transport()
@@ -276,6 +282,7 @@ impl SkillVersions {
 
 async fn prepare_skill_form(
     files: &[openai_rs_types::files::ReplayableMultipartSource],
+    relative_paths: Option<&[SafeRelativeSkillPath]>,
     default: Omittable<bool>,
 ) -> Result<ReplayableMultipartForm, Error> {
     if files.is_empty() || files.len() > 500 {
@@ -283,13 +290,22 @@ async fn prepare_skill_form(
             "Skill upload requires between 1 and 500 files".into(),
         ));
     }
+    if relative_paths.is_some_and(|paths| paths.len() != files.len()) {
+        return Err(Error::InvalidConfiguration(
+            "Skill directory path count does not match source count".into(),
+        ));
+    }
     let field = if files.len() == 1 { "files" } else { "files[]" };
     let mut form = ReplayableMultipartForm::new();
     if let Omittable::Value(default) = default {
         form = form.text("default", default.to_string());
     }
-    for source in files {
-        form = form.part(field, PreparedReplayableSource::prepare(source).await?);
+    for (index, source) in files.iter().enumerate() {
+        let prepared = PreparedReplayableSource::prepare(source).await?;
+        form = match relative_paths.and_then(|paths| paths.get(index)) {
+            Some(path) => form.part_with_file_name(field, prepared, path.as_str()),
+            None => form.part(field, prepared),
+        };
     }
     Ok(form)
 }
@@ -468,8 +484,9 @@ mod tests {
         Omittable,
         files::ReplayableMultipartSource,
         skills::{
-            CreateSkillRequest, CreateSkillVersionRequest, SetDefaultSkillVersionBody, SkillId,
-            SkillListLimit, SkillListOrder, SkillListParams, SkillVersionNumber,
+            CreateSkillRequest, CreateSkillVersionRequest, SafeRelativeSkillPath,
+            SetDefaultSkillVersionBody, SkillDirectoryUploadError, SkillId, SkillListLimit,
+            SkillListOrder, SkillListParams, SkillVersionNumber,
         },
     };
     use serde_json::{Value, json};
@@ -652,6 +669,36 @@ mod tests {
             .expect("safe Skill filename")
     }
 
+    #[test]
+    fn directory_paths_reject_traversal_header_and_platform_ambiguity() {
+        for invalid in [
+            "/absolute/SKILL.md",
+            "../SKILL.md",
+            "agents/../SKILL.md",
+            "./SKILL.md",
+            "agents/./SKILL.md",
+            "agents\\SKILL.md",
+            "C:/SKILL.md",
+            "agents/SKILL.md\r\nX-Injected: yes",
+        ] {
+            assert!(
+                SafeRelativeSkillPath::new(invalid).is_err(),
+                "accepted unsafe path {invalid:?}"
+            );
+        }
+
+        let path =
+            SafeRelativeSkillPath::new("agents/research/SKILL.md").expect("safe nested path");
+        let duplicate = CreateSkillRequest::from_directory_files([
+            (path.clone(), bytes_source("first.md", b"ONE")),
+            (path, bytes_source("second.md", b"TWO")),
+        ]);
+        assert!(matches!(
+            duplicate,
+            Err(SkillDirectoryUploadError::DuplicatePath)
+        ));
+    }
+
     #[tokio::test]
     async fn create_skill_sends_single_zip_multipart() {
         let (client, captures) =
@@ -679,6 +726,27 @@ mod tests {
         assert!(body.contains("name=\"files\""));
         assert!(body.contains("filename=\"skill.zip\""));
         assert!(body.contains("ZIP"));
+    }
+
+    #[tokio::test]
+    async fn directory_upload_preserves_nested_relative_filename_on_wire() {
+        let (client, captures) =
+            serve_script(vec![StubResponse::json(skill_json("skill_dir", "1", "1"))]).await;
+        let request = CreateSkillRequest::from_directory_files([(
+            SafeRelativeSkillPath::new("agents/research/SKILL.md").expect("nested path"),
+            bytes_source("ignored-basename.md", b"NESTED"),
+        )])
+        .expect("directory request");
+        Skills::new(client)
+            .create(request)
+            .await
+            .expect("create directory Skill");
+
+        let captures = captures.lock().expect("capture lock");
+        let body = String::from_utf8_lossy(&captures[0].body);
+        assert!(body.contains("name=\"files\""));
+        assert!(body.contains("filename=\"agents/research/SKILL.md\""));
+        assert!(body.contains("NESTED"));
     }
 
     #[tokio::test]

@@ -27,9 +27,8 @@ const DEFAULT_TOKEN_LIFETIME: Duration = Duration::from_secs(3_600);
 const MAX_EXCHANGE_BODY_BYTES: usize = 64 * 1024;
 
 /// Boxed future returned by [`SubjectTokenProvider`].
-pub type SubjectTokenFuture<'a> = Pin<
-    Box<dyn Future<Output = Result<SubjectToken, SubjectTokenProviderError>> + Send + 'a>,
->;
+pub type SubjectTokenFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<SubjectToken, SubjectTokenProviderError>> + Send + 'a>>;
 
 /// RFC 8693 subject-token kind accepted by OpenAI workload identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -426,10 +425,7 @@ impl WorkloadIdentityAuth {
         self.notify.notify_waiters();
     }
 
-    async fn exchange(
-        &self,
-        generation: u64,
-    ) -> Result<CachedToken, Arc<WorkloadIdentityError>> {
+    async fn exchange(&self, generation: u64) -> Result<CachedToken, Arc<WorkloadIdentityError>> {
         let subject = self
             .config
             .provider
@@ -480,7 +476,9 @@ impl WorkloadIdentityAuth {
                 body: BodyPreview::from_bytes(&bytes, false),
             })
         })?;
-        let lifetime_seconds = response.expires_in.unwrap_or(DEFAULT_TOKEN_LIFETIME.as_secs_f64());
+        let lifetime_seconds = response
+            .expires_in
+            .unwrap_or(DEFAULT_TOKEN_LIFETIME.as_secs_f64());
         let lifetime = Duration::try_from_secs_f64(lifetime_seconds).map_err(|_| {
             Arc::new(WorkloadIdentityError::InvalidResponse {
                 reason: "response contains an invalid expires_in",
@@ -599,4 +597,364 @@ async fn read_bounded(
         body.extend_from_slice(&chunk);
     }
     Ok((body, false))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::VecDeque,
+        convert::Infallible,
+        sync::{
+            Arc, Mutex as StdMutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+    use url::Url;
+
+    use super::*;
+    use crate::Client;
+
+    #[derive(Clone)]
+    struct Reply {
+        status: StatusCode,
+        body: String,
+        location: Option<String>,
+    }
+
+    async fn exchange_server(
+        replies: Vec<Reply>,
+    ) -> (Url, Arc<AtomicUsize>, Arc<StdMutex<Vec<Value>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind exchange server");
+        let address = listener.local_addr().expect("exchange address");
+        let replies = Arc::new(StdMutex::new(VecDeque::from(replies)));
+        let count = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let server_count = Arc::clone(&count);
+        let server_requests = Arc::clone(&requests);
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let replies = Arc::clone(&replies);
+                let count = Arc::clone(&server_count);
+                let requests = Arc::clone(&server_requests);
+                tokio::spawn(async move {
+                    let service = service_fn(move |request: Request<Incoming>| {
+                        let replies = Arc::clone(&replies);
+                        let count = Arc::clone(&count);
+                        let requests = Arc::clone(&requests);
+                        async move {
+                            count.fetch_add(1, Ordering::SeqCst);
+                            let bytes = request
+                                .into_body()
+                                .collect()
+                                .await
+                                .expect("read exchange request")
+                                .to_bytes();
+                            let value = serde_json::from_slice(&bytes).expect("exchange JSON");
+                            requests.lock().expect("exchange requests lock").push(value);
+                            let reply = {
+                                let mut replies = replies.lock().expect("exchange replies lock");
+                                match replies.len() {
+                                    0 => Reply {
+                                        status: StatusCode::INTERNAL_SERVER_ERROR,
+                                        body: "{}".to_owned(),
+                                        location: None,
+                                    },
+                                    1 => replies.front().expect("one reply").clone(),
+                                    _ => replies.pop_front().expect("queued reply"),
+                                }
+                            };
+                            let mut response = hyper::Response::builder()
+                                .status(reply.status)
+                                .header(http::header::CONTENT_TYPE, "application/json");
+                            if let Some(location) = reply.location {
+                                response = response.header(http::header::LOCATION, location);
+                            }
+                            Ok::<_, Infallible>(
+                                response
+                                    .body(Full::new(Bytes::from(reply.body)))
+                                    .expect("exchange response"),
+                            )
+                        }
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        (
+            Url::parse(&format!("http://{address}/oauth/token")).expect("exchange URL"),
+            count,
+            requests,
+        )
+    }
+
+    async fn api_server(reject_first: bool) -> (Url, Arc<AtomicUsize>, Arc<StdMutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind API server");
+        let address = listener.local_addr().expect("API address");
+        let count = Arc::new(AtomicUsize::new(0));
+        let headers = Arc::new(StdMutex::new(Vec::new()));
+        let server_count = Arc::clone(&count);
+        let server_headers = Arc::clone(&headers);
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let count = Arc::clone(&server_count);
+                let headers = Arc::clone(&server_headers);
+                tokio::spawn(async move {
+                    let service = service_fn(move |request: Request<Incoming>| {
+                        let count = Arc::clone(&count);
+                        let headers = Arc::clone(&headers);
+                        async move {
+                            let attempt = count.fetch_add(1, Ordering::SeqCst);
+                            let authorization = request
+                                .headers()
+                                .get(http::header::AUTHORIZATION)
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or_default()
+                                .to_owned();
+                            headers
+                                .lock()
+                                .expect("API headers lock")
+                                .push(authorization);
+                            let (status, body) = if reject_first && attempt == 0 {
+                                (
+                                    StatusCode::UNAUTHORIZED,
+                                    r#"{"error":{"message":"expired","type":"auth","code":"invalid_token"}}"#,
+                                )
+                            } else {
+                                (StatusCode::OK, r#"{"object":"list","data":[]}"#)
+                            };
+                            Ok::<_, Infallible>(
+                                hyper::Response::builder()
+                                    .status(status)
+                                    .header(http::header::CONTENT_TYPE, "application/json")
+                                    .body(Full::new(Bytes::from_static(body.as_bytes())))
+                                    .expect("API response"),
+                            )
+                        }
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        (
+            Url::parse(&format!("http://{address}/v1/")).expect("API URL"),
+            count,
+            headers,
+        )
+    }
+
+    fn config(exchange_url: Url, provider_count: Arc<AtomicUsize>) -> WorkloadIdentityConfig {
+        let provider = SubjectTokenProviderFn::new(SubjectTokenType::Jwt, move || {
+            let provider_count = Arc::clone(&provider_count);
+            async move {
+                provider_count.fetch_add(1, Ordering::SeqCst);
+                SubjectToken::new("subject.jwt.token").map_err(|_| SubjectTokenProviderError::new())
+            }
+        });
+        WorkloadIdentityConfig::new("idp_test", "svc_test", provider)
+            .expect("workload config")
+            .with_client_id("client_test")
+            .expect("client id")
+            .with_token_exchange_url(exchange_url)
+    }
+
+    #[tokio::test]
+    async fn concurrent_api_calls_share_one_exchange() {
+        let (exchange_url, exchanges, exchange_requests) = exchange_server(vec![Reply {
+            status: StatusCode::OK,
+            body: r#"{"access_token":"access_one","expires_in":3600}"#.to_owned(),
+            location: None,
+        }])
+        .await;
+        let (api_url, api_calls, headers) = api_server(false).await;
+        let providers = Arc::new(AtomicUsize::new(0));
+        let client =
+            Client::workload_identity_builder(config(exchange_url, Arc::clone(&providers)))
+                .base_url(api_url)
+                .allow_insecure_loopback(true)
+                .build()
+                .expect("workload client");
+
+        let mut tasks = Vec::new();
+        for _ in 0..16 {
+            let client = client.clone();
+            tasks.push(tokio::spawn(async move { client.models().list().await }));
+        }
+        for task in tasks {
+            task.await
+                .expect("join API call")
+                .expect("workload API call");
+        }
+        assert_eq!(providers.load(Ordering::SeqCst), 1);
+        assert_eq!(exchanges.load(Ordering::SeqCst), 1);
+        assert_eq!(api_calls.load(Ordering::SeqCst), 16);
+        assert!(
+            headers
+                .lock()
+                .expect("headers lock")
+                .iter()
+                .all(|header| header == "Bearer access_one")
+        );
+        let requests = exchange_requests.lock().expect("exchange requests");
+        assert_eq!(requests[0]["grant_type"], TOKEN_EXCHANGE_GRANT_TYPE);
+        assert_eq!(requests[0]["subject_token_type"], JWT_TOKEN_TYPE);
+        assert_eq!(requests[0]["identity_provider_id"], "idp_test");
+        assert_eq!(requests[0]["service_account_id"], "svc_test");
+        assert_eq!(requests[0]["client_id"], "client_test");
+    }
+
+    #[tokio::test]
+    async fn api_401_invalidates_generation_and_replays_once() {
+        let (exchange_url, exchanges, _) = exchange_server(vec![
+            Reply {
+                status: StatusCode::OK,
+                body: r#"{"access_token":"access_one","expires_in":3600}"#.to_owned(),
+                location: None,
+            },
+            Reply {
+                status: StatusCode::OK,
+                body: r#"{"access_token":"access_two","expires_in":3600}"#.to_owned(),
+                location: None,
+            },
+        ])
+        .await;
+        let (api_url, api_calls, headers) = api_server(true).await;
+        let client =
+            Client::workload_identity_builder(config(exchange_url, Arc::new(AtomicUsize::new(0))))
+                .base_url(api_url)
+                .allow_insecure_loopback(true)
+                .build()
+                .expect("workload client");
+        client.models().list().await.expect("401 replay succeeds");
+
+        assert_eq!(exchanges.load(Ordering::SeqCst), 2);
+        assert_eq!(api_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            headers.lock().expect("headers lock").as_slice(),
+            ["Bearer access_one", "Bearer access_two"]
+        );
+    }
+
+    #[tokio::test]
+    async fn proactive_refresh_uses_half_life_cap_and_returns_stale_token() {
+        let (exchange_url, exchanges, _) = exchange_server(vec![
+            Reply {
+                status: StatusCode::OK,
+                body: r#"{"access_token":"access_one","expires_in":0.2}"#.to_owned(),
+                location: None,
+            },
+            Reply {
+                status: StatusCode::OK,
+                body: r#"{"access_token":"access_two","expires_in":3600}"#.to_owned(),
+                location: None,
+            },
+        ])
+        .await;
+        let auth = WorkloadIdentityAuth::new(
+            config(exchange_url, Arc::new(AtomicUsize::new(0)))
+                .with_refresh_buffer(Duration::from_secs(10)),
+            None,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .expect("workload auth");
+        let first = auth.token().await.expect("first token");
+        assert_eq!(first.header, "Bearer access_one");
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let stale = auth.token().await.expect("stale token");
+        assert_eq!(stale.header, "Bearer access_one");
+        for _ in 0..20 {
+            if exchanges.load(Ordering::SeqCst) >= 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let refreshed = auth.token().await.expect("refreshed token");
+        assert_eq!(refreshed.header, "Bearer access_two");
+    }
+
+    #[tokio::test]
+    async fn bad_status_token_and_redirect_fail_closed_without_leaks() {
+        let (exchange_url, _, _) = exchange_server(vec![Reply {
+            status: StatusCode::BAD_REQUEST,
+            body: r#"{"error":"invalid_subject","subject_token":"subject.jwt.token"}"#.to_owned(),
+            location: None,
+        }])
+        .await;
+        let auth = WorkloadIdentityAuth::new(
+            config(exchange_url, Arc::new(AtomicUsize::new(0))),
+            None,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .expect("workload auth");
+        let error = auth.token().await.expect_err("rejected exchange");
+        assert_eq!(error.status(), Some(StatusCode::BAD_REQUEST));
+        let debug = format!("{error:?}");
+        assert!(!debug.contains("subject.jwt.token"));
+        assert!(!debug.contains("idp_test"));
+
+        let (bad_url, _, _) = exchange_server(vec![Reply {
+            status: StatusCode::OK,
+            body: r#"{"access_token":" bad token ","expires_in":3600}"#.to_owned(),
+            location: None,
+        }])
+        .await;
+        let auth = WorkloadIdentityAuth::new(
+            config(bad_url, Arc::new(AtomicUsize::new(0))),
+            None,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .expect("workload auth");
+        assert!(auth.token().await.is_err());
+
+        let target = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("redirect target");
+        let target_url = format!(
+            "http://{}/stolen",
+            target.local_addr().expect("target addr")
+        );
+        let (redirect_url, _, _) = exchange_server(vec![Reply {
+            status: StatusCode::TEMPORARY_REDIRECT,
+            body: String::new(),
+            location: Some(target_url),
+        }])
+        .await;
+        let auth = WorkloadIdentityAuth::new(
+            config(redirect_url, Arc::new(AtomicUsize::new(0))),
+            None,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .expect("workload auth");
+        assert!(auth.token().await.is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), target.accept())
+                .await
+                .is_err(),
+            "redirect target must never receive the subject token"
+        );
+    }
 }

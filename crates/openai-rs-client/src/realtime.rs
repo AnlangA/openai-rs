@@ -26,7 +26,8 @@ use crate::{
         private::Sealed,
     },
     responses_websocket::{
-        Socket, connect_socket, map_websocket_error, websocket_connector, websocket_request,
+        Socket, connect_socket, is_unauthorized_websocket_error, map_websocket_error,
+        websocket_connector, websocket_request,
     },
     transport::{PathSegment, deserialize_json},
 };
@@ -133,7 +134,9 @@ impl Realtime {
             .map_err(Error::from_reqwest)?;
         if response.status() != CREATED {
             if response.status() == StatusCode::UNAUTHORIZED {
-                let _ = transport.invalidate_authorization(&authorization).await;
+                let _ = transport
+                    .invalidate_authorization(authorization.generation)
+                    .await;
             }
             return Err(transport.error_from_response(response).await);
         }
@@ -352,18 +355,35 @@ impl RealtimeWebSocket {
         let url = realtime_websocket_url(client.base_url(), &model)?;
         let transport = client.transport();
         let connector = websocket_connector(url.scheme(), transport.tls_backend())?;
-        let authorization = transport.authorization().await?;
-        let request = websocket_request(
-            &url,
-            authorization.header,
-            transport.organization(),
-            transport.project(),
-        )?;
-        let connect = connect_socket(request, config.tungstenite(), connector);
-        let (socket, response) = tokio::time::timeout(config.connect_timeout, connect)
-            .await
-            .map_err(|_| Error::WebSocketTransport("Realtime handshake timed out".into()))?
-            .map_err(map_websocket_error)?;
+        let mut auth_refreshed = false;
+        let (socket, response) = loop {
+            let authorization = transport.authorization().await?;
+            let generation = authorization.generation;
+            let request = websocket_request(
+                &url,
+                authorization.header,
+                transport.organization(),
+                transport.project(),
+            )?;
+            let connect = connect_socket(request, config.tungstenite(), connector.clone());
+            match tokio::time::timeout(config.connect_timeout, connect).await {
+                Ok(Ok(connection)) => break connection,
+                Ok(Err(error))
+                    if generation.is_some()
+                        && !auth_refreshed
+                        && is_unauthorized_websocket_error(&error) =>
+                {
+                    let _ = transport.invalidate_authorization(generation).await;
+                    auth_refreshed = true;
+                }
+                Ok(Err(error)) => return Err(map_websocket_error(error)),
+                Err(_) => {
+                    return Err(Error::WebSocketTransport(
+                        "Realtime handshake timed out".into(),
+                    ));
+                }
+            }
+        };
         let meta = ResponseMeta::from_headers(response.status(), response.headers());
         Ok(Self {
             socket,

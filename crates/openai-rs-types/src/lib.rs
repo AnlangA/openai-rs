@@ -6,6 +6,7 @@ pub mod admin;
 pub mod batches;
 pub mod chat;
 pub mod containers;
+pub mod content_provenance;
 pub mod conversations;
 pub mod core;
 pub mod evals;
@@ -30,6 +31,7 @@ pub mod structured;
 
 pub use kernel::{ExtraFields, ExtraFieldsConflict, Nullable, Omittable};
 pub use batches::*;
+pub use content_provenance::*;
 pub use conversations::*;
 pub use evals::*;
 pub use responses::*;

@@ -11,7 +11,7 @@ use url::Url;
 
 use crate::{
     ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy, TlsBackend,
-    auth::{AuthLease, AuthProvider},
+    auth::AuthProvider,
     operation::{AuthScope, Operation, RequestEncoding, RetryClass},
     sse::SseLimits,
 };
@@ -109,12 +109,13 @@ impl Transport {
     }
 
     #[cfg(feature = "realtime")]
-    pub(crate) async fn authorization(&self) -> Result<AuthLease, Error> {
+    pub(crate) async fn authorization(&self) -> Result<crate::auth::AuthLease, Error> {
         self.auth.authorization().await
     }
 
-    pub(crate) async fn invalidate_authorization(&self, lease: &AuthLease) -> bool {
-        self.auth.invalidate_if_generation(lease.generation).await
+    #[cfg(feature = "realtime")]
+    pub(crate) async fn invalidate_authorization(&self, generation: Option<u64>) -> bool {
+        self.auth.invalidate_if_generation(generation).await
     }
 
     #[cfg(feature = "realtime")]
@@ -796,7 +797,7 @@ mod tests {
         let transport = Transport::new(
             reqwest::Client::new(),
             base,
-            HeaderValue::from_static("Bearer test-placeholder-key"),
+            AuthProvider::api_key(crate::ApiKey::new("test-placeholder-key").expect("test key")),
             None,
             None,
             1024,
