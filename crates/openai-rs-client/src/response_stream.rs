@@ -168,6 +168,13 @@ impl fmt::Debug for ResponseEventStream {
 }
 
 fn decode_event(frame: &SseFrame, meta: &ResponseMeta) -> Result<ResponseStreamEvent, Error> {
+    if frame.event.is_none() {
+        return Err(Error::StreamProtocol {
+            message: "a Responses event is missing its SSE event field",
+            request_id: meta.request_id().map(Box::<str>::from),
+            body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
+        });
+    }
     let value =
         serde_json::from_str::<serde_json::Value>(&frame.data).map_err(|source| Error::Decode {
             source,
@@ -175,9 +182,7 @@ fn decode_event(frame: &SseFrame, meta: &ResponseMeta) -> Result<ResponseStreamE
             request_id: meta.request_id().map(Box::<str>::from),
             body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
         })?;
-    if let Some(event_name) = frame.event.as_deref()
-        && value.get("type").and_then(serde_json::Value::as_str) != Some(event_name)
-    {
+    if value.get("type").and_then(serde_json::Value::as_str) != frame.event.as_deref() {
         return Err(Error::StreamProtocol {
             message: "the SSE event field and JSON type discriminator differ",
             request_id: meta.request_id().map(Box::<str>::from),

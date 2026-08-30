@@ -3,7 +3,9 @@ use std::{fmt, sync::Arc, time::Duration};
 use http::HeaderValue;
 use url::{Host, Url};
 
-use crate::{ApiKey, Embeddings, Error, Models, Moderations, Responses, transport::Transport};
+use crate::{
+    ApiKey, Embeddings, Error, Models, Moderations, Responses, RetryPolicy, transport::Transport,
+};
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -104,6 +106,7 @@ pub struct ClientBuilder {
     max_json_body_bytes: usize,
     max_error_body_bytes: usize,
     tls_backend: Option<TlsBackend>,
+    retry_policy: RetryPolicy,
 }
 
 impl ClientBuilder {
@@ -120,6 +123,7 @@ impl ClientBuilder {
             max_json_body_bytes: DEFAULT_MAX_JSON_BODY_BYTES,
             max_error_body_bytes: DEFAULT_MAX_ERROR_BODY_BYTES,
             tls_backend: default_tls_backend(),
+            retry_policy: RetryPolicy::default(),
         }
     }
 
@@ -179,6 +183,13 @@ impl ClientBuilder {
     #[must_use]
     pub const fn tls_backend(mut self, backend: TlsBackend) -> Self {
         self.tls_backend = Some(backend);
+        self
+    }
+
+    /// Replaces the automatic retry policy.
+    #[must_use]
+    pub const fn retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
+        self.retry_policy = retry_policy;
         self
     }
 
@@ -246,6 +257,8 @@ impl ClientBuilder {
                     project,
                     self.max_json_body_bytes,
                     self.max_error_body_bytes,
+                    self.retry_policy,
+                    self.request_timeout,
                 ),
             }),
         })
@@ -273,6 +286,7 @@ impl fmt::Debug for ClientBuilder {
             .field("max_json_body_bytes", &self.max_json_body_bytes)
             .field("max_error_body_bytes", &self.max_error_body_bytes)
             .field("tls_backend", &self.tls_backend)
+            .field("retry_policy", &self.retry_policy)
             .finish()
     }
 }

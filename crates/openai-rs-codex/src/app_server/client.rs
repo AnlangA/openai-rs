@@ -306,7 +306,10 @@ where
                 "initialize client name and version must be non-empty".to_owned(),
             ));
         }
-        let executable = config.executable.canonicalize().map_err(Error::Spawn)?;
+        let executable = config
+            .executable
+            .canonicalize()
+            .map_err(Error::RuntimeArtifact)?;
         validate_executable(&executable)?;
         let executable_for_hash = executable.clone();
         let executable_sha256 =
@@ -326,11 +329,13 @@ where
         // hash and its audited schema mapping. initialize.userAgent is never
         // consulted as compatibility evidence.
         prepare_codex_home(&config.codex_home)?;
+        let codex_home = config.codex_home.canonicalize().map_err(Error::CodexHome)?;
         let mut command = Command::new(executable);
         command
             .args(&config.arguments)
             .env_clear()
-            .env("CODEX_HOME", &config.codex_home)
+            .env("CODEX_HOME", &codex_home)
+            .current_dir(&codex_home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1116,7 +1121,11 @@ mod tests {
     use super::{
         AppServerClient, AppServerConfig, AppServerEvent, AppServerLimits, StderrTail, sha256_file,
     };
-    use crate::{ClientInfo, Error, Notification, RuntimeCompatibility, RuntimeIdentity};
+    use crate::{
+        AccountUsageParams, BrowserLoginOptions, ClientInfo, Error, Notification,
+        RuntimeCompatibility, RuntimeIdentity, ThreadStartParams, TurnInterruptParams,
+        TurnStartParams,
+    };
 
     fn fake_runtime(executable: &Path) -> Result<RuntimeCompatibility, Box<dyn std::error::Error>> {
         let executable = executable.canonicalize()?;
@@ -1144,7 +1153,7 @@ mod tests {
         let script = r#"
             test -z "${OPENAI_API_KEY+x}" || exit 9
             test -z "${CODEX_ACCESS_TOKEN+x}" || exit 10
-            test "$CODEX_HOME" = "$0" || exit 11
+            test -d "$CODEX_HOME" || exit 11
             IFS= read -r init || exit 12
             case "$init" in *'"method":"initialize"'*'"id":1'*) ;; *) exit 13 ;; esac
             printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
@@ -1202,6 +1211,117 @@ mod tests {
 
         client.close().await?;
         assert!(client.is_closed());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fake_child_typed_account_thread_and_turn_contracts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 31
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 32
+
+            IFS= read -r browser || exit 33
+            case "$browser" in *'"method":"account/login/start"'*'"type":"chatgpt"'*) ;; *) exit 34 ;; esac
+            printf '%s\n' '{"id":2,"result":{"type":"chatgpt","loginId":"login-browser","authUrl":"https://chatgpt.com/auth"}}'
+
+            IFS= read -r device || exit 35
+            case "$device" in *'"method":"account/login/start"'*'"type":"chatgptDeviceCode"'*) ;; *) exit 36 ;; esac
+            printf '%s\n' '{"id":3,"result":{"type":"chatgptDeviceCode","loginId":"login-device","verificationUrl":"https://auth.openai.com/codex/device","userCode":"ABCD-1234"}}'
+
+            IFS= read -r cancel || exit 37
+            case "$cancel" in *'"method":"account/login/cancel"'*'"loginId":"login-device"'*) ;; *) exit 38 ;; esac
+            printf '%s\n' '{"id":4,"result":{"status":"canceled"}}'
+
+            IFS= read -r account || exit 39
+            case "$account" in *'"method":"account/read"'*) ;; *) exit 40 ;; esac
+            printf '%s\n' '{"id":5,"result":{"account":{"type":"chatgpt","email":null,"planType":"future_plan"},"requiresOpenaiAuth":false}}'
+
+            IFS= read -r limits || exit 41
+            case "$limits" in *'"method":"account/rateLimits/read"'*) ;; *) exit 42 ;; esac
+            printf '%s\n' '{"id":6,"result":{"rateLimits":{"limitId":"codex","limitName":null,"primary":{"usedPercent":25,"windowDurationMins":15,"resetsAt":1730947200},"secondary":null,"credits":null,"planType":"future_plan","rateLimitReachedType":"future_state"}}}'
+
+            IFS= read -r usage || exit 43
+            case "$usage" in *'"method":"account/usage/read"'*) ;; *) exit 44 ;; esac
+            printf '%s\n' '{"id":7,"result":{"summary":{"lifetimeTokens":123,"peakDailyTokens":45,"longestRunningTurnSec":9,"currentStreakDays":2,"longestStreakDays":3},"dailyUsageBuckets":[{"startDate":"2026-08-30","tokens":12}]}}'
+
+            IFS= read -r thread || exit 45
+            case "$thread" in *'"method":"thread/start"'*) ;; *) exit 46 ;; esac
+            printf '%s\n' '{"id":8,"result":{"thread":{"id":"thr_123","sessionId":"thr_123","futureThreadField":true},"model":"gpt-test","modelProvider":"openai"}}'
+
+            IFS= read -r turn || exit 47
+            case "$turn" in *'"method":"turn/start"'*'"threadId":"thr_123"'*'"type":"text"'*'"text":"hello"'*) ;; *) exit 48 ;; esac
+            printf '%s\n' '{"id":9,"result":{"turn":{"id":"turn_456","status":"inProgress","futureTurnField":7}}}'
+            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thr_123","turn":{"id":"turn_456","status":"completed"}}}'
+
+            IFS= read -r interrupt || exit 49
+            case "$interrupt" in *'"method":"turn/interrupt"'*'"threadId":"thr_123"'*'"turnId":"turn_456"'*) ;; *) exit 50 ;; esac
+            printf '%s\n' '{"id":10,"result":{}}'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let config = AppServerConfig::new("/bin/sh", profile.path(), compatibility)
+            .with_arguments([OsString::from("-c"), OsString::from(script)]);
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        let browser = client
+            .account_login_browser(BrowserLoginOptions::default())
+            .await?;
+        assert_eq!(browser.login_id, "login-browser");
+        assert_eq!(browser.auth_url.as_str(), "https://chatgpt.com/auth");
+
+        let device = client.account_login_device().await?;
+        assert_eq!(device.user_code, "ABCD-1234");
+        assert_eq!(
+            client.account_login_cancel(device.login_id).await?.status,
+            "canceled"
+        );
+
+        let account = client.account_read(false).await?;
+        assert_eq!(
+            account.account.and_then(|account| account.plan_type),
+            Some("future_plan".to_owned())
+        );
+        let limits = client.account_rate_limits().await?;
+        assert_eq!(limits.rate_limits.plan_type.as_deref(), Some("future_plan"));
+        assert_eq!(
+            limits.rate_limits.rate_limit_reached_type.as_deref(),
+            Some("future_state")
+        );
+        let usage = client.account_usage(AccountUsageParams::default()).await?;
+        assert_eq!(usage.summary.lifetime_tokens, Some(123));
+
+        let thread = client.thread_start(ThreadStartParams::default()).await?;
+        assert_eq!(thread.thread.id, "thr_123");
+        assert_eq!(thread.thread.extra["futureThreadField"], Value::Bool(true));
+        let turn = client
+            .turn_start(TurnStartParams::text("thr_123", "hello"))
+            .await?;
+        assert_eq!(turn.turn.id, "turn_456");
+        assert_eq!(turn.turn.extra["futureTurnField"], Value::from(7));
+        client
+            .turn_interrupt(TurnInterruptParams {
+                thread_id: "thr_123".to_owned(),
+                turn_id: "turn_456".to_owned(),
+            })
+            .await?;
+
+        let event = client.next_event().await.ok_or("missing turn event")?;
+        match event {
+            AppServerEvent::Notification(notification) => match *notification {
+                Notification::TurnCompleted(completed) => {
+                    assert_eq!(completed.thread_id, "thr_123");
+                    assert_eq!(completed.turn.status, "completed");
+                }
+                other => return Err(format!("unexpected notification: {other:?}").into()),
+            },
+            other => return Err(format!("unexpected event: {other:?}").into()),
+        }
+
+        client.close().await?;
         Ok(())
     }
 

@@ -687,9 +687,13 @@ pub struct FunctionTool {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     description: Omittable<Nullable<String>>,
     parameters: Value,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    output_schema: Omittable<Nullable<Value>>,
     strict: Nullable<bool>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     defer_loading: Omittable<bool>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    allowed_callers: Omittable<Nullable<Vec<String>>>,
 }
 
 impl FunctionTool {
@@ -704,8 +708,10 @@ impl FunctionTool {
             name: name.into(),
             description: Omittable::Omitted,
             parameters: Value::Object(parameters),
+            output_schema: Omittable::Omitted,
             strict: Nullable::Null,
             defer_loading: Omittable::Omitted,
+            allowed_callers: Omittable::Omitted,
         }
     }
 
@@ -732,6 +738,16 @@ impl FunctionTool {
         Ok(self)
     }
 
+    /// Sets a typed output JSON Schema.
+    pub fn output_schema_from<T: Serialize>(
+        mut self,
+        output_schema: &T,
+    ) -> Result<Self, serde_json::Error> {
+        self.output_schema =
+            Omittable::Value(Nullable::Value(serde_json::to_value(output_schema)?));
+        Ok(self)
+    }
+
     /// Enables or disables strict schema adherence.
     #[must_use]
     pub fn strict(mut self, strict: bool) -> Self {
@@ -743,6 +759,15 @@ impl FunctionTool {
     #[must_use]
     pub fn defer_loading(mut self, defer_loading: bool) -> Self {
         self.defer_loading = Omittable::Value(defer_loading);
+        self
+    }
+
+    /// Restricts which invocation contexts may call this function.
+    #[must_use]
+    pub fn allowed_callers(mut self, callers: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.allowed_callers = Omittable::Value(Nullable::Value(
+            callers.into_iter().map(Into::into).collect(),
+        ));
         self
     }
 
@@ -912,13 +937,17 @@ pub struct McpTool {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     connector_id: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    tunnel_id: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     authorization: Omittable<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    headers: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    allowed_tools: Omittable<McpAllowedTools>,
+    headers: Omittable<Nullable<BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    require_approval: Omittable<McpRequireApproval>,
+    allowed_tools: Omittable<Nullable<McpAllowedTools>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    allowed_callers: Omittable<Nullable<Vec<String>>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    require_approval: Omittable<Nullable<McpRequireApproval>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     defer_loading: Omittable<bool>,
 }
@@ -931,9 +960,11 @@ impl McpTool {
             server_description: Omittable::Omitted,
             server_url: Omittable::Omitted,
             connector_id: Omittable::Omitted,
+            tunnel_id: Omittable::Omitted,
             authorization: Omittable::Omitted,
-            headers: BTreeMap::new(),
+            headers: Omittable::Omitted,
             allowed_tools: Omittable::Omitted,
+            allowed_callers: Omittable::Omitted,
             require_approval: Omittable::Omitted,
             defer_loading: Omittable::Omitted,
         }
@@ -955,6 +986,14 @@ impl McpTool {
         value
     }
 
+    /// Creates an MCP tool backed by a secure tunnel id.
+    #[must_use]
+    pub fn tunnel(server_label: impl Into<String>, tunnel_id: impl Into<String>) -> Self {
+        let mut value = Self::empty(server_label);
+        value.tunnel_id = Omittable::Value(tunnel_id.into());
+        value
+    }
+
     /// Sets a server description.
     #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
@@ -972,21 +1011,35 @@ impl McpTool {
     /// Adds a request header. Debug output never prints header values.
     #[must_use]
     pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.headers.insert(name.into(), value.into());
+        let mut headers = match std::mem::take(&mut self.headers) {
+            Omittable::Value(Nullable::Value(headers)) => headers,
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => BTreeMap::new(),
+        };
+        headers.insert(name.into(), value.into());
+        self.headers = Omittable::Value(Nullable::Value(headers));
         self
     }
 
     /// Restricts tools made visible to the model.
     #[must_use]
     pub fn allowed_tools(mut self, allowed_tools: McpAllowedTools) -> Self {
-        self.allowed_tools = Omittable::Value(allowed_tools);
+        self.allowed_tools = Omittable::Value(Nullable::Value(allowed_tools));
+        self
+    }
+
+    /// Restricts which invocation contexts may call this MCP tool.
+    #[must_use]
+    pub fn allowed_callers(mut self, callers: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.allowed_callers = Omittable::Value(Nullable::Value(
+            callers.into_iter().map(Into::into).collect(),
+        ));
         self
     }
 
     /// Sets the approval policy.
     #[must_use]
     pub fn require_approval(mut self, policy: McpRequireApproval) -> Self {
-        self.require_approval = Omittable::Value(policy);
+        self.require_approval = Omittable::Value(Nullable::Value(policy));
         self
     }
 
@@ -1012,9 +1065,17 @@ impl fmt::Debug for McpTool {
             .field("server_description", &self.server_description)
             .field("server_url", &self.server_url)
             .field("connector_id", &self.connector_id)
+            .field("tunnel_id", &self.tunnel_id)
             .field("authorization", &"[REDACTED]")
-            .field("header_count", &self.headers.len())
+            .field(
+                "header_count",
+                &match &self.headers {
+                    Omittable::Value(Nullable::Value(headers)) => headers.len(),
+                    Omittable::Omitted | Omittable::Value(Nullable::Null) => 0,
+                },
+            )
             .field("allowed_tools", &self.allowed_tools)
+            .field("allowed_callers", &self.allowed_callers)
             .field("require_approval", &self.require_approval)
             .field("defer_loading", &self.defer_loading)
             .finish()
@@ -1135,17 +1196,52 @@ impl FunctionCall {
     }
 }
 
+/// String or rich content supplied as a function call output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FunctionCallOutputValue {
+    /// An opaque text value, commonly a JSON string.
+    Text(String),
+    /// Typed text/image/file content parts.
+    Content(Vec<InputContent>),
+}
+
+impl From<String> for FunctionCallOutputValue {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<&str> for FunctionCallOutputValue {
+    fn from(value: &str) -> Self {
+        Self::Text(value.to_owned())
+    }
+}
+
+impl From<Vec<InputContent>> for FunctionCallOutputValue {
+    fn from(value: Vec<InputContent>) -> Self {
+        Self::Content(value)
+    }
+}
+
 /// Output supplied for a preceding function call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionCallOutput {
     #[serde(rename = "type")]
     kind: FunctionCallOutputTag,
-    call_id: String,
-    output: String,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    id: Omittable<String>,
+    call_id: Omittable<Nullable<String>>,
+    output: FunctionCallOutputValue,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    status: Omittable<ResponseItemStatus>,
+    id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    name: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    namespace: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    caller: Omittable<Nullable<Value>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    status: Omittable<Nullable<ResponseItemStatus>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1153,12 +1249,15 @@ pub struct FunctionCallOutput {
 impl FunctionCallOutput {
     /// Creates a function output from an opaque string.
     #[must_use]
-    pub fn new(call_id: impl Into<String>, output: impl Into<String>) -> Self {
+    pub fn new(call_id: impl Into<String>, output: impl Into<FunctionCallOutputValue>) -> Self {
         Self {
             kind: FunctionCallOutputTag::FunctionCallOutput,
-            call_id: call_id.into(),
+            call_id: Omittable::Value(Nullable::Value(call_id.into())),
             output: output.into(),
             id: Omittable::Omitted,
+            name: Omittable::Omitted,
+            namespace: Omittable::Omitted,
+            caller: Omittable::Omitted,
             status: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
@@ -1175,26 +1274,36 @@ impl FunctionCallOutput {
     /// Sets an item id for stored input items.
     #[must_use]
     pub fn id(mut self, id: impl Into<String>) -> Self {
-        self.id = Omittable::Value(id.into());
+        self.id = Omittable::Value(Nullable::Value(id.into()));
         self
     }
 
     /// Sets an item status for stored input items.
     #[must_use]
     pub fn status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(status);
+        self.status = Omittable::Value(Nullable::Value(status));
+        self
+    }
+
+    /// Records the tool name that produced this output.
+    #[must_use]
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Omittable::Value(Nullable::Value(name.into()));
         self
     }
 
     /// Returns the related function call id.
     #[must_use]
-    pub fn call_id(&self) -> &str {
-        &self.call_id
+    pub fn call_id(&self) -> Option<&str> {
+        match &self.call_id {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
     }
 
     /// Returns the opaque output string.
     #[must_use]
-    pub fn output(&self) -> &str {
+    pub const fn output(&self) -> &FunctionCallOutputValue {
         &self.output
     }
 
@@ -1202,7 +1311,12 @@ impl FunctionCallOutput {
     pub fn deserialize_output<T: serde::de::DeserializeOwned>(
         &self,
     ) -> Result<T, serde_json::Error> {
-        serde_json::from_str(&self.output)
+        match &self.output {
+            FunctionCallOutputValue::Text(output) => serde_json::from_str(output),
+            FunctionCallOutputValue::Content(output) => {
+                serde_json::from_value(serde_json::to_value(output)?)
+            }
+        }
     }
 }
 
@@ -3962,6 +4076,15 @@ tagged_union! {
     /// Unknown future event types remain usable through [`Self::Unknown`]. A
     /// malformed payload for any listed tag is a decoding error.
     pub enum ResponseStreamEvent {
+        AudioDelta(AudioDeltaEvent) => "response.audio.delta",
+        AudioDone(AudioDoneEvent) => "response.audio.done",
+        AudioTranscriptDelta(AudioTranscriptDeltaEvent) => "response.audio.transcript.delta",
+        AudioTranscriptDone(AudioTranscriptDoneEvent) => "response.audio.transcript.done",
+        CodeInterpreterCodeDelta(CodeInterpreterCodeDeltaEvent) => "response.code_interpreter_call_code.delta",
+        CodeInterpreterCodeDone(CodeInterpreterCodeDoneEvent) => "response.code_interpreter_call_code.done",
+        CodeInterpreterCompleted(CodeInterpreterCompletedEvent) => "response.code_interpreter_call.completed",
+        CodeInterpreterInProgress(CodeInterpreterInProgressEvent) => "response.code_interpreter_call.in_progress",
+        CodeInterpreterInterpreting(CodeInterpreterInterpretingEvent) => "response.code_interpreter_call.interpreting",
         Queued(ResponseQueuedEvent) => "response.queued",
         Created(ResponseCreatedEvent) => "response.created",
         InProgress(ResponseInProgressEvent) => "response.in_progress",
@@ -3978,6 +4101,27 @@ tagged_union! {
         RefusalDone(RefusalDoneEvent) => "response.refusal.done",
         FunctionCallArgumentsDelta(FunctionCallArgumentsDeltaEvent) => "response.function_call_arguments.delta",
         FunctionCallArgumentsDone(FunctionCallArgumentsDoneEvent) => "response.function_call_arguments.done",
+        FileSearchCompleted(FileSearchCompletedEvent) => "response.file_search_call.completed",
+        FileSearchInProgress(FileSearchInProgressEvent) => "response.file_search_call.in_progress",
+        FileSearchSearching(FileSearchSearchingEvent) => "response.file_search_call.searching",
+        ShellCommandAdded(ShellCommandAddedEvent) => "response.shell_call_command.added",
+        ShellCommandDelta(ShellCommandDeltaEvent) => "response.shell_call_command.delta",
+        ShellCommandDone(ShellCommandDoneEvent) => "response.shell_call_command.done",
+        ShellOutputContentDelta(ShellOutputContentDeltaEvent) => "response.shell_call_output_content.delta",
+        ShellOutputContentDone(ShellOutputContentDoneEvent) => "response.shell_call_output_content.done",
+        ReasoningSummaryPartAdded(ReasoningSummaryPartAddedEvent) => "response.reasoning_summary_part.added",
+        ReasoningSummaryPartDone(ReasoningSummaryPartDoneEvent) => "response.reasoning_summary_part.done",
+        ReasoningSummaryTextDelta(ReasoningSummaryTextDeltaEvent) => "response.reasoning_summary_text.delta",
+        ReasoningSummaryTextDone(ReasoningSummaryTextDoneEvent) => "response.reasoning_summary_text.done",
+        ReasoningTextDelta(ReasoningTextDeltaEvent) => "response.reasoning_text.delta",
+        ReasoningTextDone(ReasoningTextDoneEvent) => "response.reasoning_text.done",
+        WebSearchCompleted(WebSearchCompletedEvent) => "response.web_search_call.completed",
+        WebSearchInProgress(WebSearchInProgressEvent) => "response.web_search_call.in_progress",
+        WebSearchSearching(WebSearchSearchingEvent) => "response.web_search_call.searching",
+        ImageGenerationCompleted(ImageGenerationCompletedEvent) => "response.image_generation_call.completed",
+        ImageGenerationGenerating(ImageGenerationGeneratingEvent) => "response.image_generation_call.generating",
+        ImageGenerationInProgress(ImageGenerationInProgressEvent) => "response.image_generation_call.in_progress",
+        ImageGenerationPartialImage(ImageGenerationPartialImageEvent) => "response.image_generation_call.partial_image",
         McpCallArgumentsDelta(McpCallArgumentsDeltaEvent) => "response.mcp_call_arguments.delta",
         McpCallArgumentsDone(McpCallArgumentsDoneEvent) => "response.mcp_call_arguments.done",
         McpCallInProgress(McpCallInProgressEvent) => "response.mcp_call.in_progress",
@@ -3986,6 +4130,9 @@ tagged_union! {
         McpListToolsInProgress(McpListToolsInProgressEvent) => "response.mcp_list_tools.in_progress",
         McpListToolsCompleted(McpListToolsCompletedEvent) => "response.mcp_list_tools.completed",
         McpListToolsFailed(McpListToolsFailedEvent) => "response.mcp_list_tools.failed",
+        OutputTextAnnotationAdded(OutputTextAnnotationAddedEvent) => "response.output_text.annotation.added",
+        CustomToolCallInputDelta(CustomToolCallInputDeltaEvent) => "response.custom_tool_call_input.delta",
+        CustomToolCallInputDone(CustomToolCallInputDoneEvent) => "response.custom_tool_call_input.done",
         Error(StreamErrorEvent) => "error"
     }
 }
@@ -4004,6 +4151,15 @@ impl ResponseStreamEvent {
     #[must_use]
     pub fn sequence_number(&self) -> Option<u64> {
         match self {
+            Self::AudioDelta(value) => Some(value.sequence_number()),
+            Self::AudioDone(value) => Some(value.sequence_number()),
+            Self::AudioTranscriptDelta(value) => Some(value.sequence_number()),
+            Self::AudioTranscriptDone(value) => Some(value.sequence_number()),
+            Self::CodeInterpreterCodeDelta(value) => Some(value.sequence_number()),
+            Self::CodeInterpreterCodeDone(value) => Some(value.sequence_number()),
+            Self::CodeInterpreterCompleted(value) => Some(value.sequence_number()),
+            Self::CodeInterpreterInProgress(value) => Some(value.sequence_number()),
+            Self::CodeInterpreterInterpreting(value) => Some(value.sequence_number()),
             Self::Queued(value) => Some(value.sequence_number()),
             Self::Created(value) => Some(value.sequence_number()),
             Self::InProgress(value) => Some(value.sequence_number()),
@@ -4020,6 +4176,27 @@ impl ResponseStreamEvent {
             Self::RefusalDone(value) => Some(value.sequence_number()),
             Self::FunctionCallArgumentsDelta(value) => Some(value.sequence_number()),
             Self::FunctionCallArgumentsDone(value) => Some(value.sequence_number()),
+            Self::FileSearchCompleted(value) => Some(value.sequence_number()),
+            Self::FileSearchInProgress(value) => Some(value.sequence_number()),
+            Self::FileSearchSearching(value) => Some(value.sequence_number()),
+            Self::ShellCommandAdded(value) => Some(value.sequence_number()),
+            Self::ShellCommandDelta(value) => Some(value.sequence_number()),
+            Self::ShellCommandDone(value) => Some(value.sequence_number()),
+            Self::ShellOutputContentDelta(value) => Some(value.sequence_number()),
+            Self::ShellOutputContentDone(value) => Some(value.sequence_number()),
+            Self::ReasoningSummaryPartAdded(value) => Some(value.sequence_number()),
+            Self::ReasoningSummaryPartDone(value) => Some(value.sequence_number()),
+            Self::ReasoningSummaryTextDelta(value) => Some(value.sequence_number()),
+            Self::ReasoningSummaryTextDone(value) => Some(value.sequence_number()),
+            Self::ReasoningTextDelta(value) => Some(value.sequence_number()),
+            Self::ReasoningTextDone(value) => Some(value.sequence_number()),
+            Self::WebSearchCompleted(value) => Some(value.sequence_number()),
+            Self::WebSearchInProgress(value) => Some(value.sequence_number()),
+            Self::WebSearchSearching(value) => Some(value.sequence_number()),
+            Self::ImageGenerationCompleted(value) => Some(value.sequence_number()),
+            Self::ImageGenerationGenerating(value) => Some(value.sequence_number()),
+            Self::ImageGenerationInProgress(value) => Some(value.sequence_number()),
+            Self::ImageGenerationPartialImage(value) => Some(value.sequence_number()),
             Self::McpCallArgumentsDelta(value) => Some(value.sequence_number),
             Self::McpCallArgumentsDone(value) => Some(value.sequence_number),
             Self::McpCallInProgress(value) => Some(value.sequence_number()),
@@ -4028,6 +4205,9 @@ impl ResponseStreamEvent {
             Self::McpListToolsInProgress(value) => Some(value.sequence_number()),
             Self::McpListToolsCompleted(value) => Some(value.sequence_number()),
             Self::McpListToolsFailed(value) => Some(value.sequence_number()),
+            Self::OutputTextAnnotationAdded(value) => Some(value.sequence_number()),
+            Self::CustomToolCallInputDelta(value) => Some(value.sequence_number()),
+            Self::CustomToolCallInputDone(value) => Some(value.sequence_number()),
             Self::Error(value) => Some(value.sequence_number()),
             Self::Unknown(value) => value.raw().get("sequence_number").and_then(Value::as_u64),
         }
@@ -4413,6 +4593,43 @@ pub const STABLE_RESPONSE_INPUT_SCHEMAS: [&str; 32] = [
     "CustomToolCall",
 ];
 
+/// Discriminators aligned positionally with [`STABLE_RESPONSE_INPUT_SCHEMAS`].
+/// `<absent:id>` denotes the untagged stored-item reference branch.
+pub const STABLE_RESPONSE_INPUT_DISCRIMINATORS: [&str; 32] = [
+    "message",
+    "compaction_trigger",
+    "<absent:id>",
+    "program",
+    "program_output",
+    "message",
+    "message",
+    "file_search_call",
+    "computer_call",
+    "computer_call_output",
+    "web_search_call",
+    "function_call",
+    "function_call_output",
+    "tool_search_call",
+    "tool_search_output",
+    "additional_tools",
+    "reasoning",
+    "compaction",
+    "image_generation_call",
+    "code_interpreter_call",
+    "local_shell_call",
+    "local_shell_call_output",
+    "shell_call",
+    "shell_call_output",
+    "apply_patch_call",
+    "apply_patch_call_output",
+    "mcp_list_tools",
+    "mcp_approval_request",
+    "mcp_approval_response",
+    "mcp_call",
+    "custom_tool_call_output",
+    "custom_tool_call",
+];
+
 /// Frozen schema-name inventory for the 28 stable output branches.
 pub const STABLE_RESPONSE_OUTPUT_SCHEMAS: [&str; 28] = [
     "OutputMessage",
@@ -4443,6 +4660,38 @@ pub const STABLE_RESPONSE_OUTPUT_SCHEMAS: [&str; 28] = [
     "MCPApprovalResponseResource",
     "CustomToolCall",
     "CustomToolCallOutputResource",
+];
+
+/// Discriminators aligned positionally with [`STABLE_RESPONSE_OUTPUT_SCHEMAS`].
+pub const STABLE_RESPONSE_OUTPUT_DISCRIMINATORS: [&str; 28] = [
+    "message",
+    "file_search_call",
+    "function_call",
+    "function_call_output",
+    "web_search_call",
+    "computer_call",
+    "computer_call_output",
+    "reasoning",
+    "program",
+    "program_output",
+    "tool_search_call",
+    "tool_search_output",
+    "additional_tools",
+    "compaction",
+    "image_generation_call",
+    "code_interpreter_call",
+    "local_shell_call",
+    "local_shell_call_output",
+    "shell_call",
+    "shell_call_output",
+    "apply_patch_call",
+    "apply_patch_call_output",
+    "mcp_call",
+    "mcp_list_tools",
+    "mcp_approval_request",
+    "mcp_approval_response",
+    "custom_tool_call",
+    "custom_tool_call_output",
 ];
 
 macro_rules! tag_only_tool {
@@ -4538,7 +4787,11 @@ tag_only_tool!(
 );
 tag_only_tool!(ApplyPatchTool, ApplyPatchToolTag, ApplyPatch, "apply_patch");
 
-literal_tag!(ComputerUsePreviewToolTag, ComputerUsePreview, "computer_use_preview");
+literal_tag!(
+    ComputerUsePreviewToolTag,
+    ComputerUsePreview,
+    "computer_use_preview"
+);
 
 /// Preview computer-use tool with an explicit virtual display.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -4673,6 +4926,26 @@ pub const STABLE_RESPONSE_TOOL_SCHEMAS: [&str; 16] = [
     "ToolSearchToolParam",
     "WebSearchPreviewTool",
     "ApplyPatchToolParam",
+];
+
+/// Discriminators aligned positionally with [`STABLE_RESPONSE_TOOL_SCHEMAS`].
+pub const STABLE_RESPONSE_TOOL_DISCRIMINATORS: [&str; 16] = [
+    "function",
+    "file_search",
+    "computer",
+    "computer_use_preview",
+    "web_search",
+    "mcp",
+    "code_interpreter",
+    "programmatic_tool_calling",
+    "image_generation",
+    "local_shell",
+    "shell",
+    "custom",
+    "namespace",
+    "tool_search",
+    "web_search_preview",
+    "apply_patch",
 ];
 
 open_string_enum! {
@@ -4833,6 +5106,523 @@ pub const STABLE_RESPONSE_TOOL_CHOICE_SCHEMAS: [&str; 9] = [
     "SpecificProgrammaticToolCallingParam",
     "SpecificApplyPatchParam",
     "SpecificFunctionShellParam",
+];
+
+/// Route discriminators aligned with [`STABLE_RESPONSE_TOOL_CHOICE_SCHEMAS`].
+pub const STABLE_RESPONSE_TOOL_CHOICE_DISCRIMINATORS: [&str; 9] = [
+    "<string:none|auto|required>",
+    "allowed_tools",
+    "<hosted-tool-type>",
+    "function",
+    "mcp",
+    "custom",
+    "programmatic_tool_calling",
+    "apply_patch",
+    "shell",
+];
+
+macro_rules! required_stream_event {
+    ($name:ident, $tag_name:ident, $tag_variant:ident, $wire:literal, {
+        $($field:ident: $ty:ty),* $(,)?
+    }) => {
+        literal_tag!($tag_name, $tag_variant, $wire);
+
+        #[doc = concat!("Streaming event `", $wire, "`.")]
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        pub struct $name {
+            #[serde(rename = "type")]
+            kind: $tag_name,
+            $($field: $ty,)*
+            sequence_number: u64,
+            #[serde(flatten)]
+            extra: ExtraFields,
+        }
+
+        impl $name {
+            /// Returns the monotonically increasing event sequence number.
+            #[must_use]
+            pub const fn sequence_number(&self) -> u64 {
+                self.sequence_number
+            }
+
+            /// Returns future fields retained while decoding.
+            #[must_use]
+            pub const fn extra_fields(&self) -> &ExtraFields {
+                &self.extra
+            }
+        }
+    };
+}
+
+required_stream_event!(AudioDeltaEvent, AudioDeltaEventTag, AudioDelta, "response.audio.delta", {
+    delta: String
+});
+required_stream_event!(AudioDoneEvent, AudioDoneEventTag, AudioDone, "response.audio.done", {
+    response_id: String
+});
+required_stream_event!(
+    AudioTranscriptDeltaEvent,
+    AudioTranscriptDeltaEventTag,
+    AudioTranscriptDelta,
+    "response.audio.transcript.delta",
+    {
+        response_id: String,
+        delta: String
+    }
+);
+required_stream_event!(
+    AudioTranscriptDoneEvent,
+    AudioTranscriptDoneEventTag,
+    AudioTranscriptDone,
+    "response.audio.transcript.done",
+    { response_id: String }
+);
+required_stream_event!(
+    CodeInterpreterCodeDeltaEvent,
+    CodeInterpreterCodeDeltaEventTag,
+    CodeInterpreterCodeDelta,
+    "response.code_interpreter_call_code.delta",
+    {
+        output_index: u64,
+        item_id: String,
+        delta: String
+    }
+);
+required_stream_event!(
+    CodeInterpreterCodeDoneEvent,
+    CodeInterpreterCodeDoneEventTag,
+    CodeInterpreterCodeDone,
+    "response.code_interpreter_call_code.done",
+    {
+        output_index: u64,
+        item_id: String,
+        code: String
+    }
+);
+
+literal_tag!(
+    CodeInterpreterCompletedEventTag,
+    CodeInterpreterCompleted,
+    "response.code_interpreter_call.completed"
+);
+literal_tag!(
+    CodeInterpreterInProgressEventTag,
+    CodeInterpreterInProgress,
+    "response.code_interpreter_call.in_progress"
+);
+literal_tag!(
+    CodeInterpreterInterpretingEventTag,
+    CodeInterpreterInterpreting,
+    "response.code_interpreter_call.interpreting"
+);
+tool_status_event!(
+    CodeInterpreterCompletedEvent,
+    CodeInterpreterCompletedEventTag,
+    CodeInterpreterCompleted
+);
+tool_status_event!(
+    CodeInterpreterInProgressEvent,
+    CodeInterpreterInProgressEventTag,
+    CodeInterpreterInProgress
+);
+tool_status_event!(
+    CodeInterpreterInterpretingEvent,
+    CodeInterpreterInterpretingEventTag,
+    CodeInterpreterInterpreting
+);
+
+literal_tag!(
+    FileSearchCompletedEventTag,
+    FileSearchCompleted,
+    "response.file_search_call.completed"
+);
+literal_tag!(
+    FileSearchInProgressEventTag,
+    FileSearchInProgress,
+    "response.file_search_call.in_progress"
+);
+literal_tag!(
+    FileSearchSearchingEventTag,
+    FileSearchSearching,
+    "response.file_search_call.searching"
+);
+tool_status_event!(
+    FileSearchCompletedEvent,
+    FileSearchCompletedEventTag,
+    FileSearchCompleted
+);
+tool_status_event!(
+    FileSearchInProgressEvent,
+    FileSearchInProgressEventTag,
+    FileSearchInProgress
+);
+tool_status_event!(
+    FileSearchSearchingEvent,
+    FileSearchSearchingEventTag,
+    FileSearchSearching
+);
+
+required_stream_event!(
+    ShellCommandAddedEvent,
+    ShellCommandAddedEventTag,
+    ShellCommandAdded,
+    "response.shell_call_command.added",
+    {
+        output_index: u64,
+        command_index: u64,
+        command: String
+    }
+);
+required_stream_event!(
+    ShellCommandDeltaEvent,
+    ShellCommandDeltaEventTag,
+    ShellCommandDelta,
+    "response.shell_call_command.delta",
+    {
+        output_index: u64,
+        command_index: u64,
+        delta: String
+    }
+);
+required_stream_event!(
+    ShellCommandDoneEvent,
+    ShellCommandDoneEventTag,
+    ShellCommandDone,
+    "response.shell_call_command.done",
+    {
+        output_index: u64,
+        command_index: u64,
+        command: String
+    }
+);
+required_stream_event!(
+    ShellOutputContentDeltaEvent,
+    ShellOutputContentDeltaEventTag,
+    ShellOutputContentDelta,
+    "response.shell_call_output_content.delta",
+    {
+        item_id: String,
+        output_index: u64,
+        command_index: u64,
+        delta: String
+    }
+);
+required_stream_event!(
+    ShellOutputContentDoneEvent,
+    ShellOutputContentDoneEventTag,
+    ShellOutputContentDone,
+    "response.shell_call_output_content.done",
+    {
+        item_id: String,
+        output_index: u64,
+        command_index: u64,
+        output: String
+    }
+);
+required_stream_event!(
+    ReasoningSummaryPartAddedEvent,
+    ReasoningSummaryPartAddedEventTag,
+    ReasoningSummaryPartAdded,
+    "response.reasoning_summary_part.added",
+    {
+        item_id: String,
+        output_index: u64,
+        summary_index: u64,
+        part: Value
+    }
+);
+required_stream_event!(
+    ReasoningSummaryPartDoneEvent,
+    ReasoningSummaryPartDoneEventTag,
+    ReasoningSummaryPartDone,
+    "response.reasoning_summary_part.done",
+    {
+        item_id: String,
+        output_index: u64,
+        summary_index: u64,
+        part: Value
+    }
+);
+required_stream_event!(
+    ReasoningSummaryTextDeltaEvent,
+    ReasoningSummaryTextDeltaEventTag,
+    ReasoningSummaryTextDelta,
+    "response.reasoning_summary_text.delta",
+    {
+        item_id: String,
+        output_index: u64,
+        summary_index: u64,
+        delta: String
+    }
+);
+required_stream_event!(
+    ReasoningSummaryTextDoneEvent,
+    ReasoningSummaryTextDoneEventTag,
+    ReasoningSummaryTextDone,
+    "response.reasoning_summary_text.done",
+    {
+        item_id: String,
+        output_index: u64,
+        summary_index: u64,
+        text: String
+    }
+);
+required_stream_event!(
+    ReasoningTextDeltaEvent,
+    ReasoningTextDeltaEventTag,
+    ReasoningTextDelta,
+    "response.reasoning_text.delta",
+    {
+        item_id: String,
+        output_index: u64,
+        content_index: u64,
+        delta: String
+    }
+);
+required_stream_event!(
+    ReasoningTextDoneEvent,
+    ReasoningTextDoneEventTag,
+    ReasoningTextDone,
+    "response.reasoning_text.done",
+    {
+        item_id: String,
+        output_index: u64,
+        content_index: u64,
+        text: String
+    }
+);
+
+literal_tag!(
+    WebSearchCompletedEventTag,
+    WebSearchCompleted,
+    "response.web_search_call.completed"
+);
+literal_tag!(
+    WebSearchInProgressEventTag,
+    WebSearchInProgress,
+    "response.web_search_call.in_progress"
+);
+literal_tag!(
+    WebSearchSearchingEventTag,
+    WebSearchSearching,
+    "response.web_search_call.searching"
+);
+tool_status_event!(
+    WebSearchCompletedEvent,
+    WebSearchCompletedEventTag,
+    WebSearchCompleted
+);
+tool_status_event!(
+    WebSearchInProgressEvent,
+    WebSearchInProgressEventTag,
+    WebSearchInProgress
+);
+tool_status_event!(
+    WebSearchSearchingEvent,
+    WebSearchSearchingEventTag,
+    WebSearchSearching
+);
+
+literal_tag!(
+    ImageGenerationCompletedEventTag,
+    ImageGenerationCompleted,
+    "response.image_generation_call.completed"
+);
+literal_tag!(
+    ImageGenerationGeneratingEventTag,
+    ImageGenerationGenerating,
+    "response.image_generation_call.generating"
+);
+literal_tag!(
+    ImageGenerationInProgressEventTag,
+    ImageGenerationInProgress,
+    "response.image_generation_call.in_progress"
+);
+tool_status_event!(
+    ImageGenerationCompletedEvent,
+    ImageGenerationCompletedEventTag,
+    ImageGenerationCompleted
+);
+tool_status_event!(
+    ImageGenerationGeneratingEvent,
+    ImageGenerationGeneratingEventTag,
+    ImageGenerationGenerating
+);
+tool_status_event!(
+    ImageGenerationInProgressEvent,
+    ImageGenerationInProgressEventTag,
+    ImageGenerationInProgress
+);
+required_stream_event!(
+    ImageGenerationPartialImageEvent,
+    ImageGenerationPartialImageEventTag,
+    ImageGenerationPartialImage,
+    "response.image_generation_call.partial_image",
+    {
+        output_index: u64,
+        item_id: String,
+        partial_image_index: u64,
+        partial_image_b64: String
+    }
+);
+required_stream_event!(
+    OutputTextAnnotationAddedEvent,
+    OutputTextAnnotationAddedEventTag,
+    OutputTextAnnotationAdded,
+    "response.output_text.annotation.added",
+    {
+        item_id: String,
+        output_index: u64,
+        content_index: u64,
+        annotation_index: u64,
+        annotation: Value
+    }
+);
+required_stream_event!(
+    CustomToolCallInputDeltaEvent,
+    CustomToolCallInputDeltaEventTag,
+    CustomToolCallInputDelta,
+    "response.custom_tool_call_input.delta",
+    {
+        output_index: u64,
+        item_id: String,
+        delta: String
+    }
+);
+required_stream_event!(
+    CustomToolCallInputDoneEvent,
+    CustomToolCallInputDoneEventTag,
+    CustomToolCallInputDone,
+    "response.custom_tool_call_input.done",
+    {
+        output_index: u64,
+        item_id: String,
+        input: String
+    }
+);
+
+/// Frozen schema-name inventory for all 58 stable Responses SSE branches.
+pub const STABLE_RESPONSE_STREAM_EVENT_SCHEMAS: [&str; 58] = [
+    "ResponseAudioDeltaEvent",
+    "ResponseAudioDoneEvent",
+    "ResponseAudioTranscriptDeltaEvent",
+    "ResponseAudioTranscriptDoneEvent",
+    "ResponseCodeInterpreterCallCodeDeltaEvent",
+    "ResponseCodeInterpreterCallCodeDoneEvent",
+    "ResponseCodeInterpreterCallCompletedEvent",
+    "ResponseCodeInterpreterCallInProgressEvent",
+    "ResponseCodeInterpreterCallInterpretingEvent",
+    "ResponseCompletedEvent",
+    "ResponseContentPartAddedEvent",
+    "ResponseContentPartDoneEvent",
+    "ResponseCreatedEvent",
+    "ResponseErrorEvent",
+    "ResponseFileSearchCallCompletedEvent",
+    "ResponseFileSearchCallInProgressEvent",
+    "ResponseFileSearchCallSearchingEvent",
+    "ResponseFunctionCallArgumentsDeltaEvent",
+    "ResponseFunctionCallArgumentsDoneEvent",
+    "ResponseShellCallCommandAddedStreamingEvent",
+    "ResponseShellCallCommandDeltaStreamingEvent",
+    "ResponseShellCallCommandDoneStreamingEvent",
+    "ResponseShellCallOutputContentDeltaStreamingEvent",
+    "ResponseShellCallOutputContentDoneStreamingEvent",
+    "ResponseInProgressEvent",
+    "ResponseFailedEvent",
+    "ResponseIncompleteEvent",
+    "ResponseOutputItemAddedEvent",
+    "ResponseOutputItemDoneEvent",
+    "ResponseReasoningSummaryPartAddedEvent",
+    "ResponseReasoningSummaryPartDoneEvent",
+    "ResponseReasoningSummaryTextDeltaEvent",
+    "ResponseReasoningSummaryTextDoneEvent",
+    "ResponseReasoningTextDeltaEvent",
+    "ResponseReasoningTextDoneEvent",
+    "ResponseRefusalDeltaEvent",
+    "ResponseRefusalDoneEvent",
+    "ResponseTextDeltaEvent",
+    "ResponseTextDoneEvent",
+    "ResponseWebSearchCallCompletedEvent",
+    "ResponseWebSearchCallInProgressEvent",
+    "ResponseWebSearchCallSearchingEvent",
+    "ResponseImageGenCallCompletedEvent",
+    "ResponseImageGenCallGeneratingEvent",
+    "ResponseImageGenCallInProgressEvent",
+    "ResponseImageGenCallPartialImageEvent",
+    "ResponseMCPCallArgumentsDeltaEvent",
+    "ResponseMCPCallArgumentsDoneEvent",
+    "ResponseMCPCallCompletedEvent",
+    "ResponseMCPCallFailedEvent",
+    "ResponseMCPCallInProgressEvent",
+    "ResponseMCPListToolsCompletedEvent",
+    "ResponseMCPListToolsFailedEvent",
+    "ResponseMCPListToolsInProgressEvent",
+    "ResponseOutputTextAnnotationAddedEvent",
+    "ResponseQueuedEvent",
+    "ResponseCustomToolCallInputDeltaEvent",
+    "ResponseCustomToolCallInputDoneEvent",
+];
+
+/// Event discriminators aligned with [`STABLE_RESPONSE_STREAM_EVENT_SCHEMAS`].
+pub const STABLE_RESPONSE_STREAM_EVENT_DISCRIMINATORS: [&str; 58] = [
+    "response.audio.delta",
+    "response.audio.done",
+    "response.audio.transcript.delta",
+    "response.audio.transcript.done",
+    "response.code_interpreter_call_code.delta",
+    "response.code_interpreter_call_code.done",
+    "response.code_interpreter_call.completed",
+    "response.code_interpreter_call.in_progress",
+    "response.code_interpreter_call.interpreting",
+    "response.completed",
+    "response.content_part.added",
+    "response.content_part.done",
+    "response.created",
+    "error",
+    "response.file_search_call.completed",
+    "response.file_search_call.in_progress",
+    "response.file_search_call.searching",
+    "response.function_call_arguments.delta",
+    "response.function_call_arguments.done",
+    "response.shell_call_command.added",
+    "response.shell_call_command.delta",
+    "response.shell_call_command.done",
+    "response.shell_call_output_content.delta",
+    "response.shell_call_output_content.done",
+    "response.in_progress",
+    "response.failed",
+    "response.incomplete",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.reasoning_summary_part.added",
+    "response.reasoning_summary_part.done",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.done",
+    "response.reasoning_text.delta",
+    "response.reasoning_text.done",
+    "response.refusal.delta",
+    "response.refusal.done",
+    "response.output_text.delta",
+    "response.output_text.done",
+    "response.web_search_call.completed",
+    "response.web_search_call.in_progress",
+    "response.web_search_call.searching",
+    "response.image_generation_call.completed",
+    "response.image_generation_call.generating",
+    "response.image_generation_call.in_progress",
+    "response.image_generation_call.partial_image",
+    "response.mcp_call_arguments.delta",
+    "response.mcp_call_arguments.done",
+    "response.mcp_call.completed",
+    "response.mcp_call.failed",
+    "response.mcp_call.in_progress",
+    "response.mcp_list_tools.completed",
+    "response.mcp_list_tools.failed",
+    "response.mcp_list_tools.in_progress",
+    "response.output_text.annotation.added",
+    "response.queued",
+    "response.custom_tool_call_input.delta",
+    "response.custom_tool_call_input.done",
 ];
 
 #[cfg(test)]

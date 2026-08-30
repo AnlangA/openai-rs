@@ -24,6 +24,14 @@ pub(crate) enum ResponseMode {
     Sse,
 }
 
+/// Whether a fully buffered request can be retried before response delivery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetryClass {
+    Safe,
+    Replayable,
+    Never,
+}
+
 /// Static wire contract for one generated or handwritten operation.
 #[derive(Clone, Debug)]
 pub(crate) struct OperationMeta {
@@ -33,6 +41,7 @@ pub(crate) struct OperationMeta {
     pub auth: AuthScope,
     pub request_encoding: RequestEncoding,
     pub response_mode: ResponseMode,
+    pub retry: RetryClass,
     pub success_statuses: &'static [StatusCode],
 }
 

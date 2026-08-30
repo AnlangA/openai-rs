@@ -8,7 +8,8 @@ use openai_rs_types::{
 use crate::{
     ApiResponse, Client, Error,
     operation::{
-        AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, private::Sealed,
+        AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, RetryClass,
+        private::Sealed,
     },
     transport::PathSegment,
 };
@@ -139,7 +140,8 @@ macro_rules! operation {
         response = $response:ty,
         method = $method:expr,
         route = $route:literal,
-        request_encoding = $request_encoding:expr $(,)?
+        request_encoding = $request_encoding:expr,
+        retry = $retry:expr $(,)?
     ) => {
         struct $name;
 
@@ -156,6 +158,7 @@ macro_rules! operation {
                 auth: AuthScope::Platform,
                 request_encoding: $request_encoding,
                 response_mode: ResponseMode::Json,
+                retry: $retry,
                 success_statuses: OK,
             };
         }
@@ -169,6 +172,7 @@ operation!(
     method = Method::GET,
     route = "/models",
     request_encoding = RequestEncoding::None,
+    retry = RetryClass::Safe,
 );
 
 operation!(
@@ -178,6 +182,7 @@ operation!(
     method = Method::GET,
     route = "/models/{model}",
     request_encoding = RequestEncoding::None,
+    retry = RetryClass::Safe,
 );
 
 operation!(
@@ -187,6 +192,7 @@ operation!(
     method = Method::DELETE,
     route = "/models/{model}",
     request_encoding = RequestEncoding::None,
+    retry = RetryClass::Replayable,
 );
 
 operation!(
@@ -196,6 +202,7 @@ operation!(
     method = Method::POST,
     route = "/embeddings",
     request_encoding = RequestEncoding::Json,
+    retry = RetryClass::Replayable,
 );
 
 operation!(
@@ -205,6 +212,7 @@ operation!(
     method = Method::POST,
     route = "/embeddings",
     request_encoding = RequestEncoding::Json,
+    retry = RetryClass::Replayable,
 );
 
 operation!(
@@ -214,6 +222,7 @@ operation!(
     method = Method::POST,
     route = "/moderations",
     request_encoding = RequestEncoding::Json,
+    retry = RetryClass::Replayable,
 );
 
 #[cfg(test)]

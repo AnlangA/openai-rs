@@ -10,6 +10,7 @@ mod error;
 mod operation;
 mod response_stream;
 mod responses;
+mod retry;
 pub mod sse;
 pub(crate) mod transport;
 
@@ -19,6 +20,8 @@ pub use core_resources::{Embeddings, Models, Moderations};
 pub use error::{ApiError, BodyPreview, Error, StreamError};
 pub use operation::{ApiResponse, RateLimitMetadata, ResponseMeta};
 pub use response_stream::ResponseEventStream;
+pub use retry::RetryPolicy;
 pub use responses::{
     DeleteResponseResult, InputItems, InputTokens, Responses, RetrieveResponseParams,
+    RetrieveResponseStreamParams,
 };

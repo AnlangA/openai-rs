@@ -328,6 +328,9 @@ impl FileObject {
 /// Maximum collection size accepted by `GET /files`.
 pub const MAX_FILE_LIST_LIMIT: u32 = 10_000;
 
+/// Effective collection size when `limit` is omitted.
+pub const DEFAULT_FILE_LIST_LIMIT: u32 = 10_000;
+
 /// A validated `GET /files` page size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
@@ -502,6 +505,24 @@ impl FileListParams {
     #[must_use]
     pub const fn after_cursor(&self) -> &Omittable<FileId> {
         &self.after
+    }
+
+    /// Returns the requested page size or the documented server default.
+    #[must_use]
+    pub const fn effective_limit(&self) -> u32 {
+        match self.limit {
+            Omittable::Omitted => DEFAULT_FILE_LIST_LIMIT,
+            Omittable::Value(limit) => limit.get(),
+        }
+    }
+
+    /// Returns the requested order or the documented server default.
+    #[must_use]
+    pub fn effective_order(&self) -> FileSortOrder {
+        match &self.order {
+            Omittable::Omitted => FileSortOrder::Descending,
+            Omittable::Value(order) => order.clone(),
+        }
     }
 }
 
@@ -740,7 +761,9 @@ impl MultipartMediaType {
             return Err(MultipartMediaTypeError);
         }
 
-        let essence = value.split_once(';').map_or(value.as_str(), |(head, _)| head);
+        let essence = value
+            .split_once(';')
+            .map_or(value.as_str(), |(head, _)| head);
         let Some((top_level, subtype)) = essence.split_once('/') else {
             return Err(MultipartMediaTypeError);
         };
@@ -1355,10 +1378,10 @@ mod tests {
     use super::{
         AddUploadPartRequest, CompleteUploadRequest, CreateFileRequest, CreateUploadRequest,
         DeleteFileResponse, FileContent, FileExpirationAfter, FileListLimit, FileListPage,
-        FileListParams, FileObject, FilePurpose, FileSortOrder, FileStatus, MultipartFileName,
-        MultipartMediaType,
+        FileListParams, FileObject, FileObjectPurpose, FilePurpose, FileSortOrder, FileStatus,
         MAX_FILE_EXPIRATION_SECONDS, MAX_FILE_LIST_LIMIT, MIN_FILE_EXPIRATION_SECONDS,
-        ReplayableMultipartSource, Upload, UploadPart, UploadPartId, UploadStatus,
+        MultipartFileName, MultipartMediaType, ReplayableMultipartSource, Upload, UploadPart,
+        UploadPartId, UploadStatus,
     };
     use crate::{Nullable, Omittable};
 
@@ -1446,6 +1469,21 @@ mod tests {
     }
 
     #[test]
+    fn response_only_purposes_do_not_become_known_create_purposes() {
+        let mut wire = base_file_json();
+        wire.as_object_mut()
+            .expect("fixture is an object")
+            .insert(String::from("purpose"), json!("assistants_output"));
+        let file = serde_json::from_value::<FileObject>(wire).expect("decode output file");
+
+        assert_eq!(file.purpose(), &FileObjectPurpose::AssistantsOutput);
+        assert_eq!(
+            FilePurpose::from_raw("assistants_output").unknown_value(),
+            Some("assistants_output")
+        );
+    }
+
+    #[test]
     fn file_list_params_build_without_manual_json() {
         let params = FileListParams::new()
             .with_purpose(FilePurpose::Batch)
@@ -1465,6 +1503,11 @@ mod tests {
         assert_eq!(
             serde_json::to_value(FileListParams::new()).expect("encode defaults"),
             json!({})
+        );
+        assert_eq!(FileListParams::new().effective_limit(), 10_000);
+        assert_eq!(
+            FileListParams::new().effective_order(),
+            FileSortOrder::Descending
         );
     }
 
@@ -1530,6 +1573,13 @@ mod tests {
             )
             .is_err()
         );
+        assert!(
+            serde_json::from_value::<FileExpirationAfter>(json!({
+                "anchor": "created_at",
+                "seconds": MAX_FILE_EXPIRATION_SECONDS + 1
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -1560,7 +1610,13 @@ mod tests {
 
     #[test]
     fn multipart_metadata_rejects_header_and_path_injection() {
-        for invalid in ["", "../secret", r#"subdir\secret"#, "quoted\"name", "line\r\nbreak"] {
+        for invalid in [
+            "",
+            "../secret",
+            r#"subdir\secret"#,
+            "quoted\"name",
+            "line\r\nbreak",
+        ] {
             assert!(MultipartFileName::new(invalid).is_err());
             assert!(serde_json::from_value::<MultipartFileName>(json!(invalid)).is_err());
         }
@@ -1587,6 +1643,16 @@ mod tests {
         assert_eq!(request.file().path(), Some(Path::new("training.jsonl")));
         assert_eq!(request.purpose(), &FilePurpose::FineTune);
         assert_eq!(part.data().path(), Some(Path::new("training.jsonl")));
+    }
+
+    #[test]
+    fn raw_file_content_is_not_mistaken_for_json_or_logged() {
+        let content = FileContent::new(b"{not-json}\0binary-secret".as_slice());
+        let debug = format!("{content:?}");
+
+        assert_eq!(content.as_bytes(), b"{not-json}\0binary-secret");
+        assert!(!debug.contains("binary-secret"));
+        assert!(debug.contains("len"));
     }
 
     #[test]
@@ -1655,6 +1721,35 @@ mod tests {
         assert!(matches!(null.file(), Omittable::Value(Nullable::Null)));
         assert!(matches!(value.file(), Omittable::Value(Nullable::Value(_))));
         assert!(value.completed_file().is_some());
+    }
+
+    #[test]
+    fn upload_object_is_required_by_the_sdk_contract_override() {
+        let mut wire = base_upload_json();
+        wire.as_object_mut()
+            .expect("fixture is an object")
+            .remove("object");
+
+        let error = serde_json::from_value::<Upload>(wire)
+            .expect_err("official SDK contract requires upload object");
+        assert!(error.to_string().contains("missing field `object`"));
+    }
+
+    #[test]
+    fn upload_byte_counts_above_four_gib_round_trip() {
+        let bytes = 5_i64 * 1024 * 1024 * 1024;
+        let request = CreateUploadRequest::new(
+            "large.bin",
+            FilePurpose::UserData,
+            bytes,
+            "application/octet-stream",
+        );
+        let wire = serde_json::to_vec(&request).expect("encode large upload request");
+        let decoded = serde_json::from_slice::<CreateUploadRequest>(&wire)
+            .expect("decode large upload request");
+
+        assert_eq!(decoded.bytes(), bytes);
+        assert_eq!(decoded, request);
     }
 
     #[test]

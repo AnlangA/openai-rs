@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     ApiResponse, Client, Error, ResponseEventStream,
     operation::{
-        AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, private::Sealed,
+        AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, RetryClass,
+        private::Sealed,
     },
     transport::PathSegment,
 };
@@ -27,6 +28,54 @@ const OK_OR_NO_CONTENT: &[StatusCode] = &[StatusCode::OK, StatusCode::NO_CONTENT
 pub struct RetrieveResponseParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     include: Vec<String>,
+}
+
+/// Query parameters for retrieving or resuming a Response SSE stream.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RetrieveResponseStreamParams {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    include: Vec<String>,
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    starting_after: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include_obfuscation: Option<bool>,
+}
+
+impl RetrieveResponseStreamParams {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            include: Vec::new(),
+            stream: true,
+            starting_after: None,
+            include_obfuscation: None,
+        }
+    }
+
+    #[must_use]
+    pub fn include(mut self, value: impl Into<String>) -> Self {
+        self.include.push(value.into());
+        self
+    }
+
+    #[must_use]
+    pub const fn starting_after(mut self, sequence_number: u64) -> Self {
+        self.starting_after = Some(sequence_number);
+        self
+    }
+
+    #[must_use]
+    pub const fn include_obfuscation(mut self, include: bool) -> Self {
+        self.include_obfuscation = Some(include);
+        self
+    }
+}
+
+impl Default for RetrieveResponseStreamParams {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RetrieveResponseParams {
@@ -96,6 +145,21 @@ impl Responses {
             .transport()
             .execute_json::<RetrieveResponse, _>(&path, Some(&params), None)
             .await
+    }
+
+    /// Retrieves or resumes the SSE event stream for a stored response.
+    pub async fn retrieve_stream(
+        &self,
+        response_id: &ResponseId,
+        params: RetrieveResponseStreamParams,
+    ) -> Result<ResponseEventStream, Error> {
+        let path = response_path(response_id)?;
+        let response = self
+            .client
+            .transport()
+            .send::<RetrieveResponseStream, _>(&path, Some(&params), None)
+            .await?;
+        ResponseEventStream::from_response(response)
     }
 
     /// Deletes a stored response.
@@ -257,6 +321,7 @@ macro_rules! operation {
         route = $route:literal,
         request_encoding = $request_encoding:expr,
         response_mode = $response_mode:expr,
+        retry = $retry:expr,
         success = $success:expr $(,)?
     ) => {
         struct $name;
@@ -274,6 +339,7 @@ macro_rules! operation {
                 auth: AuthScope::Platform,
                 request_encoding: $request_encoding,
                 response_mode: $response_mode,
+                retry: $retry,
                 success_statuses: $success,
             };
         }
@@ -288,6 +354,7 @@ operation!(
     route = "/responses",
     request_encoding = RequestEncoding::Json,
     response_mode = ResponseMode::Json,
+    retry = RetryClass::Replayable,
     success = OK,
 );
 
@@ -299,6 +366,7 @@ operation!(
     route = "/responses",
     request_encoding = RequestEncoding::Json,
     response_mode = ResponseMode::Sse,
+    retry = RetryClass::Replayable,
     success = OK,
 );
 
@@ -310,6 +378,19 @@ operation!(
     route = "/responses/{response_id}",
     request_encoding = RequestEncoding::None,
     response_mode = ResponseMode::Json,
+    retry = RetryClass::Safe,
+    success = OK,
+);
+
+operation!(
+    RetrieveResponseStream,
+    request = (),
+    response = ResponseStreamEvent,
+    method = Method::GET,
+    route = "/responses/{response_id}",
+    request_encoding = RequestEncoding::None,
+    response_mode = ResponseMode::Sse,
+    retry = RetryClass::Safe,
     success = OK,
 );
 
@@ -321,6 +402,7 @@ operation!(
     route = "/responses/{response_id}",
     request_encoding = RequestEncoding::None,
     response_mode = ResponseMode::EmptyOrJson,
+    retry = RetryClass::Replayable,
     success = OK_OR_NO_CONTENT,
 );
 
@@ -332,6 +414,7 @@ operation!(
     route = "/responses/{response_id}/cancel",
     request_encoding = RequestEncoding::None,
     response_mode = ResponseMode::Json,
+    retry = RetryClass::Replayable,
     success = OK,
 );
 
@@ -343,6 +426,7 @@ operation!(
     route = "/responses/compact",
     request_encoding = RequestEncoding::Json,
     response_mode = ResponseMode::Json,
+    retry = RetryClass::Replayable,
     success = OK,
 );
 
@@ -354,6 +438,7 @@ operation!(
     route = "/responses/{response_id}/input_items",
     request_encoding = RequestEncoding::None,
     response_mode = ResponseMode::Json,
+    retry = RetryClass::Safe,
     success = OK,
 );
 
@@ -365,6 +450,7 @@ operation!(
     route = "/responses/input_tokens",
     request_encoding = RequestEncoding::Json,
     response_mode = ResponseMode::Json,
+    retry = RetryClass::Replayable,
     success = OK,
 );
 
@@ -653,5 +739,36 @@ mod tests {
             other => panic!("expected stream error, got {other:?}"),
         }
         assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn retrieve_stream_encodes_resume_query_and_repeated_include() {
+        let (base_url, captured) =
+            serve_once_with_content_type(StatusCode::OK, "text/event-stream", "data: [DONE]\n\n")
+                .await;
+        let response_id = ResponseId::new("resp_resume");
+        let params = RetrieveResponseStreamParams::new()
+            .include("reasoning.encrypted_content")
+            .include("message.output_text.logprobs")
+            .starting_after(41)
+            .include_obfuscation(false);
+
+        let mut stream = client(base_url)
+            .responses()
+            .retrieve_stream(&response_id, params)
+            .await
+            .expect("retrieve stream handshake");
+        assert!(stream.next().await.is_none());
+
+        let captured = captured.await.expect("captured request");
+        assert_eq!(captured.method, Method::GET);
+        let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
+            .expect("captured URL");
+        assert_eq!(url.path(), "/v1/responses/resp_resume");
+        let query = url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("stream".into(), "true".into())));
+        assert!(query.contains(&("starting_after".into(), "41".into())));
+        assert!(query.contains(&("include_obfuscation".into(), "false".into())));
+        assert_eq!(query.iter().filter(|(key, _)| key == "include").count(), 2);
     }
 }

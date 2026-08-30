@@ -208,6 +208,16 @@ impl ApiError {
     }
 
     #[must_use]
+    pub const fn meta(&self) -> &ResponseMeta {
+        &self.meta
+    }
+
+    #[must_use]
+    pub const fn rate_limits(&self) -> &crate::RateLimitMetadata {
+        self.meta.rate_limits()
+    }
+
+    #[must_use]
     pub fn is_rate_limited(&self) -> bool {
         self.status() == StatusCode::TOO_MANY_REQUESTS
     }

@@ -94,6 +94,16 @@ fn role_discriminator(value: &Value) -> Result<&str, &'static str> {
         .ok_or("Chat message field `role` must be a string")
 }
 
+fn serialize_object<T: Serialize>(
+    value: &T,
+    context: &'static str,
+) -> Result<Map<String, Value>, serde_json::Error> {
+    match serde_json::to_value(value)? {
+        Value::Object(object) => Ok(object),
+        _ => Err(<serde_json::Error as serde::ser::Error>::custom(context)),
+    }
+}
+
 crate::open_string_enum! {
     /// Role carried by Chat messages and streaming deltas.
     pub enum ChatRole {
@@ -1223,7 +1233,7 @@ pub struct ChatFunctionDefinition {
     pub description: Omittable<String>,
     /// JSON Schema object for function arguments.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub parameters: Omittable<Value>,
+    pub parameters: Omittable<Map<String, Value>>,
     /// Strict schema-adherence setting.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub strict: Omittable<Nullable<bool>>,
@@ -1253,7 +1263,10 @@ impl ChatFunctionDefinition {
         mut self,
         parameters: &T,
     ) -> Result<Self, serde_json::Error> {
-        self.parameters = Omittable::Value(serde_json::to_value(parameters)?);
+        self.parameters = Omittable::Value(serialize_object(
+            parameters,
+            "function parameters must serialize as a JSON object",
+        )?);
         Ok(self)
     }
 
@@ -1488,7 +1501,7 @@ pub struct ChatNamedTool {
 
 strict_tagged_union! {
     /// A concrete tool reference used by tool-choice constraints.
-    pub enum ChatToolReference {
+pub enum ChatToolReference {
         Function(ChatNamedFunctionChoice) = "function",
         Custom(ChatNamedCustomChoice) = "custom"
     }
@@ -1506,25 +1519,92 @@ impl From<ChatNamedCustomChoice> for ChatToolReference {
     }
 }
 
+/// One tool descriptor inside an allowed-tools constraint.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ChatAllowedTool {
+    /// A typed name-only function or custom tool reference.
+    Reference(ChatToolReference),
+    /// An arbitrary descriptor allowed by the forward-compatible wire schema.
+    Arbitrary(Map<String, Value>),
+}
+
+impl ChatAllowedTool {
+    /// Construct an arbitrary descriptor from a typed serializable object.
+    pub fn from_serializable<T: Serialize>(value: &T) -> Result<Self, serde_json::Error> {
+        serialize_object(value, "allowed tool must serialize as a JSON object").map(Self::Arbitrary)
+    }
+}
+
+impl Serialize for ChatAllowedTool {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Reference(reference) => reference.serialize(serializer),
+            Self::Arbitrary(object) => object.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ChatAllowedTool {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let Value::Object(object) = &value else {
+            return Err(D::Error::custom("allowed tool must be a JSON object"));
+        };
+
+        match object.get("type").and_then(Value::as_str) {
+            Some("function" | "custom") => serde_json::from_value(value)
+                .map(Self::Reference)
+                .map_err(D::Error::custom),
+            _ => Ok(Self::Arbitrary(object.clone())),
+        }
+    }
+}
+
+impl From<ChatToolReference> for ChatAllowedTool {
+    fn from(value: ChatToolReference) -> Self {
+        Self::Reference(value)
+    }
+}
+
+impl From<ChatNamedFunctionChoice> for ChatAllowedTool {
+    fn from(value: ChatNamedFunctionChoice) -> Self {
+        Self::Reference(value.into())
+    }
+}
+
+impl From<ChatNamedCustomChoice> for ChatAllowedTool {
+    fn from(value: ChatNamedCustomChoice) -> Self {
+        Self::Reference(value.into())
+    }
+}
+
 /// Predefined set of tools available to the model.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatAllowedTools {
     /// Whether using an allowed tool is optional or required.
     pub mode: ChatAllowedToolsMode,
     /// Named tool references.
-    pub tools: Vec<ChatToolReference>,
+    pub tools: Vec<ChatAllowedTool>,
 }
 
 impl ChatAllowedTools {
     /// Construct an allowed-tools constraint.
     #[must_use]
-    pub fn new(
-        mode: ChatAllowedToolsMode,
-        tools: impl IntoIterator<Item = ChatToolReference>,
-    ) -> Self {
+    pub fn new<I, T>(mode: ChatAllowedToolsMode, tools: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<ChatAllowedTool>,
+    {
         Self {
             mode,
-            tools: tools.into_iter().collect(),
+            tools: tools.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1696,7 +1776,7 @@ pub struct ChatJsonSchemaDefinition {
     pub description: Omittable<String>,
     /// JSON Schema value.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub schema: Omittable<Value>,
+    pub schema: Omittable<Map<String, Value>>,
     /// Strict schema-adherence setting.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub strict: Omittable<Nullable<bool>>,
@@ -1716,7 +1796,10 @@ impl ChatJsonSchemaDefinition {
 
     /// Serialize a typed schema representation.
     pub fn with_schema<T: Serialize>(mut self, schema: &T) -> Result<Self, serde_json::Error> {
-        self.schema = Omittable::Value(serde_json::to_value(schema)?);
+        self.schema = Omittable::Value(serialize_object(
+            schema,
+            "response format schema must serialize as a JSON object",
+        )?);
         Ok(self)
     }
 
@@ -1961,7 +2044,7 @@ pub struct ChatModerationConfig {
     /// Policy object; represented semantically and constructible from any
     /// serializable typed policy.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub policy: Omittable<Nullable<Value>>,
+    pub policy: Omittable<Nullable<Map<String, Value>>>,
 }
 
 impl ChatModerationConfig {
@@ -1976,7 +2059,10 @@ impl ChatModerationConfig {
 
     /// Serialize a typed moderation policy.
     pub fn with_policy<T: Serialize>(mut self, policy: &T) -> Result<Self, serde_json::Error> {
-        self.policy = Omittable::Value(Nullable::Value(serde_json::to_value(policy)?));
+        self.policy = Omittable::Value(Nullable::Value(serialize_object(
+            policy,
+            "moderation policy must serialize as a JSON object",
+        )?));
         Ok(self)
     }
 }
@@ -2685,10 +2771,10 @@ pub struct ChatCompletion {
     pub service_tier: Omittable<Nullable<ChatServiceTier>>,
     /// Deprecated backend fingerprint.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub system_fingerprint: Omittable<Nullable<String>>,
-    /// Usage statistics or explicit null.
+    pub system_fingerprint: Omittable<String>,
+    /// Usage statistics.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub usage: Omittable<Nullable<ChatCompletionUsage>>,
+    pub usage: Omittable<ChatCompletionUsage>,
     /// Future response fields.
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2867,7 +2953,7 @@ pub struct ChatCompletionChunk {
     pub service_tier: Omittable<Nullable<ChatServiceTier>>,
     /// Deprecated backend fingerprint.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub system_fingerprint: Omittable<Nullable<String>>,
+    pub system_fingerprint: Omittable<String>,
     /// Usage is null on ordinary chunks and populated on the optional final
     /// usage chunk.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -3103,6 +3189,42 @@ mod tests {
         let tool = ok(serde_json::from_value::<ChatTool>(future.clone()));
         assert!(matches!(tool, ChatTool::Unknown(_)));
         assert_eq!(ok(serde_json::to_value(tool)), future);
+
+        let arbitrary_allowed = json!({"connector": "future-connector", "version": 2});
+        let allowed = ok(serde_json::from_value::<ChatAllowedTool>(
+            arbitrary_allowed.clone(),
+        ));
+        assert!(matches!(allowed, ChatAllowedTool::Arbitrary(_)));
+        assert_eq!(ok(serde_json::to_value(allowed)), arbitrary_allowed);
+
+        assert!(
+            serde_json::from_value::<ChatAllowedTool>(json!({
+                "type": "function",
+                "function": {}
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn schema_fields_require_json_objects() {
+        assert!(
+            ChatFunctionDefinition::new("bad")
+                .with_parameters(&["not", "an", "object"])
+                .is_err()
+        );
+        assert!(
+            ChatJsonSchemaDefinition::new("bad")
+                .with_schema(&["not", "an", "object"])
+                .is_err()
+        );
+        assert!(
+            serde_json::from_value::<ChatFunctionDefinition>(json!({
+                "name": "bad",
+                "parameters": []
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -3180,7 +3302,7 @@ mod tests {
                 .contains_key("message_future")
         );
         match &completion.usage {
-            Omittable::Value(Nullable::Value(usage)) => {
+            Omittable::Value(usage) => {
                 assert!(usage.extra().contains_key("usage_future"));
             }
             _ => panic!("fixture must contain usage"),

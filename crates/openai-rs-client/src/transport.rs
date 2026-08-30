@@ -19,7 +19,7 @@ const DECODE_PREVIEW_BYTES: usize = 8 * 1024;
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PathSegment<'a> {
     Literal(&'static str),
-    Parameter(&'a str),
+    Parameter { name: &'static str, value: &'a str },
 }
 
 impl<'a> PathSegment<'a> {
@@ -46,7 +46,7 @@ impl<'a> PathSegment<'a> {
                 reason: "must not contain control characters",
             });
         }
-        Ok(Self::Parameter(value))
+        Ok(Self::Parameter { name, value })
     }
 }
 
@@ -144,6 +144,7 @@ impl Transport {
                 "operation metadata has an invalid identifier or route template".into(),
             ));
         }
+        validate_operation_route(meta.route, path)?;
         if meta.auth != AuthScope::Platform {
             return Err(Error::InvalidConfiguration(
                 "operation is not authorized for Platform credentials".into(),
@@ -272,7 +273,7 @@ impl Transport {
             for segment in path {
                 match segment {
                     PathSegment::Literal(value) => segments.push(value),
-                    PathSegment::Parameter(value) => segments.push(value),
+                    PathSegment::Parameter { name: _, value } => segments.push(value),
                 };
             }
         }
@@ -356,6 +357,38 @@ fn same_origin(left: &Url, right: &Url) -> bool {
         && left.port_or_known_default() == right.port_or_known_default()
 }
 
+fn validate_operation_route(route: &str, path: &[PathSegment<'_>]) -> Result<(), Error> {
+    let route_segments = route
+        .strip_prefix('/')
+        .ok_or_else(|| {
+            Error::InvalidConfiguration("operation route must start with a slash".into())
+        })?
+        .split('/')
+        .collect::<Vec<_>>();
+    if route_segments.len() != path.len() {
+        return Err(Error::InvalidConfiguration(
+            "operation route metadata does not match its encoded path".into(),
+        ));
+    }
+    for (template, segment) in route_segments.into_iter().zip(path) {
+        let matches = match segment {
+            PathSegment::Literal(value) => template == *value,
+            PathSegment::Parameter { name, value: _ } => {
+                template
+                    .strip_prefix('{')
+                    .and_then(|template| template.strip_suffix('}'))
+                    == Some(*name)
+            }
+        };
+        if !matches {
+            return Err(Error::InvalidConfiguration(
+                "operation route metadata does not match its encoded path".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn append_query<T>(url: &mut Url, query: &T) -> Result<(), Error>
 where
     T: Serialize + ?Sized,
@@ -367,6 +400,9 @@ where
             "operation query must serialize as an object".into(),
         ));
     };
+    if fields.is_empty() {
+        return Ok(());
+    }
     let mut serializer = url.query_pairs_mut();
     for (name, value) in fields {
         match value {
@@ -440,5 +476,17 @@ mod tests {
     #[test]
     fn dot_segments_are_rejected() {
         assert!(PathSegment::parameter("response_id", "..").is_err());
+    }
+
+    #[test]
+    fn empty_query_does_not_add_a_trailing_question_mark() {
+        let mut url = Url::parse("https://api.openai.com/v1/responses/resp_1")
+            .expect("test operation URL");
+        append_query(&mut url, &serde_json::json!({})).expect("empty query");
+        assert_eq!(
+            url.as_str(),
+            "https://api.openai.com/v1/responses/resp_1"
+        );
+        assert!(url.query().is_none());
     }
 }
