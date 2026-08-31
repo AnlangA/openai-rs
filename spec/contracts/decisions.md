@@ -3922,3 +3922,229 @@ until a decision is recorded here and its fixtures pass.
 - Overrides: corrects D0050
 - Tests: updated `beta_item_official_nulls_match_openapi` (id/status keys now asserted absent, agent/phase nulls retained).
 
+
+## D0189 — Item-status construction narrowed on the remaining five hosts (extends D0168)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ComputerCall::new`, `LocalShellCall::new`, `ToolSearchCallInput::status`, `ReasoningItem::status`, `LocalShellCallOutput::status`, `BetaPromptCachedInputMessage::status`
+- Sources: the pinned item request schemas type each `status` as the three-value trio (ToolSearch reuses `FunctionCallItemStatus`); round-3's D0168 missed these five construction sites plus the beta prompt-cached message.
+- Decision: all five take `FunctionCallItemStatus` (or `MessageStatus` on the beta message); decode-side fields stay the shared open superset; the per-host test table grew to twelve hosts.
+- Reason: the leftover sites could still construct statuses their pinned schemas reject.
+- Impact: `openai-rs-types` Responses construction surface (breaking: parameter types narrowed).
+- Overrides: none
+- Tests: extended `per_host_item_status_enums_pin_official_domains`, `beta_prompt_cached_message_status_pins_message_trio`.
+
+## D0190 — Tool-call output items expose read accessors
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `WebSearchCall`, `FileSearchCall`, `ComputerCall`, `LocalShellCall`, `ImageGenerationCall`, `CodeInterpreterCall`, `McpListTools`, `McpCall` impl blocks
+- Sources: the pinned output items require `id`/`status` (and carry results, code, container ids, MCP errors) and both official SDKs expose them as public attributes; the crate already provided `id()`/`status()` on `OutputMessage`/`FunctionCall`, making the omission self-inconsistent.
+- Decision: hand-written read getters (`status()`, `id()`, plus `call_id()`, `result()`, `code()`, `container_id()`, `error()` where applicable). Rust's name collision forced three builders to the `with_*` convention (`ImageGenerationCall::result`→`with_result`, `CodeInterpreterCall::code`→`with_code`, `McpListTools::error`→`with_error`). The `required_tagged_record!` macro deliberately generates nothing — macro-level getters would return `&String`/`&Nullable<String>` shapes and collide with builder names.
+- Reason: failure states (`status: failed`, MCP `error`) were unobservable on the typed surface.
+- Impact: `openai-rs-types` Responses output items (breaking: three builder renames, pre-1.0).
+- Overrides: none
+- Tests: `tool_call_output_items_expose_read_accessors`.
+
+## D0191 — output_parsed routes Failed; accumulator stream errors carry the full payload
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `OutputParseError`, `Response::output_parsed`, `ResponseAccumulatorError::Stream`
+- Sources: the pinned `Response.error` object (required, nullable) was dropped when routing a failed response through `output_parsed` (only Incomplete was routed); the pinned stream error event requires `param` and `sequence_number` and codes can be null.
+- Decision: `OutputParseError::Failed(ResponseError)` joins Incomplete (a failed response with `error: null` synthesizes an `Unknown("failed_without_error")` payload to keep the variant typed); `ResponseAccumulatorError::Stream` now carries `code: Option<Box<str>>`, `param: Option<Box<str>>`, and `sequence_number`, with Display omitting absent segments; the Incomplete Display no longer debug-prints the reason.
+- Reason: failed-response error details were silently replaced by `NoTextOutput`, and WebSocket-lane consumers lost param/sequence context.
+- Impact: `openai-rs-types` Responses parse and accumulator error surfaces (breaking: `ResponseAccumulatorError::Stream.code` changed from `String` to `Option<Box<str>>` and gained fields).
+- Overrides: none
+- Tests: `response_output_parsed_branches`, `accumulator_stream_error_keeps_code_param_and_sequence_number`.
+
+## D0192 — Beta response and WebSocket error surfaces mirror GA
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BetaResponse`, `BetaWebSocketErrorDetails`, `BetaWebSocketErrorEvent`, `StreamErrorEvent::param`, `BetaResponsesServerEvent::is_error`
+- Sources: the pinned beta schemas reuse the GA error/incomplete shapes and the GA `BetaErrorPayload` fields (`code`/`param` required-nullable, optional `headers`); the GA twins already exposed full accessors and `ExtraFields`.
+- Decision: `BetaResponse` gains `error()`/`incomplete_details()` (reusing GA types); the beta WS error details gain `code()`/`param()`/`headers()`/`extra_fields()` and the event gains `status()`/`extra_fields()` (both via flatten `ExtraFields`); `StreamErrorEvent::param()` joins its siblings; `is_error()` helpers document the channel split — SSE-shaped standalone errors are fatal (Err), the WS `type:"error"` envelope is lane-level and stays an Ok delivery (round-4 rejection 4-R1).
+- Reason: mirrored wire shapes had asymmetric readability and lost unknown fields on re-encode.
+- Impact: `openai-rs-types` beta Responses surface (additive).
+- Overrides: none
+- Tests: `beta_websocket_error_envelope_round_trips_every_field`, `server_event_is_error_covers_sse_and_websocket_shapes`, `beta_response_exposes_error_and_incomplete_details_accessors`, extended `stream_events_distinguish_terminal_and_unknown_events`.
+
+## D0193 — In-band stream errors: legacy completions checks data errors; media flat error frames; truthiness predicate
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `completions.rs::decode_chunk`, `media.rs::decode_media_event`, the shared `error`-key predicate (chat/completions/media)
+- Sources: openai-python `_streaming.py` raises on `data.get("error")` truthiness for every stream and openai-node throws on `sse.event === 'error'` or `data.error`; a legacy-completions error frame previously degraded to `Error::Decode` ("missing field id"); a media frame with `{"type":"error",...}` and no `event:` line decoded as an Unknown event and could be swallowed entirely by a following `[DONE]`.
+- Decision: legacy completions decodes through `serde_json::Value` first and routes error keys to `StreamError::from_body`; media routes `type == "error"` frames the same way; the error-key predicate mirrors Python truthiness (`null`, `false`, `""`, `{}`, `0` pass; non-empty objects/strings/true fail).
+- Reason: typed error semantics (code/param/request-id classification) were lost or delayed to an unrelated `UnexpectedEof`.
+- Impact: `openai-rs-client` stream decoders only.
+- Overrides: none
+- Tests: legacy-completions mirror of `create_stream_surfaces_in_band_data_error`, media flat-error and truthiness cases.
+
+## D0194 — All SSE streams honor sse_limits; finish loops are fail-stop
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `MediaEventStream::from_response` and its five call sites, the finish() loops in chat/completions/media, `response_stream.rs` finish loop, `ClientBuilder::sse_limits` docs, media SSE error-channel tests
+- Sources: D0144 raised the default line cap for the very media payloads (multi-MiB `partial_image`) that the media streams then ignored by hardcoding defaults; `response_stream.rs` already failed-stop after an error while the other three finish loops kept yielding items from the same EOF flush.
+- Decision: media streams read `transport().sse_limits()` like every other stream and the builder doc now says "all SSE streams"; all finish loops return after yielding an error; the response_stream finish loop's defensive Error handling is aligned with the push loop; media gains the missing error-path tests (remote error event, data error key, missing terminal, wrong content type, mid-body read failure).
+- Reason: user-configured limits were silently ignored on five endpoints and error-then-item sequences violated the crate-wide fail-stop posture.
+- Impact: `openai-rs-client` media transport and stream loops.
+- Overrides: none
+- Tests: `sse_limits_configuration_rejects_long_lines`, EOF-flush error-stop cases, media error-channel suite.
+
+## D0195 — StreamError is channel-neutral and exposes the official type
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `StreamError` (`error.rs`)
+- Sources: the pinned `Error`/`ErrorPayload` require `type`; both official SDKs expose it on stream-raised errors; the Display string said "OpenAI Responses stream error" while the type is shared by chat, legacy completions, media, and Responses streams.
+- Decision: Display/doc become endpoint-neutral ("OpenAI stream error"); `kind()` exposes `type` from the flat body first and the nested `error` envelope second, alongside `code`/`param`.
+- Impact: `openai-rs-client` error display (message text change) and accessor (additive).
+- Overrides: none
+- Tests: `stream_error_display_is_channel_neutral`, `stream_error_exposes_type_from_flat_and_nested_bodies`.
+
+## D0196 — The API error envelope is per-field lenient
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ApiErrorBody`, `StreamErrorBody` (`error.rs`)
+- Sources: openai-python reads each field independently from the body; a single wrong-typed field previously failed the whole envelope deserialization and dropped `code`/`param`/`type` for every malformed-but-partial body.
+- Decision: all four envelope fields become `Option<Value>` with per-field lenient extraction (non-string scalars stringify, message included); stringification passes through the inline redactor; the leniency chain, fallback copy, malformed bodies, and flat→nested precedence are now test-locked, along with `Send + Sync` assertions for `Error`/`ApiError`/`StreamError`/`BodyPreview`.
+- Impact: `openai-rs-client` error parsing (more fields survive malformed bodies).
+- Overrides: none
+- Tests: `api_error_malformed_field_does_not_discard_sibling_fields`, `api_error_non_string_message_is_stringified`, `api_error_string_error_key_falls_back_without_panicking`, `api_error_malformed_body_falls_back_without_secondary_failure`, plus the Send/Sync assertions.
+
+## D0197 — ResponseMeta retains retry hints
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ResponseMeta`, `ApiError::retry_after`
+- Sources: openai-python `APIStatusError.response.headers` and openai-node `APIError.headers` keep the full header set, so users can read `Retry-After` after retries are exhausted; only the six `x-ratelimit-*` headers were retained here.
+- Decision: `ResponseMeta` records `retry_after` (the raw `retry-after-ms` or `Retry-After` text, ms preferred) and `x_should_retry` (literal true/false only) with public accessors; numeric interpretation and the zero/negative gating stay in the transport retry domain (D0131/D0201). `Location` remains unretained per the minimal-exposure stance.
+- Impact: `openai-rs-client` operation metadata (additive).
+- Overrides: none
+- Tests: `retry_after_prefers_retry_after_ms_over_retry_after`, `retry_after_falls_back_to_retry_after_header`, `retry_after_absent_when_neither_header_is_present`, `retry_after_preserves_non_numeric_values_verbatim`, `should_retry_keeps_only_literal_booleans`, `api_error_exposes_retry_hints_from_response_headers`.
+
+## D0198 — WebSocket handshake bodies, close frames, and the realtime failure posture
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `Error::WebSocketHandshake` (+`handshake_body()`), `map_websocket_error`, `RealtimeInbound::Closed`, `close_code()`/`close_reason()` on both WS clients, realtime recv failure branches, `RealtimeWebSocketConfig::write_buffer_bytes` (probe-write-failure test seam)
+- Sources: tungstenite 0.29 buffers the non-101 response body in `Error::Http` (it was discarded, losing the API's auth/rate-limit detail — python's `InvalidStatus` carries the full response); `Message::Close` frames carry code/reason that both official stacks expose (`ConnectionClosedError.rcvd` / ws `close(code, reason)`); the realtime recv comment promised probe deactivation on error paths that did not set `closed`.
+- Decision: handshake failures carry a `BodyPreview` (sanitized, truncated flag per the buffered tail; the envelope message stays out of Display per the D0208 preview stance); `Closed` carries the optional close frame and both clients record the last code/reason behind accessors (an unframed EOF stays `None` so coded closes remain distinguishable); every realtime transport/protocol failure (read error, Reject, keepalive timeout, probe write failure, oversized frame) retires the socket while event decode failures keep it open (node parity).
+- Impact: `openai-rs-client` WS error surfaces (additive fields; realtime failure semantics tightened).
+- Overrides: none
+- Tests: `handshake_errors_carry_a_sanitized_body_preview`, `handshake_rejection_preserves_the_json_error_body` (×2), `peer_close_code_and_reason_stay_readable`, `websocket_close_code_and_reason_survive_the_close_handshake`, `rejected_frame_retires_the_realtime_socket`, `event_decode_failure_keeps_the_realtime_socket_open`, `keepalive_probe_write_failure_retires_the_realtime_socket`.
+
+## D0199 — Recorded positions: realtime handshake single-shot; admin mint-retry interaction; chat/completions clean-EOF fail-stop (partial D0163 correction)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `RealtimeWebSocket::connect`, `AdminApiKeys::create`/`with_retry_policy`, chat/completions EOF handling; D0163 timeout wording
+- Sources: neither official SDK retries WebSocket connections (Responses WS exposes an opt-in initial-connect policy; the realtime socket binds session state — model/intent/call_id — that is not replayable, so the knob is deliberately absent); the pinned admin key creation responses return `value` exactly once while the default policy replays POSTs like openai-python does (an orphaned credential is possible if the first attempt lands); D0163 cited python's `DEFAULT_TIMEOUT` as a 600s overall budget when httpx applies it per I/O operation — this crate's `request_timeout` is a total budget (node parity), which truncates long streams at 600s.
+- Decision: document all three positions in rustdoc (realtime handshake single-shot with the "loop yourself" note; the mint-retry interaction with `conservative()`/`disabled()` escape hatches covering all three once-only endpoints); the chat/completions clean-EOF-without-`[DONE]` error joins the D0187 hardening family; D0163's timeout attribution is corrected by this entry; `Error::Timeout`/`Error::ResponseBody` docs state the invariant (Timeout = no response received; ResponseBody = response received, source distinguishes).
+- Impact: documentation only.
+- Overrides: corrects D0163's python-timeout attribution
+- Tests: existing EOF/handshake tests.
+
+## D0200 — Administration error-body reading matches the platform
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `admin.rs::error_from_response`/`read_limited`
+- Sources: D0176 declared the admin channel behaviorally identical to the transport, but oversized error bodies produced `BodyTooLarge` (dropping the typed envelope) where the platform truncates into an `ApiError`, and interrupted reads produced `Transport` (dropping status/request-id) where the platform uses `ResponseBody`.
+- Decision: admin reads use the transport's truncate-into-`ApiError` semantics for error bodies and map read interruptions to `ResponseBody { status, request_id }`; the helper is a line-for-line private copy annotated as same-source with `transport.rs`.
+- Impact: `openai-rs-client` admin channel error surfaces.
+- Overrides: none
+- Tests: `oversized_error_body_is_truncated_into_a_typed_api_error`, `interrupted_error_body_read_surfaces_response_body_with_status`.
+
+## D0201 — A parseable retry-after-ms decides alone
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `server_retry_delay` in `transport.rs` and the admin same-source copy
+- Sources: openai-python returns the parsed millisecond value immediately (never consulting `Retry-After`); round-2 D0146 fixed the multipart copy but negative/non-finite parseable values still fell through to `Retry-After` in the transport and admin copies.
+- Decision: any successfully parsed `retry-after-ms` value short-circuits the decision — positive and bounded becomes `Valid`, everything else (zero, negative, NaN, Inf, over-cap) becomes the local-backoff path; the guards moved into `bounded_delay`.
+- Impact: `openai-rs-client` retry delay selection on mixed headers.
+- Overrides: none
+- Tests: `parseable_retry_after_ms_decides_alone_and_never_falls_back` (transport and admin copies).
+
+## D0202 — Batch polling gains a completion-window preset
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `PollOptions::for_batches`, poll rustdocs on batches/fine-tuning/evals, poll.rs module docs
+- Sources: the pinned `completion_window` enum's only value is `24h`; the generic `PollOptions::new()` (1s/10min) expires 144× before any realistic batch finishes; the module doc omitted Batches and background-mode Responses.
+- Decision: `for_batches()` (5s interval, 24h deadline) joins the fine-tuning/evals presets; the three poll entry points point at their presets (the API stays explicit-supply); module docs list the real consumers.
+- Impact: `openai-rs-client` polling surface (additive).
+- Overrides: none
+- Tests: `for_batches_preset_covers_the_only_batch_completion_window`, `batch_poll_accepts_for_batches_preset_options`.
+
+## D0203 — Evals and vector-store failure surfaces are readable; rejected maxima report actual
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `EvalRun` (+counts/error), `EvalRunOutputItem`, `EvalSample`, `experimental::RunGraderResponse` (+metadata tree), `RunGraderErrors` accessors, `VectorStoreValidationError::InvalidMaxResults`
+- Sources: the pinned run/grader failure payloads (14-field `RunGraderResponse.metadata.errors`, run `error`/`result_counts`, per-item status/sample) decode fully but were write-only on the typed surface, unlike `FineTuningJob`'s public fields and `Batch::errors()`; `InvalidMaxResults` stored the rejected value in a field named `maximum`.
+- Decision: read accessors across the evals failure tree (Nullable fields surface as `Option`, `type` accessors named `kind()` per crate convention); the variant field renames to `actual` with unchanged Display.
+- Impact: `openai-rs-types` Evals/Vector Stores surfaces (additive; enum field rename on a `#[non_exhaustive]` variant).
+- Overrides: none
+- Tests: `eval_run_result_counts_and_error_are_readable`, `output_item_status_sample_and_sample_error_are_readable`, `run_grader_metadata_and_error_flags_are_readable`, `max_results_bounds_report_the_rejected_actual_value`.
+
+## D0204 — Custom-voice audio limit reports RequestPayloadTooLarge at send time
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `Error::RequestPayloadTooLarge`, `voices.rs::prepare_bounded`, `VoiceRequestError` docs
+- Sources: the pinned 10 MiB prose cap; in-memory sources fail at construction with `VoiceRequestError::AudioTooLarge` while file/stream sources only become measurable after preparation, and that send-time failure previously reused `InvalidConfiguration` ("invalid client configuration"), which is a client-config category.
+- Decision: new `Error::RequestPayloadTooLarge { limit_bytes }` for the send-time half; the two-phase split is documented on both error surfaces; the threshold constant stays single-sourced.
+- Impact: `openai-rs-client` error enum (additive variant) and voices transport classification.
+- Overrides: none
+- Tests: `oversized_send_time_audio_reports_request_payload_too_large`.
+
+## D0205 — Webhook post-verification decode errors are sanitized; prefixed secrets validate at construction
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `WebhookVerificationError::Decode`, `WebhookVerifier::new`/`decode_secret`, tolerance boundary tests, verifier docs
+- Sources: reproduced leak — the serde error's Debug/Display embed rejected payload literals (SIP credentials could surface through error chains, the only path outside the D0125 redline); a `whsec_`-prefixed secret decoding to an empty key was accepted and empty-key HMAC forgeries verify; node's docs carry the clock-sync guidance the verifier lacked.
+- Decision: `Decode` becomes `{ kind: syntax|discriminator|type, line, column }` with no source chain (the category is re-derived from the payload envelope, not the error text); construction decodes prefixed secrets eagerly and rejects empty/invalid decodings with `InvalidSecret`; the future-side `== tolerance` pass boundary joins the past-side lock; module docs state the replay purpose, the symmetric window, and the clock-sync advice.
+- Impact: `openai-rs-client` webhook verification (breaking: `Decode` shape).
+- Overrides: none
+- Tests: `decode_failures_report_sanitized_class_and_position_without_payload_content`, `empty_or_malformed_prefixed_secrets_are_rejected_at_construction`, extended `sub_second_tolerances_are_rejected_instead_of_truncating_to_zero`.
+
+## D0206 — Codex: typed error notifications, distinguished child exits, hardened error channel
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `protocol.rs` (ErrorNotification/TurnError/CodexErrorInfo), `app_server/client.rs` (exit reaping, line limit), `error.rs` (Json/ResponseDecode/RequestTimeout/RpcError.data), `direct/transport.rs` (status_error)
+- Sources: pinned `v2/ErrorNotification`→`TurnError`→`CodexErrorInfo` (11 string + 5 object variants, including the `turn/start`-failure `activeTurnNotSteerable`); a crashed or killed child surfaced as a plain stdout EOF while the reserved `ChildExit` kind went unused; serde error text can embed payload fragments; `JSONRPCErrorError.data` accepts explicit null; D0144's payload-scale argument applies to JSONL frames.
+- Decision: the error notification channel is fully typed (open enums + granular object variants, flatten extras, `Turn.error` narrowed to `TurnError`); stdout EOF reaps the child (bounded by the shutdown timeout) and folds the exit status — plus a truncated stderr tail — into a `ChildExit` terminal failure, and `terminate()` no longer discards already-reaped statuses; `Error::Json` renders neutrally with decode failures carrying the method name (`ResponseDecode`) and `RequestTimeout` gaining `method`; `RpcError.data` becomes three-state so explicit null round-trips; the default JSONL frame limit rises 4 MiB → 32 MiB (still bounded, configurable); direct `status_error` falls back to a sanitized `error.message` when the code is absent; the dead `UnsupportedDirectTransport` variant is removed.
+- Impact: `openai-rs-codex` protocol/error/client surfaces (breaking: variant removal, field type changes; additive: typed error channel).
+- Overrides: none
+- Tests: `error_notification_decodes_and_serializes_the_pinned_shape`, `codex_error_info_string_branch_covers_the_pinned_domain_and_keeps_unknowns`, `codex_error_info_object_variants_match_the_pinned_wire_shape`, `failed_turn_error_is_typed_and_lossless`, `rpc_error_data_keeps_the_three_wire_states`, `json_and_decode_failures_keep_neutral_messages`, `child_exit_failure_displays_its_message`, `default_line_limit_matches_the_payload_scale`, `child_crash_exit_status_reaches_in_flight_requests`, `rpc_error_response_preserves_code_message_and_data`, `eof_mid_frame_fails_in_flight_requests`, `invalid_json_frame_fails_in_flight_requests`, `status_error_prefers_code_and_falls_back_to_sanitized_message`.
+
+## D0207 — RMCP bridge: cancellation semantics, unsupported results, and model re-exports (round-4 item 4-41)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BridgeError`, `RmcpExecutor::call_cancellable`/`list_tools`, `ResultEncoding::CompactWhenPossible`, crate-root re-exports, `examples/rmcp_bridge.rs`
+- Sources: rmcp 3.1.4 resolves peer-cancelled requests as `Cancelled` (both directions share the shape); cancel-notification delivery can fail after transport close, which previously masked the cancellation as `Transport`; SEP-2322 `InputRequired`/SEP-2663 task results are successful exchanges the bridge cannot drive; MCP makes cancel notifications optional; the compact flattening provably drops `resultType`/`_meta` (D0185 fields).
+- Decision: `Cancelled` documents both initiators (no `initiator` field, preserving the variant surface); the cancel branch ignores notification-delivery failure and returns `Cancelled` (matching the timeout branch); `UnsupportedResult { kind }` separates input-required/task outcomes from executor failures; `list_tools` cancellation stays local by design (documented); the compact doc discloses the dropped fields; the crate root re-exports `rmcp::model::{Tool, CallToolResult, ContentBlock, JsonObject}` so facade-only users can implement the executor trait; a new example demonstrates the DispatchOutcome split.
+- Impact: `openai-rs-rmcp` error surface (additive variant, cancel-classification change) and exports; facade example added.
+- Overrides: none
+- Tests: `cancellation_wins_over_a_failed_cancel_notification_delivery`, `input_required_results_report_an_unsupported_result_kind`, `unknown_function_is_rejected_before_any_execution`, `discover_propagates_list_tools_protocol_failure`.
+
+## D0208 — Recorded positions: constraint errors stay count-only; the error preview stance
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CreateResponseConstraintError` shape; `BodyPreview` behavior; `StructuredError::Decode` messages
+- Sources: the audit asked whether validation errors should carry item paths (`input[6]`) and whether the preview/Display truncation should be ledgered; both behaviors predate the audit rounds and carry deliberate privacy/simplicity trade-offs (variants intentionally omit values; the transport's `Error::Decode` already provides serde paths for decode failures).
+- Decision: `CreateResponseConstraintError` stays count-only (positioning belongs to decode-side serde paths); the `BodyPreview` stance is hereby recorded — an 8 KiB cap, sensitive-key and prefix redaction, Display limited to status/code/request-id, Debug fully redacted, versus python's full `response.text` exposure; `StructuredError::Decode` similarly keeps serde's own location info without payload snippets.
+- Impact: documentation of existing behavior.
+- Overrides: none
+- Tests: existing redaction and constraint tests.

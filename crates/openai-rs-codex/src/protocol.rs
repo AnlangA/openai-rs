@@ -669,6 +669,109 @@ openai_rs_types::open_string_enum! {
     }
 }
 
+openai_rs_types::open_string_enum! {
+    /// Kind of an active turn that cannot accept same-turn steering.
+    ///
+    /// The pinned `v2/NonSteerableTurnKind` enumerates exactly `review` and
+    /// `compact`; kinds introduced later decode losslessly as
+    /// [`NonSteerableTurnKind::Unknown`].
+    pub enum NonSteerableTurnKind {
+        Review = "review",
+        Compact = "compact"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// String branch of the pinned `v2/CodexErrorInfo` union.
+    ///
+    /// The pinned literal set has exactly the eleven camelCase codes below;
+    /// codes introduced later decode losslessly as [`CodexErrorCode::Unknown`].
+    pub enum CodexErrorCode {
+        ContextWindowExceeded = "contextWindowExceeded",
+        SessionBudgetExceeded = "sessionBudgetExceeded",
+        UsageLimitExceeded = "usageLimitExceeded",
+        ServerOverloaded = "serverOverloaded",
+        CyberPolicy = "cyberPolicy",
+        InternalServerError = "internalServerError",
+        Unauthorized = "unauthorized",
+        BadRequest = "badRequest",
+        ThreadRollbackFailed = "threadRollbackFailed",
+        SandboxError = "sandboxError",
+        Other = "other"
+    }
+}
+
+/// Payload of the four `codexErrorInfo` object variants that forward an
+/// upstream HTTP status.
+///
+/// The pinned schema types `httpStatusCode` as an optional `uint16` that may
+/// explicitly be `null`, so an absent key and `null` both decode to [`None`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardedHttpStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_status_code: Option<u16>,
+}
+
+/// Payload of the `activeTurnNotSteerable` variant of [`CodexErrorInfo`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveTurnNotSteerableDetails {
+    pub turn_kind: NonSteerableTurnKind,
+}
+
+/// Machine-readable Codex error classification carried by a [`TurnError`].
+///
+/// Untagged mirror of the pinned `v2/CodexErrorInfo` union: the eleven
+/// plain-string codes form the open enum [`CodexErrorCode`] (an unknown code
+/// decodes losslessly instead of failing the surrounding error payload), and
+/// the five object variants wrap their payload under the pinned camelCase key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, rename_all_fields = "camelCase")]
+pub enum CodexErrorInfo {
+    /// One of the eleven pinned error-code strings.
+    Code(CodexErrorCode),
+    /// The upstream HTTP connection could not be established.
+    HttpConnectionFailed {
+        http_connection_failed: ForwardedHttpStatus,
+    },
+    /// Failed to connect to the response SSE stream.
+    ResponseStreamConnectionFailed {
+        response_stream_connection_failed: ForwardedHttpStatus,
+    },
+    /// The response SSE stream disconnected in the middle of a turn before
+    /// completion.
+    ResponseStreamDisconnected {
+        response_stream_disconnected: ForwardedHttpStatus,
+    },
+    /// Reached the retry limit for responses.
+    ResponseTooManyFailedAttempts {
+        response_too_many_failed_attempts: ForwardedHttpStatus,
+    },
+    /// `turn/start` or `turn/steer` was submitted while the active turn cannot
+    /// accept same-turn steering, for example `/review` or `/compact`.
+    ActiveTurnNotSteerable {
+        active_turn_not_steerable: ActiveTurnNotSteerableDetails,
+    },
+}
+
+/// Error payload of a failed turn.
+///
+/// Wire shape of the pinned `v2/TurnError`: `message` is required, while
+/// `additionalDetails` and `codexErrorInfo` are optional nulls; properties
+/// added by a newer app-server are retained losslessly in [`TurnError::extra`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnError {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_details: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_error_info: Option<CodexErrorInfo>,
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
@@ -676,8 +779,10 @@ pub struct Turn {
     #[serde(default)]
     pub items: Vec<Value>,
     pub status: TurnStatus,
+    /// Populated when [`Turn::status`] is `failed`; typed as the pinned
+    /// `v2/TurnError` payload with unknown properties retained losslessly.
     #[serde(default)]
-    pub error: Option<Value>,
+    pub error: Option<TurnError>,
     #[serde(default)]
     pub started_at: Option<i64>,
     #[serde(default)]
@@ -754,6 +859,24 @@ pub struct AccountRateLimitsUpdatedNotification {
     pub extra: serde_json::Map<String, Value>,
 }
 
+/// Turn failure broadcast on the dedicated `error` notification channel.
+///
+/// Wire shape of the pinned `v2/ErrorNotification`: `threadId`, `turnId`,
+/// `willRetry`, and the typed [`TurnError`] are all required; envelope
+/// properties added by a newer app-server stay lossless in
+/// [`ErrorNotification::extra`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    /// Whether the app-server will retry the failed turn on its own.
+    pub will_retry: bool,
+    pub error: TurnError,
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartedNotification {
@@ -819,6 +942,7 @@ pub enum Notification {
     AccountLoginCompleted(Box<AccountLoginCompletedNotification>),
     AccountUpdated(Box<AccountUpdatedNotification>),
     AccountRateLimitsUpdated(Box<AccountRateLimitsUpdatedNotification>),
+    Error(Box<ErrorNotification>),
     ThreadStarted(Box<ThreadStartedNotification>),
     TurnStarted(Box<TurnStartedNotification>),
     TurnCompleted(Box<TurnCompletedNotification>),
@@ -848,6 +972,7 @@ pub(crate) fn decode_notification(
         "account/rateLimits/updated" => typed(&params)
             .map(Box::new)
             .map(Notification::AccountRateLimitsUpdated),
+        "error" => typed(&params).map(Box::new).map(Notification::Error),
         "thread/started" => typed(&params)
             .map(Box::new)
             .map(Notification::ThreadStarted),
@@ -878,12 +1003,14 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AccountUpdatedNotification, AskForApproval, AskForApprovalMode, AuthMode, ByteRange,
-        CancelLoginResponse, CancelLoginStatus, ClientInfo, GranularAskForApproval, ImageDetail,
-        InitializeCapabilities, InitializeParams, LoginAccountResponse, Notification, Nullable,
-        Omittable, Personality, PlanType, RateLimitReachedType, RateLimitSnapshot,
-        ReasoningSummary, SandboxMode, TextElement, ThreadStartParams, Turn, TurnStartParams,
-        TurnStatus, UserInput, decode_notification,
+        AccountUpdatedNotification, ActiveTurnNotSteerableDetails, AskForApproval,
+        AskForApprovalMode, AuthMode, ByteRange, CancelLoginResponse, CancelLoginStatus,
+        ClientInfo, CodexErrorCode, CodexErrorInfo, ErrorNotification, ForwardedHttpStatus,
+        GranularAskForApproval, ImageDetail, InitializeCapabilities, InitializeParams,
+        LoginAccountResponse, NonSteerableTurnKind, Notification, Nullable, Omittable, Personality,
+        PlanType, RateLimitReachedType, RateLimitSnapshot, ReasoningSummary, SandboxMode,
+        TextElement, ThreadStartParams, Turn, TurnError, TurnStartParams, TurnStatus, UserInput,
+        decode_notification,
     };
 
     #[test]
@@ -1427,6 +1554,225 @@ mod tests {
         );
         let encoded = serde_json::to_value(&updated)?;
         assert_eq!(encoded["authMode"], json!("futureMode"));
+        Ok(())
+    }
+
+    /// 4-37: the string branch of `v2/CodexErrorInfo` covers the eleven pinned
+    /// codes and keeps codes from a newer app-server losslessly.
+    #[test]
+    fn codex_error_info_string_branch_covers_the_pinned_domain_and_keeps_unknowns()
+    -> Result<(), serde_json::Error> {
+        for (wire, expected) in [
+            (
+                "contextWindowExceeded",
+                CodexErrorCode::ContextWindowExceeded,
+            ),
+            (
+                "sessionBudgetExceeded",
+                CodexErrorCode::SessionBudgetExceeded,
+            ),
+            ("usageLimitExceeded", CodexErrorCode::UsageLimitExceeded),
+            ("serverOverloaded", CodexErrorCode::ServerOverloaded),
+            ("cyberPolicy", CodexErrorCode::CyberPolicy),
+            ("internalServerError", CodexErrorCode::InternalServerError),
+            ("unauthorized", CodexErrorCode::Unauthorized),
+            ("badRequest", CodexErrorCode::BadRequest),
+            ("threadRollbackFailed", CodexErrorCode::ThreadRollbackFailed),
+            ("sandboxError", CodexErrorCode::SandboxError),
+            ("other", CodexErrorCode::Other),
+        ] {
+            assert_eq!(CodexErrorCode::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+            assert_eq!(
+                serde_json::from_value::<CodexErrorInfo>(json!(wire))?,
+                CodexErrorInfo::Code(expected)
+            );
+        }
+
+        let unknown: CodexErrorInfo = serde_json::from_value(json!("futureCode"))?;
+        assert_eq!(
+            unknown,
+            CodexErrorInfo::Code(CodexErrorCode::from_raw("futureCode"))
+        );
+        assert_eq!(serde_json::to_value(&unknown)?, json!("futureCode"));
+        Ok(())
+    }
+
+    /// 4-37: the five object variants of `v2/CodexErrorInfo` keep the pinned
+    /// single-key wrapper shape and an optional nullable `httpStatusCode`.
+    #[test]
+    fn codex_error_info_object_variants_match_the_pinned_wire_shape()
+    -> Result<(), serde_json::Error> {
+        let forwarded = |code: Option<u16>| ForwardedHttpStatus {
+            http_status_code: code,
+        };
+        let cases = [
+            (
+                json!({"httpConnectionFailed": {"httpStatusCode": 503}}),
+                CodexErrorInfo::HttpConnectionFailed {
+                    http_connection_failed: forwarded(Some(503)),
+                },
+            ),
+            (
+                json!({"responseStreamDisconnected": {}}),
+                CodexErrorInfo::ResponseStreamDisconnected {
+                    response_stream_disconnected: forwarded(None),
+                },
+            ),
+            (
+                json!({"responseTooManyFailedAttempts": {"httpStatusCode": 429}}),
+                CodexErrorInfo::ResponseTooManyFailedAttempts {
+                    response_too_many_failed_attempts: forwarded(Some(429)),
+                },
+            ),
+            (
+                json!({"activeTurnNotSteerable": {"turnKind": "review"}}),
+                CodexErrorInfo::ActiveTurnNotSteerable {
+                    active_turn_not_steerable: ActiveTurnNotSteerableDetails {
+                        turn_kind: NonSteerableTurnKind::Review,
+                    },
+                },
+            ),
+            (
+                json!({"activeTurnNotSteerable": {"turnKind": "compact"}}),
+                CodexErrorInfo::ActiveTurnNotSteerable {
+                    active_turn_not_steerable: ActiveTurnNotSteerableDetails {
+                        turn_kind: NonSteerableTurnKind::Compact,
+                    },
+                },
+            ),
+            (
+                json!({"activeTurnNotSteerable": {"turnKind": "futureKind"}}),
+                CodexErrorInfo::ActiveTurnNotSteerable {
+                    active_turn_not_steerable: ActiveTurnNotSteerableDetails {
+                        turn_kind: NonSteerableTurnKind::from_raw("futureKind"),
+                    },
+                },
+            ),
+        ];
+        for (wire, expected) in cases {
+            assert_eq!(
+                serde_json::from_value::<CodexErrorInfo>(wire.clone())?,
+                expected
+            );
+            assert_eq!(serde_json::to_value(&expected)?, wire);
+        }
+
+        // An explicit `httpStatusCode: null` and an absent key both mean "no
+        // status was forwarded", so both decode to `None` and encode without
+        // the key - the same conflation the crate applies to `Account.email`.
+        let explicit_null: CodexErrorInfo = serde_json::from_value(
+            json!({"responseStreamConnectionFailed": {"httpStatusCode": null}}),
+        )?;
+        assert_eq!(
+            explicit_null,
+            CodexErrorInfo::ResponseStreamConnectionFailed {
+                response_stream_connection_failed: ForwardedHttpStatus {
+                    http_status_code: None,
+                },
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&explicit_null)?,
+            json!({"responseStreamConnectionFailed": {}})
+        );
+        Ok(())
+    }
+
+    /// 4-37: the dedicated `error` notification decodes through
+    /// `decode_notification` and serializes back to the pinned envelope.
+    #[test]
+    fn error_notification_decodes_and_serializes_the_pinned_shape() -> Result<(), serde_json::Error>
+    {
+        let raw = json!({
+            "method": "error",
+            "params": {
+                "threadId": "thr_123",
+                "turnId": "turn_456",
+                "willRetry": true,
+                "error": {
+                    "message": "turn failed",
+                    "additionalDetails": "provider unavailable",
+                    "codexErrorInfo": {"responseStreamDisconnected": {"httpStatusCode": 502}},
+                    "futureErrorField": 7
+                },
+                "futureField": true
+            }
+        });
+        let notification =
+            decode_notification("error".to_owned(), raw.get("params").cloned(), raw.clone());
+        let Notification::Error(notification) = notification else {
+            panic!("expected an error notification");
+        };
+        let expected = ErrorNotification {
+            thread_id: "thr_123".to_owned(),
+            turn_id: "turn_456".to_owned(),
+            will_retry: true,
+            error: TurnError {
+                message: "turn failed".to_owned(),
+                additional_details: Some("provider unavailable".to_owned()),
+                codex_error_info: Some(CodexErrorInfo::ResponseStreamDisconnected {
+                    response_stream_disconnected: ForwardedHttpStatus {
+                        http_status_code: Some(502),
+                    },
+                }),
+                extra: [("futureErrorField".to_owned(), json!(7))]
+                    .into_iter()
+                    .collect(),
+            },
+            extra: [("futureField".to_owned(), json!(true))]
+                .into_iter()
+                .collect(),
+        };
+        assert_eq!(*notification, expected);
+        assert_eq!(serde_json::to_value(&*notification)?, raw["params"].clone());
+        Ok(())
+    }
+
+    /// 4-37: `Turn.error` is the typed `v2/TurnError` payload; a failed turn
+    /// round-trips it losslessly and a non-failed turn omits the key.
+    #[test]
+    fn failed_turn_error_is_typed_and_lossless() -> Result<(), serde_json::Error> {
+        let failed: Turn = serde_json::from_value(json!({
+            "id": "turn_456",
+            "items": [],
+            "status": "failed",
+            "error": {
+                "message": "boom",
+                "codexErrorInfo": "usageLimitExceeded"
+            }
+        }))?;
+        let Some(error) = failed.error.as_ref() else {
+            panic!("missing typed turn error");
+        };
+        assert_eq!(error.message, "boom");
+        assert_eq!(error.additional_details, None);
+        assert_eq!(
+            error.codex_error_info,
+            Some(CodexErrorInfo::Code(CodexErrorCode::UsageLimitExceeded))
+        );
+        let encoded = serde_json::to_value(&failed)?;
+        assert_eq!(
+            encoded["error"]["codexErrorInfo"],
+            json!("usageLimitExceeded")
+        );
+
+        let clean: Turn =
+            serde_json::from_value(json!({"id": "turn_1", "items": [], "status": "completed"}))?;
+        assert_eq!(clean.error, None);
+        // `Turn` keeps the pinned null-carrying optional keys on the wire.
+        assert_eq!(
+            serde_json::to_value(&clean)?,
+            json!({
+                "id": "turn_1",
+                "items": [],
+                "status": "completed",
+                "error": null,
+                "startedAt": null,
+                "completedAt": null,
+                "durationMs": null
+            })
+        );
         Ok(())
     }
 }

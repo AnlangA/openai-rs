@@ -250,6 +250,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unknown_function_is_rejected_before_any_execution() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let executor = FakeExecutor {
+            tools: vec![fake_tool()],
+            calls: calls.clone(),
+            result: CallToolResult::success(vec![ContentBlock::text("sunny")]),
+        };
+        let bridge = ResponsesToolBridge::discover(
+            executor,
+            CatalogPolicy::default(),
+            &ExecutionControl::default(),
+        )
+        .await;
+        let Ok(bridge) = bridge else {
+            panic!("fake catalog must build");
+        };
+
+        let outcome = bridge
+            .dispatch_parts(
+                "call_unknown",
+                "weather/nonexistent",
+                r#"{"city":"杭州"}"#,
+                &ExecutionControl::default(),
+            )
+            .await;
+
+        assert!(matches!(
+            outcome,
+            Err(BridgeError::UnknownFunction { ref name }) if name == "weather/nonexistent"
+        ));
+        let calls = calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(
+            calls.is_empty(),
+            "an unknown function name must be rejected by the catalog before execution"
+        );
+    }
+
+    #[cfg(feature = "client")]
+    #[tokio::test]
+    async fn discover_propagates_list_tools_protocol_failure() {
+        struct FailingListExecutor;
+
+        #[async_trait]
+        impl ResponsesToolExecutor for FailingListExecutor {
+            async fn list_tools(
+                &self,
+                _control: &ExecutionControl,
+            ) -> Result<Vec<Tool>, BridgeError> {
+                Err(BridgeError::Protocol {
+                    source: rmcp::service::ServiceError::UnexpectedResponse,
+                })
+            }
+
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: JsonObject,
+                _control: &ExecutionControl,
+            ) -> Result<CallToolResult, BridgeError> {
+                panic!("a failed discovery must never reach execution");
+            }
+        }
+
+        let discovered = ResponsesToolBridge::discover(
+            FailingListExecutor,
+            CatalogPolicy::default(),
+            &ExecutionControl::default(),
+        )
+        .await;
+        assert!(matches!(discovered, Err(BridgeError::Protocol { .. })));
+    }
+
+    #[tokio::test]
     async fn tool_error_stays_in_band() {
         let executor = FakeExecutor {
             tools: vec![fake_tool()],

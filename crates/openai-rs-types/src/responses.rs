@@ -3637,7 +3637,7 @@ impl McpListTools {
 
     /// Records a list-tools error message.
     #[must_use]
-    pub fn error(mut self, error: impl Into<String>) -> Self {
+    pub fn with_error(mut self, error: impl Into<String>) -> Self {
         self.error = Omittable::Value(Nullable::Value(error.into()));
         self
     }
@@ -3647,6 +3647,12 @@ impl McpListTools {
     pub fn error_null(mut self) -> Self {
         self.error = Omittable::Value(Nullable::Null);
         self
+    }
+
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
     /// Returns the server label.
@@ -3659,6 +3665,15 @@ impl McpListTools {
     #[must_use]
     pub fn tools(&self) -> &[McpListedTool] {
         &self.tools
+    }
+
+    /// Returns the list-tools error message when present and non-null.
+    #[must_use]
+    pub fn error(&self) -> Option<&str> {
+        match &self.error {
+            Omittable::Value(Nullable::Value(error)) => Some(error),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
     }
 }
 
@@ -3868,6 +3883,15 @@ impl McpCall {
     #[must_use]
     pub const fn arguments(&self) -> &JsonText {
         &self.arguments
+    }
+
+    /// Returns the item status when present.
+    #[must_use]
+    pub fn status(&self) -> Option<&ResponseItemStatus> {
+        match &self.status {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 
     /// Returns the structured MCP error when present.
@@ -6939,8 +6963,14 @@ impl ResponseUsage {
 #[non_exhaustive]
 pub enum OutputParseError {
     /// The response was incomplete.
-    #[error("response was incomplete: {0:?}")]
+    #[error(
+        "response was incomplete: {reason}",
+        reason = .0.as_deref().unwrap_or("reason not provided")
+    )]
     Incomplete(Option<String>),
+    /// The response failed with a service error.
+    #[error("response failed: {}", .0.message())]
+    Failed(ResponseError),
     /// The model refused to respond.
     #[error("model refused to respond: {0}")]
     Refusal(String),
@@ -7163,14 +7193,27 @@ impl Response {
 
     /// Parses assistant output text into a declared Rust type.
     ///
-    /// Refusal and incomplete states are routed to dedicated error variants
-    /// rather than being treated as malformed JSON.
+    /// Refusal, incomplete, and failed states are routed to dedicated error
+    /// variants rather than being treated as malformed JSON.
     pub fn output_parsed<T: serde::de::DeserializeOwned>(&self) -> Result<T, OutputParseError> {
         if matches!(self.status(), Some(ResponseStatus::Incomplete)) {
             let reason = self
                 .incomplete_details()
                 .and_then(|details| details.reason().map(|reason| reason.as_str().to_owned()));
             return Err(OutputParseError::Incomplete(reason));
+        }
+        if matches!(self.status(), Some(ResponseStatus::Failed)) {
+            let error = match &self.error {
+                Nullable::Value(error) => error.clone(),
+                // The pin pairs `status: "failed"` with a populated error
+                // object; keep a readable fallback for the degenerate null.
+                Nullable::Null => ResponseError {
+                    code: ResponseErrorCode::from_raw("failed_without_error"),
+                    message: "response failed without an error payload".to_owned(),
+                    extra: ExtraFields::new(),
+                },
+            };
+            return Err(OutputParseError::Failed(error));
         }
         if let Some(refusal) = self.refusal() {
             return Err(OutputParseError::Refusal(refusal.to_owned()));
@@ -8687,6 +8730,15 @@ impl StreamErrorEvent {
         }
     }
 
+    /// Returns the offending request parameter when the service sent a string.
+    #[must_use]
+    pub fn param(&self) -> Option<&str> {
+        match &self.param {
+            Nullable::Value(param) => Some(param.as_str()),
+            Nullable::Null => None,
+        }
+    }
+
     /// Returns the human-readable message.
     #[must_use]
     pub fn message(&self) -> &str {
@@ -8781,6 +8833,12 @@ impl ResponseStreamEvent {
             self,
             Self::Completed(_) | Self::Failed(_) | Self::Incomplete(_) | Self::Error(_)
         )
+    }
+
+    /// Returns whether this is the standalone SSE error event.
+    #[must_use]
+    pub const fn is_error(&self) -> bool {
+        matches!(self, Self::Error(_))
     }
 
     /// Returns the event sequence number when it is known to this crate.
@@ -9078,11 +9136,13 @@ impl ResponseAccumulator {
             }
             ResponseStreamEvent::Error(event) => {
                 return Err(ResponseAccumulatorError::Stream {
-                    code: match event.code {
-                        Nullable::Value(code) => code,
-                        Nullable::Null => String::new(),
-                    },
+                    code: event.code.into_option().map(|code| code.into_boxed_str()),
                     message: event.message,
+                    param: event
+                        .param
+                        .into_option()
+                        .map(|param| param.into_boxed_str()),
+                    sequence_number: event.sequence_number,
                 });
             }
             ResponseStreamEvent::AudioDelta(_)
@@ -9397,12 +9457,21 @@ pub enum ResponseAccumulatorError {
         received: String,
     },
     /// The SSE protocol emitted its standalone error event.
-    #[error("Responses stream error `{code}`: {message}")]
+    #[error(
+        "Responses stream error{code_clause}{param_clause} at sequence {sequence_number}: {message}",
+        code_clause = .code.as_ref().map(|code| format!(" `{code}`")).unwrap_or_default(),
+        param_clause = .param.as_ref().map(|param| format!(" on `{param}`")).unwrap_or_default(),
+    )]
     Stream {
-        /// Machine-readable service error code.
-        code: String,
+        /// Machine-readable service error code, or `None` when the service
+        /// sent the official `code: null`.
+        code: Option<Box<str>>,
         /// Human-readable service message.
         message: String,
+        /// Offending request parameter, or `None` when absent or null.
+        param: Option<Box<str>>,
+        /// Sequence number carried by the error event.
+        sequence_number: u64,
     },
     /// The stream ended without completed, failed, or incomplete response.
     #[error("Responses stream ended before a terminal response")]
@@ -9808,6 +9877,18 @@ impl FileSearchCall {
     #[must_use]
     pub fn queries(&self) -> &[String] {
         &self.queries
+    }
+
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the call status.
+    #[must_use]
+    pub const fn status(&self) -> &ResponseItemStatus {
+        &self.status
     }
 
     /// Returns results when present.
@@ -10464,18 +10545,22 @@ pub struct ComputerCall {
 
 impl ComputerCall {
     /// Creates a computer-use call from the official required fields.
+    ///
+    /// `status` takes the pinned three-value [`FunctionCallItemStatus`]
+    /// domain, which matches the pinned `ComputerCall.status`; decoding
+    /// keeps the shared open [`ResponseItemStatus`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
         call_id: impl Into<String>,
-        status: ResponseItemStatus,
+        status: FunctionCallItemStatus,
     ) -> Self {
         Self {
             kind: ComputerCallTag::ComputerCall,
             id: id.into(),
             call_id: call_id.into(),
             pending_safety_checks: Vec::new(),
-            status,
+            status: status.into(),
             action: Omittable::Omitted,
             actions: Omittable::Omitted,
             extra: ExtraFields::new(),
@@ -10506,10 +10591,22 @@ impl ComputerCall {
         self
     }
 
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     /// Returns the model-generated call id.
     #[must_use]
     pub fn call_id(&self) -> &str {
         &self.call_id
+    }
+
+    /// Returns the call status.
+    #[must_use]
+    pub const fn status(&self) -> &ResponseItemStatus {
+        &self.status
     }
 
     /// Returns the single requested action when present.
@@ -10935,6 +11032,18 @@ impl WebSearchCall {
         }
     }
 
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the call status.
+    #[must_use]
+    pub const fn status(&self) -> &ResponseItemStatus {
+        &self.status
+    }
+
     /// Returns the recorded web-search action.
     #[must_use]
     pub const fn action(&self) -> &WebSearchAction {
@@ -11063,9 +11172,13 @@ impl ToolSearchCallInput {
     }
 
     /// Sets the call status.
+    ///
+    /// `status` takes the pinned three-value [`FunctionCallItemStatus`]
+    /// domain, which matches the pinned `ToolSearchCall.status`; decoding
+    /// keeps the shared open [`ResponseItemStatus`].
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(Nullable::Value(status));
+    pub fn status(mut self, status: FunctionCallItemStatus) -> Self {
+        self.status = Omittable::Value(Nullable::Value(status.into()));
         self
     }
 
@@ -11448,9 +11561,13 @@ impl ReasoningItem {
     }
 
     /// Sets the item status.
+    ///
+    /// `status` takes the pinned three-value [`FunctionCallItemStatus`]
+    /// domain, which matches the pinned `ReasoningItem.status`; decoding
+    /// keeps the shared open [`ResponseItemStatus`].
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(status);
+    pub fn status(mut self, status: FunctionCallItemStatus) -> Self {
+        self.status = Omittable::Value(status.into());
         self
     }
 
@@ -11572,9 +11689,30 @@ impl ImageGenerationCall {
 
     /// Sets the generated image payload.
     #[must_use]
-    pub fn result(mut self, result: impl Into<String>) -> Self {
+    pub fn with_result(mut self, result: impl Into<String>) -> Self {
         self.result = Nullable::Value(result.into());
         self
+    }
+
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the call status.
+    #[must_use]
+    pub const fn status(&self) -> &ResponseItemStatus {
+        &self.status
+    }
+
+    /// Returns the generated image payload when present and non-null.
+    #[must_use]
+    pub fn result(&self) -> Option<&str> {
+        match &self.result {
+            Nullable::Value(result) => Some(result),
+            Nullable::Null => None,
+        }
     }
 }
 literal_tag!(CodeInterpreterLogsTag, Logs, "logs");
@@ -11728,7 +11866,7 @@ impl CodeInterpreterCall {
 
     /// Sets the code to run.
     #[must_use]
-    pub fn code(mut self, code: impl Into<String>) -> Self {
+    pub fn with_code(mut self, code: impl Into<String>) -> Self {
         self.code = Nullable::Value(code.into());
         self
     }
@@ -11738,6 +11876,33 @@ impl CodeInterpreterCall {
     pub fn with_outputs(mut self, outputs: impl Into<Vec<CodeInterpreterOutput>>) -> Self {
         self.outputs = Nullable::Value(outputs.into());
         self
+    }
+
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the call status.
+    #[must_use]
+    pub const fn status(&self) -> &ResponseItemStatus {
+        &self.status
+    }
+
+    /// Returns the container the interpreter ran in.
+    #[must_use]
+    pub fn container_id(&self) -> &str {
+        &self.container_id
+    }
+
+    /// Returns the code to run when present and non-null.
+    #[must_use]
+    pub fn code(&self) -> Option<&str> {
+        match &self.code {
+            Nullable::Value(code) => Some(code),
+            Nullable::Null => None,
+        }
     }
 
     /// Returns the interpreter outputs when present.
@@ -11911,21 +12076,43 @@ pub struct LocalShellCall {
 
 impl LocalShellCall {
     /// Creates a local-shell call from the official required fields.
+    ///
+    /// `status` takes the pinned three-value [`FunctionCallItemStatus`]
+    /// domain, which matches the pinned `LocalShellCall.status`; decoding
+    /// keeps the shared open [`ResponseItemStatus`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
         call_id: impl Into<String>,
         action: impl Into<LocalShellAction>,
-        status: ResponseItemStatus,
+        status: FunctionCallItemStatus,
     ) -> Self {
         Self {
             kind: LocalShellCallTag::LocalShellCall,
             id: id.into(),
             call_id: call_id.into(),
             action: action.into(),
-            status,
+            status: status.into(),
             extra: ExtraFields::new(),
         }
+    }
+
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the model-generated call id.
+    #[must_use]
+    pub fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    /// Returns the call status.
+    #[must_use]
+    pub const fn status(&self) -> &ResponseItemStatus {
+        &self.status
     }
 
     /// Returns the requested action.
@@ -11983,9 +12170,13 @@ impl LocalShellCallOutput {
     }
 
     /// Sets the item status.
+    ///
+    /// `status` takes the pinned three-value [`FunctionCallItemStatus`]
+    /// domain, which matches the pinned `LocalShellCallOutput.status`;
+    /// decoding keeps the shared open [`ResponseItemStatus`].
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(Nullable::Value(status));
+    pub fn status(mut self, status: FunctionCallItemStatus) -> Self {
+        self.status = Omittable::Value(Nullable::Value(status.into()));
         self
     }
 
@@ -17616,6 +17807,22 @@ mod tests {
             panic!("expected stream error");
         };
         assert_eq!(error.code(), Some("server_error"));
+        assert_eq!(error.param(), None);
+        assert_eq!(error.message(), "retry later");
+        assert_eq!(error.sequence_number(), 9);
+
+        let param_error: ResponseStreamEvent = serde_json::from_value(json!({
+            "type": "error",
+            "code": "invalid_prompt",
+            "message": "unknown field",
+            "param": "input_text.text",
+            "sequence_number": 11
+        }))
+        .expect("decode stream error param");
+        let ResponseStreamEvent::Error(param_error) = param_error else {
+            panic!("expected stream error with param");
+        };
+        assert_eq!(param_error.param(), Some("input_text.text"));
 
         let null_code: ResponseStreamEvent = serde_json::from_value(json!({
             "type": "error",
@@ -17629,6 +17836,68 @@ mod tests {
             panic!("expected stream error");
         };
         assert_eq!(null_code.code(), None);
+        assert_eq!(null_code.param(), None);
+    }
+
+    #[test]
+    fn accumulator_stream_error_keeps_code_param_and_sequence_number() {
+        // The standalone SSE error event carries the offending parameter and
+        // its sequence number; a null code stays `None` instead of an empty
+        // string (4-05).
+        let mut accumulator = ResponseAccumulator::new();
+        let error = ResponseStreamEvent::Error(StreamErrorEvent {
+            kind: StreamErrorEventTag::Error,
+            code: Nullable::Value("invalid_prompt".into()),
+            message: "unknown field".into(),
+            param: Nullable::Value("input_text.text".into()),
+            sequence_number: 4,
+            extra: ExtraFields::new(),
+        });
+        let err = accumulator
+            .push(error)
+            .expect_err("stream error must surface");
+        assert_eq!(
+            err,
+            ResponseAccumulatorError::Stream {
+                code: Some("invalid_prompt".into()),
+                message: "unknown field".into(),
+                param: Some("input_text.text".into()),
+                sequence_number: 4,
+            }
+        );
+        assert_eq!(
+            err.to_string(),
+            "Responses stream error `invalid_prompt` on `input_text.text` at sequence 4: unknown field"
+        );
+
+        let mut null_accumulator = ResponseAccumulator::new();
+        let null_error = ResponseStreamEvent::Error(StreamErrorEvent {
+            kind: StreamErrorEventTag::Error,
+            code: Nullable::Null,
+            message: "retry later".into(),
+            param: Nullable::Null,
+            sequence_number: 5,
+            extra: ExtraFields::new(),
+        });
+        let null_err = null_accumulator
+            .push(null_error)
+            .expect_err("null-code stream error must still surface");
+        assert!(
+            matches!(
+                &null_err,
+                ResponseAccumulatorError::Stream {
+                    code: None,
+                    param: None,
+                    sequence_number: 5,
+                    ..
+                }
+            ),
+            "null code and param must round-trip as None: {null_err:?}"
+        );
+        assert_eq!(
+            null_err.to_string(),
+            "Responses stream error at sequence 5: retry later"
+        );
     }
 
     #[test]
@@ -17881,7 +18150,53 @@ mod tests {
             .output_parsed::<WeatherReport>()
             .expect_err("incomplete must error");
         assert!(
-            matches!(inc_err, OutputParseError::Incomplete(Some(reason)) if reason == "max_output_tokens")
+            matches!(&inc_err, OutputParseError::Incomplete(Some(reason)) if reason == "max_output_tokens")
+        );
+        assert_eq!(
+            inc_err.to_string(),
+            "response was incomplete: max_output_tokens"
+        );
+
+        // Failed case routes the service error payload instead of losing it.
+        let failed_response = Response {
+            error: Nullable::Value(ResponseError {
+                code: ResponseErrorCode::RateLimitExceeded,
+                message: "Rate limit reached".into(),
+                extra: ExtraFields::new(),
+            }),
+            status: Omittable::Value(ResponseStatus::Failed),
+            ..incomplete_response
+        };
+        let failed_err = failed_response
+            .output_parsed::<WeatherReport>()
+            .expect_err("failed must error");
+        match &failed_err {
+            OutputParseError::Failed(error) => {
+                assert_eq!(error.code(), &ResponseErrorCode::RateLimitExceeded);
+                assert_eq!(error.message(), "Rate limit reached");
+            }
+            other => panic!("expected a failed error, got {other:?}"),
+        }
+        assert_eq!(
+            failed_err.to_string(),
+            "response failed: Rate limit reached"
+        );
+
+        // A failed status without an error object still reports readably.
+        let null_error_response = Response {
+            error: Nullable::Null,
+            status: Omittable::Value(ResponseStatus::Failed),
+            ..failed_response
+        };
+        let null_err = null_error_response
+            .output_parsed::<WeatherReport>()
+            .expect_err("failed without error must still error");
+        assert!(
+            matches!(&null_err, OutputParseError::Failed(error) if error.message() == "response failed without an error payload")
+        );
+        assert_eq!(
+            null_err.to_string(),
+            "response failed: response failed without an error payload"
         );
     }
 
@@ -18372,7 +18687,9 @@ mod tests {
         // calling/failed; WebSearchToolCall has searching+failed but no
         // incomplete; FileSearchToolCall pins all five; ImageGenToolCall
         // carries generating; CodeInterpreterToolCall carries interpreting.
-        let hosts: [(&str, Vec<&str>, Vec<&str>); 7] = [
+        // Computer / local-shell / tool-search / reasoning hosts pin the same
+        // three-value trio as function calls (4-01).
+        let hosts: [(&str, Vec<&str>, Vec<&str>); 12] = [
             (
                 "message",
                 vec!["in_progress", "completed", "incomplete"],
@@ -18438,16 +18755,67 @@ mod tests {
                 ],
                 vec!["searching", "generating", "calling"],
             ),
+            (
+                "computer_call",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+            (
+                "local_shell_call",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+            (
+                "tool_search_call",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+            (
+                "reasoning",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+            (
+                "local_shell_call_output",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
         ];
         for (host, official, foreign) in hosts {
             let narrow = |value: &str| -> (bool, String) {
                 match host {
                     "message" => {
                         let decoded = MessageStatus::from_raw(value);
-                        (decoded.is_known(), decoded.as_str().to_owned())
-                    }
-                    "function_call" => {
-                        let decoded = FunctionCallItemStatus::from_raw(value);
                         (decoded.is_known(), decoded.as_str().to_owned())
                     }
                     "mcp_call" => {
@@ -18466,8 +18834,14 @@ mod tests {
                         let decoded = ImageGenToolCallStatus::from_raw(value);
                         (decoded.is_known(), decoded.as_str().to_owned())
                     }
-                    _ => {
+                    "code_interpreter_call" => {
                         let decoded = CodeInterpreterToolCallStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    // The function-call trio also hosts the computer /
+                    // local-shell / tool-search / reasoning item statuses.
+                    _ => {
+                        let decoded = FunctionCallItemStatus::from_raw(value);
                         (decoded.is_known(), decoded.as_str().to_owned())
                     }
                 }
@@ -18569,6 +18943,49 @@ mod tests {
             )
             .expect("serialize function call")["status"],
             "completed"
+        );
+        assert_eq!(
+            serde_json::to_value(ComputerCall::new(
+                "cc_2",
+                "call_cc",
+                FunctionCallItemStatus::InProgress
+            ))
+            .expect("serialize computer call")["status"],
+            "in_progress"
+        );
+        assert_eq!(
+            serde_json::to_value(LocalShellCall::new(
+                "ls_2",
+                "call_ls",
+                LocalShellExecAction::new(["echo"], [("PATH", "/bin")]),
+                FunctionCallItemStatus::Completed
+            ))
+            .expect("serialize local shell call")["status"],
+            "completed"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                ToolSearchCallInput::new(json!({"query": "tools"}))
+                    .status(FunctionCallItemStatus::Incomplete)
+            )
+            .expect("serialize tool search input")["status"],
+            "incomplete"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                ReasoningItem::new("rs_2", vec![SummaryTextContent::new("thought")])
+                    .status(FunctionCallItemStatus::Completed)
+            )
+            .expect("serialize reasoning item")["status"],
+            "completed"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                LocalShellCallOutput::new("lsco_2", "call_ls", "ok")
+                    .status(FunctionCallItemStatus::Incomplete)
+            )
+            .expect("serialize local shell output")["status"],
+            "incomplete"
         );
 
         // Decode side keeps the shared eight-value union: a status foreign to
@@ -21160,7 +21577,7 @@ mod tests {
         let reasoning = ReasoningItem::new("rs_1", vec![SummaryTextContent::new("thought")])
             .encrypted_content("enc_1")
             .content(vec![ReasoningTextContent::new("step")])
-            .status(ResponseItemStatus::Completed);
+            .status(FunctionCallItemStatus::Completed);
         let value = serde_json::to_value(&reasoning).expect("serialize reasoning");
         let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
         keys.sort();
@@ -21581,8 +21998,8 @@ mod tests {
                 if matches!(event.annotation, Nullable::Null)
         ));
 
-        let local =
-            LocalShellCallOutput::new("lsco1", "l1", "ok").status(ResponseItemStatus::Completed);
+        let local = LocalShellCallOutput::new("lsco1", "l1", "ok")
+            .status(FunctionCallItemStatus::Completed);
         assert_eq!(
             serde_json::to_value(&local).expect("serialize local output")["status"],
             "completed"
@@ -21841,7 +22258,7 @@ mod tests {
             .with_id("tsc_1")
             .call_id("call_ts")
             .execution(ToolSearchExecution::Server)
-            .status(ResponseItemStatus::Completed);
+            .status(FunctionCallItemStatus::Completed);
         let value = serde_json::to_value(&search).expect("serialize tool search");
         assert_eq!(value["id"], "tsc_1");
         assert_eq!(value["call_id"], "call_ts");
@@ -22359,7 +22776,7 @@ mod tests {
         );
 
         let computer =
-            ComputerCall::new("cc_1", "call_cc", ResponseItemStatus::Completed).with_action(
+            ComputerCall::new("cc_1", "call_cc", FunctionCallItemStatus::Completed).with_action(
                 ComputerAction::Click(ComputerClickAction::new(ComputerClickButton::Left, 1, 2)),
             );
         let computer_value = serde_json::to_value(&computer).expect("serialize computer call");
@@ -22383,7 +22800,8 @@ mod tests {
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(image.result("img_b64")).expect("serialize image-gen result")["result"],
+            serde_json::to_value(image.with_result("img_b64")).expect("serialize image-gen result")
+                ["result"],
             "img_b64"
         );
 
@@ -22394,8 +22812,8 @@ mod tests {
         assert_eq!(interpreter_value["code"], Value::Null);
         assert_eq!(interpreter_value["outputs"], Value::Null);
         assert_eq!(
-            serde_json::to_value(interpreter.code("print(1)")).expect("serialize interpreter code")
-                ["code"],
+            serde_json::to_value(interpreter.with_code("print(1)"))
+                .expect("serialize interpreter code")["code"],
             "print(1)"
         );
 
@@ -22403,11 +22821,123 @@ mod tests {
             "ls_1",
             "call_ls",
             LocalShellExecAction::new(["echo"], [("PATH", "/bin")]),
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         );
         assert_eq!(
             serde_json::to_value(&shell).expect("serialize local shell")["action"]["type"],
             "exec"
+        );
+    }
+
+    #[test]
+    fn tool_call_output_items_expose_read_accessors() {
+        // Every hosted tool-call output item exposes at least id() and
+        // status(); failure-relevant payloads stay readable the same way
+        // python/node expose them as attributes (4-02).
+        let file_search: FileSearchCall = serde_json::from_value(json!({
+            "type": "file_search_call",
+            "id": "fs_9",
+            "status": "failed",
+            "queries": ["rust"],
+            "results": null
+        }))
+        .expect("decode file search");
+        assert_eq!(file_search.id(), "fs_9");
+        assert_eq!(file_search.status(), &ResponseItemStatus::Failed);
+        assert_eq!(file_search.results_ref(), None);
+
+        let web_search: WebSearchCall = serde_json::from_value(json!({
+            "type": "web_search_call",
+            "id": "ws_9",
+            "status": "in_progress",
+            "action": {"type": "search", "query": "openai"}
+        }))
+        .expect("decode web search");
+        assert_eq!(web_search.id(), "ws_9");
+        assert_eq!(web_search.status(), &ResponseItemStatus::InProgress);
+
+        let computer: ComputerCall = serde_json::from_value(json!({
+            "type": "computer_call",
+            "id": "cc_9",
+            "call_id": "call_cc",
+            "status": "failed",
+            "pending_safety_checks": []
+        }))
+        .expect("decode computer call");
+        assert_eq!(computer.id(), "cc_9");
+        assert_eq!(computer.call_id(), "call_cc");
+        assert_eq!(computer.status(), &ResponseItemStatus::Failed);
+
+        let shell: LocalShellCall = serde_json::from_value(json!({
+            "type": "local_shell_call",
+            "id": "ls_9",
+            "call_id": "call_ls",
+            "status": "completed",
+            "action": {"type": "exec", "command": ["ls"], "env": {}}
+        }))
+        .expect("decode local shell call");
+        assert_eq!(shell.id(), "ls_9");
+        assert_eq!(shell.call_id(), "call_ls");
+        assert_eq!(shell.status(), &ResponseItemStatus::Completed);
+
+        let image: ImageGenerationCall = serde_json::from_value(json!({
+            "type": "image_generation_call",
+            "id": "ig_9",
+            "status": "completed",
+            "result": "aGVsbG8="
+        }))
+        .expect("decode image generation call");
+        assert_eq!(image.id(), "ig_9");
+        assert_eq!(image.status(), &ResponseItemStatus::Completed);
+        assert_eq!(image.result(), Some("aGVsbG8="));
+        assert_eq!(
+            ImageGenerationCall::new("ig_n", ImageGenToolCallStatus::InProgress).result(),
+            None
+        );
+
+        let interpreter: CodeInterpreterCall = serde_json::from_value(json!({
+            "type": "code_interpreter_call",
+            "id": "ci_9",
+            "status": "interpreting",
+            "container_id": "cntr_9",
+            "code": "print(1)",
+            "outputs": null
+        }))
+        .expect("decode interpreter call");
+        assert_eq!(interpreter.id(), "ci_9");
+        assert_eq!(interpreter.status(), &ResponseItemStatus::Interpreting);
+        assert_eq!(interpreter.container_id(), "cntr_9");
+        assert_eq!(interpreter.code(), Some("print(1)"));
+        assert_eq!(
+            CodeInterpreterCall::new("ci_n", CodeInterpreterToolCallStatus::InProgress, "cntr_n")
+                .code(),
+            None
+        );
+
+        let listed = McpListTools::new("lt_9", "docs", []);
+        assert_eq!(listed.id(), "lt_9");
+        assert_eq!(listed.error(), None);
+        assert_eq!(
+            McpListTools::new("lt_9", "docs", [])
+                .with_error("connection refused")
+                .error(),
+            Some("connection refused")
+        );
+
+        let mcp: McpCall = serde_json::from_value(json!({
+            "type": "mcp_call",
+            "id": "mcp_9",
+            "server_label": "docs",
+            "name": "search",
+            "arguments": "{}",
+            "status": "failed"
+        }))
+        .expect("decode mcp call");
+        assert_eq!(mcp.id(), "mcp_9");
+        assert_eq!(mcp.status(), Some(&ResponseItemStatus::Failed));
+        assert_eq!(
+            McpCall::new("mcp_n", "docs", "search", JsonText::from("{}")).status(),
+            None
         );
     }
 

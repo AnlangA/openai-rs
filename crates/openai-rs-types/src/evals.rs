@@ -2445,6 +2445,38 @@ pub struct EvalRunResultCounts {
     extra: ExtraFields,
 }
 
+impl EvalRunResultCounts {
+    /// Returns the total number of graded items.
+    #[must_use]
+    pub const fn total(&self) -> u64 {
+        self.total
+    }
+
+    /// Returns the number of items whose sampling errored.
+    #[must_use]
+    pub const fn errored(&self) -> u64 {
+        self.errored
+    }
+
+    /// Returns the number of items that failed their criteria.
+    #[must_use]
+    pub const fn failed(&self) -> u64 {
+        self.failed
+    }
+
+    /// Returns the number of items that passed.
+    #[must_use]
+    pub const fn passed(&self) -> u64 {
+        self.passed
+    }
+
+    /// Returns unknown response fields.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 /// Per-model usage for a run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvalRunModelUsage {
@@ -2475,6 +2507,26 @@ pub struct EvalApiError {
     message: String,
     #[serde(flatten)]
     extra: ExtraFields,
+}
+
+impl EvalApiError {
+    /// Returns the machine-readable error code.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// Returns the human-readable failure message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns unknown response fields.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 literal_tag!(EvalRunObjectTag, EvalRun, "eval.run");
@@ -2512,6 +2564,24 @@ impl EvalRun {
     #[must_use]
     pub const fn status(&self) -> &EvalRunStatus {
         &self.status
+    }
+
+    /// Returns aggregate pass/fail/error counts for the run.
+    #[must_use]
+    pub const fn result_counts(&self) -> &EvalRunResultCounts {
+        &self.result_counts
+    }
+
+    /// Returns run-level failure details when the run errored.
+    ///
+    /// The pinned schema requires the `error` key and allows explicit `null`
+    /// for runs that have not failed; explicit null maps to `None` here.
+    #[must_use]
+    pub const fn error(&self) -> Option<&EvalApiError> {
+        match &self.error {
+            Nullable::Value(error) => Some(error),
+            Nullable::Null => None,
+        }
     }
 
     /// Returns unknown response fields.
@@ -2740,6 +2810,18 @@ impl EvalSample {
     pub const fn usage(&self) -> &EvalSampleUsage {
         &self.usage
     }
+
+    /// Returns the sampled model error when the underlying call errored.
+    ///
+    /// The pinned schema requires the `error` key and allows explicit `null`
+    /// for successful samples; explicit null maps to `None` here.
+    #[must_use]
+    pub const fn error(&self) -> Option<&EvalApiError> {
+        match &self.error {
+            Nullable::Value(error) => Some(error),
+            Nullable::Null => None,
+        }
+    }
 }
 
 literal_tag!(EvalOutputItemObjectTag, OutputItem, "eval.run.output_item");
@@ -2769,10 +2851,23 @@ impl EvalRunOutputItem {
         &self.id
     }
 
+    /// Returns the item's pass/fail/error status.
+    #[must_use]
+    pub const fn status(&self) -> &EvalOutputItemStatus {
+        &self.status
+    }
+
     /// Returns grader results.
     #[must_use]
     pub fn results(&self) -> &[EvalOutputItemResult] {
         &self.results
+    }
+
+    /// Returns the sampled model input, output, and error captured for this
+    /// item.
+    #[must_use]
+    pub const fn sample(&self) -> &EvalSample {
+        &self.sample
     }
 
     /// Returns future response fields.
@@ -2951,6 +3046,107 @@ pub mod experimental {
         extra: ExtraFields,
     }
 
+    impl RunGraderErrors {
+        /// Returns whether the multi-grader formula failed to parse.
+        #[must_use]
+        pub const fn formula_parse_error(&self) -> bool {
+            self.formula_parse_error
+        }
+
+        /// Returns whether the model sample failed to parse.
+        #[must_use]
+        pub const fn sample_parse_error(&self) -> bool {
+            self.sample_parse_error
+        }
+
+        /// Returns whether a truncated observation was rejected.
+        #[must_use]
+        pub const fn truncated_observation_error(&self) -> bool {
+            self.truncated_observation_error
+        }
+
+        /// Returns whether the reward never responded.
+        #[must_use]
+        pub const fn unresponsive_reward_error(&self) -> bool {
+            self.unresponsive_reward_error
+        }
+
+        /// Returns whether a template variable was invalid.
+        #[must_use]
+        pub const fn invalid_variable_error(&self) -> bool {
+            self.invalid_variable_error
+        }
+
+        /// Returns whether an unclassified error occurred.
+        #[must_use]
+        pub const fn other_error(&self) -> bool {
+            self.other_error
+        }
+
+        /// Returns whether the Python grader server failed.
+        #[must_use]
+        pub const fn python_grader_server_error(&self) -> bool {
+            self.python_grader_server_error
+        }
+
+        /// Returns the Python grader server error type when present.
+        #[must_use]
+        pub fn python_grader_server_error_type(&self) -> Option<&str> {
+            match &self.python_grader_server_error_type {
+                Nullable::Value(value) => Some(value),
+                Nullable::Null => None,
+            }
+        }
+
+        /// Returns whether the Python grader raised at runtime.
+        #[must_use]
+        pub const fn python_grader_runtime_error(&self) -> bool {
+            self.python_grader_runtime_error
+        }
+
+        /// Returns the Python grader runtime error details when present.
+        #[must_use]
+        pub fn python_grader_runtime_error_details(&self) -> Option<&str> {
+            match &self.python_grader_runtime_error_details {
+                Nullable::Value(value) => Some(value),
+                Nullable::Null => None,
+            }
+        }
+
+        /// Returns whether the model grader server failed.
+        #[must_use]
+        pub const fn model_grader_server_error(&self) -> bool {
+            self.model_grader_server_error
+        }
+
+        /// Returns whether the model grader refused the request.
+        #[must_use]
+        pub const fn model_grader_refusal_error(&self) -> bool {
+            self.model_grader_refusal_error
+        }
+
+        /// Returns whether the model grader output failed to parse.
+        #[must_use]
+        pub const fn model_grader_parse_error(&self) -> bool {
+            self.model_grader_parse_error
+        }
+
+        /// Returns the model grader server error details when present.
+        #[must_use]
+        pub fn model_grader_server_error_details(&self) -> Option<&str> {
+            match &self.model_grader_server_error_details {
+                Nullable::Value(value) => Some(value),
+                Nullable::Null => None,
+            }
+        }
+
+        /// Returns unknown response fields.
+        #[must_use]
+        pub const fn extra_fields(&self) -> &ExtraFields {
+            &self.extra
+        }
+    }
+
     /// Execution metadata for an experimental grader run.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct RunGraderMetadata {
@@ -2963,6 +3159,62 @@ pub mod experimental {
         sampled_model_name: Nullable<String>,
         #[serde(flatten)]
         extra: ExtraFields,
+    }
+
+    impl RunGraderMetadata {
+        /// Returns the executed grader name.
+        #[must_use]
+        pub fn name(&self) -> &str {
+            &self.name
+        }
+
+        /// Returns the executed grader's wire `type` discriminator.
+        #[must_use]
+        pub fn kind(&self) -> &str {
+            &self.r#type
+        }
+
+        /// Returns the grader's detailed error flags.
+        #[must_use]
+        pub const fn errors(&self) -> &RunGraderErrors {
+            &self.errors
+        }
+
+        /// Returns the grader execution time in seconds.
+        #[must_use]
+        pub const fn execution_time(&self) -> f64 {
+            self.execution_time
+        }
+
+        /// Returns per-criterion grader scores.
+        #[must_use]
+        pub const fn scores(&self) -> &BTreeMap<String, Value> {
+            &self.scores
+        }
+
+        /// Returns grader token usage when present.
+        #[must_use]
+        pub const fn token_usage(&self) -> Option<&GraderTokenUsage> {
+            match &self.token_usage {
+                Nullable::Value(usage) => Some(usage),
+                Nullable::Null => None,
+            }
+        }
+
+        /// Returns the sampled model name when present.
+        #[must_use]
+        pub fn sampled_model_name(&self) -> Option<&str> {
+            match &self.sampled_model_name {
+                Nullable::Value(value) => Some(value),
+                Nullable::Null => None,
+            }
+        }
+
+        /// Returns unknown response fields.
+        #[must_use]
+        pub const fn extra_fields(&self) -> &ExtraFields {
+            &self.extra
+        }
     }
 
     /// Result of the experimental grader run endpoint.
@@ -2981,6 +3233,12 @@ pub mod experimental {
         #[must_use]
         pub const fn reward(&self) -> f64 {
             self.reward
+        }
+
+        /// Returns the grader execution metadata, including error flags.
+        #[must_use]
+        pub const fn metadata(&self) -> &RunGraderMetadata {
+            &self.metadata
         }
     }
 
@@ -3783,6 +4041,44 @@ mod tests {
         assert_eq!(status.as_str(), "paused");
     }
 
+    #[test]
+    fn eval_run_result_counts_and_error_are_readable() {
+        // The documented-null run keeps the failure surface absent.
+        let null_run: EvalRun =
+            serde_json::from_value(run_fixture()).expect("decode null-error run");
+        assert!(null_run.error().is_none());
+        assert_eq!(null_run.result_counts().total(), 0);
+        assert_eq!(null_run.result_counts().errored(), 0);
+        assert_eq!(null_run.result_counts().failed(), 0);
+        assert_eq!(null_run.result_counts().passed(), 0);
+
+        let mut fixture = run_fixture();
+        fixture["status"] = json!("failed");
+        fixture["result_counts"] = json!({
+            "total": 12,
+            "errored": 2,
+            "failed": 3,
+            "passed": 7,
+            "future_count": 1
+        });
+        fixture["error"] = json!({
+            "code": "run_failed",
+            "message": "sampling exhausted retries",
+            "future_error": true
+        });
+        let run: EvalRun = serde_json::from_value(fixture).expect("decode failed run");
+        let counts = run.result_counts();
+        assert_eq!(counts.total(), 12);
+        assert_eq!(counts.errored(), 2);
+        assert_eq!(counts.failed(), 3);
+        assert_eq!(counts.passed(), 7);
+        assert_eq!(counts.extra_fields().get("future_count"), Some(&json!(1)));
+        let error = run.error().expect("failed run carries error details");
+        assert_eq!(error.code(), "run_failed");
+        assert_eq!(error.message(), "sampling exhausted retries");
+        assert_eq!(error.extra_fields().get("future_error"), Some(&json!(true)));
+    }
+
     fn output_item_fixture() -> Value {
         json!({
             "object": "eval.run.output_item",
@@ -3836,6 +4132,36 @@ mod tests {
         assert_eq!(
             serde_json::to_value(item).expect("round-trip output item"),
             fixture
+        );
+    }
+
+    #[test]
+    fn output_item_status_sample_and_sample_error_are_readable() {
+        // The passing fixture keeps the sample error null.
+        let passing: EvalRunOutputItem =
+            serde_json::from_value(output_item_fixture()).expect("decode passing item");
+        assert_eq!(passing.status(), &EvalOutputItemStatus::Pass);
+        assert!(passing.sample().error().is_none());
+        assert_eq!(passing.sample().usage().total_tokens, 4);
+
+        let mut fixture = output_item_fixture();
+        fixture["status"] = json!("error");
+        fixture["sample"]["error"] = json!({
+            "code": "rate_limit_exceeded",
+            "message": "sample hit the model rate limit",
+            "future_sample_error": 1
+        });
+        let item: EvalRunOutputItem = serde_json::from_value(fixture).expect("decode errored item");
+        assert_eq!(item.status(), &EvalOutputItemStatus::Error);
+        let error = item
+            .sample()
+            .error()
+            .expect("errored sample carries details");
+        assert_eq!(error.code(), "rate_limit_exceeded");
+        assert_eq!(error.message(), "sample hit the model rate limit");
+        assert_eq!(
+            error.extra_fields().get("future_sample_error"),
+            Some(&json!(1))
         );
     }
 
@@ -3932,6 +4258,83 @@ mod tests {
             serde_json::to_value(validation).expect("encode validation"),
             json!({})
         );
+    }
+
+    #[test]
+    fn run_grader_metadata_and_error_flags_are_readable() {
+        let mut fixture = json!({
+            "reward": 0.0,
+            "metadata": {
+                "name": "exact",
+                "type": "string_check",
+                "errors": {
+                    "formula_parse_error": false,
+                    "sample_parse_error": true,
+                    "truncated_observation_error": false,
+                    "unresponsive_reward_error": false,
+                    "invalid_variable_error": false,
+                    "other_error": false,
+                    "python_grader_server_error": true,
+                    "python_grader_server_error_type": "python_grader_timeout",
+                    "python_grader_runtime_error": false,
+                    "python_grader_runtime_error_details": null,
+                    "model_grader_server_error": false,
+                    "model_grader_refusal_error": false,
+                    "model_grader_parse_error": false,
+                    "model_grader_server_error_details": null,
+                    "future_error_flag": "kept"
+                },
+                "execution_time": 1.5,
+                "scores": {"exact": 0.0},
+                "token_usage": 9,
+                "sampled_model_name": "gpt-test"
+            },
+            "sub_rewards": {"exact": 0.0},
+            "model_grader_token_usage_per_model": {}
+        });
+        let response: experimental::RunGraderResponse =
+            serde_json::from_value(fixture.clone()).expect("decode grader response");
+        let metadata = response.metadata();
+        assert_eq!(metadata.name(), "exact");
+        assert_eq!(metadata.kind(), "string_check");
+        assert_eq!(metadata.execution_time(), 1.5);
+        assert_eq!(metadata.scores().get("exact"), Some(&json!(0.0)));
+        assert_eq!(metadata.sampled_model_name(), Some("gpt-test"));
+        assert!(matches!(
+            metadata.token_usage(),
+            Some(experimental::GraderTokenUsage::Total(9))
+        ));
+
+        let errors = metadata.errors();
+        assert!(!errors.formula_parse_error());
+        assert!(errors.sample_parse_error());
+        assert!(!errors.truncated_observation_error());
+        assert!(!errors.unresponsive_reward_error());
+        assert!(!errors.invalid_variable_error());
+        assert!(!errors.other_error());
+        assert!(errors.python_grader_server_error());
+        assert_eq!(
+            errors.python_grader_server_error_type(),
+            Some("python_grader_timeout")
+        );
+        assert!(!errors.python_grader_runtime_error());
+        assert_eq!(errors.python_grader_runtime_error_details(), None);
+        assert!(!errors.model_grader_server_error());
+        assert!(!errors.model_grader_refusal_error());
+        assert!(!errors.model_grader_parse_error());
+        assert_eq!(errors.model_grader_server_error_details(), None);
+        assert_eq!(
+            errors.extra_fields().get("future_error_flag"),
+            Some(&json!("kept"))
+        );
+
+        // Null metadata fields stay distinguishable from values.
+        fixture["metadata"]["token_usage"] = Value::Null;
+        fixture["metadata"]["sampled_model_name"] = Value::Null;
+        let nulls: experimental::RunGraderResponse =
+            serde_json::from_value(fixture).expect("decode null metadata");
+        assert!(nulls.metadata().token_usage().is_none());
+        assert_eq!(nulls.metadata().sampled_model_name(), None);
     }
 
     #[test]

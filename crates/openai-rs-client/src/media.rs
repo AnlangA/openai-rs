@@ -32,7 +32,8 @@ use crate::{
         private::Sealed,
     },
     sse::{
-        SseDispatch, SseEndpointPolicy, SseEofBehavior, SseFrame, SseStreamDecoder, SseStreamState,
+        SseDispatch, SseEndpointPolicy, SseEofBehavior, SseFrame, SseLimits, SseStreamDecoder,
+        SseStreamState,
     },
     transport::{PathSegment, deserialize_json},
 };
@@ -89,6 +90,7 @@ impl Audio {
             .await?;
         MediaEventStream::from_response(
             response,
+            self.client.transport().sse_limits(),
             &["speech.audio.done"],
             SpeechStreamEvent::is_terminal,
         )
@@ -131,6 +133,7 @@ impl Audio {
             .await?;
         MediaEventStream::from_response(
             response,
+            self.client.transport().sse_limits(),
             &["transcript.text.done"],
             TranscriptionStreamEvent::is_terminal,
         )
@@ -199,6 +202,7 @@ impl Images {
             .await?;
         MediaEventStream::from_response(
             response,
+            self.client.transport().sse_limits(),
             &["image_generation.completed"],
             ImageGenerationStreamEvent::is_terminal,
         )
@@ -235,6 +239,7 @@ impl Images {
             .await?;
         MediaEventStream::from_response(
             response,
+            self.client.transport().sse_limits(),
             &["image_edit.completed"],
             ImageEditStreamEvent::is_terminal,
         )
@@ -278,6 +283,7 @@ impl Images {
             .await?;
         MediaEventStream::from_response(
             response,
+            self.client.transport().sse_limits(),
             &["image_edit.completed"],
             ImageEditStreamEvent::is_terminal,
         )
@@ -442,6 +448,7 @@ where
 {
     fn from_response(
         response: reqwest::Response,
+        limits: SseLimits,
         terminal_names: &'static [&'static str],
         is_terminal: fn(&E) -> bool,
     ) -> Result<Self, Error> {
@@ -456,7 +463,7 @@ where
         let stream_meta = meta.clone();
         let inner = async_stream::stream! {
             let mut chunks = Box::pin(response.bytes_stream());
-            let mut decoder = SseStreamDecoder::with_default_limits(policy);
+            let mut decoder = SseStreamDecoder::new(limits, policy);
             while let Some(chunk) = chunks.next().await {
                 let chunk = match chunk {
                     Ok(chunk) => chunk,
@@ -512,7 +519,13 @@ where
             for dispatch in dispatches {
                 match dispatch {
                     SseDispatch::Event(frame) | SseDispatch::Terminal(frame) => {
-                        yield decode_media_event(&frame, &stream_meta);
+                        match decode_media_event(&frame, &stream_meta) {
+                            Ok(event) => yield Ok(event),
+                            Err(error) => {
+                                yield Err(error);
+                                return;
+                            }
+                        }
                     }
                     SseDispatch::RemoteError(frame) => {
                         yield Err(StreamError::from_body(
@@ -836,7 +849,14 @@ where
         request_id: meta.request_id().map(Box::<str>::from),
         body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
     })?;
-    if value.get("error").is_some_and(|error| !error.is_null()) {
+    if value.get("error").is_some_and(error_is_truthy) {
+        return Err(StreamError::from_body(meta.request_id(), frame.data.as_bytes()).into());
+    }
+    // A flat error frame carries no `event:` line, so the remote-error
+    // classification never sees it. Mirror openai-node's `data?.error ?? data`
+    // fallback: a `type:"error"` payload is an in-band error even without the
+    // event field, instead of decoding into the union's `Unknown` variant.
+    if frame.event.is_none() && value.get("type").and_then(Value::as_str) == Some("error") {
         return Err(StreamError::from_body(meta.request_id(), frame.data.as_bytes()).into());
     }
     if let Some(event_name) = frame.event.as_deref()
@@ -855,6 +875,22 @@ where
         request_id: meta.request_id().map(Box::<str>::from),
         body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
     })
+}
+
+/// Whether an in-band `error` field marks the frame as a remote error.
+///
+/// Mirrors openai-python's `data.get("error")` truthiness: `null`, `false`,
+/// `0`, `""`, `[]`, `{}`, and a missing key all pass (falsy), while any other
+/// value is treated as an in-band error.
+fn error_is_truthy(error: &Value) -> bool {
+    match error {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_some_and(|n| n != 0.0),
+        Value::String(text) => !text.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(fields) => !fields.is_empty(),
+    }
 }
 
 fn media_sse_error(source: crate::sse::SseDecodeError, meta: &ResponseMeta) -> Error {
@@ -931,7 +967,8 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::{ApiKey, RetryPolicy};
+    use crate::sse::{SseDecodeError, SseLimits};
+    use crate::{ApiKey, ClientBuilder, RetryPolicy};
 
     #[derive(Debug)]
     struct CapturedRequest {
@@ -946,6 +983,14 @@ mod tests {
     async fn serve_once(
         content_type: &'static str,
         body: Bytes,
+    ) -> (Client, oneshot::Receiver<CapturedRequest>) {
+        serve_once_configured(content_type, body, |builder| builder).await
+    }
+
+    async fn serve_once_configured(
+        content_type: &'static str,
+        body: Bytes,
+        configure: impl FnOnce(ClientBuilder) -> ClientBuilder,
     ) -> (Client, oneshot::Receiver<CapturedRequest>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -1009,13 +1054,72 @@ mod tests {
                 .expect("serve media request");
         });
         let base_url = Url::parse(&format!("http://{address}/v1/")).expect("media base URL");
+        let builder = Client::builder(ApiKey::new("test-placeholder-key").expect("test API key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(RetryPolicy::disabled());
+        let client = configure(builder).build().expect("media client");
+        (client, receiver)
+    }
+
+    // Serves one SSE prefix chunk and then, once the caller signals, fails the
+    // response body mid-stream, which surfaces as a mid-body transport read
+    // error on the client.
+    async fn serve_once_with_body_failure(
+        content_type: &'static str,
+        prefix: Bytes,
+    ) -> (Client, oneshot::Sender<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind failing media server");
+        let address = listener.local_addr().expect("failing media server address");
+        let (trigger, release) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept failing request");
+            let release = Arc::new(Mutex::new(Some(release)));
+            let service = service_fn(move |_: Request<Incoming>| {
+                let prefix = prefix.clone();
+                let release = Arc::clone(&release);
+                async move {
+                    let release = release.lock().expect("release lock").take();
+                    let body = http_body_util::StreamBody::new(
+                        futures_util::stream::iter(vec![Ok::<_, std::io::Error>(
+                            hyper::body::Frame::data(prefix),
+                        )])
+                        .chain(futures_util::stream::once(async move {
+                            if let Some(release) = release {
+                                let _ = release.await;
+                            }
+                            Err::<hyper::body::Frame<Bytes>, std::io::Error>(std::io::Error::other(
+                                "mid-body media failure",
+                            ))
+                        })),
+                    );
+                    Ok::<_, Infallible>(
+                        hyper::Response::builder()
+                            .status(StatusCode::OK)
+                            .header(header::CONTENT_TYPE, content_type)
+                            .header("x-request-id", "req_media")
+                            .body(body)
+                            .expect("failing media response"),
+                    )
+                }
+            });
+            // A mid-body failure surfaces as a serve_connection error here,
+            // which is the condition under test; ignore it instead of
+            // tearing down the task before the client observes the failure.
+            let _ = http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+        });
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("failing media URL");
         let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test API key"))
             .base_url(base_url)
             .allow_insecure_loopback(true)
             .retry_policy(RetryPolicy::disabled())
             .build()
-            .expect("media client");
-        (client, receiver)
+            .expect("failing media client");
+        (client, trigger)
     }
 
     fn bytes_source(
@@ -1362,5 +1466,313 @@ mod tests {
         assert!(!text.contains("background"));
         assert!(!text.contains("quality"));
         assert!(!text.contains("null"));
+    }
+
+    async fn speech_stream(client: &Client) -> MediaEventStream<SpeechStreamEvent> {
+        client
+            .audio()
+            .speech_stream(
+                CreateSpeechRequest::new("gpt-4o-mini-tts", "hello", "coral").into_streaming(),
+            )
+            .await
+            .expect("speech SSE handshake")
+    }
+
+    #[test]
+    fn error_key_truthiness_matches_python() {
+        // openai-python branches on `data.get("error")` truthiness: only
+        // missing, null, false, zero, and empty scalar/container values pass.
+        for falsy in [
+            Value::Null,
+            Value::Bool(false),
+            json!(0),
+            json!(-0.0),
+            json!(""),
+            json!([]),
+            json!({}),
+        ] {
+            assert!(!error_is_truthy(&falsy), "expected falsy: {falsy}");
+        }
+        for truthy in [
+            Value::Bool(true),
+            json!(1),
+            json!(-1),
+            json!(0.5),
+            json!("message"),
+            json!([0]),
+            json!({"code": "overloaded"}),
+        ] {
+            assert!(error_is_truthy(&truthy), "expected truthy: {truthy}");
+        }
+    }
+
+    #[tokio::test]
+    async fn sse_limits_configuration_rejects_long_lines() {
+        let mut line = String::from("data: {\"type\":\"speech.audio.delta\",\"audio\":\"");
+        line.push_str(&"A".repeat(200));
+        line.push_str("\"}\n\n");
+        let limits = SseLimits::new(64, 8192, 64).expect("small SSE limits");
+        let (client, _captured) = serve_once_configured(SSE_MIME, Bytes::from(line), |builder| {
+            builder.sse_limits(limits)
+        })
+        .await;
+        let mut stream = speech_stream(&client).await;
+        let error = stream
+            .next()
+            .await
+            .expect("line limit error item")
+            .expect_err("line above the configured limit");
+        match error {
+            Error::Sse {
+                source: SseDecodeError::LineTooLarge { limit },
+                ..
+            } => assert_eq!(limit, 64),
+            other => panic!("expected a line-limit error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn event_error_frame_surfaces_stream_error_once() {
+        let body = Bytes::from_static(
+            concat!(
+                "event: speech.audio.delta\n",
+                "data: {\"type\":\"speech.audio.delta\",\"audio\":\"UklGRg==\"}\n\n",
+                "event: error\n",
+                "data: {\"type\":\"error\",\"code\":\"stream_failed\",\"message\":\"bad Bearer private\",\"param\":null}\n\n",
+                "event: speech.audio.done\n",
+                "data: {\"type\":\"speech.audio.done\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}\n\n",
+            )
+            .as_bytes(),
+        );
+        let (client, _captured) = serve_once(SSE_MIME, body).await;
+        let mut stream = speech_stream(&client).await;
+        assert!(matches!(
+            stream.next().await.expect("delta").expect("typed delta"),
+            SpeechStreamEvent::AudioDelta(_)
+        ));
+        let error = stream
+            .next()
+            .await
+            .expect("remote error item")
+            .expect_err("remote error event");
+        match error {
+            Error::Stream(error) => {
+                assert_eq!(error.request_id(), Some("req_media"));
+                assert_eq!(error.code(), Some("stream_failed"));
+                assert!(!error.message().contains("private"));
+            }
+            other => panic!("expected stream error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn data_error_key_frame_surfaces_stream_error() {
+        let body = Bytes::from_static(
+            concat!(
+                "data: {\"error\":{\"message\":\"bad Bearer private\",\"code\":\"upload_failed\"}}\n\n",
+            )
+            .as_bytes(),
+        );
+        let (client, _captured) = serve_once(SSE_MIME, body).await;
+        let mut stream = speech_stream(&client).await;
+        let error = stream
+            .next()
+            .await
+            .expect("in-band error item")
+            .expect_err("data error key");
+        match error {
+            Error::Stream(error) => {
+                assert_eq!(error.code(), Some("upload_failed"));
+                assert!(!error.message().contains("private"));
+            }
+            other => panic!("expected stream error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn flat_error_frame_without_event_line_surfaces_stream_error() {
+        // A frame carrying `type:"error"` but no `event:` line never reaches
+        // the remote-error classification and previously decoded into the
+        // event union's `Unknown` variant, losing the error entirely.
+        let body = Bytes::from_static(
+            concat!(
+                "data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"bad Bearer private\"}\n\n",
+            )
+            .as_bytes(),
+        );
+        let (client, _captured) = serve_once(SSE_MIME, body).await;
+        let mut stream = speech_stream(&client).await;
+        let error = stream
+            .next()
+            .await
+            .expect("flat error item")
+            .expect_err("flat error frame");
+        match error {
+            Error::Stream(error) => {
+                assert_eq!(error.request_id(), Some("req_media"));
+                assert_eq!(error.code(), Some("server_error"));
+                assert!(!error.message().contains("private"));
+            }
+            other => panic!("expected stream error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn falsy_error_keys_still_decode_typed_events() {
+        let body = Bytes::from_static(
+            concat!(
+                "event: speech.audio.delta\n",
+                "data: {\"type\":\"speech.audio.delta\",\"audio\":\"UklGRg==\",\"error\":false}\n\n",
+                "event: speech.audio.done\n",
+                "data: {\"type\":\"speech.audio.done\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3},\"error\":{}}\n\n",
+            )
+            .as_bytes(),
+        );
+        let (client, _captured) = serve_once(SSE_MIME, body).await;
+        let mut stream = speech_stream(&client).await;
+        assert!(matches!(
+            stream
+                .next()
+                .await
+                .expect("delta despite falsy error key")
+                .expect("typed delta"),
+            SpeechStreamEvent::AudioDelta(_)
+        ));
+        assert!(matches!(
+            stream
+                .next()
+                .await
+                .expect("done despite falsy error key")
+                .expect("typed done"),
+            SpeechStreamEvent::AudioDone(_)
+        ));
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn eof_without_terminal_event_reports_unexpected_eof() {
+        let body = Bytes::from_static(
+            concat!(
+                "event: speech.audio.delta\n",
+                "data: {\"type\":\"speech.audio.delta\",\"audio\":\"UklGRg==\"}\n\n",
+            )
+            .as_bytes(),
+        );
+        let (client, _captured) = serve_once(SSE_MIME, body).await;
+        let mut stream = speech_stream(&client).await;
+        assert!(matches!(
+            stream.next().await.expect("delta").expect("typed delta"),
+            SpeechStreamEvent::AudioDelta(_)
+        ));
+        let error = stream
+            .next()
+            .await
+            .expect("EOF error item")
+            .expect_err("missing terminal event");
+        match error {
+            Error::Sse {
+                source: SseDecodeError::UnexpectedEof { .. },
+                request_id,
+            } => assert_eq!(request_id.as_deref(), Some("req_media")),
+            other => panic!("expected unexpected EOF, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn non_sse_content_type_fails_the_stream_handshake() {
+        let (client, _captured) =
+            serve_once(JSON_MIME, Bytes::from_static(br#"{"text":"hello"}"#)).await;
+        let error = client
+            .audio()
+            .speech_stream(
+                CreateSpeechRequest::new("gpt-4o-mini-tts", "hello", "coral").into_streaming(),
+            )
+            .await
+            .expect_err("non-SSE content type");
+        match error {
+            Error::UnexpectedContentType {
+                expected,
+                actual,
+                status,
+                request_id,
+            } => {
+                assert_eq!(expected, SSE_MIME);
+                assert_eq!(actual.as_deref(), Some(JSON_MIME));
+                assert_eq!(status, StatusCode::OK);
+                assert_eq!(request_id.as_deref(), Some("req_media"));
+            }
+            other => panic!("expected unexpected content type, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mid_body_read_error_surfaces_response_body_error_and_stops() {
+        let prefix = Bytes::from_static(
+            concat!(
+                "event: speech.audio.delta\n",
+                "data: {\"type\":\"speech.audio.delta\",\"audio\":\"UklGRg==\"}\n\n",
+            )
+            .as_bytes(),
+        );
+        let (client, fail_body) = serve_once_with_body_failure(SSE_MIME, prefix).await;
+        let mut stream = speech_stream(&client).await;
+        assert!(matches!(
+            stream.next().await.expect("delta").expect("typed delta"),
+            SpeechStreamEvent::AudioDelta(_)
+        ));
+        let _ = fail_body.send(());
+        let error = stream
+            .next()
+            .await
+            .expect("body error item")
+            .expect_err("mid-body read failure");
+        match error {
+            Error::ResponseBody {
+                status, request_id, ..
+            } => {
+                assert_eq!(status, StatusCode::OK);
+                assert_eq!(request_id.as_deref(), Some("req_media"));
+            }
+            other => panic!("expected a response body error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn finish_flushed_terminal_decode_error_stops_the_stream() {
+        // The terminal event block lacks its final blank line, so it is
+        // flushed by `finish()`; its payload is missing the required `usage`
+        // field and the decode error must be the stream's last item.
+        let body = Bytes::from_static(
+            concat!(
+                "event: speech.audio.done\n",
+                "data: {\"type\":\"speech.audio.done\"}",
+            )
+            .as_bytes(),
+        );
+        let (client, _captured) = serve_once(SSE_MIME, body).await;
+        let mut stream = speech_stream(&client).await;
+        let error = stream
+            .next()
+            .await
+            .expect("EOF flush decode error")
+            .expect_err("malformed terminal event");
+        match error {
+            Error::Decode {
+                meta_status,
+                request_id,
+                ..
+            } => {
+                assert_eq!(meta_status, StatusCode::OK);
+                assert_eq!(request_id.as_deref(), Some("req_media"));
+            }
+            other => panic!("expected a decode error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
     }
 }

@@ -177,6 +177,7 @@ pub struct ResponsesWebSocket {
     meta: ResponseMeta,
     max_message_bytes: usize,
     closed: bool,
+    last_close: Option<(u16, String)>,
 }
 
 #[cfg(feature = "realtime")]
@@ -215,6 +216,7 @@ impl ResponsesWebSocket {
                         meta,
                         max_message_bytes: config.max_message_bytes,
                         closed: false,
+                        last_close: None,
                     });
                 }
                 Ok(Err(error))
@@ -256,6 +258,28 @@ impl ResponsesWebSocket {
     #[must_use]
     pub const fn is_closed(&self) -> bool {
         self.closed
+    }
+
+    /// Close status code carried by the peer's close frame, if one was
+    /// received (4-18). `None` after a frameless EOF (or before any close):
+    /// a code such as 1011 distinguishes a server-side failure close from a
+    /// clean `1000`/`1001` shutdown.
+    #[must_use]
+    pub const fn close_code(&self) -> Option<u16> {
+        match &self.last_close {
+            Some((code, _)) => Some(*code),
+            None => None,
+        }
+    }
+
+    /// Close reason text carried by the peer's close frame, if one was
+    /// received with a non-empty reason.
+    #[must_use]
+    pub fn close_reason(&self) -> Option<&str> {
+        match &self.last_close {
+            Some((_, reason)) => Some(reason.as_str()),
+            None => None,
+        }
     }
 
     /// Sends a typed `response.create` event.
@@ -326,8 +350,12 @@ impl ResponsesWebSocket {
                 // adds a redundant write path.
                 Message::Ping(_) => {}
                 Message::Pong(_) => {}
-                Message::Close(_) => {
+                Message::Close(frame) => {
                     self.closed = true;
+                    if let Some(frame) = frame {
+                        self.last_close =
+                            Some((u16::from(frame.code), frame.reason.as_str().to_owned()));
+                    }
                     return Ok(None);
                 }
                 Message::Binary(_) => {
@@ -532,14 +560,29 @@ pub(crate) fn is_unauthorized_websocket_error(error: &tungstenite::Error) -> boo
 
 pub(crate) fn map_websocket_error(error: tungstenite::Error) -> Error {
     match error {
-        tungstenite::Error::Http(response) => Error::WebSocketHandshake {
-            status: response.status(),
-            request_id: response
-                .headers()
-                .get("x-request-id")
+        tungstenite::Error::Http(response) => {
+            let status = response.status();
+            let headers = response.headers().clone();
+            // tungstenite only exposes the bytes that arrived in the same read
+            // as the response head ("tail"), so compare the buffered length
+            // against the declared `Content-Length` to flag the preview as
+            // truncated honestly instead of presenting a partial body as the
+            // whole rejection payload (4-17).
+            let tail = response.into_body().unwrap_or_default();
+            let truncated = headers
+                .get(header::CONTENT_LENGTH)
                 .and_then(|value| value.to_str().ok())
-                .map(Box::<str>::from),
-        },
+                .and_then(|value| value.parse::<usize>().ok())
+                .is_some_and(|declared| tail.len() < declared);
+            Error::WebSocketHandshake {
+                status,
+                request_id: headers
+                    .get("x-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(Box::<str>::from),
+                body: crate::BodyPreview::from_bytes(&tail, truncated),
+            }
+        }
         tungstenite::Error::Capacity(_) => {
             Error::WebSocketTransport("WebSocket capacity limit exceeded".into())
         }
@@ -558,10 +601,18 @@ fn invalid_configuration(message: impl Into<Box<str>>) -> Error {
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use http::StatusCode;
     use openai_rs_types::responses::ResponseStreamEvent;
     use serde_json::{Value, json};
-    use tokio::{net::TcpListener, sync::oneshot};
-    use tokio_tungstenite::{accept_hdr_async, tungstenite::handshake::server};
+    use tokio::{io::AsyncReadExt, io::AsyncWriteExt, net::TcpListener, sync::oneshot};
+    use tokio_tungstenite::{
+        accept_hdr_async,
+        tungstenite::{
+            Utf8Bytes,
+            handshake::server,
+            protocol::frame::{CloseFrame, coding::CloseCode},
+        },
+    };
 
     use super::*;
     use crate::ApiKey;
@@ -720,5 +771,161 @@ mod tests {
                 .validate()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn handshake_errors_carry_a_sanitized_body_preview() {
+        // 4-17: the buffered rejection tail becomes a BodyPreview whose
+        // truncation flag honestly reflects a wire body longer than the tail.
+        let body = br#"{"error":{"message":"no such lane","type":"invalid_request_error","code":"lane_not_found"}}"#;
+        let response = http::Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header("x-request-id", "req_ws_401")
+            .header(header::CONTENT_LENGTH, body.len().to_string())
+            .body(Some(body.to_vec()))
+            .expect("handshake rejection response");
+        let error = map_websocket_error(tungstenite::Error::Http(Box::new(response)));
+        let Error::WebSocketHandshake {
+            status,
+            request_id,
+            body: preview,
+        } = &error
+        else {
+            panic!("expected a handshake error, got {error:?}");
+        };
+        assert_eq!(*status, StatusCode::UNAUTHORIZED);
+        assert_eq!(request_id.as_deref(), Some("req_ws_401"));
+        assert!(preview.as_str().contains("no such lane"));
+        assert!(!preview.is_truncated());
+
+        // A declared Content-Length longer than the buffered tail is flagged.
+        let response = http::Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header(header::CONTENT_LENGTH, (body.len() * 2).to_string())
+            .body(Some(body.to_vec()))
+            .expect("truncated handshake rejection");
+        let error = map_websocket_error(tungstenite::Error::Http(Box::new(response)));
+        assert!(
+            error
+                .handshake_body()
+                .expect("handshake body preview")
+                .is_truncated()
+        );
+
+        // An absent body degrades to an empty, untruncated preview.
+        let response = http::Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(None)
+            .expect("empty handshake rejection");
+        let error = map_websocket_error(tungstenite::Error::Http(Box::new(response)));
+        let preview = error.handshake_body().expect("handshake body preview");
+        assert_eq!(preview.as_str(), "");
+        assert!(!preview.is_truncated());
+    }
+
+    /// Serves one raw HTTP rejection — head and body in a single TCP write —
+    /// so the handshake fails with the JSON body buffered beside the head.
+    async fn raw_handshake_rejection_server(body: &'static str) -> Client {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind raw rejection server");
+        let address = listener.local_addr().expect("raw rejection address");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept raw rejection");
+            let mut request = vec![0_u8; 4096];
+            let _ = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut request))
+                .await
+                .expect("timely handshake request read");
+            let response = format!(
+                "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\nx-request-id: req_ws_401\r\ncontent-length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write raw rejection");
+        });
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("raw rejection base");
+        Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("raw rejection client")
+    }
+
+    #[tokio::test]
+    async fn handshake_rejection_preserves_the_json_error_body() {
+        // 4-17: the shared handshake mapping covers the Responses client; the
+        // Realtime and Beta sockets route their failures through the same
+        // `map_websocket_error`.
+        let body = r#"{"error":{"message":"workspace is suspended","type":"invalid_request_error","code":"workspace_suspended"}}"#;
+        let client = raw_handshake_rejection_server(body).await;
+        let error = client
+            .responses()
+            .connect()
+            .await
+            .expect_err("401 handshake rejection");
+        assert_eq!(error.status(), Some(StatusCode::UNAUTHORIZED));
+        assert_eq!(error.request_id(), Some("req_ws_401"));
+        let preview = error.handshake_body().expect("handshake body preview");
+        assert!(
+            preview.as_str().contains("workspace is suspended"),
+            "the rejection body must survive the handshake failure, got {}",
+            preview.as_str()
+        );
+        assert!(!preview.is_truncated());
+    }
+
+    #[tokio::test]
+    async fn peer_close_code_and_reason_stay_readable() {
+        // 4-18: an abnormal coded close must remain distinguishable from a
+        // clean frameless EOF on the Responses WebSocket too.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind coded-close server");
+        let address = listener.local_addr().expect("coded-close server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept coded-close socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("coded-close server handshake");
+            socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: CloseCode::Error,
+                    reason: Utf8Bytes::from_static("response failed"),
+                })))
+                .await
+                .expect("send coded close frame");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("coded-close client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("coded-close client");
+        let mut socket = client
+            .responses()
+            .connect()
+            .await
+            .expect("connect Responses WebSocket");
+        assert_eq!(
+            socket.close_code(),
+            None,
+            "no close frame has been seen yet"
+        );
+        assert!(
+            socket.recv().await.expect("coded close").is_none(),
+            "a peer close ends the stream"
+        );
+        assert!(socket.is_closed());
+        assert_eq!(socket.close_code(), Some(1011));
+        assert_eq!(socket.close_reason(), Some("response failed"));
     }
 }

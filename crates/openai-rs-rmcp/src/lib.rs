@@ -31,7 +31,11 @@ pub use error::BridgeError;
 pub use executor::ResponsesToolExecutor;
 #[cfg(feature = "client")]
 pub use executor::RmcpExecutor;
+// The executor trait is written in terms of these rmcp model types, so
+// facade-only consumers need them re-exported alongside the trait to
+// implement it.
 pub use result::{EncodedToolResult, ResultEncoding, ToolResultEnvelope, encode_tool_result};
+pub use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
 
 /// OpenAI-native remote MCP wire types.
 ///

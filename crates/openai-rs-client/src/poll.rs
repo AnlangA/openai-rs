@@ -1,4 +1,5 @@
-//! Bounded polling shared by Vector Stores, Fine-tuning, and Evals.
+//! Bounded polling shared by Vector Stores, Fine-tuning, Evals, Batches, and
+//! background-mode Responses.
 
 use std::{
     future::Future,
@@ -101,6 +102,23 @@ impl PollOptions {
         Self {
             interval: Duration::from_secs(1),
             timeout: Duration::from_secs(30 * 60),
+            cancellation: None,
+        }
+    }
+
+    /// Creates options with batch defaults (5-second interval, 24-hour timeout).
+    ///
+    /// The pinned Batch API accepts exactly one `completion_window` value,
+    /// `24h`, so a batch may legitimately take most of a day to finish. The
+    /// generic [`PollOptions::new`] deadline of ten minutes therefore expires
+    /// structurally before any batch can complete. This preset matches the
+    /// 24-hour window and uses a 5-second interval to keep request volume
+    /// proportionate to runs measured in hours.
+    #[must_use]
+    pub const fn for_batches() -> Self {
+        Self {
+            interval: Duration::from_secs(5),
+            timeout: Duration::from_secs(24 * 60 * 60),
             cancellation: None,
         }
     }
@@ -307,6 +325,19 @@ mod tests {
             body,
             crate::ResponseMeta::new(StatusCode::OK, None, crate::RateLimitMetadata::default()),
         )
+    }
+
+    #[test]
+    fn for_batches_preset_covers_the_only_batch_completion_window() {
+        let options = PollOptions::for_batches();
+        assert_eq!(options.interval(), Duration::from_secs(5));
+        assert_eq!(options.timeout(), Duration::from_secs(24 * 60 * 60));
+        assert!(options.cancellation.is_none());
+
+        // The generic defaults cannot cover the pinned `24h` completion window.
+        let defaults = PollOptions::new();
+        assert_eq!(defaults.interval(), Duration::from_secs(1));
+        assert_eq!(defaults.timeout(), Duration::from_secs(10 * 60));
     }
 
     #[tokio::test]

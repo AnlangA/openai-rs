@@ -277,10 +277,10 @@ pub enum VectorStoreValidationError {
     #[error("vector-store search query array must not be empty")]
     EmptySearchQueries,
     /// Search result count is outside `1..=50`.
-    #[error("vector-store max_num_results must be 1..=50, got {maximum}")]
+    #[error("vector-store max_num_results must be 1..=50, got {actual}")]
     InvalidMaxResults {
         /// Rejected value.
-        maximum: u8,
+        actual: u8,
     },
     /// A score is non-finite or outside `[0, 1]`.
     #[error("vector-store score must be finite and between 0 and 1, got {score}")]
@@ -2390,7 +2390,7 @@ impl VectorStoreMaxResults {
     /// Creates a result count in `1..=50`.
     pub const fn new(value: u8) -> Result<Self, VectorStoreValidationError> {
         if value == 0 || value > MAX_VECTOR_STORE_SEARCH_RESULTS {
-            Err(VectorStoreValidationError::InvalidMaxResults { maximum: value })
+            Err(VectorStoreValidationError::InvalidMaxResults { actual: value })
         } else {
             Ok(Self(value))
         }
@@ -3311,6 +3311,33 @@ mod tests {
         assert_eq!(value["query"], "quarterly revenue");
         assert_eq!(value["filters"]["type"], "gt");
         assert_eq!(value["ranking_options"]["score_threshold"], 0.4);
+    }
+
+    #[test]
+    fn max_results_bounds_report_the_rejected_actual_value() {
+        assert_eq!(
+            VectorStoreMaxResults::new(0),
+            Err(VectorStoreValidationError::InvalidMaxResults { actual: 0 })
+        );
+        assert_eq!(
+            VectorStoreMaxResults::new(MAX_VECTOR_STORE_SEARCH_RESULTS + 1),
+            Err(VectorStoreValidationError::InvalidMaxResults {
+                actual: MAX_VECTOR_STORE_SEARCH_RESULTS + 1
+            })
+        );
+        // The rendered message keeps its original wording.
+        assert_eq!(
+            VectorStoreMaxResults::new(51)
+                .expect_err("above the ceiling")
+                .to_string(),
+            "vector-store max_num_results must be 1..=50, got 51"
+        );
+        assert_eq!(
+            VectorStoreMaxResults::new(MAX_VECTOR_STORE_SEARCH_RESULTS)
+                .expect("ceiling is valid")
+                .get(),
+            MAX_VECTOR_STORE_SEARCH_RESULTS
+        );
     }
 
     #[test]

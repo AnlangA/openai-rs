@@ -719,9 +719,16 @@ fn server_retry_delay(headers: &http::HeaderMap, maximum: Duration) -> ServerDel
         .get("retry-after-ms")
         .and_then(|value| value.to_str().ok())
         && let Ok(milliseconds) = value.parse::<f64>()
-        && milliseconds.is_finite()
-        && milliseconds >= 0.0
     {
+        // A *parseable* `retry-after-ms` decides the delay on its own, exactly
+        // like openai-python's `_parse_retry_after_header` and the multipart
+        // copy (`multipart.rs::retry_delay`): a positive, in-bound value wins,
+        // while zero, negative, non-finite (`nan`/`inf`), and over-bound values
+        // all map to local exponential backoff without ever consulting
+        // `Retry-After`, so a stale coarse header cannot override the
+        // millisecond header the server actually emitted. Only an unparseable
+        // value falls through to `Retry-After`. The zero/negative guards live
+        // inside `bounded_delay`.
         return bounded_delay(milliseconds / 1000.0, maximum);
     }
 
@@ -768,6 +775,9 @@ fn bounded_delay(seconds: f64, maximum: Duration) -> ServerDelay {
     } else {
         match Duration::try_from_secs_f64(seconds) {
             Ok(delay) => ServerDelay::Valid(delay),
+            // The only in-bound value that fails to convert is `nan`, which
+            // carries no usable delay and lands on the same local-backoff
+            // fallback as the over-bound branch above.
             Err(_) => ServerDelay::TooLong,
         }
     }
@@ -1031,6 +1041,46 @@ mod tests {
         assert_eq!(
             server_retry_delay(&headers, Duration::from_secs(1)),
             ServerDelay::TooLong
+        );
+    }
+
+    #[test]
+    fn parseable_retry_after_ms_decides_alone_and_never_falls_back() {
+        // 4-31: once `retry-after-ms` parses as a float, it decides the delay
+        // by itself. A negative value beside a perfectly valid `Retry-After`
+        // must resolve to local backoff (`Absent`), not adopt the coarse
+        // header the server did not mean to win.
+        let maximum = RetryPolicy::openai_compatible().max_server_delay;
+        let mut headers = http::HeaderMap::new();
+        headers.insert("retry-after-ms", HeaderValue::from_static("-500"));
+        headers.insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+        assert_eq!(
+            server_retry_delay(&headers, maximum),
+            ServerDelay::Absent,
+            "a negative millisecond value must not fall back to `Retry-After`"
+        );
+
+        // Zero parses too, so it also short-circuits into local backoff.
+        headers.insert("retry-after-ms", HeaderValue::from_static("0"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::Absent);
+
+        // Non-finite values parse as floats, so they decide alone as well.
+        headers.insert("retry-after-ms", HeaderValue::from_static("nan"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+        headers.insert("retry-after-ms", HeaderValue::from_static("inf"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+
+        // An over-bound millisecond value beside an in-bound `Retry-After`
+        // still never adopts the coarse header.
+        headers.insert("retry-after-ms", HeaderValue::from_static("130000"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+
+        // Only an unparseable millisecond value falls through to the coarse
+        // header, matching the multipart copy of this parser.
+        headers.insert("retry-after-ms", HeaderValue::from_static("soon"));
+        assert_eq!(
+            server_retry_delay(&headers, maximum),
+            ServerDelay::Valid(Duration::from_secs(1))
         );
     }
 

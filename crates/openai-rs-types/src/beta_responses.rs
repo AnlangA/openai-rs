@@ -18,8 +18,8 @@ use crate::{
         ConversationObjectReference, ConversationReference, CountInputTokensConstraintError,
         CreateResponseConstraintError, IncompleteDetails, InputContent, InputFile, LogProb,
         MAX_COMPACT_INPUT_CHARS, MAX_INPUT_TEXT_CHARS, MAX_PROMPT_CACHE_KEY_CHARS, MessageRole,
-        OutputText, PromptCacheRetention, PromptReference, ReasoningTextContent, Refusal,
-        ResponseError, ResponseInputItem, ResponseInstructions, ResponseItemStatus,
+        MessageStatus, OutputText, PromptCacheRetention, PromptReference, ReasoningTextContent,
+        Refusal, ResponseError, ResponseInputItem, ResponseInstructions, ResponseItemStatus,
         ResponseOutputItem, ResponseStatus, ResponseStreamEvent, ResponseStreamOptions,
         ResponseTextConfig, ResponseTool, ResponseUsage, ServiceTier, SummaryTextContent,
         ToolChoice, TruncationStrategy, UnknownTaggedObject, validate_input_content,
@@ -559,10 +559,13 @@ impl BetaPromptCachedInputMessage {
     /// Sets an item status when echoing a stored message.
     ///
     /// Replay-compat superset: `BetaInputMessage.status` is a non-null enum and
-    /// the easy-form branch has no status at all.
+    /// the easy-form branch has no status at all. `status` takes the pinned
+    /// three-value [`MessageStatus`] construction domain, mirroring the
+    /// stable message trio (3-06 / 4-16); decoding keeps the shared open
+    /// [`ResponseItemStatus`].
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(Nullable::Value(status));
+    pub fn status(mut self, status: MessageStatus) -> Self {
+        self.status = Omittable::Value(Nullable::Value(status.into()));
         self
     }
 
@@ -3003,6 +3006,30 @@ impl BetaResponse {
         omitted_ref(&self.status)
     }
 
+    /// Returns a model-generation error when non-null.
+    ///
+    /// Mirrors the stable [`crate::responses::Response::error`] accessor on
+    /// the shared `ResponseError` payload.
+    #[must_use]
+    pub fn error(&self) -> Option<&ResponseError> {
+        match &self.error {
+            Nullable::Value(value) => Some(value),
+            Nullable::Null => None,
+        }
+    }
+
+    /// Returns details explaining why the response was incomplete.
+    ///
+    /// Mirrors the stable [`crate::responses::Response::incomplete_details`]
+    /// accessor on the shared `IncompleteDetails` payload.
+    #[must_use]
+    pub fn incomplete_details(&self) -> Option<&IncompleteDetails> {
+        match &self.incomplete_details {
+            Nullable::Value(value) => Some(value),
+            Nullable::Null => None,
+        }
+    }
+
     /// Returns usage when present and non-null.
     #[must_use]
     pub fn usage(&self) -> Option<&ResponseUsage> {
@@ -3696,6 +3723,12 @@ impl BetaResponseStreamEvent {
     pub const fn is_terminal(&self) -> bool {
         self.core.is_terminal()
     }
+
+    /// Returns whether the stable core is the standalone SSE error event.
+    #[must_use]
+    pub const fn is_error(&self) -> bool {
+        self.core.is_error()
+    }
 }
 
 impl Serialize for BetaResponseStreamEvent {
@@ -4105,17 +4138,52 @@ pub struct BetaWebSocketErrorDetails {
     kind: String,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     headers: Omittable<BTreeMap<String, String>>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl BetaWebSocketErrorDetails {
+    /// Returns the official error code when the service sent a string.
+    #[must_use]
+    pub fn code(&self) -> Option<&str> {
+        match &self.code {
+            Nullable::Value(code) => Some(code.as_str()),
+            Nullable::Null => None,
+        }
+    }
+
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 
+    /// Returns the associated parameter when present.
+    #[must_use]
+    pub fn param(&self) -> Option<&str> {
+        match &self.param {
+            Nullable::Value(param) => Some(param.as_str()),
+            Nullable::Null => None,
+        }
+    }
+
     #[must_use]
     pub fn error_type(&self) -> &str {
         &self.kind
+    }
+
+    /// Returns official response headers when the service sent them.
+    #[must_use]
+    pub fn headers(&self) -> Option<&BTreeMap<String, String>> {
+        match &self.headers {
+            Omittable::Value(headers) => Some(headers),
+            Omittable::Omitted => None,
+        }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -4136,6 +4204,8 @@ pub struct BetaWebSocketErrorEvent {
     status: Omittable<u16>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     stream_id: Omittable<String>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl BetaWebSocketErrorEvent {
@@ -4143,11 +4213,39 @@ impl BetaWebSocketErrorEvent {
     pub const fn error(&self) -> &BetaWebSocketErrorDetails {
         &self.error
     }
+
+    /// Returns the HTTP status when the service sent one.
+    #[must_use]
+    pub fn status(&self) -> Option<u16> {
+        match self.status {
+            Omittable::Value(status) => Some(status),
+            Omittable::Omitted => None,
+        }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Server events emitted by the beta Responses WebSocket.
+///
+/// Error delivery is lane-dependent: a stable SSE-shaped standalone error
+/// event (`type: "error"` without a nested `error` object) is fatal for the
+/// stream and is surfaced as `Err` by the client, while the envelope routed
+/// to [`Self::WebSocketError`] describes one failed request on a multiplexed
+/// lane and is therefore delivered as `Ok` so sibling lanes keep draining.
+/// Use [`Self::is_error`] to branch on either shape without matching every
+/// variant.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+// WebSocketError grew past the smaller inject variants once its envelope
+// started retaining future fields through ExtraFields; boxing one payload
+// would be a breaking public-API refactor tracked separately from wire
+// fixes, mirroring the stable ResponsesServerEvent stance.
+#[allow(clippy::large_enum_variant)]
 pub enum BetaResponsesServerEvent {
     Response(Box<BetaResponseStreamEvent>),
     InjectCreated(BetaResponseInjectCreatedEvent),
@@ -4182,6 +4280,21 @@ impl BetaResponsesServerEvent {
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
         matches!(self, Self::Response(event) if event.is_terminal())
+    }
+
+    /// Returns whether this event carries an error payload of either shape.
+    ///
+    /// This covers both the fatal SSE-shaped standalone error delivered
+    /// inside [`Self::Response`] and the lane-scoped [`Self::WebSocketError`]
+    /// envelope; it does not change how the client delivers the event (see
+    /// the enum-level documentation).
+    #[must_use]
+    pub const fn is_error(&self) -> bool {
+        match self {
+            Self::WebSocketError(_) => true,
+            Self::Response(event) => event.is_error(),
+            Self::InjectCreated(_) | Self::InjectFailed(_) => false,
+        }
     }
 }
 
@@ -4534,6 +4647,37 @@ mod tests {
     }
 
     #[test]
+    fn beta_response_exposes_error_and_incomplete_details_accessors() {
+        // GA-parity read accessors (4-04): the failure payloads reuse the
+        // stable ResponseError / IncompleteDetails codecs unchanged.
+        let mut fixture = response_fixture(json!([]));
+        fixture["error"] = json!({"code": "server_error", "message": "boom"});
+        fixture["incomplete_details"] = json!({"reason": "max_output_tokens"});
+        fixture["status"] = json!("failed");
+        let response: BetaResponse =
+            serde_json::from_value(fixture.clone()).expect("decode failed beta response");
+        let error = response.error().expect("error payload must be readable");
+        assert_eq!(error.code().as_str(), "server_error");
+        assert_eq!(error.message(), "boom");
+        assert_eq!(
+            response
+                .incomplete_details()
+                .and_then(|details| details.reason())
+                .map(|reason| reason.as_str()),
+            Some("max_output_tokens")
+        );
+        assert_eq!(
+            serde_json::to_value(&response).expect("round trip"),
+            fixture
+        );
+
+        let healthy: BetaResponse =
+            serde_json::from_value(response_fixture(json!([]))).expect("decode healthy response");
+        assert_eq!(healthy.error(), None);
+        assert_eq!(healthy.incomplete_details(), None);
+    }
+
+    #[test]
     fn lifecycle_event_reuses_stable_discriminator_with_typed_agent_snapshot() {
         let fixture = json!({
             "type": "response.created",
@@ -4712,16 +4856,102 @@ mod tests {
             "error": {
                 "code": "bad_event",
                 "message": "invalid event",
+                "param": "input",
+                "type": "invalid_request_error",
+                "headers": {"x-request-id": "req_1"},
+                "future_detail": 7
+            },
+            "status": 400,
+            "sequence_number": 12,
+            "stream_id": "lane.2"
+        }))
+        .expect("decode structural WebSocket error");
+        let BetaResponsesServerEvent::WebSocketError(event) = &websocket_error else {
+            panic!("expected a WebSocket error envelope");
+        };
+        assert!(websocket_error.is_error());
+        assert_eq!(event.status(), Some(400));
+        assert_eq!(websocket_error.stream_id(), Some("lane.2"));
+        assert_eq!(websocket_error.sequence_number(), Some(12));
+        assert_eq!(event.error().code(), Some("bad_event"));
+        assert_eq!(event.error().message(), "invalid event");
+        assert_eq!(event.error().param(), Some("input"));
+        assert_eq!(event.error().error_type(), "invalid_request_error");
+        assert_eq!(
+            event
+                .error()
+                .headers()
+                .and_then(|headers| headers.get("x-request-id"))
+                .map(String::as_str),
+            Some("req_1")
+        );
+        assert_eq!(
+            event.error().extra_fields().get("future_detail"),
+            Some(&json!(7)),
+            "unknown nested error fields must stay lossless"
+        );
+    }
+
+    #[test]
+    fn beta_websocket_error_envelope_round_trips_every_field() {
+        let fixture = json!({
+            "type": "error",
+            "error": {
+                "code": null,
+                "message": "invalid event",
                 "param": null,
                 "type": "invalid_request_error"
             },
-            "status": 400
+            "future_top": true
+        });
+        let event: BetaResponsesServerEvent =
+            serde_json::from_value(fixture.clone()).expect("decode WebSocket error envelope");
+        let BetaResponsesServerEvent::WebSocketError(event) = &event else {
+            panic!("expected a WebSocket error envelope");
+        };
+        assert_eq!(event.error().code(), None);
+        assert_eq!(event.error().param(), None);
+        assert_eq!(event.error().headers(), None);
+        assert_eq!(event.status(), None);
+        assert_eq!(
+            event.extra_fields().get("future_top"),
+            Some(&json!(true)),
+            "unknown envelope fields must stay lossless"
+        );
+        assert_eq!(serde_json::to_value(event).expect("round trip"), fixture);
+    }
+
+    #[test]
+    fn server_event_is_error_covers_sse_and_websocket_shapes() {
+        // SSE-shaped standalone errors arrive inside the stable core and are
+        // delivered through the fatal error channel; the WebSocket envelope
+        // is lane-scoped and stays Ok-delivered. is_error() reports both.
+        let sse_error: BetaResponsesServerEvent = serde_json::from_value(json!({
+            "type": "error",
+            "code": "server_error",
+            "message": "retry later",
+            "param": null,
+            "sequence_number": 3
         }))
-        .expect("decode structural WebSocket error");
-        assert!(matches!(
-            websocket_error,
-            BetaResponsesServerEvent::WebSocketError(_)
-        ));
+        .expect("decode SSE-shaped error");
+        assert!(sse_error.is_error());
+
+        let lifecycle: BetaResponsesServerEvent = serde_json::from_value(json!({
+            "type": "response.created",
+            "response": response_fixture(json!([])),
+            "sequence_number": 1
+        }))
+        .expect("decode lifecycle event");
+        assert!(!lifecycle.is_error());
+        assert!(!lifecycle.is_terminal());
+
+        let created: BetaResponsesServerEvent = serde_json::from_value(json!({
+            "type": "response.inject.created",
+            "response_id": "resp_beta_1",
+            "sequence_number": 2
+        }))
+        .expect("decode inject created");
+        assert!(!created.is_error());
     }
 
     #[test]
@@ -5234,6 +5464,30 @@ mod tests {
             .expect("serialize multi-agent output nulls")["agent"],
             Value::Null
         );
+    }
+
+    #[test]
+    fn beta_prompt_cached_message_status_pins_message_trio() {
+        // The construction surface takes the three-value message trio,
+        // mirroring the stable message narrowing (3-06, synced in 4-16);
+        // the decode side keeps the shared open status union.
+        let echoed = serde_json::to_value(
+            BetaPromptCachedInputMessage::user([BetaPromptCachedInputContent::new(
+                crate::responses::InputText::new("hello"),
+            )])
+            .status(MessageStatus::Completed),
+        )
+        .expect("serialize narrowed status");
+        assert_eq!(echoed["status"], "completed");
+
+        let foreign: BetaPromptCachedInputMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello"}],
+            "status": "searching"
+        }))
+        .expect("decode keeps open statuses");
+        let value = serde_json::to_value(&foreign).expect("round trip");
+        assert_eq!(value["status"], "searching");
     }
 
     #[test]

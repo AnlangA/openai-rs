@@ -20,7 +20,8 @@ use openai_rs_types::{ModelId, Omittable};
 use reqwest::multipart::{Form, Part};
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tokio_tungstenite::tungstenite::{
-    Message, Utf8Bytes, protocol::WebSocketConfig as TungsteniteConfig,
+    Message, Utf8Bytes,
+    protocol::{WebSocketConfig as TungsteniteConfig, frame::CloseFrame},
 };
 use url::Url;
 
@@ -63,7 +64,9 @@ impl Realtime {
     }
 
     /// Opens a GA Realtime WebSocket for one model. The URL is derived from the
-    /// configured Platform base and cannot be supplied by the caller.
+    /// configured Platform base and cannot be supplied by the caller. The
+    /// handshake itself is single-shot and never retried; see
+    /// [`RealtimeWebSocket::connect`] for the rationale.
     pub async fn connect(&self, model: impl Into<ModelId>) -> Result<RealtimeWebSocket, Error> {
         self.connect_with(model, RealtimeWebSocketConfig::default())
             .await
@@ -430,6 +433,14 @@ impl RealtimeWebSocketConfig {
         self
     }
 
+    /// Bounds tungstenite's write buffer, mirroring the Responses WebSocket
+    /// config. `max_queued_write_bytes` must stay strictly larger.
+    #[must_use]
+    pub const fn write_buffer_bytes(mut self, value: usize) -> Self {
+        self.write_buffer_bytes = value;
+        self
+    }
+
     #[must_use]
     pub const fn max_queued_write_bytes(mut self, value: usize) -> Self {
         self.max_queued_write_bytes = value;
@@ -566,9 +577,24 @@ pub struct RealtimeWebSocket {
     max_message_bytes: usize,
     keepalive: Option<RealtimeKeepaliveState>,
     closed: bool,
+    last_close: Option<(u16, String)>,
 }
 
 impl RealtimeWebSocket {
+    /// Opens one Realtime WebSocket against the derived URL.
+    ///
+    /// The handshake is deliberately single-shot (4-20): a failed or timed-out
+    /// handshake surfaces as [`Error::WebSocketHandshake`] /
+    /// [`Error::WebSocketTransport`] and is never retried automatically. Both
+    /// official baselines agree — openai-node and openai-python do not retry
+    /// WebSocket connections — and a blind reconnect could attach to a
+    /// half-provisioned target. The Responses WebSocket exposes initial-connect
+    /// retries as an opt-in surface
+    /// (`WebSocketReconnectPolicy::InitialConnect` in `responses_websocket`);
+    /// Realtime intentionally does not offer that knob, because a Realtime
+    /// connection is bound to session state (one model, the transcription
+    /// intent, or one in-progress call) rather than to a replayable request.
+    /// Callers that want connection retries can loop on the returned error.
     async fn connect(
         client: &Client,
         target: RealtimeConnectTarget,
@@ -627,6 +653,7 @@ impl RealtimeWebSocket {
             max_message_bytes: config.max_message_bytes,
             keepalive,
             closed: false,
+            last_close: None,
         })
     }
 
@@ -643,6 +670,28 @@ impl RealtimeWebSocket {
     #[must_use]
     pub const fn is_closed(&self) -> bool {
         self.closed
+    }
+
+    /// Close status code carried by the peer's close frame, if one was
+    /// received (4-18). `None` after a frameless EOF (or before any close):
+    /// a code such as 1011 distinguishes a server-side failure close from a
+    /// clean `1000`/`1001` shutdown.
+    #[must_use]
+    pub const fn close_code(&self) -> Option<u16> {
+        match &self.last_close {
+            Some((code, _)) => Some(*code),
+            None => None,
+        }
+    }
+
+    /// Close reason text carried by the peer's close frame, if one was
+    /// received with a non-empty reason.
+    #[must_use]
+    pub fn close_reason(&self) -> Option<&str> {
+        match &self.last_close {
+            Some((_, reason)) => Some(reason.as_str()),
+            None => None,
+        }
     }
 
     pub async fn send(&mut self, event: RealtimeClientEvent) -> Result<(), Error> {
@@ -686,6 +735,14 @@ impl RealtimeWebSocket {
     /// inbound frame of any kind. Keepalive is therefore recv-driven — an
     /// application that stops polling `recv` also opts out of liveness
     /// detection. The connection is never reconnected automatically.
+    ///
+    /// Failure posture (4-19): every transport or protocol failure — a broken
+    /// connection, a keepalive timeout, a failed probe write, or a frame that
+    /// violates the Realtime event-transport contract — retires the socket
+    /// (`is_closed` becomes `true`, matching openai-node, which destroys the
+    /// WebSocket on any error). A failed event *decode* is the one
+    /// recoverable path: the connection stays open so a malformed event need
+    /// not take down an otherwise healthy session.
     pub async fn recv(&mut self) -> Result<Option<RealtimeServerEvent>, Error> {
         if self.closed {
             return Ok(None);
@@ -705,18 +762,22 @@ impl RealtimeWebSocket {
                             // intermediaries that eat control frames cannot
                             // cause spurious timeouts while traffic flows.
                             if keepalive.last_inbound.elapsed() >= keepalive.config.silence_window() {
-                                // Retire the socket; error paths and close()
-                                // deactivate the probe by short-circuiting
-                                // every later recv. No automatic reconnect.
                                 self.closed = true;
                                 return Err(Error::WebSocketProtocol(
                                     KEEPALIVE_TIMEOUT_REASON,
                                 ));
                             }
-                            self.socket
+                            // A probe that cannot be written is just as fatal
+                            // as the silence window above: the socket is
+                            // retired instead of being polled again (4-19).
+                            if let Err(error) = self
+                                .socket
                                 .send(Message::Ping(Bytes::from_static(KEEPALIVE_PING_PAYLOAD)))
                                 .await
-                                .map_err(map_websocket_error)?;
+                            {
+                                self.closed = true;
+                                return Err(map_websocket_error(error));
+                            }
                             continue;
                         }
                     }
@@ -732,9 +793,19 @@ impl RealtimeWebSocket {
             if let Some(keepalive) = self.keepalive.as_mut() {
                 keepalive.last_inbound = Instant::now();
             }
-            match classify_realtime_inbound(message.map_err(map_websocket_error)?) {
+            // A read failure leaves the underlying connection unusable, so it
+            // retires the socket like every other non-decode error path.
+            let message = match message {
+                Ok(message) => message,
+                Err(error) => {
+                    self.closed = true;
+                    return Err(map_websocket_error(error));
+                }
+            };
+            match classify_realtime_inbound(message) {
                 RealtimeInbound::Event(text) => {
                     if text.len() > self.max_message_bytes {
+                        self.closed = true;
                         return Err(Error::WebSocketProtocol(
                             "incoming Realtime event exceeds the configured message limit",
                         ));
@@ -750,11 +821,21 @@ impl RealtimeWebSocket {
                     return Ok(Some(event));
                 }
                 RealtimeInbound::Ignore => {}
-                RealtimeInbound::Closed => {
+                RealtimeInbound::Closed(frame) => {
                     self.closed = true;
+                    if let Some(frame) = frame {
+                        self.last_close =
+                            Some((u16::from(frame.code), frame.reason.as_str().to_owned()));
+                    }
                     return Ok(None);
                 }
-                RealtimeInbound::Reject(reason) => return Err(Error::WebSocketProtocol(reason)),
+                RealtimeInbound::Reject(reason) => {
+                    // A frame that violates the event-transport contract
+                    // retires the socket (4-19); the stream is only usable for
+                    // well-formed Realtime frames.
+                    self.closed = true;
+                    return Err(Error::WebSocketProtocol(reason));
+                }
             }
         }
     }
@@ -790,8 +871,11 @@ enum RealtimeInbound {
     Event(Utf8Bytes),
     /// Ignore the frame and keep reading.
     Ignore,
-    /// The peer completed its close handshake.
-    Closed,
+    /// The peer completed its close handshake, carrying its close frame when
+    /// one was sent (4-18). `None` means a frameless EOF, which stays
+    /// distinguishable from a coded close through
+    /// [`RealtimeWebSocket::close_code`].
+    Closed(Option<CloseFrame>),
     /// The frame violates the Realtime event-transport contract.
     Reject(&'static str),
 }
@@ -808,7 +892,7 @@ fn classify_realtime_inbound(message: Message) -> RealtimeInbound {
     match message {
         Message::Text(text) => RealtimeInbound::Event(text),
         Message::Ping(_) | Message::Pong(_) => RealtimeInbound::Ignore,
-        Message::Close(_) => RealtimeInbound::Closed,
+        Message::Close(frame) => RealtimeInbound::Closed(frame),
         Message::Binary(_) => {
             RealtimeInbound::Reject("Realtime WebSocket sent a binary data message")
         }
@@ -1014,10 +1098,13 @@ mod tests {
         RealtimeTranslationClientSecretExpiration, RealtimeTranslationSessionCreateRequest,
     };
     use serde_json::{Value, json};
-    use tokio::{net::TcpListener, sync::oneshot};
+    use tokio::{io::AsyncReadExt, io::AsyncWriteExt, net::TcpListener, sync::oneshot};
     use tokio_tungstenite::{
         accept_hdr_async,
-        tungstenite::{handshake::server, protocol::frame::Frame},
+        tungstenite::{
+            handshake::server,
+            protocol::frame::{CloseFrame, Frame, coding::CloseCode},
+        },
     };
 
     use super::*;
@@ -1388,6 +1475,321 @@ mod tests {
         );
     }
 
+    /// Accepts one WebSocket and immediately closes it with a non-1000
+    /// status code, so the client's recv observes a coded close frame.
+    async fn coded_close_websocket_server() -> (Client, oneshot::Receiver<Option<(u16, String)>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind coded-close server");
+        let address = listener.local_addr().expect("coded-close server address");
+        let (close_sender, close_receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept coded-close socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("coded-close server handshake");
+            socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: CloseCode::Error,
+                    reason: Utf8Bytes::from_static("upstream model failed"),
+                })))
+                .await
+                .expect("send coded close frame");
+            // Report before draining: the drain loop only ends when the client
+            // drops its side, so awaiting it from the test would deadlock.
+            let _ = close_sender.send(Some((1011_u16, "upstream model failed".to_owned())));
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("coded-close client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("coded-close client");
+        (client, close_receiver)
+    }
+
+    #[tokio::test]
+    async fn websocket_close_code_and_reason_survive_the_close_handshake() {
+        let (client, server_close) = coded_close_websocket_server().await;
+        let mut socket = client
+            .realtime()
+            .connect("gpt-realtime/test")
+            .await
+            .expect("connect Realtime WebSocket");
+        assert_eq!(
+            socket.close_code(),
+            None,
+            "no close frame has been seen yet"
+        );
+        assert!(
+            socket.recv().await.expect("coded close").is_none(),
+            "a peer close ends the stream"
+        );
+        assert!(socket.is_closed());
+        // 4-18: a coded close (1011) must stay distinguishable from a clean
+        // frameless EOF, and the reason text must remain readable.
+        assert_eq!(socket.close_code(), Some(1011));
+        assert_eq!(socket.close_reason(), Some("upstream model failed"));
+        drop(socket);
+        drop(client);
+        let observed = tokio::time::timeout(Duration::from_secs(5), server_close)
+            .await
+            .expect("timely server drain")
+            .expect("server completed its side");
+        assert_eq!(
+            observed,
+            Some((1011_u16, "upstream model failed".to_owned())),
+            "the server saw its coded close accepted"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_frame_retires_the_realtime_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind binary-frame server");
+        let address = listener.local_addr().expect("binary-frame server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept binary-frame socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("binary-frame server handshake");
+            socket
+                .send(Message::Binary(Bytes::from_static(b"[1,2,3]")))
+                .await
+                .expect("send binary frame");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("binary-frame client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("binary-frame client");
+        let mut socket = client
+            .realtime()
+            .connect("gpt-realtime/test")
+            .await
+            .expect("connect Realtime WebSocket");
+
+        // 4-19: a frame that violates the event-transport contract retires the
+        // socket instead of leaving it half-alive.
+        match socket.recv().await {
+            Err(Error::WebSocketProtocol(reason)) => {
+                assert_eq!(reason, "Realtime WebSocket sent a binary data message");
+            }
+            unexpected => panic!("expected a protocol rejection, got {unexpected:?}"),
+        }
+        assert!(
+            socket.is_closed(),
+            "a rejected frame must retire the socket"
+        );
+        assert!(
+            socket.recv().await.expect("recv after rejection").is_none(),
+            "a retired socket reports EOF on every later recv"
+        );
+    }
+
+    #[tokio::test]
+    async fn event_decode_failure_keeps_the_realtime_socket_open() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind decode-failure server");
+        let address = listener
+            .local_addr()
+            .expect("decode-failure server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept decode-failure socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("decode-failure server handshake");
+            socket
+                .send(Message::text("{not json"))
+                .await
+                .expect("send malformed event");
+            socket
+                .send(Message::text(
+                    json!({
+                        "type": "future.server.event",
+                        "event_id": "evt_after_garbage",
+                        "payload": {"ok": true}
+                    })
+                    .to_string(),
+                ))
+                .await
+                .expect("send well-formed event");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("decode-failure client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("decode-failure client");
+        let mut socket = client
+            .realtime()
+            .connect("gpt-realtime/test")
+            .await
+            .expect("connect Realtime WebSocket");
+
+        // 4-19: only event decoding is recoverable (openai-node keeps the
+        // WebSocket usable for the next frame); the socket stays open.
+        assert!(
+            socket.recv().await.is_err(),
+            "a malformed event must surface as a decode error"
+        );
+        assert!(
+            !socket.is_closed(),
+            "a decode failure must not retire the socket"
+        );
+        let event = socket
+            .recv()
+            .await
+            .expect("the connection survives a decode failure")
+            .expect("the following event still decodes");
+        assert_eq!(event.event_type(), "future.server.event");
+    }
+
+    #[tokio::test]
+    async fn keepalive_probe_write_failure_retires_the_realtime_socket() {
+        // The probe write fails deterministically when the probe frame cannot
+        // fit tungstenite's bounded write buffer: a 10-byte ping payload needs
+        // a 12-byte frame, which an 8-byte cap rejects with WriteBufferFull.
+        // That is the only in-process way to make the *write* fail while the
+        // read side stays healthy.
+        let (client, release, pings) = silent_websocket_server().await;
+        let keepalive =
+            RealtimeKeepalive::new(Duration::from_millis(40), Duration::from_millis(60))
+                .expect("valid keepalive");
+        let mut socket = client
+            .realtime()
+            .connect_with(
+                "gpt-realtime/test",
+                RealtimeWebSocketConfig::new()
+                    .write_buffer_bytes(1)
+                    .max_queued_write_bytes(8)
+                    .with_keepalive(Some(keepalive)),
+            )
+            .await
+            .expect("connect Realtime WebSocket with a tiny write buffer");
+        match socket.recv().await {
+            Err(Error::WebSocketTransport(reason)) => {
+                assert!(
+                    reason.to_lowercase().contains("buffer"),
+                    "expected a write-buffer failure, got {reason}"
+                );
+            }
+            unexpected => panic!("expected a probe write failure, got {unexpected:?}"),
+        }
+        // 4-19: a failed keepalive probe write retires the socket instead of
+        // polling a connection that can no longer be written to.
+        assert!(socket.is_closed());
+        assert!(
+            socket
+                .recv()
+                .await
+                .expect("recv after probe failure")
+                .is_none()
+        );
+        drop(socket);
+        drop(client);
+        let _ = release.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(5), pings).await;
+    }
+
+    /// Serves one raw HTTP rejection — head and body in a single TCP write —
+    /// so the WebSocket handshake fails and tungstenite buffers the JSON body
+    /// beside the response head. `declared_body_len` may exceed the bytes
+    /// actually sent to exercise honest truncation flagging.
+    async fn raw_handshake_rejection_server(
+        body: &'static str,
+        declared_body_len: usize,
+    ) -> Client {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind raw rejection server");
+        let address = listener.local_addr().expect("raw rejection address");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept raw rejection");
+            let mut request = vec![0_u8; 4096];
+            let _ = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut request))
+                .await
+                .expect("timely handshake request read");
+            let response = format!(
+                "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\nx-request-id: req_realtime_401\r\ncontent-length: {declared_body_len}\r\n\r\n{body}"
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write raw rejection");
+        });
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("raw rejection base");
+        Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("raw rejection client")
+    }
+
+    #[tokio::test]
+    async fn handshake_rejection_preserves_the_json_error_body() {
+        // 4-17: a 401 handshake must surface status, request id, and a
+        // sanitized preview of the JSON error body instead of discarding it.
+        let body = r#"{"error":{"message":"no such realtime session","type":"invalid_request_error","code":"session_not_found"}}"#;
+        let client = raw_handshake_rejection_server(body, body.len()).await;
+        let error = client
+            .realtime()
+            .connect("gpt-realtime/test")
+            .await
+            .expect_err("401 handshake rejection");
+        assert_eq!(error.status(), Some(StatusCode::UNAUTHORIZED));
+        assert_eq!(error.request_id(), Some("req_realtime_401"));
+        let preview = error.handshake_body().expect("handshake body preview");
+        assert!(
+            preview.as_str().contains("no such realtime session"),
+            "the rejection body must survive the handshake failure, got {}",
+            preview.as_str()
+        );
+        assert!(!preview.is_truncated(), "the whole body was buffered");
+
+        // A declared length longer than the buffered tail is flagged honestly.
+        let client = raw_handshake_rejection_server(body, body.len() * 2).await;
+        let error = client
+            .realtime()
+            .connect("gpt-realtime/test")
+            .await
+            .expect_err("401 handshake rejection with a short tail");
+        assert!(
+            error
+                .handshake_body()
+                .expect("handshake body preview")
+                .is_truncated(),
+            "a tail shorter than the declared body must be flagged as truncated"
+        );
+    }
+
     /// A received Ping must classify as "ignore and keep reading": tungstenite
     /// 0.29 queues the automatic Pong while the Ping frame is read, so `recv`
     /// must not write an explicit Pong of its own. This locks the branch that
@@ -1410,7 +1812,17 @@ mod tests {
         ));
         assert_eq!(
             classify_realtime_inbound(Message::Close(None)),
-            RealtimeInbound::Closed
+            RealtimeInbound::Closed(None),
+            "a frameless EOF stays distinguishable from a coded close"
+        );
+        let close = CloseFrame {
+            code: CloseCode::Error,
+            reason: Utf8Bytes::from_static("server exploded"),
+        };
+        assert_eq!(
+            classify_realtime_inbound(Message::Close(Some(close.clone()))),
+            RealtimeInbound::Closed(Some(close)),
+            "the peer's close frame must survive classification (4-18)"
         );
         assert_eq!(
             classify_realtime_inbound(Message::Binary(Bytes::from_static(b"[]"))),

@@ -22,6 +22,7 @@ use super::{CODEX_RESPONSES_ENDPOINT, DirectError};
 const MAX_JSON_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ERROR_BYTES: usize = 64 * 1024;
 const MAX_SSE_EVENT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_ERROR_MESSAGE_CHARS: usize = 256;
 const STREAM_QUEUE_CAPACITY: usize = 64;
 
 /// Host-locked executor for the private Codex Responses operation.
@@ -270,6 +271,47 @@ async fn decode_json_response(response: reqwest::Response) -> Result<Response, D
     serde_json::from_slice(&body).map_err(DirectError::Json)
 }
 
+/// Keep a server-controlled `error.code` only when it is a short, inert
+/// token: the string ends up in [`DirectError::HttpStatus`]'s display, so it
+/// must not smuggle control bytes or unbounded prose.
+fn sanitize_error_code(code: &str) -> Option<String> {
+    if !code.is_empty()
+        && code.len() <= 64
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        Some(code.to_owned())
+    } else {
+        None
+    }
+}
+
+/// The same sanitizing discipline applied to the `error.message` fallback:
+/// control characters (including newlines) are neutralized, surrounding
+/// whitespace is trimmed, and the prose is truncated to a bounded length.
+fn sanitize_error_message(message: &str) -> Option<String> {
+    let flattened: String = message
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    let trimmed = flattened.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut sanitized: String = trimmed.chars().take(MAX_ERROR_MESSAGE_CHARS).collect();
+    if sanitized.chars().count() < trimmed.chars().count() {
+        sanitized.push_str("...[truncated]");
+    }
+    Some(sanitized)
+}
+
 async fn status_error(response: reqwest::Response) -> DirectError {
     let status = response.status().as_u16();
     let mut stream = response.bytes_stream();
@@ -282,21 +324,24 @@ async fn status_error(response: reqwest::Response) -> DirectError {
             _ => break,
         }
     }
+    // Prefer the machine-readable `error.code`; when it is absent or not an
+    // inert token, fall back to the sanitized `error.message` instead of
+    // dropping the server's explanation entirely.
     let message = serde_json::from_slice::<Value>(&body)
         .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(|error| error.get("code"))
-                .cloned()
-        })
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .filter(|code| {
-            !code.is_empty()
-                && code.len() <= 64
-                && code
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(|error| {
+            error
+                .get("code")
+                .and_then(Value::as_str)
+                .and_then(sanitize_error_code)
+                .or_else(|| {
+                    error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .and_then(sanitize_error_message)
+                })
         })
         .unwrap_or_else(|| "request failed".to_owned());
     DirectError::HttpStatus { status, message }
@@ -311,10 +356,85 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::DirectCodexResponsesClient;
+    use crate::direct::DirectError;
     use crate::direct::auth::{
         CredentialStore, DirectAuthClient, EphemeralStore, StoredCodexSession, TokenManager,
     };
     use crate::direct::jwt::ChatGptAccountId;
+
+    /// Serve exactly one HTTP response carrying `status`/`body` and return the
+    /// `DirectError` the sealed transport produced for it.
+    async fn status_error_round(
+        status: u16,
+        body: &'static str,
+    ) -> Result<DirectError, Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = vec![0_u8; 16 * 1024];
+            let _ = stream.read(&mut request).await?;
+            let headers = format!(
+                "HTTP/1.1 {status} Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(headers.as_bytes()).await?;
+            stream.write_all(body.as_bytes()).await?;
+            Ok::<_, std::io::Error>(())
+        });
+        let endpoint = url::Url::parse(&format!("http://{address}/backend-api/codex/responses"))?;
+        let client = test_client(endpoint).await?;
+        let request = CreateResponseRequest::new("gpt-test", ResponseInput::Text("hello".into()));
+        let error = client
+            .create(&request)
+            .await
+            .err()
+            .ok_or("expected an HTTP status error")?;
+        server.await??;
+        Ok(error)
+    }
+
+    /// 4-40: `error.code` stays preferred, a missing code falls back to the
+    /// sanitized `error.message`, and neither field keeps the neutral
+    /// placeholder instead of the server's explanation.
+    #[tokio::test]
+    async fn status_error_prefers_code_and_falls_back_to_sanitized_message()
+    -> Result<(), Box<dyn std::error::Error>> {
+        match status_error_round(
+            500,
+            r#"{"error":{"code":"usage_limit","message":"ignored prose"}}"#,
+        )
+        .await?
+        {
+            DirectError::HttpStatus { status, message } => {
+                assert_eq!(status, 500);
+                assert_eq!(message, "usage_limit");
+            }
+            other => return Err(format!("unexpected error: {other:?}").into()),
+        }
+        match status_error_round(429, r#"{"error":{"message":"quota exceeded for team"}}"#).await? {
+            DirectError::HttpStatus { status, message } => {
+                assert_eq!(status, 429);
+                assert_eq!(message, "quota exceeded for team");
+            }
+            other => return Err(format!("unexpected error: {other:?}").into()),
+        }
+        match status_error_round(502, r#"{"error":{"message":"line1\nline2\u0007"}}"#).await? {
+            DirectError::HttpStatus { status, message } => {
+                assert_eq!(status, 502);
+                assert_eq!(message, "line1 line2");
+            }
+            other => return Err(format!("unexpected error: {other:?}").into()),
+        }
+        match status_error_round(403, r#"{"error":{}}"#).await? {
+            DirectError::HttpStatus { status, message } => {
+                assert_eq!(status, 403);
+                assert_eq!(message, "request failed");
+            }
+            other => return Err(format!("unexpected error: {other:?}").into()),
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn sealed_transport_sets_headers_and_rejects_redirects()

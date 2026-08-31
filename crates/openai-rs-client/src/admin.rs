@@ -2057,6 +2057,15 @@ impl AdminClientBuilder {
     /// mutations retry only when the policy enables `retry_replayable_mutations`
     /// (`Replayable`, the [`RetryPolicy::openai_compatible`] default), matching
     /// the platform transport's semantics.
+    ///
+    /// Interaction with one-shot secrets (4-26): the minting endpoints —
+    /// [`AdminApiKeys::create`] (organization admin keys), project API-key
+    /// creation, and project service-account creation — each return their
+    /// secret `value` exactly once. Under a policy that replays `POST`s, a
+    /// timeout after the server already minted the key can replay the request
+    /// and mint a second, unobserved credential. Callers that must avoid
+    /// orphaned secrets can pass [`RetryPolicy::conservative`] (only read-only
+    /// retries) or [`RetryPolicy::disabled`].
     #[must_use]
     pub const fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
         self.retry_policy = retry_policy;
@@ -2344,10 +2353,15 @@ impl AdminClient {
     }
 
     async fn error_from_response(&self, response: reqwest::Response) -> Error {
+        // Same-source semantics as `transport.rs::error_from_response` (4-25,
+        // D0176): an oversized error body is truncated and flagged instead of
+        // failing, so the typed envelope and request id survive; an
+        // interrupted read surfaces as `Error::ResponseBody` carrying the
+        // status and request id rather than a bare transport error.
         let meta = ResponseMeta::from_headers(response.status(), response.headers());
-        match read_limited(response, self.inner.max_error_body_bytes, &meta).await {
-            Ok(body) => ApiError::from_body(meta, &body, false).into(),
-            Err(error) => error,
+        match read_up_to(response, self.inner.max_error_body_bytes).await {
+            Ok((body, truncated)) => ApiError::from_body(meta, &body, truncated).into(),
+            Err(error) => Error::from_response_body(error, &meta),
         }
     }
 }
@@ -2503,6 +2517,12 @@ fn append_query_value(
     Ok(())
 }
 
+/// Reads the success body, failing with `BodyTooLarge` past `limit`.
+///
+/// Same-source twin of `transport.rs::read_success` (4-25, D0176): a
+/// declared or streamed body longer than `limit` is a hard failure, and a
+/// read interruption surfaces as `Error::ResponseBody` (preserving status and
+/// request id) instead of a bare transport error.
 async fn read_limited(
     response: reqwest::Response,
     limit: usize,
@@ -2518,20 +2538,44 @@ async fn read_limited(
             request_id: meta.request_id().map(Box::<str>::from),
         });
     }
+    let (body, truncated) = read_up_to(response, limit)
+        .await
+        .map_err(|error| Error::from_response_body(error, meta))?;
+    if truncated {
+        Err(Error::BodyTooLarge {
+            limit,
+            status: meta.status(),
+            request_id: meta.request_id().map(Box::<str>::from),
+        })
+    } else {
+        Ok(body)
+    }
+}
+
+/// Reads up to `limit` bytes of a body, reporting whether the wire body was
+/// longer.
+///
+/// Verbatim twin of `transport.rs::read_up_to` (4-25, D0176): the helpers are
+/// private there, so this channel duplicates the body; the two copies must
+/// stay behaviorally identical. Truncation is a *reported* outcome rather
+/// than an error because the error-body channel keeps decoding the truncated
+/// prefix into an `ApiError`.
+async fn read_up_to(
+    response: reqwest::Response,
+    limit: usize,
+) -> Result<(Vec<u8>, bool), reqwest::Error> {
     let mut stream = response.bytes_stream();
     let mut body = Vec::with_capacity(limit.min(16 * 1024));
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(Error::from_reqwest)?;
-        if chunk.len() > limit.saturating_sub(body.len()) {
-            return Err(Error::BodyTooLarge {
-                limit,
-                status: meta.status(),
-                request_id: meta.request_id().map(Box::<str>::from),
-            });
+        let chunk = chunk?;
+        let remaining = limit.saturating_sub(body.len());
+        if chunk.len() > remaining {
+            body.extend_from_slice(&chunk[..remaining]);
+            return Ok((body, true));
         }
         body.extend_from_slice(&chunk);
     }
-    Ok(body)
+    Ok((body, false))
 }
 
 fn same_origin(left: &Url, right: &Url) -> bool {
@@ -2595,9 +2639,17 @@ fn server_retry_delay(headers: &http::HeaderMap, maximum: Duration) -> ServerDel
         .get("retry-after-ms")
         .and_then(|value| value.to_str().ok())
         && let Ok(milliseconds) = value.parse::<f64>()
-        && milliseconds.is_finite()
-        && milliseconds >= 0.0
     {
+        // A *parseable* `retry-after-ms` decides the delay on its own, exactly
+        // like openai-python's `_parse_retry_after_header` and the sibling
+        // copies (`transport.rs::server_retry_delay`,
+        // `multipart.rs::retry_delay`): a positive, in-bound value wins, while
+        // zero, negative, non-finite (`nan`/`inf`), and over-bound values all
+        // map to local exponential backoff without ever consulting
+        // `Retry-After`, so a stale coarse header cannot override the
+        // millisecond header the server actually emitted. Only an unparseable
+        // value falls through to `Retry-After`. The zero/negative guards live
+        // inside `bounded_delay`.
         return bounded_delay(milliseconds / 1000.0, maximum);
     }
 
@@ -2644,6 +2696,9 @@ fn bounded_delay(seconds: f64, maximum: Duration) -> ServerDelay {
     } else {
         match Duration::try_from_secs_f64(seconds) {
             Ok(delay) => ServerDelay::Valid(delay),
+            // The only in-bound value that fails to convert is `nan`, which
+            // carries no usable delay and lands on the same local-backoff
+            // fallback as the over-bound branch above.
             Err(_) => ServerDelay::TooLong,
         }
     }
@@ -2708,6 +2763,17 @@ impl AdminApiKeys {
             .await
     }
 
+    /// Creates one admin API key, returning its unredacted `value` exactly
+    /// once.
+    ///
+    /// Automatic-retry interaction (4-26): this `POST` is classified
+    /// `Replayable`, so with the default [`RetryPolicy::openai_compatible`]
+    /// a timeout after the server already created the key can replay the
+    /// request and mint a second, orphaned key whose `value` this call never
+    /// observes. The default matches openai-python, which retries every
+    /// request. To guarantee a single mint attempt, build the client with
+    /// [`RetryPolicy::conservative`] (only read-only retries) or
+    /// [`RetryPolicy::disabled`].
     pub async fn create(
         &self,
         request: AdminApiKeyCreateRequest,
@@ -3320,7 +3386,7 @@ mod tests {
     use hyper::{Request, Response, body::Incoming, service::service_fn};
     use hyper_util::rt::TokioIo;
     use static_assertions::{assert_impl_all, assert_not_impl_any};
-    use tokio::{net::TcpListener, task::JoinHandle};
+    use tokio::{io::AsyncReadExt, io::AsyncWriteExt, net::TcpListener, task::JoinHandle};
 
     use super::*;
 
@@ -3736,6 +3802,124 @@ mod tests {
             .expect_err("disabled policy must not retry even a safe GET");
         assert_eq!(error.status(), Some(StatusCode::TOO_MANY_REQUESTS));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn parseable_retry_after_ms_decides_alone_and_never_falls_back() {
+        // 4-31, admin sibling of `transport.rs`: once `retry-after-ms` parses
+        // as a float it decides the delay by itself, so a negative value next
+        // to a perfectly valid `Retry-After` resolves to local backoff
+        // (`Absent`) instead of adopting the coarse header.
+        let maximum = RetryPolicy::openai_compatible().max_server_delay;
+        let mut headers = http::HeaderMap::new();
+        headers.insert("retry-after-ms", HeaderValue::from_static("-500"));
+        headers.insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+        assert_eq!(
+            server_retry_delay(&headers, maximum),
+            ServerDelay::Absent,
+            "a negative millisecond value must not fall back to `Retry-After`"
+        );
+
+        // Zero parses too, so it also short-circuits into local backoff.
+        headers.insert("retry-after-ms", HeaderValue::from_static("0"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::Absent);
+
+        // Non-finite values parse as floats, so they decide alone as well.
+        headers.insert("retry-after-ms", HeaderValue::from_static("nan"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+        headers.insert("retry-after-ms", HeaderValue::from_static("inf"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+
+        // An over-bound millisecond value beside an in-bound `Retry-After`
+        // still never adopts the coarse header.
+        headers.insert("retry-after-ms", HeaderValue::from_static("130000"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+
+        // Only an unparseable millisecond value falls through to the coarse
+        // header, matching the platform transport and multipart parsers.
+        headers.insert("retry-after-ms", HeaderValue::from_static("soon"));
+        assert_eq!(
+            server_retry_delay(&headers, maximum),
+            ServerDelay::Valid(Duration::from_secs(1))
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_error_body_is_truncated_into_a_typed_api_error() {
+        // 4-25: an error body past the 64KiB limit must still decode into an
+        // `ApiError` carrying a truncated preview, mirroring the platform
+        // transport instead of collapsing into `BodyTooLarge`.
+        let mut payload = r#"{"error":{"message":"validation failed","type":"invalid_request_error"},"padding":""#
+            .to_owned();
+        payload.push_str(&"a".repeat(DEFAULT_MAX_ERROR_BODY_BYTES + 16 * 1024));
+        payload.push_str("\"}");
+        let body: &'static str = Box::leak(payload.into_boxed_str());
+        let (base_url, _attempts) = serve_scripted_admin_responses(vec![ScriptedAdminResponse {
+            status: StatusCode::BAD_REQUEST,
+            retry_after: None,
+            body,
+        }])
+        .await;
+        let client = loopback_admin_client(base_url, RetryPolicy::openai_compatible());
+
+        let error = client
+            .users()
+            .list(&AdminListParams::default())
+            .await
+            .expect_err("400 with an oversized body");
+        let Error::Api(api) = &error else {
+            panic!("expected a typed API error, got {error:?}");
+        };
+        assert_eq!(api.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(api.request_id(), None);
+        let preview = api.body_preview();
+        assert!(
+            preview.is_truncated(),
+            "an oversized error body must be flagged as truncated"
+        );
+        assert!(preview.as_str().len() <= 8 * 1024);
+        assert!(!format!("{error:?}").contains("validation failed"));
+    }
+
+    #[tokio::test]
+    async fn interrupted_error_body_read_surfaces_response_body_with_status() {
+        // 4-25: a connection dying mid-body must surface as `ResponseBody`
+        // with the status and request id attached, not as a bare transport
+        // error that loses them.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind aborting admin server");
+        let address = listener.local_addr().expect("aborting admin address");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept aborting admin");
+            let mut request = vec![0_u8; 8192];
+            let read = stream.read(&mut request).await.expect("read request head");
+            assert!(read > 0);
+            // Declare a body far longer than the bytes actually sent, then
+            // drop the connection so the client's read fails mid-body.
+            let response = "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\nx-request-id: req_admin_abort\r\ncontent-length: 4096\r\n\r\n{\"error\":{\"message\":\"trunc";
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write partial response");
+            drop(stream);
+        });
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("aborting admin base");
+        let client = loopback_admin_client(base_url, RetryPolicy::openai_compatible());
+
+        let error = client
+            .users()
+            .list(&AdminListParams::default())
+            .await
+            .expect_err("interrupted error body read");
+        let Error::ResponseBody {
+            status, request_id, ..
+        } = &error
+        else {
+            panic!("expected a response-body error, got {error:?}");
+        };
+        assert_eq!(*status, StatusCode::BAD_REQUEST);
+        assert_eq!(request_id.as_deref(), Some("req_admin_abort"));
     }
 
     #[tokio::test]

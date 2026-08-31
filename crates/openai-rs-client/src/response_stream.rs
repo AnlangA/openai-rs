@@ -72,10 +72,7 @@ impl ResponseEventStream {
                         SseDispatch::Event(frame) => {
                             match decode_event(&frame, &stream_meta) {
                                 Ok(ResponseStreamEvent::Error(_)) => {
-                                    yield Err(StreamError::from_body(
-                                        stream_meta.request_id(),
-                                        frame.data.as_bytes(),
-                                    ).into());
+                                    yield Err(remote_stream_error(&frame, &stream_meta));
                                     return;
                                 }
                                 Ok(event) if event.is_terminal() => {
@@ -94,10 +91,7 @@ impl ResponseEventStream {
                             return;
                         }
                         SseDispatch::RemoteError(frame) => {
-                            yield Err(StreamError::from_body(
-                                stream_meta.request_id(),
-                                frame.data.as_bytes(),
-                            ).into());
+                            yield Err(remote_stream_error(&frame, &stream_meta));
                             return;
                         }
                     }
@@ -118,6 +112,17 @@ impl ResponseEventStream {
                 match dispatch {
                     SseDispatch::Event(frame) | SseDispatch::Terminal(frame) => {
                         match decode_event(&frame, &stream_meta) {
+                            // Defensive symmetry with the push loop: the "error"
+                            // event name is classified as a remote error by
+                            // `SseEndpointPolicy::responses()` before typed
+                            // decoding, so a typed error event cannot reach
+                            // this EOF flush. Keep the discrimination aligned
+                            // so a policy change cannot silently downgrade an
+                            // error event to an `Ok` delivery.
+                            Ok(ResponseStreamEvent::Error(_)) => {
+                                yield Err(remote_stream_error(&frame, &stream_meta));
+                                return;
+                            }
                             Ok(event) => yield Ok(event),
                             Err(error) => {
                                 yield Err(error);
@@ -126,10 +131,7 @@ impl ResponseEventStream {
                         }
                     }
                     SseDispatch::RemoteError(frame) => {
-                        yield Err(StreamError::from_body(
-                            stream_meta.request_id(),
-                            frame.data.as_bytes(),
-                        ).into());
+                        yield Err(remote_stream_error(&frame, &stream_meta));
                         return;
                     }
                 }
@@ -218,6 +220,10 @@ fn decode_event(frame: &SseFrame, meta: &ResponseMeta) -> Result<ResponseStreamE
         request_id: meta.request_id().map(Box::<str>::from),
         body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
     })
+}
+
+fn remote_stream_error(frame: &SseFrame, meta: &ResponseMeta) -> Error {
+    StreamError::from_body(meta.request_id(), frame.data.as_bytes()).into()
 }
 
 fn sse_error(source: crate::sse::SseDecodeError, meta: &ResponseMeta) -> Error {

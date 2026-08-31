@@ -19,6 +19,12 @@ pub enum ResultEncoding {
     /// blocks (image, audio, resource, resource link), multi-block text
     /// without `structuredContent`, and any tool error keep the lossless
     /// envelope.
+    ///
+    /// The flattened forms carry no `resultType` discriminator or `_meta`
+    /// object: only the envelope (or the raw text block) survives. When a
+    /// later turn must distinguish SEP-2322 result kinds or read
+    /// protocol-level metadata, use [`ResultEncoding::LosslessEnvelope`]
+    /// instead.
     CompactWhenPossible,
 }
 

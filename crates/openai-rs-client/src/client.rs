@@ -408,7 +408,8 @@ impl ClientBuilder {
         self
     }
 
-    /// Sets parser-owned memory limits for Responses SSE streams.
+    /// Sets parser-owned memory limits for all SSE streams (Responses, chat
+    /// completions, legacy completions, and media streams alike).
     #[must_use]
     pub const fn sse_limits(mut self, sse_limits: SseLimits) -> Self {
         self.sse_limits = sse_limits;

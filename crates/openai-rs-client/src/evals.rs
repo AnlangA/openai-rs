@@ -237,6 +237,12 @@ impl EvalRuns {
     }
 
     /// Polls until the run reaches completed, canceled, or failed.
+    ///
+    /// Eval runs finish in minutes rather than hours, so the default
+    /// [`PollOptions::new`] deadline of ten minutes is usually sufficient;
+    /// start from [`PollOptions::for_eval_runs`] (1-second interval,
+    /// 30-minute timeout) to poll at the cadence this surface is designed
+    /// for.
     pub async fn poll(
         &self,
         eval_id: &EvalId,

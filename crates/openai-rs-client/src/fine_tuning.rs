@@ -216,6 +216,10 @@ impl FineTuningJobs {
     /// Polls until the job succeeds, fails, or is cancelled.
     ///
     /// A paused or future unknown status is intentionally non-terminal.
+    ///
+    /// Fine-tuning jobs routinely run far longer than the ten-minute
+    /// [`PollOptions::new`] deadline; start from [`PollOptions::for_fine_tuning`]
+    /// (5-second interval, 24-hour timeout) instead.
     pub async fn poll(
         &self,
         fine_tuning_job_id: &FineTuningJobId,

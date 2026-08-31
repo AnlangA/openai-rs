@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::time::Duration;
 
@@ -9,14 +9,15 @@ use openai_rs_types::{
     responses::{FunctionCall, FunctionCallItemStatus},
 };
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, JsonObject,
-    ListToolsResult, PaginatedRequestParams, Resource, ResourceContents, ServerCapabilities,
-    ServerInfo, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, InputRequiredResult,
+    JsonObject, ListToolsResult, PaginatedRequestParams, ProtocolVersion, Resource,
+    ResourceContents, ServerCapabilities, ServerInfo, Tool,
 };
-use rmcp::service::{RequestContext, RunningService};
+use rmcp::service::{ClientLifecycleMode, RequestContext, RunningService};
+use rmcp::transport::Transport;
 use rmcp::{ErrorData as McpError, RoleClient, RoleServer, ServerHandler};
 use serde_json::{Map, Value, json};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, mpsc};
 
 use crate::{
     BridgeError, CancellationToken, CatalogPolicy, DispatchOutcome, ExecutionControl,
@@ -27,6 +28,7 @@ const RICH_TOOL: &str = "rich/tool";
 const ERROR_TOOL: &str = "tool_error";
 const PROTOCOL_ERROR_TOOL: &str = "protocol_error";
 const SLOW_TOOL: &str = "slow_tool";
+const INPUT_REQUIRED_TOOL: &str = "input_required_tool";
 
 #[derive(Clone, Default)]
 struct ProbeState {
@@ -43,10 +45,16 @@ struct ProbeServer {
 
 impl ProbeServer {
     fn tools() -> Vec<Tool> {
-        [RICH_TOOL, ERROR_TOOL, PROTOCOL_ERROR_TOOL, SLOW_TOOL]
-            .into_iter()
-            .map(|name| Tool::new(name, format!("{name} fixture"), object_schema()))
-            .collect()
+        [
+            RICH_TOOL,
+            ERROR_TOOL,
+            PROTOCOL_ERROR_TOOL,
+            SLOW_TOOL,
+            INPUT_REQUIRED_TOOL,
+        ]
+        .into_iter()
+        .map(|name| Tool::new(name, format!("{name} fixture"), object_schema()))
+        .collect()
     }
 }
 
@@ -113,6 +121,11 @@ impl ServerHandler for ProbeServer {
                     }
                 }
             }
+            // A successful protocol exchange whose SEP-2322 result needs an
+            // application-driven continuation the bridge does not provide.
+            INPUT_REQUIRED_TOOL => Ok(CallToolResponse::InputRequired(
+                InputRequiredResult::from_request_state("opaque-request-state"),
+            )),
             _ => Err(McpError::invalid_params("unknown fixture tool", None)),
         }
     }
@@ -154,7 +167,16 @@ impl Harness {
         });
 
         // A successful serve_client call proves the initialize handshake.
-        let client = rmcp::serve_client((), client_transport).await;
+        // Negotiating the 2026-07-28 protocol version lets the probe server
+        // return SEP-2322 `input_required` results instead of rejecting them.
+        let client = rmcp::serve_client_with_lifecycle(
+            (),
+            client_transport,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await;
         let Ok(client) = client else {
             panic!("in-process RMCP client must initialize");
         };
@@ -379,4 +401,194 @@ async fn tool_errors_stay_in_band_while_protocol_and_transport_errors_do_not() {
         transport_error,
         Err(BridgeError::Transport { .. })
     ));
+}
+
+#[tokio::test]
+async fn input_required_results_report_an_unsupported_result_kind() {
+    let harness = Harness::connect().await;
+    let outcome = harness
+        .bridge
+        .dispatch_parts(
+            "call_input_required",
+            &harness.openai_name(INPUT_REQUIRED_TOOL),
+            "{}",
+            &ExecutionControl::default(),
+        )
+        .await;
+    // The exchange itself succeeded, so this is neither an in-band tool error
+    // nor a protocol failure: the result kind needs an application-driven
+    // continuation the bridge does not provide.
+    let Err(error) = &outcome else {
+        panic!("input_required fixture must not produce {outcome:?}");
+    };
+    assert!(
+        matches!(
+            error,
+            BridgeError::UnsupportedResult {
+                kind: "input_required"
+            }
+        ),
+        "unexpected bridge error: {error:?}"
+    );
+    assert_eq!(harness.state.calls.load(Ordering::SeqCst), 1);
+
+    harness.close().await;
+}
+
+/// A transport whose writes fail once the `broken` flag is set and whose
+/// reads are fed from a scripted response channel.
+///
+/// This lets a test hold a request pending forever (no response is scripted
+/// for it) while still failing the client's follow-up writes, which is the
+/// exact state "the peer disconnected while cancellation was in flight".
+#[derive(Clone)]
+struct ScriptedTransport {
+    broken: Arc<AtomicBool>,
+    outgoing: mpsc::UnboundedSender<Value>,
+    incoming: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Value>>>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("scripted transport write failed")]
+struct ScriptedWriteError;
+
+impl Transport<RoleClient> for ScriptedTransport {
+    type Error = ScriptedWriteError;
+
+    fn send(
+        &mut self,
+        item: rmcp::service::TxJsonRpcMessage<RoleClient>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        let broken = self.broken.clone();
+        let outgoing = self.outgoing.clone();
+        async move {
+            if broken.load(Ordering::SeqCst) {
+                return Err(ScriptedWriteError);
+            }
+            let message = serde_json::to_value(&item).map_err(|_| ScriptedWriteError)?;
+            outgoing.send(message).map_err(|_| ScriptedWriteError)?;
+            Ok(())
+        }
+    }
+
+    async fn receive(&mut self) -> Option<rmcp::service::RxJsonRpcMessage<RoleClient>> {
+        let value = self.incoming.lock().await.recv().await?;
+        serde_json::from_value(value).ok()
+    }
+
+    async fn close(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn cancellation_wins_over_a_failed_cancel_notification_delivery() {
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel::<Value>();
+    let (response_tx, response_rx) = mpsc::unbounded_channel::<Value>();
+    let broken = Arc::new(AtomicBool::new(false));
+    let call_seen = Arc::new(Notify::new());
+    let scripter_call_seen = call_seen.clone();
+    let transport = ScriptedTransport {
+        broken: broken.clone(),
+        outgoing: request_tx,
+        incoming: Arc::new(tokio::sync::Mutex::new(response_rx)),
+    };
+
+    // Scripted peer: a legacy handshake, one listed tool, and silence for
+    // `tools/call` so the dispatched request never completes.
+    let scripter = tokio::spawn(async move {
+        while let Some(message) = request_rx.recv().await {
+            let Some(method) = message.get("method").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(id) = message.get("id").cloned() else {
+                continue;
+            };
+            let response = match method {
+                "server/discover" => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {"code": -32601, "message": "legacy scripted peer"}
+                }),
+                "initialize" => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "scripted", "version": "0.0.0"}
+                    }
+                }),
+                "tools/list" => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "tools": [{
+                            "name": "slow/tool",
+                            "description": "scripted fixture",
+                            "inputSchema": {"type": "object"}
+                        }]
+                    }
+                }),
+                "tools/call" => {
+                    scripter_call_seen.notify_one();
+                    continue;
+                }
+                _ => continue,
+            };
+            let _ = response_tx.send(response);
+        }
+    });
+
+    let mut client = rmcp::serve_client((), transport)
+        .await
+        .expect("scripted handshake must complete");
+    let executor = RmcpExecutor::new(client.peer().clone());
+    let bridge = ResponsesToolBridge::discover(
+        executor,
+        CatalogPolicy::default(),
+        &ExecutionControl::default(),
+    )
+    .await
+    .expect("scripted tools/list must produce a catalog");
+    let slow_name = bridge
+        .catalog()
+        .entries()
+        .next()
+        .expect("one scripted tool must be listed")
+        .openai_name()
+        .to_owned();
+
+    let token = CancellationToken::new();
+    let control = ExecutionControl::default().with_cancellation(token.clone());
+    let bridge = Arc::new(bridge);
+    let dispatch = {
+        let bridge = bridge.clone();
+        let slow_name = slow_name.clone();
+        tokio::spawn(async move {
+            bridge
+                .dispatch_parts("call_broken_cancel", &slow_name, "{}", &control)
+                .await
+        })
+    };
+
+    let seen = tokio::time::timeout(Duration::from_secs(2), call_seen.notified()).await;
+    assert!(seen.is_ok(), "scripted peer must observe the tools/call");
+    // The transport is gone from this point on: delivering the
+    // `notifications/cancelled` write must fail.
+    broken.store(true, Ordering::SeqCst);
+    token.cancel_with_reason("caller stopped");
+
+    let cancelled = dispatch
+        .await
+        .expect("dispatch task must join")
+        .expect_err("cancellation must end the dispatch");
+    assert!(matches!(
+        cancelled,
+        BridgeError::Cancelled { reason: Some(ref reason) } if reason == "caller stopped"
+    ));
+
+    scripter.abort();
+    let closed = client.close().await;
+    assert!(closed.is_ok(), "client close must complete");
 }
