@@ -1508,6 +1508,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
+ "tracing",
+ "tracing-core",
  "url",
  "webpki-roots 0.26.11",
  "zeroize",
@@ -1535,6 +1537,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
  "url",
  "zeroize",
 ]
@@ -1572,6 +1575,8 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
+ "tracing-core",
 ]
 
 [[package]]

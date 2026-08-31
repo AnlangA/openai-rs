@@ -20,6 +20,8 @@ use reqwest::multipart::{Form, Part};
 use tokio_tungstenite::tungstenite::{Message, protocol::WebSocketConfig as TungsteniteConfig};
 use url::Url;
 
+use tracing::Instrument;
+
 use crate::{
     ApiResponse, BodyPreview, Client, Error, ResponseMeta,
     operation::{
@@ -30,6 +32,7 @@ use crate::{
         Socket, connect_socket, is_unauthorized_websocket_error, map_websocket_error,
         websocket_connector, websocket_request,
     },
+    trace,
     transport::{PathSegment, deserialize_json},
 };
 
@@ -144,19 +147,27 @@ impl Realtime {
             .build()
             .map_err(Error::from_reqwest)?;
         transport.ensure_same_origin(request.url())?;
-        let response = transport
-            .http()
-            .execute(request)
-            .await
-            .map_err(Error::from_reqwest)?;
-        if response.status() != CREATED {
-            if response.status() == StatusCode::UNAUTHORIZED {
-                let _ = transport
-                    .invalidate_authorization(authorization.generation)
-                    .await;
+        let span = trace::http_request_span("realtime.create_call", "POST", "/realtime/calls");
+        let response = async {
+            let response = transport
+                .http()
+                .execute(request)
+                .await
+                .map_err(Error::from_reqwest)?;
+            trace::record_http_outcome(0, &response);
+            if response.status() != CREATED {
+                if response.status() == StatusCode::UNAUTHORIZED {
+                    let _ = transport
+                        .invalidate_authorization(authorization.generation)
+                        .await;
+                    trace::emit_auth_refresh();
+                }
+                return Err(transport.error_from_response(response).await);
             }
-            return Err(transport.error_from_response(response).await);
+            Ok(response)
         }
+        .instrument(span)
+        .await?;
         let location = response
             .headers()
             .get(header::LOCATION)

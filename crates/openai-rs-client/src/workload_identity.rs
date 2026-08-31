@@ -16,7 +16,9 @@ use thiserror::Error;
 use tokio::sync::{Mutex, Notify};
 use zeroize::Zeroizing;
 
-use crate::{BodyPreview, Error, TlsBackend};
+use tracing::Instrument;
+
+use crate::{BodyPreview, Error, TlsBackend, trace};
 
 const TOKEN_EXCHANGE_URL: &str = "https://auth.openai.com/oauth/token";
 const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
@@ -375,10 +377,13 @@ impl WorkloadIdentityAuth {
                 if now >= cached.refresh_at && state.refreshing.is_none() {
                     let refresh = begin_refresh(&mut state);
                     let auth = Arc::clone(self);
-                    tokio::spawn(async move {
-                        let result = auth.exchange(refresh.token_generation).await;
-                        auth.finish_refresh(refresh, result).await;
-                    });
+                    tokio::spawn(
+                        async move {
+                            let result = auth.exchange(refresh.token_generation).await;
+                            auth.finish_refresh(refresh, result).await;
+                        }
+                        .instrument(tracing::debug_span!("openai.workload_identity.refresh")),
+                    );
                 }
                 return token_lease(&cached);
             }
@@ -461,88 +466,94 @@ impl WorkloadIdentityAuth {
         &self,
         token_generation: u64,
     ) -> Result<CachedToken, Arc<WorkloadIdentityError>> {
-        let subject = self
-            .config
-            .provider
-            .subject_token()
-            .await
-            .map_err(|_| Arc::new(WorkloadIdentityError::SubjectToken))?;
-        let body = TokenExchangeRequest {
-            grant_type: TOKEN_EXCHANGE_GRANT_TYPE,
-            subject_token: subject.expose(),
-            subject_token_type: self.config.provider.token_type().as_urn(),
-            identity_provider_id: &self.config.identity_provider_id,
-            service_account_id: &self.config.service_account_id,
-            client_id: self.config.client_id.as_deref(),
-        };
-        let response = self
-            .http
-            .post(self.config.exchange_url())
-            .header(http::header::CONTENT_TYPE, "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|_| Arc::new(WorkloadIdentityError::Transport))?;
-        let status = response.status();
-        let (bytes, truncated) = read_bounded(response, MAX_EXCHANGE_BODY_BYTES)
-            .await
-            .map_err(|_| Arc::new(WorkloadIdentityError::Transport))?;
-        if !status.is_success() {
-            let body = BodyPreview::from_bytes(&bytes, truncated);
-            return Err(Arc::new(if matches!(status.as_u16(), 400 | 401 | 403) {
-                WorkloadIdentityError::OAuthRejected { status, body }
-            } else {
-                WorkloadIdentityError::ExchangeRejected { status, body }
-            }));
+        let span = trace::http_request_span("workload_identity.exchange", "POST", "/oauth/token");
+        async move {
+            let subject = self
+                .config
+                .provider
+                .subject_token()
+                .await
+                .map_err(|_| Arc::new(WorkloadIdentityError::SubjectToken))?;
+            let body = TokenExchangeRequest {
+                grant_type: TOKEN_EXCHANGE_GRANT_TYPE,
+                subject_token: subject.expose(),
+                subject_token_type: self.config.provider.token_type().as_urn(),
+                identity_provider_id: &self.config.identity_provider_id,
+                service_account_id: &self.config.service_account_id,
+                client_id: self.config.client_id.as_deref(),
+            };
+            let response = self
+                .http
+                .post(self.config.exchange_url())
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|_| Arc::new(WorkloadIdentityError::Transport))?;
+            trace::record_http_outcome(0, &response);
+            let status = response.status();
+            let (bytes, truncated) = read_bounded(response, MAX_EXCHANGE_BODY_BYTES)
+                .await
+                .map_err(|_| Arc::new(WorkloadIdentityError::Transport))?;
+            if !status.is_success() {
+                let body = BodyPreview::from_bytes(&bytes, truncated);
+                return Err(Arc::new(if matches!(status.as_u16(), 400 | 401 | 403) {
+                    WorkloadIdentityError::OAuthRejected { status, body }
+                } else {
+                    WorkloadIdentityError::ExchangeRejected { status, body }
+                }));
+            }
+            if truncated {
+                return Err(Arc::new(WorkloadIdentityError::InvalidResponse {
+                    reason: "response body exceeded the configured limit",
+                    body: BodyPreview::from_bytes(&bytes, true),
+                }));
+            }
+            let response: TokenExchangeResponse = serde_json::from_slice(&bytes).map_err(|_| {
+                Arc::new(WorkloadIdentityError::InvalidResponse {
+                    reason: "response contains invalid JSON",
+                    body: BodyPreview::from_bytes(&bytes, false),
+                })
+            })?;
+            let token = validate_bearer_material(&response.access_token).map_err(|_| {
+                Arc::new(WorkloadIdentityError::InvalidResponse {
+                    reason: "response contains an invalid access_token",
+                    body: BodyPreview::from_bytes(&bytes, false),
+                })
+            })?;
+            let lifetime_seconds = response
+                .expires_in
+                .unwrap_or(DEFAULT_TOKEN_LIFETIME.as_secs_f64());
+            let lifetime = Duration::try_from_secs_f64(lifetime_seconds).map_err(|_| {
+                Arc::new(WorkloadIdentityError::InvalidResponse {
+                    reason: "response contains an invalid expires_in",
+                    body: BodyPreview::from_bytes(&bytes, false),
+                })
+            })?;
+            if lifetime.is_zero() {
+                return Err(Arc::new(WorkloadIdentityError::InvalidResponse {
+                    reason: "response contains an invalid expires_in",
+                    body: BodyPreview::from_bytes(&bytes, false),
+                }));
+            }
+            let now = Instant::now();
+            let expires_at = now.checked_add(lifetime).ok_or_else(|| {
+                Arc::new(WorkloadIdentityError::InvalidResponse {
+                    reason: "response expiration overflows the monotonic clock",
+                    body: BodyPreview::from_bytes(&bytes, false),
+                })
+            })?;
+            let effective_buffer = self.config.refresh_buffer.min(lifetime / 2);
+            let refresh_at = expires_at.checked_sub(effective_buffer).unwrap_or(now);
+            Ok(CachedToken {
+                token: SecretString::from(token),
+                expires_at,
+                refresh_at,
+                generation: token_generation,
+            })
         }
-        if truncated {
-            return Err(Arc::new(WorkloadIdentityError::InvalidResponse {
-                reason: "response body exceeded the configured limit",
-                body: BodyPreview::from_bytes(&bytes, true),
-            }));
-        }
-        let response: TokenExchangeResponse = serde_json::from_slice(&bytes).map_err(|_| {
-            Arc::new(WorkloadIdentityError::InvalidResponse {
-                reason: "response contains invalid JSON",
-                body: BodyPreview::from_bytes(&bytes, false),
-            })
-        })?;
-        let token = validate_bearer_material(&response.access_token).map_err(|_| {
-            Arc::new(WorkloadIdentityError::InvalidResponse {
-                reason: "response contains an invalid access_token",
-                body: BodyPreview::from_bytes(&bytes, false),
-            })
-        })?;
-        let lifetime_seconds = response
-            .expires_in
-            .unwrap_or(DEFAULT_TOKEN_LIFETIME.as_secs_f64());
-        let lifetime = Duration::try_from_secs_f64(lifetime_seconds).map_err(|_| {
-            Arc::new(WorkloadIdentityError::InvalidResponse {
-                reason: "response contains an invalid expires_in",
-                body: BodyPreview::from_bytes(&bytes, false),
-            })
-        })?;
-        if lifetime.is_zero() {
-            return Err(Arc::new(WorkloadIdentityError::InvalidResponse {
-                reason: "response contains an invalid expires_in",
-                body: BodyPreview::from_bytes(&bytes, false),
-            }));
-        }
-        let now = Instant::now();
-        let expires_at = now.checked_add(lifetime).ok_or_else(|| {
-            Arc::new(WorkloadIdentityError::InvalidResponse {
-                reason: "response expiration overflows the monotonic clock",
-                body: BodyPreview::from_bytes(&bytes, false),
-            })
-        })?;
-        let effective_buffer = self.config.refresh_buffer.min(lifetime / 2);
-        let refresh_at = expires_at.checked_sub(effective_buffer).unwrap_or(now);
-        Ok(CachedToken {
-            token: SecretString::from(token),
-            expires_at,
-            refresh_at,
-            generation: token_generation,
-        })
+        .instrument(span)
+        .await
     }
 }
 

@@ -21,7 +21,7 @@ use thiserror::Error as ThisError;
 use url::{Host, Url};
 use zeroize::Zeroizing;
 
-use crate::{ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, TlsBackend};
+use crate::{ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, TlsBackend, trace};
 
 const DEFAULT_ADMIN_BASE_URL: &str = "https://api.openai.com/v1/";
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -2169,6 +2169,19 @@ impl<O: AdminOperation> fmt::Debug for AdminRequest<O> {
 }
 
 impl AdminClient {
+    #[tracing::instrument(
+        level = "debug",
+        name = "openai.http_request",
+        skip_all,
+        fields(
+            operation.id = O::ID,
+            http.request.method = %O::METHOD,
+            http.route = O::ROUTE,
+            http.response.status_code = tracing::field::Empty,
+            openai.request_id = tracing::field::Empty,
+            retry.count = tracing::field::Empty,
+        )
+    )]
     async fn send<O: AdminOperation>(
         &self,
         request: AdminRequest<O>,
@@ -2219,6 +2232,7 @@ impl AdminClient {
                 .body(encoded);
         }
         let response = builder.send().await.map_err(Error::from_reqwest)?;
+        trace::record_http_outcome(0, &response);
         if !O::SUCCESS_STATUSES.contains(&response.status()) {
             return Err(self.error_from_response(response).await);
         }

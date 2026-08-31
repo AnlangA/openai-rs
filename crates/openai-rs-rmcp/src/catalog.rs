@@ -171,6 +171,7 @@ impl ToolCatalog {
                         });
                     }
                     ToolNamePolicy::MapInvalid => {
+                        tracing::warn!(name_mapped = true, "mapped invalid MCP tool name");
                         unique_mapped_name(&tool.name, &mut used_openai_names)
                     }
                 }
@@ -235,6 +236,7 @@ fn adapt_schema(tool: &Tool, policy: SchemaPolicy) -> Result<JsonObject, BridgeE
             reason: "root schema must declare type `object`",
         }),
         SchemaPolicy::NormalizeObject if root_type.is_none() => {
+            tracing::warn!("inserted type=object on MCP tool schema");
             schema.insert("type".to_owned(), Value::String("object".to_owned()));
             Ok(schema)
         }
@@ -350,6 +352,17 @@ mod tests {
                     && is_valid_function_name(entry.openai_name())
                     && entry.parameters().get("type") == Some(&json!("object"))
         ));
+    }
+
+    #[test]
+    fn mapping_invalid_names_emits_warn() {
+        let capture = crate::trace_capture::Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        let tools = vec![tool("database/read 天气", json!({"properties": {}}))];
+        ToolCatalog::build(tools, CatalogPolicy::default()).expect("mapped catalog");
+        assert!(capture.events_contain("mapped invalid MCP tool name"));
+        assert!(capture.events_contain("inserted type=object on MCP tool schema"));
+        assert!(!capture.contains_text("database/read 天气"));
     }
 
     #[test]

@@ -15,6 +15,8 @@ use tokio::sync::mpsc;
 use url::Url;
 use zeroize::Zeroizing;
 
+use tracing::Instrument;
+
 use super::auth::{CredentialStore, StoredCodexSession, TokenManager};
 use super::sse::{SseDecoder, SseItem};
 use super::{CODEX_RESPONSES_ENDPOINT, DirectError};
@@ -65,6 +67,7 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
         let generation = session.generation();
         let mut response = self.send(&body, &session, false).await?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            tracing::debug!("401 received, invalidating cached authentication and retrying");
             let refreshed = self.tokens.refresh_after_unauthorized(generation).await?;
             response = self.send(&body, &refreshed, false).await?;
         }
@@ -82,6 +85,7 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
         let generation = session.generation();
         let mut response = self.send(&body, &session, true).await?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            tracing::debug!("401 received, invalidating cached authentication and retrying");
             let refreshed = self.tokens.refresh_after_unauthorized(generation).await?;
             response = self.send(&body, &refreshed, true).await?;
         }
@@ -107,34 +111,37 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
         }
 
         let (sender, receiver) = mpsc::channel(STREAM_QUEUE_CAPACITY);
-        tokio::spawn(async move {
-            let mut body = response.bytes_stream();
-            let mut decoder = SseDecoder::new(MAX_SSE_EVENT_BYTES);
-            while let Some(chunk) = body.next().await {
-                let items = match chunk {
-                    Ok(chunk) => decoder.feed(&chunk),
-                    Err(error) => Err(DirectError::Http(error)),
-                };
-                let items = match items {
-                    Ok(items) => items,
-                    Err(error) => {
-                        let _ = sender.send(Err(error)).await;
+        tokio::spawn(
+            async move {
+                let mut body = response.bytes_stream();
+                let mut decoder = SseDecoder::new(MAX_SSE_EVENT_BYTES);
+                while let Some(chunk) = body.next().await {
+                    let items = match chunk {
+                        Ok(chunk) => decoder.feed(&chunk),
+                        Err(error) => Err(DirectError::Http(error)),
+                    };
+                    let items = match items {
+                        Ok(items) => items,
+                        Err(error) => {
+                            let _ = sender.send(Err(error)).await;
+                            return;
+                        }
+                    };
+                    if dispatch_sse_items(&sender, items).await {
                         return;
                     }
-                };
-                if dispatch_sse_items(&sender, items).await {
-                    return;
+                }
+                match decoder.finish() {
+                    Ok(items) => {
+                        let _ = dispatch_sse_items(&sender, items).await;
+                    }
+                    Err(error) => {
+                        let _ = sender.send(Err(error)).await;
+                    }
                 }
             }
-            match decoder.finish() {
-                Ok(items) => {
-                    let _ = dispatch_sse_items(&sender, items).await;
-                }
-                Err(error) => {
-                    let _ = sender.send(Err(error)).await;
-                }
-            }
-        });
+            .instrument(tracing::debug_span!("codex.direct.sse")),
+        );
         Ok(DirectResponseStream { receiver })
     }
 
@@ -166,17 +173,41 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
                 )
             })?;
         account_id.set_sensitive(true);
-        Ok(self
-            .http
-            .post(self.endpoint.clone())
-            .header(reqwest::header::AUTHORIZATION, authorization)
-            .header("ChatGPT-Account-Id", account_id)
-            .header("originator", "openai-rs")
-            .header("session_id", session_id)
-            .header(reqwest::header::ACCEPT, accept)
-            .json(body)
-            .send()
-            .await?)
+        let span = tracing::debug_span!(
+            "openai.http_request",
+            operation.id = "codex.direct.responses",
+            http.request.method = "POST",
+            http.route = "/backend-api/codex/responses",
+            http.response.status_code = tracing::field::Empty,
+            openai.request_id = tracing::field::Empty,
+            retry.count = tracing::field::Empty,
+        );
+        async move {
+            let response = self
+                .http
+                .post(self.endpoint.clone())
+                .header(reqwest::header::AUTHORIZATION, authorization)
+                .header("ChatGPT-Account-Id", account_id)
+                .header("originator", "openai-rs")
+                .header("session_id", session_id)
+                .header(reqwest::header::ACCEPT, accept)
+                .json(body)
+                .send()
+                .await?;
+            tracing::Span::current().record("retry.count", 0_u32);
+            tracing::Span::current()
+                .record("http.response.status_code", response.status().as_u16());
+            if let Some(request_id) = response
+                .headers()
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok())
+            {
+                tracing::Span::current().record("openai.request_id", request_id);
+            }
+            Ok(response)
+        }
+        .instrument(span)
+        .await
     }
 
     #[cfg(test)]

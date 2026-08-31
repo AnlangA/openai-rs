@@ -1,0 +1,483 @@
+//! Shared, crate-private tracing helpers for outbound HTTP.
+//!
+//! Field names stay low-cardinality. Callers must never pass credentials,
+//! URLs, query strings, or request/response bodies into these helpers.
+
+use std::time::Duration;
+
+use crate::ResponseMeta;
+use crate::transport::PathSegment;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetryReason {
+    Connect,
+    Timeout,
+    HttpStatus,
+}
+
+impl RetryReason {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Timeout => "timeout",
+            Self::HttpStatus => "http_status",
+        }
+    }
+
+    pub(crate) fn from_reqwest(error: &reqwest::Error) -> Self {
+        if error.is_timeout() {
+            Self::Timeout
+        } else {
+            Self::Connect
+        }
+    }
+}
+
+pub(crate) fn http_request_span(operation_id: &str, method: &str, route: &str) -> tracing::Span {
+    tracing::debug_span!(
+        "openai.http_request",
+        operation.id = operation_id,
+        http.request.method = method,
+        http.route = route,
+        http.response.status_code = tracing::field::Empty,
+        openai.request_id = tracing::field::Empty,
+        retry.count = tracing::field::Empty,
+    )
+}
+
+pub(crate) fn route_template(path: &[PathSegment<'_>]) -> String {
+    let mut route = String::new();
+    for segment in path {
+        route.push('/');
+        match segment {
+            PathSegment::Literal(value) => route.push_str(value),
+            PathSegment::Parameter { name, .. } => {
+                route.push('{');
+                route.push_str(name);
+                route.push('}');
+            }
+        }
+    }
+    route
+}
+
+pub(crate) fn record_retry_count(retries: u32) {
+    tracing::Span::current().record("retry.count", retries);
+}
+
+pub(crate) fn record_response(meta: &ResponseMeta) {
+    let span = tracing::Span::current();
+    span.record("http.response.status_code", meta.status().as_u16());
+    if let Some(request_id) = meta.request_id() {
+        span.record("openai.request_id", request_id);
+    }
+}
+
+pub(crate) fn record_http_outcome(retries: u32, response: &reqwest::Response) {
+    record_retry_count(retries);
+    record_response(&ResponseMeta::from_headers(
+        response.status(),
+        response.headers(),
+    ));
+}
+
+pub(crate) fn emit_retry(attempt: u32, delay: Duration, reason: RetryReason) {
+    let delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+    tracing::warn!(
+        retry.attempt = attempt,
+        retry.delay_ms = delay_ms,
+        retry.reason = reason.as_str(),
+        "retrying OpenAI request"
+    );
+}
+
+pub(crate) fn emit_auth_refresh() {
+    tracing::debug!("401 received, invalidating cached authentication and retrying");
+}
+
+pub(crate) fn emit_deadline_exceeded() {
+    tracing::warn!("request deadline exceeded");
+}
+
+#[cfg(test)]
+pub(crate) mod capture {
+    use std::collections::HashMap;
+    use std::fmt;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+    use std::cell::RefCell;
+
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
+    use tracing_core::span::Current;
+
+    thread_local! {
+        static CURRENT_SPANS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub(crate) struct CapturedSpan {
+        pub name: String,
+        pub fields: Vec<(String, String)>,
+    }
+
+    impl CapturedSpan {
+        pub(crate) fn field(&self, name: &str) -> Option<&str> {
+            self.fields
+                .iter()
+                .rev()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
+        }
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub(crate) struct CapturedEvent {
+        pub level: String,
+        pub fields: Vec<(String, String)>,
+    }
+
+    impl CapturedEvent {
+        pub(crate) fn field(&self, name: &str) -> Option<&str> {
+            self.fields
+                .iter()
+                .rev()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
+        }
+
+        pub(crate) fn message(&self) -> Option<&str> {
+            self.field("message")
+        }
+    }
+
+    #[derive(Default)]
+    struct Inner {
+        spans: Vec<CapturedSpan>,
+        events: Vec<CapturedEvent>,
+        by_id: HashMap<u64, usize>,
+        metadata: HashMap<u64, &'static Metadata<'static>>,
+    }
+
+    #[derive(Clone)]
+    pub(crate) struct Capture {
+        inner: Arc<Mutex<Inner>>,
+        next_id: Arc<AtomicU64>,
+    }
+
+    impl Capture {
+        pub(crate) fn new() -> Self {
+            Self {
+                inner: Arc::new(Mutex::new(Inner::default())),
+                next_id: Arc::new(AtomicU64::new(1)),
+            }
+        }
+
+        fn lock(&self) -> MutexGuard<'_, Inner> {
+            self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+        }
+
+        pub(crate) fn spans(&self) -> Vec<CapturedSpan> {
+            self.lock().spans.clone()
+        }
+
+        pub(crate) fn events(&self) -> Vec<CapturedEvent> {
+            self.lock().events.clone()
+        }
+
+        pub(crate) fn contains_text(&self, needle: &str) -> bool {
+            let inner = self.lock();
+            inner.spans.iter().any(|span| {
+                span.name.contains(needle)
+                    || span
+                        .fields
+                        .iter()
+                        .any(|(key, value)| key.contains(needle) || value.contains(needle))
+            }) || inner.events.iter().any(|event| {
+                event
+                    .fields
+                    .iter()
+                    .any(|(key, value)| key.contains(needle) || value.contains(needle))
+            })
+        }
+    }
+
+    struct FieldCollector<'a>(&'a mut Vec<(String, String)>);
+
+    impl Visit for FieldCollector<'_> {
+        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+            self.0.push((field.name().to_owned(), format!("{value:?}")));
+        }
+
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.0.push((field.name().to_owned(), value.to_owned()));
+        }
+
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.0.push((field.name().to_owned(), value.to_string()));
+        }
+
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.0.push((field.name().to_owned(), value.to_string()));
+        }
+
+        fn record_bool(&mut self, field: &Field, value: bool) {
+            self.0.push((field.name().to_owned(), value.to_string()));
+        }
+    }
+
+    impl Subscriber for Capture {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+            Some(tracing::level_filters::LevelFilter::TRACE)
+        }
+
+        fn new_span(&self, attributes: &Attributes<'_>) -> Id {
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let mut fields = Vec::new();
+            attributes.record(&mut FieldCollector(&mut fields));
+            let mut inner = self.lock();
+            let index = inner.spans.len();
+            inner.spans.push(CapturedSpan {
+                name: attributes.metadata().name().to_owned(),
+                fields,
+            });
+            inner.by_id.insert(id, index);
+            inner.metadata.insert(id, attributes.metadata());
+            Id::from_u64(id)
+        }
+
+        fn record(&self, span: &Id, values: &Record<'_>) {
+            let mut fields = Vec::new();
+            values.record(&mut FieldCollector(&mut fields));
+            let mut inner = self.lock();
+            if let Some(index) = inner.by_id.get(&span.into_u64()).copied()
+                && let Some(captured) = inner.spans.get_mut(index)
+            {
+                captured.fields.extend(fields);
+            }
+        }
+
+        fn event(&self, event: &Event<'_>) {
+            let mut fields = Vec::new();
+            event.record(&mut FieldCollector(&mut fields));
+            self.lock().events.push(CapturedEvent {
+                level: event.metadata().level().to_string(),
+                fields,
+            });
+        }
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn enter(&self, span: &Id) {
+            CURRENT_SPANS.with(|stack| stack.borrow_mut().push(span.into_u64()));
+        }
+
+        fn exit(&self, span: &Id) {
+            CURRENT_SPANS.with(|stack| {
+                let mut stack = stack.borrow_mut();
+                if let Some(index) = stack.iter().rposition(|id| *id == span.into_u64()) {
+                    stack.remove(index);
+                }
+            });
+        }
+
+        fn current_span(&self) -> Current {
+            CURRENT_SPANS.with(|stack| {
+                let Some(id) = stack.borrow().last().copied() else {
+                    return Current::none();
+                };
+                match self.lock().metadata.get(&id).copied() {
+                    Some(metadata) => Current::new(Id::from_u64(id), metadata),
+                    None => Current::none(),
+                }
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::convert::Infallible;
+    use std::sync::{Arc, Mutex, PoisonError};
+    use std::time::Duration;
+
+    use bytes::Bytes;
+    use http::StatusCode;
+    use http_body_util::Full;
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use openai_rs_types::CreateEmbeddingRequest;
+    use tokio::net::TcpListener;
+    use url::Url;
+
+    use super::RetryReason;
+    use super::capture::Capture;
+    use crate::transport::PathSegment;
+    use crate::{ApiKey, Client, RetryPolicy};
+
+    const SECRET_KEY: &str = "sk-test-secret-12345";
+    const SECRET_PROMPT: &str = "SUPER_SECRET_PROMPT_XYZ";
+    const MODEL_LIST: &str = r#"{"object":"list","data":[]}"#;
+    const EMBEDDING_BODY: &str = r#"{"object":"list","data":[{"object":"embedding","embedding":[0.1],"index":0}],"model":"text-embedding-3-small","usage":{"prompt_tokens":1,"total_tokens":1}}"#;
+
+    async fn serve_sequence(responses: Vec<(StatusCode, &'static str, &'static str)>) -> Url {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let address = listener.local_addr().expect("loopback address");
+        let queue = Arc::new(Mutex::new(VecDeque::from(responses)));
+
+        tokio::spawn(async move {
+            loop {
+                if queue
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .is_empty()
+                {
+                    break;
+                }
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let queue = Arc::clone(&queue);
+                let service = service_fn(move |_request: Request<Incoming>| {
+                    let queue = Arc::clone(&queue);
+                    async move {
+                        let next = queue
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .pop_front();
+                        let (status, request_id, body) =
+                            next.unwrap_or((StatusCode::OK, "req_missing", "{}"));
+                        let response = hyper::Response::builder()
+                            .status(status)
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .header("x-request-id", request_id)
+                            .header("retry-after-ms", "1")
+                            .body(Full::new(Bytes::from_static(body.as_bytes())))
+                            .expect("build loopback response");
+                        Ok::<_, Infallible>(response)
+                    }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            }
+        });
+
+        Url::parse(&format!("http://{address}/v1/")).expect("loopback base URL")
+    }
+
+    fn client(base_url: Url, key: &str) -> Client {
+        let key = ApiKey::new(key).expect("valid test key");
+        Client::builder(key)
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(
+                RetryPolicy::openai_compatible()
+                    .max_retries(1)
+                    .max_server_delay(Duration::from_secs(1)),
+            )
+            .build()
+            .expect("loopback client")
+    }
+
+    #[test]
+    fn route_templates_use_parameter_names() {
+        let path = [
+            PathSegment::literal("files"),
+            PathSegment::parameter("file_id", "file-secret").expect("valid id"),
+            PathSegment::literal("content"),
+        ];
+        assert_eq!(super::route_template(&path), "/files/{file_id}/content");
+    }
+
+    #[test]
+    fn retry_reason_distinguishes_timeout() {
+        assert_eq!(RetryReason::Connect.as_str(), "connect");
+        assert_eq!(RetryReason::Timeout.as_str(), "timeout");
+        assert_eq!(RetryReason::HttpStatus.as_str(), "http_status");
+    }
+
+    #[tokio::test]
+    async fn successful_request_records_operation_status_and_request_id() {
+        let base = serve_sequence(vec![(StatusCode::OK, "req_loopback", MODEL_LIST)]).await;
+        let capture = Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        let response = client(base, "test-placeholder-key")
+            .models()
+            .list()
+            .await
+            .expect("models list");
+
+        assert_eq!(response.request_id(), Some("req_loopback"));
+        let span = capture
+            .spans()
+            .into_iter()
+            .find(|span| span.name == "openai.http_request")
+            .expect("http request span");
+        assert_eq!(span.field("operation.id"), Some("ListModels"));
+        assert_eq!(span.field("http.request.method"), Some("GET"));
+        assert_eq!(span.field("http.route"), Some("/models"));
+        assert_eq!(span.field("http.response.status_code"), Some("200"));
+        assert_eq!(span.field("openai.request_id"), Some("req_loopback"));
+    }
+
+    #[tokio::test]
+    async fn http_retry_emits_warn_with_attempt() {
+        let base = serve_sequence(vec![
+            (StatusCode::TOO_MANY_REQUESTS, "req_retry", "{\"error\":{}}"),
+            (StatusCode::OK, "req_ok", MODEL_LIST),
+        ])
+        .await;
+        let capture = Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        client(base, "test-placeholder-key")
+            .models()
+            .list()
+            .await
+            .expect("retried models list");
+
+        let retry = capture
+            .events()
+            .into_iter()
+            .find(|event| event.message() == Some("retrying OpenAI request"))
+            .expect("retry event");
+        assert_eq!(retry.level, "WARN");
+        assert_eq!(retry.field("retry.attempt"), Some("1"));
+        assert_eq!(retry.field("retry.reason"), Some("http_status"));
+    }
+
+    #[tokio::test]
+    async fn captured_fields_do_not_include_secrets_or_prompts() {
+        let base = serve_sequence(vec![(StatusCode::OK, "req_embed", EMBEDDING_BODY)]).await;
+        let capture = Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        let request = CreateEmbeddingRequest::new("text-embedding-3-small", SECRET_PROMPT);
+        client(base, SECRET_KEY)
+            .embeddings()
+            .create(request)
+            .await
+            .expect("embeddings create");
+
+        assert!(
+            !capture.contains_text(SECRET_KEY),
+            "API key leaked into tracing fields"
+        );
+        assert!(
+            !capture.contains_text("Bearer "),
+            "authorization header leaked into tracing fields"
+        );
+        assert!(
+            !capture.contains_text(SECRET_PROMPT),
+            "prompt leaked into tracing fields"
+        );
+    }
+}

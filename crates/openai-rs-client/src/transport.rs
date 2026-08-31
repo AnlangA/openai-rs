@@ -14,6 +14,7 @@ use crate::{
     auth::AuthProvider,
     operation::{AuthScope, Operation, RequestEncoding, RetryClass},
     sse::SseLimits,
+    trace::{self, RetryReason},
 };
 
 const JSON_MIME: &str = "application/json";
@@ -243,6 +244,19 @@ impl Transport {
             .await
     }
 
+    #[tracing::instrument(
+        level = "debug",
+        name = "openai.http_request",
+        skip_all,
+        fields(
+            operation.id = O::META.id,
+            http.request.method = %O::META.method,
+            http.route = O::META.route,
+            http.response.status_code = tracing::field::Empty,
+            openai.request_id = tracing::field::Empty,
+            retry.count = tracing::field::Empty,
+        )
+    )]
     async fn send_with_static_header<O, Q>(
         &self,
         path: &[PathSegment<'_>],
@@ -308,7 +322,11 @@ impl Transport {
                 .overall_timeout
                 .checked_sub(started.elapsed())
                 .filter(|remaining| !remaining.is_zero())
-                .ok_or(Error::DeadlineExceeded)?;
+                .ok_or_else(|| {
+                    trace::emit_deadline_exceeded();
+                    trace::record_retry_count(retries);
+                    Error::DeadlineExceeded
+                })?;
             let authorization = self.auth.authorization().await?;
             let mut request = self
                 .http
@@ -349,13 +367,18 @@ impl Transport {
                 {
                     let delay = local_retry_delay(retries);
                     if !can_wait(started, delay, self.overall_timeout) {
+                        trace::record_retry_count(retries);
                         return Err(Error::from_reqwest(error));
                     }
                     retries += 1;
+                    trace::emit_retry(retries, delay, RetryReason::from_reqwest(&error));
                     tokio::time::sleep(delay).await;
                     continue;
                 }
-                Err(error) => return Err(Error::from_reqwest(error)),
+                Err(error) => {
+                    trace::record_retry_count(retries);
+                    return Err(Error::from_reqwest(error));
+                }
             };
 
             if response.status() == http::StatusCode::UNAUTHORIZED
@@ -367,11 +390,13 @@ impl Transport {
                     .invalidate_if_generation(authorization.generation)
                     .await;
                 auth_refreshed = true;
+                trace::emit_auth_refresh();
                 drop(response);
                 continue;
             }
 
             if meta.success_statuses.contains(&response.status()) {
+                trace::record_http_outcome(retries, &response);
                 return Ok(response);
             }
 
@@ -386,16 +411,19 @@ impl Transport {
                     ServerDelay::Valid(delay) => delay,
                     ServerDelay::Absent => local_retry_delay(retries),
                     ServerDelay::TooLong => {
+                        trace::record_http_outcome(retries, &response);
                         return self.api_error(response).await;
                     }
                 };
                 if can_wait(started, delay, self.overall_timeout) {
                     retries += 1;
+                    trace::emit_retry(retries, delay, RetryReason::HttpStatus);
                     drop(response);
                     tokio::time::sleep(delay).await;
                     continue;
                 }
             }
+            trace::record_http_outcome(retries, &response);
             return self.api_error(response).await;
         }
     }

@@ -563,7 +563,19 @@ pub(crate) fn decode_notification(
         serde_json::from_value(params.clone().unwrap_or(Value::Null)).ok()
     }
 
-    match method.as_str() {
+    let known = matches!(
+        method.as_str(),
+        "account/login/completed"
+            | "account/updated"
+            | "account/rateLimits/updated"
+            | "thread/started"
+            | "turn/started"
+            | "turn/completed"
+            | "item/started"
+            | "item/completed"
+            | "item/agentMessage/delta"
+    );
+    let decoded = match method.as_str() {
         "account/login/completed" => typed(&params)
             .map(Box::new)
             .map(Notification::AccountLoginCompleted),
@@ -588,12 +600,20 @@ pub(crate) fn decode_notification(
             .map(Box::new)
             .map(Notification::AgentMessageDelta),
         _ => None,
-    }
-    .unwrap_or(Notification::Unknown(Box::new(RawNotification {
-        method,
-        params,
-        raw,
-    })))
+    };
+    decoded.unwrap_or_else(|| {
+        if known {
+            tracing::warn!(
+                rpc.method = method.as_str(),
+                "typed decode failed for known app-server notification"
+            );
+        }
+        Notification::Unknown(Box::new(RawNotification {
+            method,
+            params,
+            raw,
+        }))
+    })
 }
 
 #[cfg(test)]
@@ -637,6 +657,99 @@ mod tests {
         match notification {
             Notification::Unknown(unknown) => assert_eq!(unknown.raw, raw),
             other => panic!("expected unknown notification, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn known_notification_decode_failure_emits_warn() {
+        let subscriber = WarnCapture::default();
+        let _guard = tracing::subscriber::set_default(subscriber.clone());
+        let notification = decode_notification(
+            "turn/completed".to_owned(),
+            Some(json!({"not":"a turn"})),
+            json!({"method":"turn/completed"}),
+        );
+        assert!(matches!(notification, Notification::Unknown(_)));
+        let events = subscriber.messages();
+        assert!(events.iter().any(|message| {
+            message.contains("typed decode failed for known app-server notification")
+        }));
+        assert!(
+            events
+                .iter()
+                .any(|message| message.contains("turn/completed"))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|message| message.contains("a turn") || message.contains("\"not\""))
+        );
+    }
+
+    #[derive(Clone, Default)]
+    struct WarnCapture {
+        messages: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl WarnCapture {
+        fn messages(&self) -> Vec<String> {
+            self.messages
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        }
+    }
+
+    impl tracing::Subscriber for WarnCapture {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+            Some(tracing::level_filters::LevelFilter::TRACE)
+        }
+
+        fn new_span(&self, _attributes: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut visitor = MessageVisitor(String::new());
+            event.record(&mut visitor);
+            self.messages
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(visitor.0);
+        }
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    struct MessageVisitor(String);
+
+    impl tracing::field::Visit for MessageVisitor {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if !self.0.is_empty() {
+                self.0.push(' ');
+            }
+            self.0.push_str(field.name());
+            self.0.push('=');
+            self.0.push_str(&format!("{value:?}"));
+        }
+
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            if !self.0.is_empty() {
+                self.0.push(' ');
+            }
+            self.0.push_str(field.name());
+            self.0.push('=');
+            self.0.push_str(value);
         }
     }
 }

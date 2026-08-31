@@ -28,7 +28,11 @@ use tokio::sync::{Mutex, Notify};
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::{ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, transport::deserialize_json};
+use tracing::Instrument;
+
+use crate::{
+    ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, trace, transport::deserialize_json,
+};
 
 const GLOBAL_API_BASE: &str = "https://mtls.api.openai.com/v1/";
 const US_API_BASE: &str = "https://mtls-us.api.openai.com/v1/";
@@ -311,44 +315,55 @@ impl X509Client {
             .map(serde_json::to_vec)
             .transpose()
             .map_err(Error::Encode)?;
-        let started = Instant::now();
-        let mut auth_replayed = false;
-        loop {
-            let remaining = self
-                .inner
-                .request_timeout
-                .checked_sub(started.elapsed())
-                .filter(|value| !value.is_zero())
-                .ok_or_else(|| X509Error::from(Error::DeadlineExceeded))?;
-            let lease = self.inner.token_manager.lease().await?;
-            let mut request = self
-                .inner
-                .http
-                .request(method.clone(), url.clone())
-                .timeout(remaining)
-                .header(header::AUTHORIZATION, lease.header.clone())
-                .header(header::ACCEPT, JSON_MIME);
-            if let Some(encoded) = &encoded {
-                request = request
-                    .header(header::CONTENT_TYPE, JSON_MIME)
-                    .body(encoded.clone());
-            }
-            let response = request.send().await.map_err(safe_transport_error)?;
-            if response.status() == StatusCode::UNAUTHORIZED && !auth_replayed {
-                drop(response);
-                let _ = self
+        let route = x509_route_template(path);
+        let span = trace::http_request_span("x509.execute_json", method.as_str(), &route);
+        async move {
+            let started = Instant::now();
+            let mut auth_replayed = false;
+            loop {
+                let remaining = self
                     .inner
-                    .token_manager
-                    .invalidate_if_generation(lease.generation)
-                    .await;
-                auth_replayed = true;
-                continue;
+                    .request_timeout
+                    .checked_sub(started.elapsed())
+                    .filter(|value| !value.is_zero())
+                    .ok_or_else(|| {
+                        trace::emit_deadline_exceeded();
+                        X509Error::from(Error::DeadlineExceeded)
+                    })?;
+                let lease = self.inner.token_manager.lease().await?;
+                let mut request = self
+                    .inner
+                    .http
+                    .request(method.clone(), url.clone())
+                    .timeout(remaining)
+                    .header(header::AUTHORIZATION, lease.header.clone())
+                    .header(header::ACCEPT, JSON_MIME);
+                if let Some(encoded) = &encoded {
+                    request = request
+                        .header(header::CONTENT_TYPE, JSON_MIME)
+                        .body(encoded.clone());
+                }
+                let response = request.send().await.map_err(safe_transport_error)?;
+                if response.status() == StatusCode::UNAUTHORIZED && !auth_replayed {
+                    drop(response);
+                    let _ = self
+                        .inner
+                        .token_manager
+                        .invalidate_if_generation(lease.generation)
+                        .await;
+                    auth_replayed = true;
+                    trace::emit_auth_refresh();
+                    continue;
+                }
+                trace::record_http_outcome(0, &response);
+                if response.status() == StatusCode::OK {
+                    return decode_api_response(response, self.inner.max_json_body_bytes).await;
+                }
+                return Err(read_api_error(response, self.inner.max_error_body_bytes).await);
             }
-            if response.status() == StatusCode::OK {
-                return decode_api_response(response, self.inner.max_json_body_bytes).await;
-            }
-            return Err(read_api_error(response, self.inner.max_error_body_bytes).await);
         }
+        .instrument(span)
+        .await
     }
 }
 
@@ -561,12 +576,15 @@ impl X509TokenManager {
                     fallback,
                 } => {
                     let manager = Arc::clone(self);
-                    tokio::spawn(async move {
-                        let exchanged = manager.exchange.exchange().await;
-                        manager
-                            .complete_attempt(attempt, generation, fallback, exchanged)
-                            .await;
-                    });
+                    tokio::spawn(
+                        async move {
+                            let exchanged = manager.exchange.exchange().await;
+                            manager
+                                .complete_attempt(attempt, generation, fallback, exchanged)
+                                .await;
+                        }
+                        .instrument(tracing::debug_span!("openai.x509.token_refresh")),
+                    );
                     attempt
                 }
             };
@@ -702,47 +720,52 @@ struct HttpX509Exchange {
 
 impl X509Exchange for HttpX509Exchange {
     fn exchange(&self) -> ExchangeFuture<'_> {
-        Box::pin(async move {
-            let started_at = Instant::now();
-            let body = TokenExchangeRequest {
-                grant_type: TOKEN_EXCHANGE_GRANT,
-                subject_token_type: X509_SUBJECT_TOKEN_TYPE,
-                identity_provider_id: &self.identity_provider_id,
-                service_account_id: &self.service_account_id,
-            };
-            let response = self
-                .http
-                .post(TOKEN_EXCHANGE_URL)
-                .timeout(TOKEN_EXCHANGE_DEADLINE)
-                .header(header::CONTENT_TYPE, JSON_MIME)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|error| {
-                    if error.is_timeout() {
-                        X509Error::ExchangeTimeout
-                    } else {
-                        X509Error::ExchangeTransport
-                    }
-                })?;
-            let status = response.status();
-            let bytes = read_bounded(response, MAX_TOKEN_RESPONSE_BYTES)
-                .await
-                .map_err(|_| X509Error::ExchangeTransport)?;
-            if matches!(
-                status,
-                StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-            ) {
-                return Err(X509Error::OAuth {
+        let span = trace::http_request_span("x509.token_exchange", "POST", "/oauth/token");
+        Box::pin(
+            async move {
+                let started_at = Instant::now();
+                let body = TokenExchangeRequest {
+                    grant_type: TOKEN_EXCHANGE_GRANT,
+                    subject_token_type: X509_SUBJECT_TOKEN_TYPE,
+                    identity_provider_id: &self.identity_provider_id,
+                    service_account_id: &self.service_account_id,
+                };
+                let response = self
+                    .http
+                    .post(TOKEN_EXCHANGE_URL)
+                    .timeout(TOKEN_EXCHANGE_DEADLINE)
+                    .header(header::CONTENT_TYPE, JSON_MIME)
+                    .json(&body)
+                    .send()
+                    .await
+                    .map_err(|error| {
+                        if error.is_timeout() {
+                            X509Error::ExchangeTimeout
+                        } else {
+                            X509Error::ExchangeTransport
+                        }
+                    })?;
+                trace::record_http_outcome(0, &response);
+                let status = response.status();
+                let bytes = read_bounded(response, MAX_TOKEN_RESPONSE_BYTES)
+                    .await
+                    .map_err(|_| X509Error::ExchangeTransport)?;
+                if matches!(
                     status,
-                    code: safe_oauth_code(&bytes),
-                });
+                    StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+                ) {
+                    return Err(X509Error::OAuth {
+                        status,
+                        code: safe_oauth_code(&bytes),
+                    });
+                }
+                if !status.is_success() {
+                    return Err(X509Error::ExchangeStatus(status));
+                }
+                validate_exchange_response(&bytes, started_at)
             }
-            if !status.is_success() {
-                return Err(X509Error::ExchangeStatus(status));
-            }
-            validate_exchange_response(&bytes, started_at)
-        })
+            .instrument(span),
+        )
     }
 }
 
@@ -904,6 +927,18 @@ impl<'a> RouteSegment<'a> {
         }
         Ok(Self::Parameter(value))
     }
+}
+
+fn x509_route_template(path: &[RouteSegment<'_>]) -> String {
+    let mut route = String::new();
+    for segment in path {
+        route.push('/');
+        match segment {
+            RouteSegment::Literal(value) => route.push_str(value),
+            RouteSegment::Parameter(_) => route.push_str("{id}"),
+        }
+    }
+    route
 }
 
 fn operation_url(base: &Url, path: &[RouteSegment<'_>]) -> Result<Url, X509Error> {

@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use tracing::Instrument;
 
 use super::codec::read_bounded_line;
 use crate::credentials::apply_credential;
@@ -288,115 +289,122 @@ where
     /// Spawn the owned child, complete `initialize`, and send exactly one
     /// `initialized` notification before returning.
     pub async fn spawn(config: AppServerConfig<C>, client_info: ClientInfo) -> Result<Self, Error> {
-        validate_config(&config)?;
-        if client_info.name.trim().is_empty() || client_info.version.trim().is_empty() {
-            return Err(Error::InvalidConfiguration(
-                "initialize client name and version must be non-empty".to_owned(),
-            ));
-        }
-        let executable = config
-            .executable
-            .canonicalize()
-            .map_err(Error::RuntimeArtifact)?;
-        validate_executable(&executable)?;
-        let executable_for_hash = executable.clone();
-        let executable_sha256 =
-            tokio::task::spawn_blocking(move || sha256_file(&executable_for_hash))
-                .await
-                .map_err(|error| Error::RuntimeHashTask(error.to_string()))?
+        let span = tracing::debug_span!("codex.app_server.connection");
+        let stdout_span = span.clone();
+        let stderr_span = span.clone();
+        async move {
+            validate_config(&config)?;
+            if client_info.name.trim().is_empty() || client_info.version.trim().is_empty() {
+                return Err(Error::InvalidConfiguration(
+                    "initialize client name and version must be non-empty".to_owned(),
+                ));
+            }
+            let executable = config
+                .executable
+                .canonicalize()
                 .map_err(Error::RuntimeArtifact)?;
-        let runtime_identity = config
-            .compatibility
-            .resolve(&executable_sha256)
-            .cloned()
-            .ok_or_else(|| Error::RuntimeArtifactMismatch {
-                actual_sha256: executable_sha256,
+            validate_executable(&executable)?;
+            let executable_for_hash = executable.clone();
+            let executable_sha256 =
+                tokio::task::spawn_blocking(move || sha256_file(&executable_for_hash))
+                    .await
+                    .map_err(|error| Error::RuntimeHashTask(error.to_string()))?
+                    .map_err(Error::RuntimeArtifact)?;
+            let runtime_identity = config
+                .compatibility
+                .resolve(&executable_sha256)
+                .cloned()
+                .ok_or_else(|| Error::RuntimeArtifactMismatch {
+                    actual_sha256: executable_sha256,
+                })?;
+
+            // The runtime identity is established solely from the exact artifact
+            // hash and its audited schema mapping. initialize.userAgent is never
+            // consulted as compatibility evidence.
+            prepare_codex_home(&config.codex_home)?;
+            let codex_home = config.codex_home.canonicalize().map_err(Error::CodexHome)?;
+            let mut command = Command::new(executable);
+            command
+                .args(&config.arguments)
+                .env_clear()
+                .env("CODEX_HOME", &codex_home)
+                .current_dir(&codex_home)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
+            copy_allowlisted_environment(&mut command);
+            apply_credential(&config.credential, &mut command);
+
+            let mut child = command.spawn().map_err(Error::Spawn)?;
+            let stdin = child.stdin.take().ok_or_else(|| {
+                Error::InvalidConfiguration("spawned child has no stdin pipe".to_owned())
+            })?;
+            let stdout = child.stdout.take().ok_or_else(|| {
+                Error::InvalidConfiguration("spawned child has no stdout pipe".to_owned())
+            })?;
+            let stderr = child.stderr.take().ok_or_else(|| {
+                Error::InvalidConfiguration("spawned child has no stderr pipe".to_owned())
             })?;
 
-        // The runtime identity is established solely from the exact artifact
-        // hash and its audited schema mapping. initialize.userAgent is never
-        // consulted as compatibility evidence.
-        prepare_codex_home(&config.codex_home)?;
-        let codex_home = config.codex_home.canonicalize().map_err(Error::CodexHome)?;
-        let mut command = Command::new(executable);
-        command
-            .args(&config.arguments)
-            .env_clear()
-            .env("CODEX_HOME", &codex_home)
-            .current_dir(&codex_home)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        copy_allowlisted_environment(&mut command);
-        apply_credential(&config.credential, &mut command);
+            let (events_tx, events_rx) = mpsc::channel(config.limits.event_queue_capacity);
+            let inner = Arc::new(Inner {
+                writer: AsyncMutex::new(Some(stdin)),
+                child: AsyncMutex::new(Some(child)),
+                pending: Mutex::new(HashMap::new()),
+                pending_slots: Arc::new(Semaphore::new(config.limits.max_pending_requests)),
+                next_id: AtomicU64::new(1),
+                events_tx: Mutex::new(Some(events_tx)),
+                events_rx: AsyncMutex::new(events_rx),
+                terminal_failure: Mutex::new(None),
+                stderr: Mutex::new(StderrTail::new(config.limits.max_stderr_bytes)),
+                limits: config.limits,
+                closed: AtomicBool::new(false),
+            });
 
-        let mut child = command.spawn().map_err(Error::Spawn)?;
-        let stdin = child.stdin.take().ok_or_else(|| {
-            Error::InvalidConfiguration("spawned child has no stdin pipe".to_owned())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            Error::InvalidConfiguration("spawned child has no stdout pipe".to_owned())
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            Error::InvalidConfiguration("spawned child has no stderr pipe".to_owned())
-        })?;
+            spawn_stdout_reader(Arc::downgrade(&inner), stdout, stdout_span);
+            spawn_stderr_reader(Arc::downgrade(&inner), stderr, stderr_span);
 
-        let (events_tx, events_rx) = mpsc::channel(config.limits.event_queue_capacity);
-        let inner = Arc::new(Inner {
-            writer: AsyncMutex::new(Some(stdin)),
-            child: AsyncMutex::new(Some(child)),
-            pending: Mutex::new(HashMap::new()),
-            pending_slots: Arc::new(Semaphore::new(config.limits.max_pending_requests)),
-            next_id: AtomicU64::new(1),
-            events_tx: Mutex::new(Some(events_tx)),
-            events_rx: AsyncMutex::new(events_rx),
-            terminal_failure: Mutex::new(None),
-            stderr: Mutex::new(StderrTail::new(config.limits.max_stderr_bytes)),
-            limits: config.limits,
-            closed: AtomicBool::new(false),
-        });
+            let provisional = Self {
+                inner,
+                initialize_response: InitializeResponse {
+                    user_agent: String::new(),
+                    codex_home: PathBuf::new(),
+                    platform_family: String::new(),
+                    platform_os: String::new(),
+                    extra: serde_json::Map::new(),
+                },
+                runtime_identity: runtime_identity.clone(),
+                credential: PhantomData,
+            };
 
-        spawn_stdout_reader(Arc::downgrade(&inner), stdout);
-        spawn_stderr_reader(Arc::downgrade(&inner), stderr);
-
-        let provisional = Self {
-            inner,
-            initialize_response: InitializeResponse {
-                user_agent: String::new(),
-                codex_home: PathBuf::new(),
-                platform_family: String::new(),
-                platform_os: String::new(),
-                extra: serde_json::Map::new(),
-            },
-            runtime_identity: runtime_identity.clone(),
-            credential: PhantomData,
-        };
-
-        let initialize_response = provisional
-            .request("initialize", Some(InitializeParams::new(client_info)))
-            .await;
-        let initialize_response = match initialize_response {
-            Ok(response) => response,
-            Err(error) => {
+            let initialize_response = provisional
+                .request("initialize", Some(InitializeParams::new(client_info)))
+                .await;
+            let initialize_response = match initialize_response {
+                Ok(response) => response,
+                Err(error) => {
+                    let _ = provisional.close().await;
+                    return Err(error);
+                }
+            };
+            if let Err(error) = provisional
+                .notify("initialized", Some(EmptyResponse::default()))
+                .await
+            {
                 let _ = provisional.close().await;
                 return Err(error);
             }
-        };
-        if let Err(error) = provisional
-            .notify("initialized", Some(EmptyResponse::default()))
-            .await
-        {
-            let _ = provisional.close().await;
-            return Err(error);
-        }
 
-        Ok(Self {
-            inner: provisional.inner,
-            initialize_response,
-            runtime_identity,
-            credential: PhantomData,
-        })
+            Ok(Self {
+                inner: provisional.inner,
+                initialize_response,
+                runtime_identity,
+                credential: PhantomData,
+            })
+        }
+        .instrument(span)
+        .await
     }
 
     #[must_use]
@@ -520,6 +528,12 @@ where
         serde_json::from_value(value).map_err(Error::Json)
     }
 
+    #[tracing::instrument(
+        level = "debug",
+        name = "codex.app_server.rpc",
+        skip_all,
+        fields(rpc.method = method, rpc.id = tracing::field::Empty)
+    )]
     async fn request_value(
         &self,
         method: &'static str,
@@ -556,6 +570,7 @@ where
             .map_err(|_| {
                 Error::InvalidConfiguration("app-server request id space exhausted".to_owned())
             })?;
+        tracing::Span::current().record("rpc.id", id);
 
         let (sender, receiver) = oneshot::channel();
         lock(&self.inner.pending).insert(
@@ -864,67 +879,81 @@ fn copy_allowlisted_environment(command: &mut Command) {
     }
 }
 
-fn spawn_stdout_reader(inner: Weak<Inner>, stdout: tokio::process::ChildStdout) {
-    tokio::spawn(async move {
-        let max_line_bytes = match inner.upgrade() {
-            Some(inner) => inner.limits.max_line_bytes,
-            None => return,
-        };
-        let mut reader = BufReader::new(stdout);
-        loop {
-            match read_bounded_line(&mut reader, max_line_bytes).await {
-                Ok(Some(line)) if line.is_empty() => continue,
-                Ok(Some(line)) => {
-                    let Some(inner) = inner.upgrade() else {
+fn spawn_stdout_reader(
+    inner: Weak<Inner>,
+    stdout: tokio::process::ChildStdout,
+    span: tracing::Span,
+) {
+    tokio::spawn(
+        async move {
+            let max_line_bytes = match inner.upgrade() {
+                Some(inner) => inner.limits.max_line_bytes,
+                None => return,
+            };
+            let mut reader = BufReader::new(stdout);
+            loop {
+                match read_bounded_line(&mut reader, max_line_bytes).await {
+                    Ok(Some(line)) if line.is_empty() => continue,
+                    Ok(Some(line)) => {
+                        let Some(inner) = inner.upgrade() else {
+                            return;
+                        };
+                        if let Err(failure) = handle_inbound(&inner, &line) {
+                            let _ = terminate(&inner, failure).await;
+                            return;
+                        }
+                    }
+                    Ok(None) => {
+                        let Some(inner) = inner.upgrade() else {
+                            return;
+                        };
+                        let _ = terminate(
+                            &inner,
+                            ConnectionFailure::new(
+                                ConnectionFailureKind::EndOfFile,
+                                "app-server stdout reached end of file",
+                            ),
+                        )
+                        .await;
                         return;
-                    };
-                    if let Err(failure) = handle_inbound(&inner, &line) {
+                    }
+                    Err(failure) => {
+                        let Some(inner) = inner.upgrade() else {
+                            return;
+                        };
                         let _ = terminate(&inner, failure).await;
                         return;
                     }
                 }
-                Ok(None) => {
-                    let Some(inner) = inner.upgrade() else {
-                        return;
-                    };
-                    let _ = terminate(
-                        &inner,
-                        ConnectionFailure::new(
-                            ConnectionFailureKind::EndOfFile,
-                            "app-server stdout reached end of file",
-                        ),
-                    )
-                    .await;
-                    return;
-                }
-                Err(failure) => {
-                    let Some(inner) = inner.upgrade() else {
-                        return;
-                    };
-                    let _ = terminate(&inner, failure).await;
-                    return;
-                }
             }
         }
-    });
+        .instrument(span),
+    );
 }
 
-fn spawn_stderr_reader(inner: Weak<Inner>, mut stderr: tokio::process::ChildStderr) {
-    tokio::spawn(async move {
-        let mut buffer = [0_u8; 1024];
-        loop {
-            match stderr.read(&mut buffer).await {
-                Ok(0) => return,
-                Ok(read) => {
-                    let Some(inner) = inner.upgrade() else {
-                        return;
-                    };
-                    lock(&inner.stderr).extend(&buffer[..read]);
+fn spawn_stderr_reader(
+    inner: Weak<Inner>,
+    mut stderr: tokio::process::ChildStderr,
+    span: tracing::Span,
+) {
+    tokio::spawn(
+        async move {
+            let mut buffer = [0_u8; 1024];
+            loop {
+                match stderr.read(&mut buffer).await {
+                    Ok(0) => return,
+                    Ok(read) => {
+                        let Some(inner) = inner.upgrade() else {
+                            return;
+                        };
+                        lock(&inner.stderr).extend(&buffer[..read]);
+                    }
+                    Err(_) => return,
                 }
-                Err(_) => return,
             }
         }
-    });
+        .instrument(span),
+    );
 }
 
 fn handle_inbound(inner: &Arc<Inner>, line: &[u8]) -> Result<(), ConnectionFailure> {
