@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ExtraFields, ModelId, Omittable, open_string_enum};
+use crate::{ExtraFields, ModelId, Nullable, Omittable, open_string_enum};
 
 open_string_enum! {
     /// The `object` discriminator returned by model collection endpoints.
@@ -25,12 +25,24 @@ pub struct Model {
     pub object: ModelObject,
     /// Organization or system that owns the model.
     pub owned_by: String,
+    /// Date the model will shut down, when announced.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    shutdown_date: Omittable<Nullable<String>>,
     /// Forward-compatible response properties.
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl Model {
+    /// Date the model will shut down, when present and non-null.
+    #[must_use]
+    pub fn shutdown_date(&self) -> Option<&str> {
+        match &self.shutdown_date {
+            Omittable::Value(Nullable::Value(value)) => Some(value.as_str()),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
     /// Response properties not known by this crate version.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
@@ -514,5 +526,58 @@ mod tests {
         let decoded: EmbeddingEncodingFormat =
             serde_json::from_value(value.clone()).expect("decode");
         assert_eq!(serde_json::to_value(decoded).expect("encode"), value);
+    }
+
+    #[test]
+    fn model_shutdown_date_keeps_omitted_null_and_value() {
+        use super::Model;
+
+        let omitted: Model = serde_json::from_value(json!({
+            "id": "gpt-test",
+            "created": 1,
+            "object": "model",
+            "owned_by": "openai"
+        }))
+        .expect("decode without shutdown_date");
+        assert_eq!(omitted.shutdown_date(), None);
+        assert_eq!(
+            serde_json::to_value(&omitted).expect("encode omitted"),
+            json!({
+                "id": "gpt-test",
+                "created": 1,
+                "object": "model",
+                "owned_by": "openai"
+            })
+        );
+
+        let explicit_null: Model = serde_json::from_value(json!({
+            "id": "gpt-test",
+            "created": 1,
+            "object": "model",
+            "owned_by": "openai",
+            "shutdown_date": null
+        }))
+        .expect("decode null shutdown_date");
+        assert_eq!(explicit_null.shutdown_date(), None);
+        assert_eq!(
+            serde_json::to_value(&explicit_null).expect("encode null"),
+            json!({
+                "id": "gpt-test",
+                "created": 1,
+                "object": "model",
+                "owned_by": "openai",
+                "shutdown_date": null
+            })
+        );
+
+        let dated: Model = serde_json::from_value(json!({
+            "id": "gpt-test",
+            "created": 1,
+            "object": "model",
+            "owned_by": "openai",
+            "shutdown_date": "2026-12-01"
+        }))
+        .expect("decode shutdown_date");
+        assert_eq!(dated.shutdown_date(), Some("2026-12-01"));
     }
 }

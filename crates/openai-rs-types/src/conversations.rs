@@ -627,7 +627,7 @@ pub struct ConversationInputFile {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     file_url: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    detail: Omittable<responses::ImageDetail>,
+    detail: Omittable<responses::FileDetail>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -672,7 +672,7 @@ impl ConversationInputFile {
 
     /// Sets the file rendering detail.
     #[must_use]
-    pub fn detail(mut self, detail: responses::ImageDetail) -> Self {
+    pub fn detail(mut self, detail: responses::FileDetail) -> Self {
         self.detail = Omittable::Value(detail);
         self
     }
@@ -965,7 +965,7 @@ impl ConversationMessage {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(responses::StoredInputMessage::new(role, content)
-                    .status(self.status.clone())
+                    .status(self.status.clone().into())
                     .into())
             }
             _ => Err(ConversationItemConversionError::UnsupportedMessageRole {
@@ -1917,7 +1917,7 @@ mod tests {
     fn output_message_converts_to_conversation_and_back_without_json_authorship() {
         let output = responses::OutputMessage::new(
             "msg_1",
-            responses::ResponseItemStatus::Completed,
+            responses::ItemProgressStatus::Completed,
             [responses::OutputText::new("answer")],
         );
         let item = ConversationItem::try_from(responses::ResponseOutputItem::Message(output))

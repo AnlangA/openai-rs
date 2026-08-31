@@ -690,7 +690,7 @@ mod tests {
             serde_json::json!({ "city": "Beijing", "unit": null })
                 .to_string()
                 .into(),
-            crate::responses::ResponseItemStatus::Completed,
+            crate::responses::ItemProgressStatus::Completed,
         );
         let out = registry.execute(&call).await.expect("execute");
         assert_eq!(
@@ -706,7 +706,7 @@ mod tests {
             serde_json::json!({ "city": "Invalid", "unit": null })
                 .to_string()
                 .into(),
-            crate::responses::ResponseItemStatus::Completed,
+            crate::responses::ItemProgressStatus::Completed,
         );
         let err_out = registry.execute(&err_call).await.expect("execute error");
         assert_eq!(

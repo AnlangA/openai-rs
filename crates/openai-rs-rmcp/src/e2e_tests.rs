@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use openai_rs_types::{
     JsonText,
-    responses::{FunctionCall, ResponseItemStatus},
+    responses::{FunctionCall, ItemProgressStatus},
 };
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, JsonObject,
@@ -208,7 +208,7 @@ async fn in_process_full_typed_round_trip_preserves_all_content_order() {
         "call_rich",
         harness.openai_name(RICH_TOOL),
         JsonText::from_raw(r#"{"city":"杭州"}"#),
-        ResponseItemStatus::Completed,
+        ItemProgressStatus::Completed,
     );
 
     let outcome = harness

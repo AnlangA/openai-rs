@@ -73,9 +73,9 @@ tests = ["synthetic empty listFiles fixture keeps required ids"]
 id = "OVR-0007"
 target = "/components/schemas/MCPApprovalResponse/required"
 action = "quarantine"
-value = "input request_id optional; output request_id required until wire fixture resolves ghost field"
-sources = [{ category = "raw_openapi", fixture_status = "captured", url = "https://raw.githubusercontent.com/openai/openai-openapi/690521b1753dce0c6d6b275f583d22537679cff9/openapi.json", sha256 = "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899", excerpt = "required contains request_id but properties does not define it." }, { category = "wire_fixture", fixture_status = "captured", note = "Synthetic output testdata/fixtures/responses/mcp-approval/output.json retains request_id via ExtraFields. Live bidirectional capture remains optional." }]
-reviewed_at = "2026-08-30"
-reason = "The pinned schema contains a ghost required field. Directional DTOs must not fabricate an undefined input property, while output decoding preserves current wire-requiredness."
-impact = ["MCPApprovalResponse request/output split", "schema anomaly manifest"]
-tests = ["input DTO does not require request_id", "output ExtraFields preserve request_id", "synthetic mcp-approval output fixture"]
+value = "input and output omit typed request_id; extra fields preserve it when present"
+sources = [{ category = "raw_openapi", fixture_status = "captured", url = "https://raw.githubusercontent.com/openai/openai-openapi/690521b1753dce0c6d6b275f583d22537679cff9/openapi.json", sha256 = "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899", excerpt = "required contains request_id but properties does not define it." }, { category = "official_sdk", fixture_status = "captured", note = "Official Python McpApprovalResponse has approval_request_id only." }, { category = "wire_fixture", fixture_status = "captured", note = "Synthetic output testdata/fixtures/responses/mcp-approval/output.json retains request_id via ExtraFields. Live bidirectional capture remains optional." }]
+reviewed_at = "2026-08-31"
+reason = "The pinned schema contains a ghost required field. Official SDK and schema properties agree on approval_request_id; typed output must not require request_id."
+impact = ["MCPApprovalResponse request/output split", "schema anomaly manifest", "D0015"]
+tests = ["input DTO does not require request_id", "output ExtraFields preserve request_id", "output decodes without request_id", "synthetic mcp-approval output fixture"]

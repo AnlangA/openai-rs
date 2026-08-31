@@ -10,10 +10,10 @@ use base64::Engine as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::Value;
 
+use crate::kernel::UnknownTaggedObject;
 use crate::{
     ExtraFields, FileId, Omittable, WireSecret,
     files::{FileContent, ReplayableMultipartSource},
-    responses::UnknownTaggedObject,
     skills::{SkillId, SkillVersionNumber},
 };
 

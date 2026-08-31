@@ -104,7 +104,7 @@ until a decision is recorded here and its fixtures pass.
 
 ## D0008 — MCPApprovalResponse ghost request_id is directional
 
-- Status: accepted (synthetic fixture accepted for local verification; does not block release)
+- Status: superseded by D0015
 - Reviewed: 2026-08-30
 - Scope: `MCPApprovalResponse.required`, override `OVR-0007`
 - Sources: pinned raw OpenAPI requires `request_id` although that name is absent
@@ -208,6 +208,53 @@ until a decision is recorded here and its fixtures pass.
 - Tests: lifecycle/feature classification unit test, implementation-status
   parser unit test, generated operation inventory zero-diff check, and absence
   from all facade feature bundles.
+
+## D0015 — MCPApprovalResponse ghost request_id is not a typed output field
+
+- Status: accepted; supersedes D0008
+- Reviewed: 2026-08-31
+- Scope: `MCPApprovalResponseResource`
+- Sources: pinned OpenAPI `MCPApprovalResponse` / `MCPApprovalResponseResource` list `request_id` in `required` but omit it from `properties`; official Python `McpApprovalResponse` exposes only `approval_request_id`.
+- Decision: output resources do not require `request_id`. If the field appears on the wire it is retained in `ExtraFields`. Input DTOs continue to send only `approval_request_id`.
+- Reason: a ghost required key would fail decode of official SDK-shaped responses. Official SDK and schema properties agree that `approval_request_id` is the real correlation field.
+- Impact: `McpApprovalResponseResource` requiredness; override `OVR-0007`.
+- Tests: output fixture without `request_id`; extra-field preservation when present.
+
+## D0016 — Hosted tool_choice follows ToolChoiceTypes
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `HostedToolType` / `ToolChoice` hosted branch
+- Sources: pinned `ToolChoiceTypes.enum`; official Python/Go/Ruby hosted tool-choice literals.
+- Decision: known hosted tool-choice types are `file_search`, `web_search_preview`, `computer`, `computer_use_preview`, `computer_use`, `web_search_preview_2025_03_11`, `image_generation`, and `code_interpreter`. `{ "type": "web_search" }` and `{ "type": "web_search_2025_08_26" }` are not hosted tool-choice values; they remain `ToolChoice::Unknown` when received. Dated aliases belong on `WebSearchTool.type`.
+- Tests: `web_search` tool-choice decodes as unknown; `web_search_preview` remains hosted.
+
+## D0017 — FunctionTool::new omits strict
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `FunctionTool.strict`
+- Sources: pinned FunctionTool required-nullable `strict`; `FunctionTool::for_type` already sends `true`.
+- Decision: `FunctionTool::new()` omits `strict` (service default). `for_type()` sends `strict: true`. Callers may still send `true`, `false`, or `null` through the existing builder.
+- Tests: existing omit/`null`/`true` FunctionTool fixtures.
+
+## D0018 — Create prompt_cache_options keeps explicit null
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CreateResponseBody.prompt_cache_options`
+- Sources: official Param is non-nullable; this crate models omitted/null/value independently.
+- Decision: keep `Omittable<Nullable<PromptCacheOptions>>` on create so all three wire states round-trip.
+- Tests: existing create request three-state coverage.
+
+## D0019 — Responses timestamps accept JSON numbers
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `Response.created_at`, `Response.completed_at`, `CompactedResponse.created_at`
+- Sources: pinned schema `type: number` with `format: unixtime`; official SDKs use float.
+- Decision: decode integer or finite float numbers, expose `i64` (truncating toward zero), serialize integers.
+- Tests: `created_at: 1700000000.9` decodes as `1700000000`.
 
 ## D0014 — GA Responses shares Chat/Beta prompt-cache and reasoning wire types
 

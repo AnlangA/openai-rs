@@ -10,9 +10,53 @@ use std::{collections::BTreeMap, fmt};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Value};
 
+use crate::containers::ContainerMemoryLimit;
+use crate::vector_stores::{VectorStoreFilter, VectorStoreMaxResults, VectorStoreScore};
 use crate::{ExtraFields, JsonText, Nullable, Omittable, open_string_enum};
 
 pub use crate::kernel::{UnknownTaggedObject, UnknownTaggedObjectError};
+
+/// Unix timestamp in seconds. Decodes JSON integers and finite floats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct UnixSeconds(i64);
+
+impl UnixSeconds {
+    const fn get(self) -> i64 {
+        self.0
+    }
+}
+
+impl Serialize for UnixSeconds {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_i64(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for UnixSeconds {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let number = serde_json::Number::deserialize(deserializer)?;
+        if let Some(value) = number.as_i64() {
+            return Ok(Self(value));
+        }
+        if let Some(value) = number.as_u64() {
+            return i64::try_from(value).map(Self).map_err(D::Error::custom);
+        }
+        if let Some(value) = number.as_f64() {
+            if value.is_finite() {
+                return Ok(Self(value.trunc() as i64));
+            }
+        }
+        Err(D::Error::custom(
+            "unix timestamp must be a finite JSON number",
+        ))
+    }
+}
 
 fn object_discriminator(value: &Value) -> Result<String, &'static str> {
     crate::kernel::object_discriminator(value)
@@ -41,6 +85,33 @@ open_string_enum! {
 }
 
 open_string_enum! {
+    /// Status domain shared by messages and function calls.
+    ///
+    /// Official `FunctionCallItemStatus` / `OutputMessage.status` are
+    /// `in_progress | completed | incomplete`. `failed` is a known value on
+    /// other item families and is retained here only as [`ItemProgressStatus::Unknown`].
+    pub enum ItemProgressStatus {
+        InProgress = "in_progress",
+        Completed = "completed",
+        Incomplete = "incomplete"
+    }
+}
+
+impl From<ResponseItemStatus> for ItemProgressStatus {
+    fn from(value: ResponseItemStatus) -> Self {
+        Self::from_raw(value.as_str())
+    }
+}
+
+open_string_enum! {
+    /// Assistant message phase that follow-up requests must resend.
+    pub enum MessagePhase {
+        Commentary = "commentary",
+        FinalAnswer = "final_answer"
+    }
+}
+
+open_string_enum! {
     /// Role assigned to a Responses message.
     pub enum MessageRole {
         User = "user",
@@ -57,6 +128,17 @@ open_string_enum! {
         Low = "low",
         High = "high",
         Original = "original"
+    }
+}
+
+open_string_enum! {
+    /// Requested file input fidelity.
+    ///
+    /// Distinct from [`ImageDetail`]: file inputs do not accept `original`.
+    pub enum FileDetail {
+        Auto = "auto",
+        Low = "low",
+        High = "high"
     }
 }
 
@@ -448,7 +530,7 @@ pub struct InputFile {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     filename: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    detail: Omittable<ImageDetail>,
+    detail: Omittable<FileDetail>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     prompt_cache_breakpoint: Omittable<PromptCacheBreakpoint>,
     #[serde(flatten)]
@@ -510,9 +592,9 @@ impl InputFile {
         value
     }
 
-    /// Sets the file/image detail preference.
+    /// Sets the file detail preference.
     #[must_use]
-    pub fn detail(mut self, detail: ImageDetail) -> Self {
+    pub fn detail(mut self, detail: FileDetail) -> Self {
         self.detail = Omittable::Value(detail);
         self
     }
@@ -594,6 +676,8 @@ pub struct InputMessage {
     kind: Omittable<InputMessageTag>,
     role: MessageRole,
     content: MessageContent,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    phase: Omittable<Nullable<MessagePhase>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -606,6 +690,7 @@ impl InputMessage {
             kind: Omittable::Omitted,
             role,
             content: content.into(),
+            phase: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -633,6 +718,22 @@ impl InputMessage {
     pub fn with_type(mut self) -> Self {
         self.kind = Omittable::Value(InputMessageTag::Message);
         self
+    }
+
+    /// Sets the assistant message phase that follow-up requests should resend.
+    #[must_use]
+    pub fn phase(mut self, phase: MessagePhase) -> Self {
+        self.phase = Omittable::Value(Nullable::Value(phase));
+        self
+    }
+
+    /// Returns the message phase when present and non-null.
+    #[must_use]
+    pub fn phase_ref(&self) -> Option<&MessagePhase> {
+        match &self.phase {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
     }
 
     /// Returns the message role.
@@ -681,7 +782,7 @@ pub struct StoredInputMessage {
     kind: Omittable<InputMessageTag>,
     role: StoredInputMessageRole,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    status: Omittable<ResponseItemStatus>,
+    status: Omittable<ItemProgressStatus>,
     content: Vec<InputContent>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -705,7 +806,7 @@ impl StoredInputMessage {
 
     /// Sets the returned item status.
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
+    pub fn status(mut self, status: ItemProgressStatus) -> Self {
         self.status = Omittable::Value(status);
         self
     }
@@ -806,7 +907,7 @@ pub struct FunctionTool {
     name: String,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     description: Omittable<Nullable<String>>,
-    parameters: Value,
+    parameters: Nullable<Value>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     output_schema: Omittable<Nullable<Value>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -845,7 +946,7 @@ impl FunctionTool {
             kind: FunctionToolTag::Function,
             name: name.into(),
             description: Omittable::Omitted,
-            parameters: Value::Object(parameters),
+            parameters: Nullable::Value(Value::Object(parameters)),
             output_schema: Omittable::Omitted,
             strict: Omittable::Omitted,
             defer_loading: Omittable::Omitted,
@@ -863,7 +964,14 @@ impl FunctionTool {
     /// Sets an already constructed JSON Schema value.
     #[must_use]
     pub fn parameters(mut self, parameters: Value) -> Self {
-        self.parameters = parameters;
+        self.parameters = Nullable::Value(parameters);
+        self
+    }
+
+    /// Sends `parameters: null`.
+    #[must_use]
+    pub fn parameters_null(mut self) -> Self {
+        self.parameters = Nullable::Null;
         self
     }
 
@@ -872,7 +980,7 @@ impl FunctionTool {
         mut self,
         parameters: &T,
     ) -> Result<Self, serde_json::Error> {
-        self.parameters = serde_json::to_value(parameters)?;
+        self.parameters = Nullable::Value(serde_json::to_value(parameters)?);
         Ok(self)
     }
 
@@ -924,10 +1032,13 @@ impl FunctionTool {
         }
     }
 
-    /// Returns the parameters JSON Schema.
+    /// Returns the parameters JSON Schema when non-null.
     #[must_use]
-    pub const fn parameters_ref(&self) -> &Value {
-        &self.parameters
+    pub const fn parameters_ref(&self) -> Option<&Value> {
+        match &self.parameters {
+            Nullable::Value(value) => Some(value),
+            Nullable::Null => None,
+        }
     }
 
     /// Returns the explicit strict flag when present.
@@ -1227,7 +1338,7 @@ tagged_union! {
         FileSearch(FileSearchTool) => "file_search",
         Computer(ComputerTool) => "computer",
         ComputerUsePreview(ComputerUsePreviewTool) => "computer_use_preview",
-        WebSearch(WebSearchTool) => "web_search",
+        WebSearch(WebSearchTool) => "web_search" | "web_search_2025_08_26",
         Mcp(McpTool) => "mcp",
         CodeInterpreter(CodeInterpreterTool) => "code_interpreter",
         Programmatic(ProgrammaticTool) => "programmatic_tool_calling",
@@ -1237,7 +1348,7 @@ tagged_union! {
         Custom(CustomTool) => "custom",
         Namespace(NamespaceTool) => "namespace",
         ToolSearch(ToolSearchTool) => "tool_search",
-        WebSearchPreview(WebSearchPreviewTool) => "web_search_preview",
+        WebSearchPreview(WebSearchPreviewTool) => "web_search_preview" | "web_search_preview_2025_03_11",
         ApplyPatch(ApplyPatchTool) => "apply_patch"
     }
 }
@@ -1265,7 +1376,11 @@ pub struct FunctionCall {
     name: String,
     arguments: JsonText,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    status: Omittable<ResponseItemStatus>,
+    status: Omittable<ItemProgressStatus>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    namespace: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    caller: Omittable<Nullable<Value>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1278,7 +1393,7 @@ impl FunctionCall {
         call_id: impl Into<String>,
         name: impl Into<String>,
         arguments: JsonText,
-        status: ResponseItemStatus,
+        status: ItemProgressStatus,
     ) -> Self {
         Self {
             kind: FunctionCallTag::FunctionCall,
@@ -1287,6 +1402,8 @@ impl FunctionCall {
             name: name.into(),
             arguments,
             status: Omittable::Value(status),
+            namespace: Omittable::Omitted,
+            caller: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -1325,11 +1442,36 @@ impl FunctionCall {
 
     /// Returns the item status.
     #[must_use]
-    pub fn status(&self) -> Option<&ResponseItemStatus> {
+    pub fn status(&self) -> Option<&ItemProgressStatus> {
         match &self.status {
             Omittable::Value(value) => Some(value),
             Omittable::Omitted => None,
         }
+    }
+
+    /// Returns the function namespace when present.
+    #[must_use]
+    pub fn namespace(&self) -> Option<&str> {
+        match &self.namespace {
+            Omittable::Value(value) => Some(value.as_str()),
+            Omittable::Omitted => None,
+        }
+    }
+
+    /// Returns the execution context that produced this call.
+    #[must_use]
+    pub fn caller(&self) -> Option<&Value> {
+        match &self.caller {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
+    /// Sets the function namespace.
+    #[must_use]
+    pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.namespace = Omittable::Value(namespace.into());
+        self
     }
 
     /// Returns future fields retained while decoding.
@@ -1384,7 +1526,7 @@ pub struct FunctionCallOutput {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     caller: Omittable<Nullable<Value>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    status: Omittable<Nullable<ResponseItemStatus>>,
+    status: Omittable<Nullable<ItemProgressStatus>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1431,7 +1573,7 @@ impl FunctionCallOutput {
 
     /// Sets an item status for stored input items.
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
+    pub fn status(mut self, status: ItemProgressStatus) -> Self {
         self.status = Omittable::Value(Nullable::Value(status));
         self
     }
@@ -1905,19 +2047,24 @@ pub struct OutputMessage {
     #[serde(rename = "type")]
     kind: OutputMessageTag,
     id: String,
-    status: ResponseItemStatus,
+    status: ItemProgressStatus,
     role: AssistantRoleTag,
     content: Vec<OutputContent>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    phase: Omittable<Nullable<MessagePhase>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
 
 impl OutputMessage {
     /// Creates an assistant message, primarily for adapters and tests.
+    ///
+    /// Official protocol requires clients to preserve [`Self::phase`] on
+    /// assistant messages when sending follow-up requests.
     #[must_use]
     pub fn new(
         id: impl Into<String>,
-        status: ResponseItemStatus,
+        status: ItemProgressStatus,
         content: impl IntoIterator<Item = impl Into<OutputContent>>,
     ) -> Self {
         Self {
@@ -1926,6 +2073,7 @@ impl OutputMessage {
             status,
             role: AssistantRoleTag::Assistant,
             content: content.into_iter().map(Into::into).collect(),
+            phase: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -1938,8 +2086,24 @@ impl OutputMessage {
 
     /// Returns the item status.
     #[must_use]
-    pub const fn status(&self) -> &ResponseItemStatus {
+    pub const fn status(&self) -> &ItemProgressStatus {
         &self.status
+    }
+
+    /// Sets the assistant message phase that follow-up requests should resend.
+    #[must_use]
+    pub fn phase(mut self, phase: MessagePhase) -> Self {
+        self.phase = Omittable::Value(Nullable::Value(phase));
+        self
+    }
+
+    /// Returns the message phase when present and non-null.
+    #[must_use]
+    pub fn phase_ref(&self) -> Option<&MessagePhase> {
+        match &self.phase {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
     }
 
     /// Returns output content in service order.
@@ -2443,7 +2607,6 @@ impl<'de> Deserialize<'de> for ToolChoice {
                 .map_err(D::Error::custom),
             "file_search"
             | "web_search_preview"
-            | "web_search"
             | "computer"
             | "computer_use_preview"
             | "computer_use"
@@ -2951,7 +3114,7 @@ struct CreateResponseBody {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input: Omittable<ResponseInput>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    instructions: Omittable<Nullable<ResponseInstructions>>,
+    instructions: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     background: Omittable<Nullable<bool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -3120,7 +3283,7 @@ macro_rules! impl_create_response_builders {
 
             /// Sets instructions.
             #[must_use]
-            pub fn instructions(mut self, instructions: impl Into<ResponseInstructions>) -> Self {
+            pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
                 self.body.instructions = Omittable::Value(Nullable::Value(instructions.into()));
                 self
             }
@@ -3780,6 +3943,8 @@ pub struct ResponseUsage {
     output_tokens: u64,
     output_tokens_details: OutputTokensDetails,
     total_tokens: u64,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    compute_units: Omittable<Nullable<u64>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -3801,6 +3966,15 @@ impl ResponseUsage {
     #[must_use]
     pub const fn total_tokens(&self) -> u64 {
         self.total_tokens
+    }
+
+    /// Returns compute units when present and non-null.
+    #[must_use]
+    pub fn compute_units(&self) -> Option<u64> {
+        match self.compute_units {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
     }
 
     /// Returns future fields retained while decoding.
@@ -3832,7 +4006,7 @@ pub enum OutputParseError {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Response {
     id: String,
-    created_at: i64,
+    created_at: UnixSeconds,
     error: Nullable<ResponseError>,
     incomplete_details: Nullable<IncompleteDetails>,
     instructions: Nullable<ResponseInstructions>,
@@ -3851,7 +4025,7 @@ pub struct Response {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     background: Omittable<bool>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    completed_at: Omittable<Nullable<i64>>,
+    completed_at: Omittable<Nullable<UnixSeconds>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     conversation: Omittable<Nullable<ConversationObjectReference>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -3863,13 +4037,17 @@ pub struct Response {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     prompt: Omittable<Nullable<PromptReference>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_key: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_options: Omittable<PromptCacheOptions>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_retention: Omittable<Nullable<PromptCacheRetention>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     reasoning: Omittable<Nullable<ReasoningConfig>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     safety_identifier: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     service_tier: Omittable<ServiceTier>,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    store: Omittable<bool>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     text: Omittable<ResponseTextConfig>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -3878,6 +4056,10 @@ pub struct Response {
     usage: Omittable<Nullable<ResponseUsage>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     user: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    moderation: Omittable<Nullable<ModerationConfig>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    top_logprobs: Omittable<Nullable<u32>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -3892,7 +4074,25 @@ impl Response {
     /// Returns the Unix creation timestamp in seconds.
     #[must_use]
     pub const fn created_at(&self) -> i64 {
-        self.created_at
+        self.created_at.get()
+    }
+
+    /// Returns the prompt cache key when present and non-null.
+    #[must_use]
+    pub fn prompt_cache_key(&self) -> Option<&str> {
+        match &self.prompt_cache_key {
+            Omittable::Value(Nullable::Value(value)) => Some(value.as_str()),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
+    /// Returns prompt-cache options when present.
+    #[must_use]
+    pub fn prompt_cache_options(&self) -> Option<&PromptCacheOptions> {
+        match &self.prompt_cache_options {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 
     /// Returns the model id used by the service.
@@ -4007,7 +4207,10 @@ impl Response {
                     };
                     ResponseInputItem::FunctionCallOutput(FunctionCallOutput {
                         kind: FunctionCallOutputTag::FunctionCallOutput,
-                        call_id: Omittable::Omitted,
+                        call_id: match &value.call_id {
+                            Omittable::Value(id) => Omittable::Value(Nullable::Value(id.clone())),
+                            Omittable::Omitted => Omittable::Omitted,
+                        },
                         output: output_val,
                         id: Omittable::Value(Nullable::Value(value.id.clone())),
                         name: Omittable::Omitted,
@@ -4212,7 +4415,7 @@ pub struct CompactResponseRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input: Omittable<ResponseInput>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    instructions: Omittable<Nullable<ResponseInstructions>>,
+    instructions: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     previous_response_id: Omittable<Nullable<String>>,
 }
@@ -4251,7 +4454,7 @@ impl CompactResponseRequest {
 
     /// Sets compaction instructions.
     #[must_use]
-    pub fn instructions(mut self, instructions: impl Into<ResponseInstructions>) -> Self {
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
         self.instructions = Omittable::Value(Nullable::Value(instructions.into()));
         self
     }
@@ -4270,7 +4473,7 @@ literal_tag!(CompactedResponseTag, Compaction, "response.compaction");
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompactedResponse {
     id: String,
-    created_at: i64,
+    created_at: UnixSeconds,
     #[serde(rename = "object")]
     object: CompactedResponseTag,
     output: Vec<ResponseOutputItem>,
@@ -4416,7 +4619,7 @@ pub struct CountInputTokensRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input: Omittable<Nullable<ResponseInput>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    instructions: Omittable<Nullable<ResponseInstructions>>,
+    instructions: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     model: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -4466,7 +4669,7 @@ impl CountInputTokensRequest {
 
     /// Sets instructions.
     #[must_use]
-    pub fn instructions(mut self, instructions: impl Into<ResponseInstructions>) -> Self {
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
         self.instructions = Omittable::Value(Nullable::Value(instructions.into()));
         self
     }
@@ -5930,12 +6133,321 @@ required_tagged_record!(FileSearchCall, FileSearchCallTag, FileSearchCall, "file
     status: ResponseItemStatus,
     queries: Vec<String>
 });
-required_tagged_record!(ComputerCall, ComputerCallTag, ComputerCall, "computer_call", {
+open_string_enum! {
+    /// Mouse button used by a computer click action.
+    pub enum ComputerClickButton {
+        Left = "left",
+        Right = "right",
+        Wheel = "wheel",
+        Back = "back",
+        Forward = "forward"
+    }
+}
+
+literal_tag!(ComputerClickTag, Click, "click");
+literal_tag!(ComputerDoubleClickTag, DoubleClick, "double_click");
+literal_tag!(ComputerDragTag, Drag, "drag");
+literal_tag!(ComputerKeyPressTag, KeyPress, "keypress");
+literal_tag!(ComputerMoveTag, Move, "move");
+literal_tag!(ComputerScreenshotTag, Screenshot, "screenshot");
+literal_tag!(ComputerScrollTag, Scroll, "scroll");
+literal_tag!(ComputerTypeTag, Type, "type");
+literal_tag!(ComputerWaitTag, Wait, "wait");
+
+/// A screen coordinate used by drag paths.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComputerCoordinate {
+    x: i64,
+    y: i64,
+}
+
+impl ComputerCoordinate {
+    /// Creates a coordinate.
+    #[must_use]
+    pub const fn new(x: i64, y: i64) -> Self {
+        Self { x, y }
+    }
+
+    /// Horizontal position.
+    #[must_use]
+    pub const fn x(&self) -> i64 {
+        self.x
+    }
+
+    /// Vertical position.
+    #[must_use]
+    pub const fn y(&self) -> i64 {
+        self.y
+    }
+}
+
+/// A single click on the virtual display.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComputerClickAction {
+    #[serde(rename = "type")]
+    kind: ComputerClickTag,
+    button: ComputerClickButton,
+    x: i64,
+    y: i64,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    keys: Omittable<Nullable<Vec<String>>>,
+}
+
+impl ComputerClickAction {
+    /// Creates a click action.
+    #[must_use]
+    pub fn new(button: ComputerClickButton, x: i64, y: i64) -> Self {
+        Self {
+            kind: ComputerClickTag::Click,
+            button,
+            x,
+            y,
+            keys: Omittable::Omitted,
+        }
+    }
+}
+
+/// A double-click on the virtual display.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComputerDoubleClickAction {
+    #[serde(rename = "type")]
+    kind: ComputerDoubleClickTag,
+    x: i64,
+    y: i64,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    keys: Omittable<Nullable<Vec<String>>>,
+}
+
+impl ComputerDoubleClickAction {
+    /// Creates a double-click action.
+    #[must_use]
+    pub fn new(x: i64, y: i64) -> Self {
+        Self {
+            kind: ComputerDoubleClickTag::DoubleClick,
+            x,
+            y,
+            keys: Omittable::Omitted,
+        }
+    }
+}
+
+/// A drag along a path of coordinates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComputerDragAction {
+    #[serde(rename = "type")]
+    kind: ComputerDragTag,
+    path: Vec<ComputerCoordinate>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    keys: Omittable<Nullable<Vec<String>>>,
+}
+
+impl ComputerDragAction {
+    /// Creates a drag action.
+    #[must_use]
+    pub fn new(path: impl IntoIterator<Item = ComputerCoordinate>) -> Self {
+        Self {
+            kind: ComputerDragTag::Drag,
+            path: path.into_iter().collect(),
+            keys: Omittable::Omitted,
+        }
+    }
+}
+
+/// A keypress on the virtual keyboard.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComputerKeyPressAction {
+    #[serde(rename = "type")]
+    kind: ComputerKeyPressTag,
+    keys: Vec<String>,
+}
+
+impl ComputerKeyPressAction {
+    /// Creates a keypress action.
+    #[must_use]
+    pub fn new(keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            kind: ComputerKeyPressTag::KeyPress,
+            keys: keys.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// A cursor move.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComputerMoveAction {
+    #[serde(rename = "type")]
+    kind: ComputerMoveTag,
+    x: i64,
+    y: i64,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    keys: Omittable<Nullable<Vec<String>>>,
+}
+
+impl ComputerMoveAction {
+    /// Creates a move action.
+    #[must_use]
+    pub fn new(x: i64, y: i64) -> Self {
+        Self {
+            kind: ComputerMoveTag::Move,
+            x,
+            y,
+            keys: Omittable::Omitted,
+        }
+    }
+}
+
+/// A screenshot request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComputerScreenshotAction {
+    #[serde(rename = "type")]
+    kind: ComputerScreenshotTag,
+}
+
+impl ComputerScreenshotAction {
+    /// Creates a screenshot action.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            kind: ComputerScreenshotTag::Screenshot,
+        }
+    }
+}
+
+impl Default for ComputerScreenshotAction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A scroll gesture.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComputerScrollAction {
+    #[serde(rename = "type")]
+    kind: ComputerScrollTag,
+    x: i64,
+    y: i64,
+    scroll_x: i64,
+    scroll_y: i64,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    keys: Omittable<Nullable<Vec<String>>>,
+}
+
+impl ComputerScrollAction {
+    /// Creates a scroll action.
+    #[must_use]
+    pub fn new(x: i64, y: i64, scroll_x: i64, scroll_y: i64) -> Self {
+        Self {
+            kind: ComputerScrollTag::Scroll,
+            x,
+            y,
+            scroll_x,
+            scroll_y,
+            keys: Omittable::Omitted,
+        }
+    }
+}
+
+/// Typed text entered on the virtual keyboard.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComputerTypeAction {
+    #[serde(rename = "type")]
+    kind: ComputerTypeTag,
+    text: String,
+}
+
+impl ComputerTypeAction {
+    /// Creates a type action.
+    #[must_use]
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            kind: ComputerTypeTag::Type,
+            text: text.into(),
+        }
+    }
+}
+
+/// A wait action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComputerWaitAction {
+    #[serde(rename = "type")]
+    kind: ComputerWaitTag,
+}
+
+impl ComputerWaitAction {
+    /// Creates a wait action.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            kind: ComputerWaitTag::Wait,
+        }
+    }
+}
+
+impl Default for ComputerWaitAction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+tagged_union! {
+    /// One computer-use action.
+    pub enum ComputerAction {
+        Click(ComputerClickAction) => "click",
+        DoubleClick(ComputerDoubleClickAction) => "double_click",
+        Drag(ComputerDragAction) => "drag",
+        KeyPress(ComputerKeyPressAction) => "keypress",
+        Move(ComputerMoveAction) => "move",
+        Screenshot(ComputerScreenshotAction) => "screenshot",
+        Scroll(ComputerScrollAction) => "scroll",
+        Type(ComputerTypeAction) => "type",
+        Wait(ComputerWaitAction) => "wait"
+    }
+}
+
+literal_tag!(ComputerCallTag, ComputerCall, "computer_call");
+
+/// A model-produced computer-use invocation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComputerCall {
+    #[serde(rename = "type")]
+    kind: ComputerCallTag,
     id: String,
     call_id: String,
     pending_safety_checks: Vec<Value>,
-    status: ResponseItemStatus
-});
+    status: ItemProgressStatus,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    action: Omittable<ComputerAction>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    actions: Omittable<Vec<ComputerAction>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ComputerCall {
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+
+    /// Returns the computer action when present.
+    #[must_use]
+    pub fn action(&self) -> Option<&ComputerAction> {
+        match &self.action {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
+    }
+
+    /// Returns batched computer actions when present.
+    #[must_use]
+    pub fn actions(&self) -> Option<&[ComputerAction]> {
+        match &self.actions {
+            Omittable::Value(value) => Some(value.as_slice()),
+            Omittable::Omitted => None,
+        }
+    }
+}
 required_tagged_record!(
     ComputerCallOutput,
     ComputerCallOutputTag,
@@ -5963,17 +6475,42 @@ required_tagged_record!(WebSearchCall, WebSearchCallTag, WebSearchCall, "web_sea
     status: ResponseItemStatus,
     action: Value
 });
-required_tagged_record!(
-    FunctionCallOutputResource,
+literal_tag!(
     FunctionCallOutputResourceTag,
     FunctionCallOutputResource,
-    "function_call_output",
-    {
-        id: String,
-        output: Value,
-        status: ResponseItemStatus
-    }
+    "function_call_output"
 );
+
+/// Stored function-call output returned by the service.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FunctionCallOutputResource {
+    #[serde(rename = "type")]
+    kind: FunctionCallOutputResourceTag,
+    id: String,
+    output: Value,
+    status: ItemProgressStatus,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    call_id: Omittable<String>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl FunctionCallOutputResource {
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+
+    /// Returns the related function call id when present.
+    #[must_use]
+    pub fn call_id(&self) -> Option<&str> {
+        match &self.call_id {
+            Omittable::Value(value) => Some(value.as_str()),
+            Omittable::Omitted => None,
+        }
+    }
+}
 required_tagged_record!(
     ToolSearchCallInput,
     ToolSearchCallInputTag,
@@ -6158,7 +6695,6 @@ required_tagged_record!(
     "mcp_approval_response",
     {
         id: String,
-        request_id: String,
         approval_request_id: String,
         approve: bool
     }
@@ -6368,12 +6904,84 @@ macro_rules! tag_only_tool {
 
 literal_tag!(FileSearchToolTag, FileSearch, "file_search");
 
+open_string_enum! {
+    /// Ranker used by Responses file search.
+    pub enum FileSearchRanker {
+        Auto = "auto",
+        Default2024_11_15 = "default-2024-11-15"
+    }
+}
+
+/// Reciprocal-rank-fusion weights for hybrid file search.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileSearchHybridSearch {
+    embedding_weight: f64,
+    text_weight: f64,
+}
+
+impl FileSearchHybridSearch {
+    /// Creates hybrid-search weights.
+    #[must_use]
+    pub fn new(embedding_weight: f64, text_weight: f64) -> Self {
+        Self {
+            embedding_weight,
+            text_weight,
+        }
+    }
+}
+
+/// Ranking controls for the Responses file-search tool.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FileSearchRankingOptions {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    ranker: Omittable<FileSearchRanker>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    score_threshold: Omittable<VectorStoreScore>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    hybrid_search: Omittable<FileSearchHybridSearch>,
+}
+
+impl FileSearchRankingOptions {
+    /// Creates empty ranking options.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Selects a ranker.
+    #[must_use]
+    pub fn with_ranker(mut self, ranker: FileSearchRanker) -> Self {
+        self.ranker = Omittable::Value(ranker);
+        self
+    }
+
+    /// Sets the score threshold.
+    #[must_use]
+    pub fn with_score_threshold(mut self, threshold: VectorStoreScore) -> Self {
+        self.score_threshold = Omittable::Value(threshold);
+        self
+    }
+
+    /// Sets hybrid-search weights.
+    #[must_use]
+    pub fn with_hybrid_search(mut self, hybrid_search: FileSearchHybridSearch) -> Self {
+        self.hybrid_search = Omittable::Value(hybrid_search);
+        self
+    }
+}
+
 /// File-search tool configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileSearchTool {
     #[serde(rename = "type")]
     kind: FileSearchToolTag,
     vector_store_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    max_num_results: Omittable<VectorStoreMaxResults>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    ranking_options: Omittable<FileSearchRankingOptions>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    filters: Omittable<Nullable<VectorStoreFilter>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -6385,8 +6993,32 @@ impl FileSearchTool {
         Self {
             kind: FileSearchToolTag::FileSearch,
             vector_store_ids: vector_store_ids.into_iter().map(Into::into).collect(),
+            max_num_results: Omittable::Omitted,
+            ranking_options: Omittable::Omitted,
+            filters: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
+    }
+
+    /// Sets the maximum number of results (1..=50).
+    #[must_use]
+    pub fn with_max_num_results(mut self, max_num_results: VectorStoreMaxResults) -> Self {
+        self.max_num_results = Omittable::Value(max_num_results);
+        self
+    }
+
+    /// Sets ranking options.
+    #[must_use]
+    pub fn with_ranking_options(mut self, ranking_options: FileSearchRankingOptions) -> Self {
+        self.ranking_options = Omittable::Value(ranking_options);
+        self
+    }
+
+    /// Sets attribute filters.
+    #[must_use]
+    pub fn with_filters(mut self, filters: VectorStoreFilter) -> Self {
+        self.filters = Omittable::Value(Nullable::Value(filters));
+        self
     }
 
     /// Returns selected vector-store ids.
@@ -6394,32 +7026,667 @@ impl FileSearchTool {
     pub fn vector_store_ids(&self) -> &[String] {
         &self.vector_store_ids
     }
+
+    /// Returns the result cap when set.
+    #[must_use]
+    pub fn max_num_results(&self) -> Option<VectorStoreMaxResults> {
+        match self.max_num_results {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
+    }
 }
 
 tag_only_tool!(ComputerTool, ComputerToolTag, Computer, "computer");
-tag_only_tool!(WebSearchTool, WebSearchToolTag, WebSearch, "web_search");
+
+open_string_enum! {
+    /// Web-search tool type, including the dated GA alias.
+    pub enum WebSearchToolType {
+        WebSearch = "web_search",
+        WebSearch20250826 = "web_search_2025_08_26"
+    }
+}
+
+open_string_enum! {
+    /// High-level web-search context size.
+    pub enum WebSearchContextSize {
+        Low = "low",
+        Medium = "medium",
+        High = "high"
+    }
+}
+
+literal_tag!(WebSearchLocationTag, Approximate, "approximate");
+
+/// Approximate user location for web search.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WebSearchApproximateLocation {
+    #[serde(
+        rename = "type",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    kind: Omittable<WebSearchLocationTag>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    country: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    region: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    city: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    timezone: Omittable<Nullable<String>>,
+}
+
+impl WebSearchApproximateLocation {
+    /// Creates an empty approximate location.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            kind: Omittable::Value(WebSearchLocationTag::Approximate),
+            ..Self::default()
+        }
+    }
+
+    /// Sets the ISO country code.
+    #[must_use]
+    pub fn country(mut self, country: impl Into<String>) -> Self {
+        self.country = Omittable::Value(Nullable::Value(country.into()));
+        self
+    }
+}
+
+/// Domain allow-list for web search.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WebSearchFilters {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    allowed_domains: Omittable<Nullable<Vec<String>>>,
+}
+
+impl WebSearchFilters {
+    /// Restricts search to the supplied domains.
+    #[must_use]
+    pub fn allowed_domains(domains: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            allowed_domains: Omittable::Value(Nullable::Value(
+                domains.into_iter().map(Into::into).collect(),
+            )),
+        }
+    }
+}
+
+/// Responses `web_search` tool definition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WebSearchTool {
+    #[serde(rename = "type")]
+    kind: WebSearchToolType,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    filters: Omittable<Nullable<WebSearchFilters>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    user_location: Omittable<WebSearchApproximateLocation>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    search_context_size: Omittable<WebSearchContextSize>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    external_web_access: Omittable<bool>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl WebSearchTool {
+    /// Creates the GA web-search tool (`type: web_search`).
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            kind: WebSearchToolType::WebSearch,
+            filters: Omittable::Omitted,
+            user_location: Omittable::Omitted,
+            search_context_size: Omittable::Omitted,
+            external_web_access: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Selects the dated tool type alias.
+    #[must_use]
+    pub fn with_type(mut self, kind: WebSearchToolType) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Sets search filters.
+    #[must_use]
+    pub fn with_filters(mut self, filters: WebSearchFilters) -> Self {
+        self.filters = Omittable::Value(Nullable::Value(filters));
+        self
+    }
+
+    /// Sets the approximate user location.
+    #[must_use]
+    pub fn with_user_location(mut self, location: WebSearchApproximateLocation) -> Self {
+        self.user_location = Omittable::Value(location);
+        self
+    }
+
+    /// Sets the search context size.
+    #[must_use]
+    pub fn with_search_context_size(mut self, size: WebSearchContextSize) -> Self {
+        self.search_context_size = Omittable::Value(size);
+        self
+    }
+
+    /// Allows or disables live internet access.
+    #[must_use]
+    pub fn with_external_web_access(mut self, enabled: bool) -> Self {
+        self.external_web_access = Omittable::Value(enabled);
+        self
+    }
+
+    /// Returns the wire `type` value.
+    #[must_use]
+    pub const fn kind(&self) -> &WebSearchToolType {
+        &self.kind
+    }
+
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+impl Default for WebSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 tag_only_tool!(
     ProgrammaticTool,
     ProgrammaticToolTag,
     ProgrammaticToolCalling,
     "programmatic_tool_calling"
 );
-tag_only_tool!(
-    ImageGenerationTool,
-    ImageGenerationToolTag,
-    ImageGeneration,
-    "image_generation"
-);
+
+open_string_enum! {
+    /// Image generation quality.
+    pub enum ImageGenerationQuality {
+        Low = "low",
+        Medium = "medium",
+        High = "high",
+        Auto = "auto"
+    }
+}
+
+open_string_enum! {
+    /// Image generation output format.
+    pub enum ImageGenerationOutputFormat {
+        Png = "png",
+        Webp = "webp",
+        Jpeg = "jpeg"
+    }
+}
+
+open_string_enum! {
+    /// Image generation moderation level.
+    pub enum ImageGenerationModeration {
+        Auto = "auto",
+        Low = "low"
+    }
+}
+
+open_string_enum! {
+    /// Image generation background.
+    pub enum ImageGenerationBackground {
+        Transparent = "transparent",
+        Opaque = "opaque",
+        Auto = "auto"
+    }
+}
+
+open_string_enum! {
+    /// Image generation input fidelity.
+    pub enum ImageGenerationInputFidelity {
+        High = "high",
+        Low = "low"
+    }
+}
+
+open_string_enum! {
+    /// Image generation action.
+    pub enum ImageGenerationAction {
+        Generate = "generate",
+        Edit = "edit",
+        Auto = "auto"
+    }
+}
+
+open_string_enum! {
+    /// Known image-generation models; other ids are retained as unknown.
+    pub enum ImageGenerationModel {
+        GptImage1 = "gpt-image-1",
+        GptImage1Mini = "gpt-image-1-mini",
+        GptImage15 = "gpt-image-1.5",
+        GptImage2 = "gpt-image-2",
+        GptImage2_2026_04_21 = "gpt-image-2-2026-04-21",
+        ChatgptImageLatest = "chatgpt-image-latest"
+    }
+}
+
+open_string_enum! {
+    /// Known image sizes; arbitrary `WIDTHxHEIGHT` values are retained as unknown.
+    pub enum ImageGenerationSize {
+        Square1024 = "1024x1024",
+        Portrait1024x1536 = "1024x1536",
+        Landscape1536x1024 = "1536x1024",
+        Auto = "auto"
+    }
+}
+
+/// Optional inpainting mask for image generation.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ImageGenerationInputMask {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    image_url: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    file_id: Omittable<String>,
+}
+
+impl ImageGenerationInputMask {
+    /// Creates an empty mask.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets a base64 mask image.
+    #[must_use]
+    pub fn image_url(mut self, image_url: impl Into<String>) -> Self {
+        self.image_url = Omittable::Value(image_url.into());
+        self
+    }
+
+    /// Sets a file id mask.
+    #[must_use]
+    pub fn file_id(mut self, file_id: impl Into<String>) -> Self {
+        self.file_id = Omittable::Value(file_id.into());
+        self
+    }
+}
+
+literal_tag!(ImageGenerationToolTag, ImageGeneration, "image_generation");
+
+/// Image-generation tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageGenerationTool {
+    #[serde(rename = "type")]
+    kind: ImageGenerationToolTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    model: Omittable<ImageGenerationModel>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    quality: Omittable<ImageGenerationQuality>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    size: Omittable<ImageGenerationSize>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    output_format: Omittable<ImageGenerationOutputFormat>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    output_compression: Omittable<u32>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    moderation: Omittable<ImageGenerationModeration>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    background: Omittable<ImageGenerationBackground>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    input_fidelity: Omittable<Nullable<ImageGenerationInputFidelity>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    input_image_mask: Omittable<ImageGenerationInputMask>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    partial_images: Omittable<u32>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    action: Omittable<ImageGenerationAction>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ImageGenerationTool {
+    /// Creates the minimal image-generation tool.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            kind: ImageGenerationToolTag::ImageGeneration,
+            model: Omittable::Omitted,
+            quality: Omittable::Omitted,
+            size: Omittable::Omitted,
+            output_format: Omittable::Omitted,
+            output_compression: Omittable::Omitted,
+            moderation: Omittable::Omitted,
+            background: Omittable::Omitted,
+            input_fidelity: Omittable::Omitted,
+            input_image_mask: Omittable::Omitted,
+            partial_images: Omittable::Omitted,
+            action: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Sets the image model.
+    #[must_use]
+    pub fn with_model(mut self, model: ImageGenerationModel) -> Self {
+        self.model = Omittable::Value(model);
+        self
+    }
+
+    /// Sets output quality.
+    #[must_use]
+    pub fn with_quality(mut self, quality: ImageGenerationQuality) -> Self {
+        self.quality = Omittable::Value(quality);
+        self
+    }
+
+    /// Sets output size.
+    #[must_use]
+    pub fn with_size(mut self, size: ImageGenerationSize) -> Self {
+        self.size = Omittable::Value(size);
+        self
+    }
+
+    /// Sets the output image format.
+    #[must_use]
+    pub fn with_output_format(mut self, output_format: ImageGenerationOutputFormat) -> Self {
+        self.output_format = Omittable::Value(output_format);
+        self
+    }
+
+    /// Sets output compression.
+    #[must_use]
+    pub fn with_output_compression(mut self, output_compression: u32) -> Self {
+        self.output_compression = Omittable::Value(output_compression);
+        self
+    }
+
+    /// Sets generation moderation.
+    #[must_use]
+    pub fn with_moderation(mut self, moderation: ImageGenerationModeration) -> Self {
+        self.moderation = Omittable::Value(moderation);
+        self
+    }
+
+    /// Sets the background mode.
+    #[must_use]
+    pub fn with_background(mut self, background: ImageGenerationBackground) -> Self {
+        self.background = Omittable::Value(background);
+        self
+    }
+
+    /// Sets input fidelity.
+    #[must_use]
+    pub fn with_input_fidelity(mut self, input_fidelity: ImageGenerationInputFidelity) -> Self {
+        self.input_fidelity = Omittable::Value(Nullable::Value(input_fidelity));
+        self
+    }
+
+    /// Sets an inpainting mask.
+    #[must_use]
+    pub fn with_input_image_mask(mut self, mask: ImageGenerationInputMask) -> Self {
+        self.input_image_mask = Omittable::Value(mask);
+        self
+    }
+
+    /// Sets how many partial images to stream.
+    #[must_use]
+    pub fn with_partial_images(mut self, partial_images: u32) -> Self {
+        self.partial_images = Omittable::Value(partial_images);
+        self
+    }
+
+    /// Sets the generation action.
+    #[must_use]
+    pub fn with_action(mut self, action: ImageGenerationAction) -> Self {
+        self.action = Omittable::Value(action);
+        self
+    }
+
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+impl Default for ImageGenerationTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 tag_only_tool!(LocalShellTool, LocalShellToolTag, LocalShell, "local_shell");
-tag_only_tool!(FunctionShellTool, FunctionShellToolTag, Shell, "shell");
-tag_only_tool!(ToolSearchTool, ToolSearchToolTag, ToolSearch, "tool_search");
-tag_only_tool!(
-    WebSearchPreviewTool,
-    WebSearchPreviewToolTag,
-    WebSearchPreview,
-    "web_search_preview"
-);
-tag_only_tool!(ApplyPatchTool, ApplyPatchToolTag, ApplyPatch, "apply_patch");
+
+literal_tag!(FunctionShellToolTag, Shell, "shell");
+
+/// Function-shell tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FunctionShellTool {
+    #[serde(rename = "type")]
+    kind: FunctionShellToolTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    environment: Omittable<Nullable<Value>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    allowed_callers: Omittable<Nullable<Vec<String>>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl FunctionShellTool {
+    /// Creates the minimal shell tool.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            kind: FunctionShellToolTag::Shell,
+            environment: Omittable::Omitted,
+            allowed_callers: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Sets the execution environment object.
+    #[must_use]
+    pub fn with_environment(mut self, environment: Value) -> Self {
+        self.environment = Omittable::Value(Nullable::Value(environment));
+        self
+    }
+
+    /// Restricts invocation contexts.
+    #[must_use]
+    pub fn with_allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.allowed_callers = Omittable::Value(Nullable::Value(
+            callers.into_iter().map(Into::into).collect(),
+        ));
+        self
+    }
+
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+impl Default for FunctionShellTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+open_string_enum! {
+    /// Where tool-search execution runs.
+    pub enum ToolSearchExecution {
+        Server = "server",
+        Client = "client"
+    }
+}
+
+literal_tag!(ToolSearchToolTag, ToolSearch, "tool_search");
+
+/// Tool-search tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolSearchTool {
+    #[serde(rename = "type")]
+    kind: ToolSearchToolTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    execution: Omittable<ToolSearchExecution>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    description: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    parameters: Omittable<Nullable<Value>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ToolSearchTool {
+    /// Creates the minimal tool-search definition.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            kind: ToolSearchToolTag::ToolSearch,
+            execution: Omittable::Omitted,
+            description: Omittable::Omitted,
+            parameters: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Sets the execution venue.
+    #[must_use]
+    pub fn with_execution(mut self, execution: ToolSearchExecution) -> Self {
+        self.execution = Omittable::Value(execution);
+        self
+    }
+
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+impl Default for ToolSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+open_string_enum! {
+    /// Web-search preview tool type, including the dated alias.
+    pub enum WebSearchPreviewToolType {
+        WebSearchPreview = "web_search_preview",
+        WebSearchPreview20250311 = "web_search_preview_2025_03_11"
+    }
+}
+
+open_string_enum! {
+    /// Content types a preview web search may return.
+    pub enum SearchContentType {
+        Text = "text",
+        Image = "image"
+    }
+}
+
+/// Responses `web_search_preview` tool definition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WebSearchPreviewTool {
+    #[serde(rename = "type")]
+    kind: WebSearchPreviewToolType,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    user_location: Omittable<Nullable<WebSearchApproximateLocation>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    search_context_size: Omittable<WebSearchContextSize>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    search_content_types: Omittable<Vec<SearchContentType>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl WebSearchPreviewTool {
+    /// Creates the preview web-search tool.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            kind: WebSearchPreviewToolType::WebSearchPreview,
+            user_location: Omittable::Omitted,
+            search_context_size: Omittable::Omitted,
+            search_content_types: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Selects the dated preview type alias.
+    #[must_use]
+    pub fn with_type(mut self, kind: WebSearchPreviewToolType) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+impl Default for WebSearchPreviewTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+literal_tag!(ApplyPatchToolTag, ApplyPatch, "apply_patch");
+
+/// Apply-patch tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplyPatchTool {
+    #[serde(rename = "type")]
+    kind: ApplyPatchToolTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    allowed_callers: Omittable<Nullable<Vec<String>>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ApplyPatchTool {
+    /// Creates the apply-patch tool.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            kind: ApplyPatchToolTag::ApplyPatch,
+            allowed_callers: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Restricts invocation contexts.
+    #[must_use]
+    pub fn with_allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.allowed_callers = Omittable::Value(Nullable::Value(
+            callers.into_iter().map(Into::into).collect(),
+        ));
+        self
+    }
+
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+impl Default for ApplyPatchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 literal_tag!(
     ComputerUsePreviewToolTag,
@@ -6454,13 +7721,163 @@ impl ComputerUsePreviewTool {
 }
 
 literal_tag!(CodeInterpreterToolTag, CodeInterpreter, "code_interpreter");
+literal_tag!(CodeInterpreterAutoTag, Auto, "auto");
+literal_tag!(CodeInterpreterNetworkDisabledTag, Disabled, "disabled");
+literal_tag!(CodeInterpreterNetworkAllowlistTag, Allowlist, "allowlist");
+
+/// Automatic code-interpreter container configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CodeInterpreterContainerAuto {
+    #[serde(rename = "type")]
+    kind: CodeInterpreterAutoTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    file_ids: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    memory_limit: Omittable<Nullable<ContainerMemoryLimit>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    network_policy: Omittable<CodeInterpreterNetworkPolicy>,
+}
+
+impl CodeInterpreterContainerAuto {
+    /// Creates an automatic container.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            kind: CodeInterpreterAutoTag::Auto,
+            file_ids: Omittable::Omitted,
+            memory_limit: Omittable::Omitted,
+            network_policy: Omittable::Omitted,
+        }
+    }
+
+    /// Attaches files to the automatic container.
+    #[must_use]
+    pub fn with_file_ids(mut self, file_ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.file_ids = Omittable::Value(file_ids.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Sets the container memory limit.
+    #[must_use]
+    pub fn with_memory_limit(mut self, memory_limit: ContainerMemoryLimit) -> Self {
+        self.memory_limit = Omittable::Value(Nullable::Value(memory_limit));
+        self
+    }
+}
+
+impl Default for CodeInterpreterContainerAuto {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Disabled network policy for a code-interpreter container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodeInterpreterNetworkDisabled {
+    #[serde(rename = "type")]
+    kind: CodeInterpreterNetworkDisabledTag,
+}
+
+impl CodeInterpreterNetworkDisabled {
+    /// Creates a disabled policy.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            kind: CodeInterpreterNetworkDisabledTag::Disabled,
+        }
+    }
+}
+
+impl Default for CodeInterpreterNetworkDisabled {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Domain allow-list for a code-interpreter container.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CodeInterpreterNetworkAllowlist {
+    #[serde(rename = "type")]
+    kind: CodeInterpreterNetworkAllowlistTag,
+    allowed_domains: Vec<String>,
+}
+
+impl CodeInterpreterNetworkAllowlist {
+    /// Creates an allow-list policy.
+    #[must_use]
+    pub fn new(allowed_domains: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            kind: CodeInterpreterNetworkAllowlistTag::Allowlist,
+            allowed_domains: allowed_domains.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+tagged_union! {
+    /// Network policy for an automatic code-interpreter container.
+    pub enum CodeInterpreterNetworkPolicy {
+        Disabled(CodeInterpreterNetworkDisabled) => "disabled",
+        Allowlist(CodeInterpreterNetworkAllowlist) => "allowlist"
+    }
+}
+
+/// Container selection for the code-interpreter tool.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum CodeInterpreterContainer {
+    /// An existing container id.
+    ContainerId(String),
+    /// Automatic container configuration.
+    Auto(CodeInterpreterContainerAuto),
+    /// A future container shape retained verbatim.
+    Unknown(Value),
+}
+
+impl Serialize for CodeInterpreterContainer {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::ContainerId(value) => value.serialize(serializer),
+            Self::Auto(value) => value.serialize(serializer),
+            Self::Unknown(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CodeInterpreterContainer {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        match value {
+            Value::String(id) => Ok(Self::ContainerId(id)),
+            Value::Object(ref object) => match object.get("type").and_then(Value::as_str) {
+                Some("auto") => serde_json::from_value(value)
+                    .map(Self::Auto)
+                    .map_err(D::Error::custom),
+                Some(_) => Ok(Self::Unknown(value)),
+                None => Err(D::Error::custom(
+                    "code interpreter container object is missing string field `type`",
+                )),
+            },
+            _ => Err(D::Error::custom(
+                "code interpreter container must be a string id or object",
+            )),
+        }
+    }
+}
 
 /// Code-interpreter tool configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CodeInterpreterTool {
     #[serde(rename = "type")]
     kind: CodeInterpreterToolTag,
-    container: Value,
+    container: CodeInterpreterContainer,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    allowed_callers: Omittable<Nullable<Vec<String>>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -6471,22 +7888,117 @@ impl CodeInterpreterTool {
     pub fn container_id(container_id: impl Into<String>) -> Self {
         Self {
             kind: CodeInterpreterToolTag::CodeInterpreter,
-            container: Value::String(container_id.into()),
+            container: CodeInterpreterContainer::ContainerId(container_id.into()),
+            allowed_callers: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Uses an automatic-container configuration.
+    #[must_use]
+    pub fn automatic_container(container: CodeInterpreterContainerAuto) -> Self {
+        Self {
+            kind: CodeInterpreterToolTag::CodeInterpreter,
+            container: CodeInterpreterContainer::Auto(container),
+            allowed_callers: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
 
     /// Serializes an automatic-container configuration.
     pub fn automatic<T: Serialize>(container: &T) -> Result<Self, serde_json::Error> {
+        let value = serde_json::to_value(container)?;
+        let parsed = serde_json::from_value(value)?;
         Ok(Self {
             kind: CodeInterpreterToolTag::CodeInterpreter,
-            container: serde_json::to_value(container)?,
+            container: parsed,
+            allowed_callers: Omittable::Omitted,
             extra: ExtraFields::new(),
         })
+    }
+
+    /// Restricts invocation contexts.
+    #[must_use]
+    pub fn with_allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.allowed_callers = Omittable::Value(Nullable::Value(
+            callers.into_iter().map(Into::into).collect(),
+        ));
+        self
+    }
+
+    /// Returns the container configuration.
+    #[must_use]
+    pub const fn container(&self) -> &CodeInterpreterContainer {
+        &self.container
     }
 }
 
 literal_tag!(CustomToolTag, Custom, "custom");
+literal_tag!(CustomTextFormatTag, Text, "text");
+literal_tag!(CustomGrammarFormatTag, Grammar, "grammar");
+
+open_string_enum! {
+    /// Grammar syntax accepted by a custom tool.
+    pub enum GrammarSyntax {
+        Lark = "lark",
+        Regex = "regex"
+    }
+}
+
+/// Unconstrained text input format for a custom tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomTextFormat {
+    #[serde(rename = "type")]
+    kind: CustomTextFormatTag,
+}
+
+impl CustomTextFormat {
+    /// Creates a text format.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            kind: CustomTextFormatTag::Text,
+        }
+    }
+}
+
+impl Default for CustomTextFormat {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Grammar-constrained input format for a custom tool.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomGrammarFormat {
+    #[serde(rename = "type")]
+    kind: CustomGrammarFormatTag,
+    syntax: GrammarSyntax,
+    definition: String,
+}
+
+impl CustomGrammarFormat {
+    /// Creates a grammar format.
+    #[must_use]
+    pub fn new(syntax: GrammarSyntax, definition: impl Into<String>) -> Self {
+        Self {
+            kind: CustomGrammarFormatTag::Grammar,
+            syntax,
+            definition: definition.into(),
+        }
+    }
+}
+
+tagged_union! {
+    /// Input format constraint for a custom tool.
+    pub enum CustomToolInputFormat {
+        Text(CustomTextFormat) => "text",
+        Grammar(CustomGrammarFormat) => "grammar"
+    }
+}
 
 /// A named custom free-form tool.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -6494,6 +8006,14 @@ pub struct CustomTool {
     #[serde(rename = "type")]
     kind: CustomToolTag,
     name: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    description: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    format: Omittable<CustomToolInputFormat>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    defer_loading: Omittable<bool>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    allowed_callers: Omittable<Nullable<Vec<String>>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -6505,8 +8025,45 @@ impl CustomTool {
         Self {
             kind: CustomToolTag::Custom,
             name: name.into(),
+            description: Omittable::Omitted,
+            format: Omittable::Omitted,
+            defer_loading: Omittable::Omitted,
+            allowed_callers: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
+    }
+
+    /// Sets the tool description.
+    #[must_use]
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Omittable::Value(description.into());
+        self
+    }
+
+    /// Sets the input format constraint.
+    #[must_use]
+    pub fn with_format(mut self, format: CustomToolInputFormat) -> Self {
+        self.format = Omittable::Value(format);
+        self
+    }
+
+    /// Marks the tool for deferred loading.
+    #[must_use]
+    pub fn with_defer_loading(mut self, defer_loading: bool) -> Self {
+        self.defer_loading = Omittable::Value(defer_loading);
+        self
+    }
+
+    /// Restricts invocation contexts.
+    #[must_use]
+    pub fn with_allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.allowed_callers = Omittable::Value(Nullable::Value(
+            callers.into_iter().map(Into::into).collect(),
+        ));
+        self
     }
 }
 
@@ -6629,7 +8186,6 @@ open_string_enum! {
     /// Hosted tool types accepted by the tool-choice object branch.
     pub enum HostedToolType {
         FileSearch = "file_search",
-        WebSearch = "web_search",
         WebSearchPreview = "web_search_preview",
         Computer = "computer",
         ComputerUsePreview = "computer_use_preview",
@@ -7266,6 +8822,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::containers::ContainerMemoryLimit;
+    use crate::vector_stores::VectorStoreMaxResults;
 
     fn assert_json_dto<T>()
     where
@@ -7278,8 +8836,11 @@ mod tests {
         assert_json_dto::<UnknownTaggedObject>();
         assert_json_dto::<ResponseStatus>();
         assert_json_dto::<ResponseItemStatus>();
+        assert_json_dto::<ItemProgressStatus>();
+        assert_json_dto::<MessagePhase>();
         assert_json_dto::<MessageRole>();
         assert_json_dto::<ImageDetail>();
+        assert_json_dto::<FileDetail>();
         assert_json_dto::<TruncationStrategy>();
         assert_json_dto::<ReasoningEffort>();
         assert_json_dto::<ReasoningSummary>();
@@ -7393,6 +8954,8 @@ mod tests {
         assert_json_dto::<ProgramOutputItem>();
         assert_json_dto::<FileSearchCall>();
         assert_json_dto::<ComputerCall>();
+        assert_json_dto::<ComputerAction>();
+        assert_json_dto::<ComputerClickAction>();
         assert_json_dto::<ComputerCallOutput>();
         assert_json_dto::<ComputerCallOutputResource>();
         assert_json_dto::<WebSearchCall>();
@@ -7423,10 +8986,16 @@ mod tests {
         assert_json_dto::<CustomToolCallOutput>();
         assert_json_dto::<CustomToolCallOutputResource>();
         assert_json_dto::<FileSearchTool>();
+        assert_json_dto::<FileSearchRankingOptions>();
         assert_json_dto::<ComputerTool>();
         assert_json_dto::<ComputerUsePreviewTool>();
         assert_json_dto::<WebSearchTool>();
+        assert_json_dto::<WebSearchToolType>();
+        assert_json_dto::<WebSearchFilters>();
         assert_json_dto::<CodeInterpreterTool>();
+        assert_json_dto::<CodeInterpreterContainer>();
+        assert_json_dto::<CustomToolInputFormat>();
+        assert_json_dto::<ImageGenerationModel>();
         assert_json_dto::<ProgrammaticTool>();
         assert_json_dto::<ImageGenerationTool>();
         assert_json_dto::<LocalShellTool>();
@@ -8076,7 +9645,7 @@ mod tests {
             "call_1",
             "weather",
             arguments,
-            ResponseItemStatus::Completed,
+            ItemProgressStatus::Completed,
         );
         let parsed: WeatherArgs = call
             .arguments()
@@ -8204,7 +9773,7 @@ mod tests {
             serde_json::json!({ "city": "Hangzhou", "country": null })
                 .to_string()
                 .into(),
-            ResponseItemStatus::Completed,
+            ItemProgressStatus::Completed,
         );
         let parsed: WeatherQuery = call.arguments_as().expect("parse arguments");
         assert_eq!(
@@ -8263,7 +9832,7 @@ mod tests {
         // Success case
         let success_response = Response {
             id: "resp_1".into(),
-            created_at: 1000,
+            created_at: UnixSeconds(1000),
             error: Nullable::Null,
             incomplete_details: Nullable::Null,
             instructions: Nullable::Null,
@@ -8272,7 +9841,7 @@ mod tests {
             object: ResponseObjectTag::Response,
             output: vec![ResponseOutputItem::Message(OutputMessage::new(
                 "msg_1",
-                ResponseItemStatus::Completed,
+                ItemProgressStatus::Completed,
                 vec![OutputContent::Text(OutputText::new(
                     "{\"temperature\":20.5,\"summary\":\"Cloudy\"}",
                 ))],
@@ -8290,14 +9859,18 @@ mod tests {
             max_tool_calls: Omittable::Omitted,
             previous_response_id: Omittable::Omitted,
             prompt: Omittable::Omitted,
+            prompt_cache_key: Omittable::Omitted,
+            prompt_cache_options: Omittable::Omitted,
+            prompt_cache_retention: Omittable::Omitted,
             reasoning: Omittable::Omitted,
             safety_identifier: Omittable::Omitted,
             service_tier: Omittable::Omitted,
-            store: Omittable::Omitted,
             text: Omittable::Omitted,
             truncation: Omittable::Omitted,
             usage: Omittable::Omitted,
             user: Omittable::Omitted,
+            moderation: Omittable::Omitted,
+            top_logprobs: Omittable::Omitted,
             extra: ExtraFields::new(),
         };
         let parsed: WeatherReport = success_response
@@ -8308,7 +9881,7 @@ mod tests {
         // Refusal case
         let refusal_response = Response {
             id: "resp_2".into(),
-            created_at: 1000,
+            created_at: UnixSeconds(1000),
             error: Nullable::Null,
             incomplete_details: Nullable::Null,
             instructions: Nullable::Null,
@@ -8317,7 +9890,7 @@ mod tests {
             object: ResponseObjectTag::Response,
             output: vec![ResponseOutputItem::Message(OutputMessage::new(
                 "msg_2",
-                ResponseItemStatus::Completed,
+                ItemProgressStatus::Completed,
                 vec![OutputContent::Refusal(Refusal::new(
                     "Cannot assist with that request",
                 ))],
@@ -8335,14 +9908,18 @@ mod tests {
             max_tool_calls: Omittable::Omitted,
             previous_response_id: Omittable::Omitted,
             prompt: Omittable::Omitted,
+            prompt_cache_key: Omittable::Omitted,
+            prompt_cache_options: Omittable::Omitted,
+            prompt_cache_retention: Omittable::Omitted,
             reasoning: Omittable::Omitted,
             safety_identifier: Omittable::Omitted,
             service_tier: Omittable::Omitted,
-            store: Omittable::Omitted,
             text: Omittable::Omitted,
             truncation: Omittable::Omitted,
             usage: Omittable::Omitted,
             user: Omittable::Omitted,
+            moderation: Omittable::Omitted,
+            top_logprobs: Omittable::Omitted,
             extra: ExtraFields::new(),
         };
         let err = refusal_response
@@ -8353,7 +9930,7 @@ mod tests {
         // Incomplete case
         let incomplete_response = Response {
             id: "resp_3".into(),
-            created_at: 1000,
+            created_at: UnixSeconds(1000),
             error: Nullable::Null,
             incomplete_details: Nullable::Value(IncompleteDetails {
                 reason: IncompleteReason::MaxOutputTokens,
@@ -8377,14 +9954,18 @@ mod tests {
             max_tool_calls: Omittable::Omitted,
             previous_response_id: Omittable::Omitted,
             prompt: Omittable::Omitted,
+            prompt_cache_key: Omittable::Omitted,
+            prompt_cache_options: Omittable::Omitted,
+            prompt_cache_retention: Omittable::Omitted,
             reasoning: Omittable::Omitted,
             safety_identifier: Omittable::Omitted,
             service_tier: Omittable::Omitted,
-            store: Omittable::Omitted,
             text: Omittable::Omitted,
             truncation: Omittable::Omitted,
             usage: Omittable::Omitted,
             user: Omittable::Omitted,
+            moderation: Omittable::Omitted,
+            top_logprobs: Omittable::Omitted,
             extra: ExtraFields::new(),
         };
         let inc_err = incomplete_response
@@ -8439,10 +10020,10 @@ mod tests {
         let output_json = json!([
             {"type": "message", "id": "m1", "role": "assistant", "status": "completed", "content": [{"type": "output_text", "text": "hi"}]},
             {"type": "function_call", "id": "fc1", "call_id": "c1", "name": "fn1", "arguments": "{}", "status": "completed"},
-            {"type": "function_call_output", "id": "fco1", "output": "result", "status": "completed"},
+            {"type": "function_call_output", "id": "fco1", "call_id": "c1", "output": "result", "status": "completed"},
             {"type": "file_search_call", "id": "fs1", "status": "completed", "queries": ["test"]},
             {"type": "web_search_call", "id": "ws1", "status": "completed", "action": {}},
-            {"type": "computer_call", "id": "cc1", "call_id": "c_call", "action": {}, "pending_safety_checks": [], "status": "completed"},
+            {"type": "computer_call", "id": "cc1", "call_id": "c_call", "action": {"type": "screenshot"}, "pending_safety_checks": [], "status": "completed"},
             {"type": "computer_call_output", "id": "cco1", "call_id": "c_call", "output": "screen", "status": "completed"},
             {"type": "reasoning", "id": "r1", "summary": []},
             {"type": "program", "id": "p1", "call_id": "c_p1", "code": "print(1)", "fingerprint": "fp1"},
@@ -8462,7 +10043,7 @@ mod tests {
             {"type": "mcp_list_tools", "id": "mcp_lt1", "server_label": "srv", "tools": []},
             {"type": "mcp_call", "id": "mcp_c1", "call_id": "mcp1", "server_label": "srv", "name": "tool1", "arguments": "{}", "status": "completed"},
             {"type": "mcp_approval_request", "id": "mcp_ar1", "server_label": "srv", "name": "tool1", "arguments": "{}"},
-            {"type": "mcp_approval_response", "id": "mcp_resp1", "request_id": "req1", "approval_request_id": "ar1", "approve": true},
+            {"type": "mcp_approval_response", "id": "mcp_resp1", "approval_request_id": "ar1", "approve": true, "request_id": "req1"},
             {"type": "custom_tool_call", "call_id": "cust1", "name": "custom", "input": "{}"},
             {"type": "custom_tool_call_output", "id": "custo1", "call_id": "cust1", "output": "done", "status": "completed"},
             {"type": "future_unknown_tool", "data": 123}
@@ -8474,7 +10055,7 @@ mod tests {
 
         let response = Response {
             id: "resp_test".into(),
-            created_at: 1000,
+            created_at: UnixSeconds(1000),
             error: Nullable::Null,
             incomplete_details: Nullable::Null,
             instructions: Nullable::Null,
@@ -8495,14 +10076,18 @@ mod tests {
             max_tool_calls: Omittable::Omitted,
             previous_response_id: Omittable::Omitted,
             prompt: Omittable::Omitted,
+            prompt_cache_key: Omittable::Omitted,
+            prompt_cache_options: Omittable::Omitted,
+            prompt_cache_retention: Omittable::Omitted,
             reasoning: Omittable::Omitted,
             safety_identifier: Omittable::Omitted,
             service_tier: Omittable::Omitted,
-            store: Omittable::Omitted,
             text: Omittable::Omitted,
             truncation: Omittable::Omitted,
             usage: Omittable::Omitted,
             user: Omittable::Omitted,
+            moderation: Omittable::Omitted,
+            top_logprobs: Omittable::Omitted,
             extra: ExtraFields::new(),
         };
 
@@ -8605,7 +10190,7 @@ mod tests {
             .tool(FunctionTool::new("lookup"));
         let response = Response {
             id: "resp_1".into(),
-            created_at: 1,
+            created_at: UnixSeconds(1),
             error: Nullable::Null,
             incomplete_details: Nullable::Null,
             instructions: Nullable::Null,
@@ -8626,14 +10211,18 @@ mod tests {
             max_tool_calls: Omittable::Omitted,
             previous_response_id: Omittable::Omitted,
             prompt: Omittable::Omitted,
+            prompt_cache_key: Omittable::Omitted,
+            prompt_cache_options: Omittable::Omitted,
+            prompt_cache_retention: Omittable::Omitted,
             reasoning: Omittable::Omitted,
             safety_identifier: Omittable::Omitted,
             service_tier: Omittable::Omitted,
-            store: Omittable::Omitted,
             text: Omittable::Omitted,
             truncation: Omittable::Omitted,
             usage: Omittable::Omitted,
             user: Omittable::Omitted,
+            moderation: Omittable::Omitted,
+            top_logprobs: Omittable::Omitted,
             extra: ExtraFields::new(),
         };
         let follow = CreateResponseRequest::follow_up_from(&previous, &response, "next");
@@ -8641,6 +10230,366 @@ mod tests {
         assert_eq!(value["previous_response_id"], "resp_1");
         assert_eq!(value["instructions"], "Stay concise.");
         assert_eq!(value["tools"][0]["name"], "lookup");
+    }
+
+    #[test]
+    fn file_detail_does_not_accept_image_original_as_known_value() {
+        let encoded =
+            serde_json::to_value(InputFile::from_file_id("file_1").detail(FileDetail::High))
+                .expect("encode file detail");
+        assert_eq!(encoded["detail"], "high");
+        let unknown: FileDetail =
+            serde_json::from_value(json!("original")).expect("unknown file detail is retained");
+        assert!(!unknown.is_known());
+        assert_eq!(unknown.as_str(), "original");
+    }
+
+    #[test]
+    fn create_instructions_are_string_or_null() {
+        let request = CreateResponseRequest::new("gpt-test", "hi").instructions("Be brief.");
+        assert_eq!(
+            serde_json::to_value(&request).expect("encode")["instructions"],
+            "Be brief."
+        );
+        let null_request = CreateResponseRequest::new("gpt-test", "hi").instructions_null();
+        assert_eq!(
+            serde_json::to_value(&null_request).expect("encode")["instructions"],
+            Value::Null
+        );
+        let array = json!({
+            "model": "gpt-test",
+            "input": "hi",
+            "instructions": [{"type": "message", "role": "developer", "content": "nope"}]
+        });
+        assert!(serde_json::from_value::<CreateResponseRequest>(array).is_err());
+    }
+
+    #[test]
+    fn function_tool_parameters_accept_null_and_reject_missing() {
+        let decoded: FunctionTool = serde_json::from_value(json!({
+            "type": "function",
+            "name": "lookup",
+            "parameters": null
+        }))
+        .expect("null parameters");
+        assert_eq!(decoded.parameters_ref(), None);
+        assert_eq!(
+            serde_json::to_value(FunctionTool::new("lookup").parameters_null()).expect("encode"),
+            json!({"type": "function", "name": "lookup", "parameters": null})
+        );
+        assert!(
+            serde_json::from_value::<FunctionTool>(json!({
+                "type": "function",
+                "name": "lookup"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn hosted_tool_choice_does_not_treat_web_search_as_known() {
+        let decoded: ToolChoice = serde_json::from_value(json!({"type": "web_search"}))
+            .expect("unknown hosted objects are retained");
+        assert!(matches!(decoded, ToolChoice::Unknown(_)));
+        let preview: ToolChoice = serde_json::from_value(json!({"type": "web_search_preview"}))
+            .expect("preview remains hosted");
+        assert!(matches!(preview, ToolChoice::Hosted(_)));
+    }
+
+    #[test]
+    fn mcp_approval_response_resource_does_not_require_ghost_request_id() {
+        let fixture = include_str!(
+            "../../../testdata/fixtures/responses/mcp-approval/output-without-request-id.json"
+        );
+        let without_request_id: Value =
+            serde_json::from_str(fixture).expect("parse fixture without request_id");
+        let decoded: McpApprovalResponseResource =
+            serde_json::from_value(without_request_id.clone()).expect("decode without request_id");
+        assert!(decoded.extra_fields().get("request_id").is_none());
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("round trip"),
+            without_request_id
+        );
+
+        let with_ghost = json!({
+            "type": "mcp_approval_response",
+            "id": "mcpr_1",
+            "approval_request_id": "apr_1",
+            "approve": true,
+            "request_id": "req_ghost"
+        });
+        let decoded_ghost: McpApprovalResponseResource =
+            serde_json::from_value(with_ghost.clone()).expect("ghost request_id is extra");
+        assert_eq!(
+            decoded_ghost.extra_fields().get("request_id"),
+            Some(&json!("req_ghost"))
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded_ghost).expect("preserve extra"),
+            with_ghost
+        );
+    }
+
+    #[test]
+    fn web_search_type_aliases_round_trip_and_stay_typed() {
+        for tag in ["web_search", "web_search_2025_08_26"] {
+            let value = json!({
+                "type": tag,
+                "search_context_size": "low",
+                "external_web_access": false,
+                "filters": {"allowed_domains": ["example.com"]},
+                "user_location": {"type": "approximate", "country": "US"}
+            });
+            let decoded: ResponseTool =
+                serde_json::from_value(value.clone()).expect("decode alias");
+            assert!(matches!(decoded, ResponseTool::WebSearch(_)));
+            assert_eq!(serde_json::to_value(&decoded).expect("encode"), value);
+        }
+        for tag in ["web_search_preview", "web_search_preview_2025_03_11"] {
+            let value = json!({"type": tag, "search_context_size": "medium"});
+            let decoded: ResponseTool =
+                serde_json::from_value(value.clone()).expect("decode preview");
+            assert!(matches!(decoded, ResponseTool::WebSearchPreview(_)));
+            assert_eq!(serde_json::to_value(&decoded).expect("encode"), value);
+        }
+        let constructed = serde_json::to_value(
+            WebSearchTool::new().with_search_context_size(WebSearchContextSize::High),
+        )
+        .expect("construct");
+        assert_eq!(constructed["type"], "web_search");
+        assert_eq!(constructed["search_context_size"], "high");
+    }
+
+    #[test]
+    fn file_search_tool_emits_official_optional_fields() {
+        let tool = FileSearchTool::new(["vs_1"])
+            .with_max_num_results(VectorStoreMaxResults::new(20).expect("limit"));
+        let value = serde_json::to_value(&tool).expect("encode");
+        assert_eq!(value["max_num_results"], 20);
+        assert!(
+            serde_json::from_value::<FileSearchTool>(json!({
+                "type": "file_search",
+                "vector_store_ids": ["vs_1"],
+                "max_num_results": 0
+            }))
+            .is_err()
+        );
+        let ranked = json!({
+            "type": "file_search",
+            "vector_store_ids": ["vs_1"],
+            "ranking_options": {
+                "ranker": "auto",
+                "hybrid_search": {"embedding_weight": 0.7, "text_weight": 0.3}
+            }
+        });
+        let decoded: FileSearchTool = serde_json::from_value(ranked.clone()).expect("hybrid");
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), ranked);
+    }
+
+    #[test]
+    fn custom_tool_format_and_code_interpreter_container_are_typed() {
+        let custom = CustomTool::new("extract").with_format(CustomToolInputFormat::Grammar(
+            CustomGrammarFormat::new(GrammarSyntax::Lark, "start: WORD"),
+        ));
+        let value = serde_json::to_value(&custom).expect("encode");
+        assert_eq!(value["format"]["type"], "grammar");
+        assert_eq!(value["format"]["syntax"], "lark");
+
+        let unknown_format: CustomToolInputFormat =
+            serde_json::from_value(json!({"type": "future_format"})).expect("unknown format");
+        assert!(matches!(unknown_format, CustomToolInputFormat::Unknown(_)));
+
+        let auto = CodeInterpreterTool::automatic_container(
+            CodeInterpreterContainerAuto::new().with_memory_limit(ContainerMemoryLimit::FourGiB),
+        )
+        .with_allowed_callers(["direct"]);
+        let encoded = serde_json::to_value(&auto).expect("encode auto");
+        assert_eq!(encoded["container"]["type"], "auto");
+        assert_eq!(encoded["container"]["memory_limit"], "4g");
+        assert_eq!(encoded["allowed_callers"], json!(["direct"]));
+        let by_id = serde_json::to_value(CodeInterpreterTool::container_id("cntr_1")).expect("id");
+        assert_eq!(by_id["container"], "cntr_1");
+    }
+
+    #[test]
+    fn response_usage_compute_units_and_message_phase_round_trip() {
+        let usage = json!({
+            "input_tokens": 1,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 1,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 2,
+            "compute_units": 7
+        });
+        let decoded: ResponseUsage = serde_json::from_value(usage.clone()).expect("usage");
+        assert_eq!(decoded.compute_units(), Some(7));
+        assert_eq!(serde_json::to_value(&decoded).expect("encode"), usage);
+
+        let null_units = json!({
+            "input_tokens": 1,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 1,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 2,
+            "compute_units": null
+        });
+        let decoded_null: ResponseUsage =
+            serde_json::from_value(null_units.clone()).expect("null units");
+        assert_eq!(decoded_null.compute_units(), None);
+        assert_eq!(
+            serde_json::to_value(&decoded_null).expect("encode null"),
+            null_units
+        );
+
+        let message = OutputMessage::new(
+            "msg_phase",
+            ItemProgressStatus::Completed,
+            [OutputText::new("done")],
+        )
+        .phase(MessagePhase::FinalAnswer);
+        let encoded = serde_json::to_value(&message).expect("encode phase");
+        assert_eq!(encoded["phase"], "final_answer");
+        let response = Response {
+            id: "resp_phase".into(),
+            created_at: UnixSeconds(1),
+            error: Nullable::Null,
+            incomplete_details: Nullable::Null,
+            instructions: Nullable::Null,
+            metadata: Nullable::Null,
+            model: "gpt-test".into(),
+            object: ResponseObjectTag::Response,
+            output: vec![ResponseOutputItem::Message(message)],
+            parallel_tool_calls: false,
+            temperature: Nullable::Null,
+            tool_choice: ToolChoice::Auto,
+            tools: vec![],
+            top_p: Nullable::Null,
+            status: Omittable::Omitted,
+            background: Omittable::Omitted,
+            completed_at: Omittable::Omitted,
+            conversation: Omittable::Omitted,
+            max_output_tokens: Omittable::Omitted,
+            max_tool_calls: Omittable::Omitted,
+            previous_response_id: Omittable::Omitted,
+            prompt: Omittable::Omitted,
+            prompt_cache_key: Omittable::Omitted,
+            prompt_cache_options: Omittable::Omitted,
+            prompt_cache_retention: Omittable::Omitted,
+            reasoning: Omittable::Omitted,
+            safety_identifier: Omittable::Omitted,
+            service_tier: Omittable::Omitted,
+            text: Omittable::Omitted,
+            truncation: Omittable::Omitted,
+            usage: Omittable::Omitted,
+            user: Omittable::Omitted,
+            moderation: Omittable::Omitted,
+            top_logprobs: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        };
+        let ResponseInputItem::OutputMessage(replayed) = &response.to_input_items()[0] else {
+            panic!("output message must replay as output message");
+        };
+        assert_eq!(replayed.phase_ref(), Some(&MessagePhase::FinalAnswer));
+    }
+
+    #[test]
+    fn function_call_output_resource_preserves_call_id_on_replay() {
+        let resource: FunctionCallOutputResource = serde_json::from_value(json!({
+            "type": "function_call_output",
+            "id": "fco_1",
+            "call_id": "call_1",
+            "output": "ok",
+            "status": "completed"
+        }))
+        .expect("decode resource");
+        let response = Response {
+            id: "resp_fco".into(),
+            created_at: UnixSeconds(1),
+            error: Nullable::Null,
+            incomplete_details: Nullable::Null,
+            instructions: Nullable::Null,
+            metadata: Nullable::Null,
+            model: "gpt-test".into(),
+            object: ResponseObjectTag::Response,
+            output: vec![ResponseOutputItem::FunctionCallOutput(resource)],
+            parallel_tool_calls: false,
+            temperature: Nullable::Null,
+            tool_choice: ToolChoice::Auto,
+            tools: vec![],
+            top_p: Nullable::Null,
+            status: Omittable::Omitted,
+            background: Omittable::Omitted,
+            completed_at: Omittable::Omitted,
+            conversation: Omittable::Omitted,
+            max_output_tokens: Omittable::Omitted,
+            max_tool_calls: Omittable::Omitted,
+            previous_response_id: Omittable::Omitted,
+            prompt: Omittable::Omitted,
+            prompt_cache_key: Omittable::Omitted,
+            prompt_cache_options: Omittable::Omitted,
+            prompt_cache_retention: Omittable::Omitted,
+            reasoning: Omittable::Omitted,
+            safety_identifier: Omittable::Omitted,
+            service_tier: Omittable::Omitted,
+            text: Omittable::Omitted,
+            truncation: Omittable::Omitted,
+            usage: Omittable::Omitted,
+            user: Omittable::Omitted,
+            moderation: Omittable::Omitted,
+            top_logprobs: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        };
+        let ResponseInputItem::FunctionCallOutput(input) = &response.to_input_items()[0] else {
+            panic!("function output must replay");
+        };
+        assert_eq!(input.call_id(), Some("call_1"));
+    }
+
+    #[test]
+    fn computer_call_actions_and_created_at_float_decode() {
+        let call = json!({
+            "type": "computer_call",
+            "id": "cu_1",
+            "call_id": "call_cu",
+            "pending_safety_checks": [],
+            "status": "in_progress",
+            "action": {"type": "click", "button": "left", "x": 1, "y": 2},
+            "actions": [{"type": "wait"}]
+        });
+        let decoded: ComputerCall = serde_json::from_value(call.clone()).expect("decode");
+        assert!(matches!(decoded.action(), Some(ComputerAction::Click(_))));
+        assert_eq!(decoded.actions().map(<[ComputerAction]>::len), Some(1));
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), call);
+        assert!(
+            serde_json::from_value::<ComputerCall>(json!({
+                "type": "computer_call",
+                "id": "cu_1",
+                "call_id": "call_cu",
+                "pending_safety_checks": [],
+                "status": "in_progress",
+                "action": {"type": "click"}
+            }))
+            .is_err()
+        );
+
+        let response = json!({
+            "id": "resp_ts",
+            "created_at": 1_700_000_000.9,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-test",
+            "object": "response",
+            "output": [],
+            "parallel_tool_calls": true,
+            "temperature": 1.0,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0
+        });
+        let decoded_response: Response = serde_json::from_value(response).expect("float timestamp");
+        assert_eq!(decoded_response.created_at(), 1_700_000_000);
     }
 
     #[test]

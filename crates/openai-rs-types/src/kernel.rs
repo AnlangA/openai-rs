@@ -402,9 +402,12 @@ macro_rules! literal_tag {
 }
 
 /// Forward-compatible tagged union that retains unknown objects verbatim.
+///
+/// A variant may list dated aliases after the primary discriminator:
+/// `WebSearch(WebSearchTool) => "web_search" | "web_search_2025_08_26"`.
 macro_rules! tagged_union {
     ($(#[$meta:meta])* pub enum $name:ident {
-        $($variant:ident($ty:ty) => $wire:literal),+ $(,)?
+        $($variant:ident($ty:ty) => $wire:literal $(| $alias:literal)*),+ $(,)?
     }) => {
         $(#[$meta])*
         #[derive(Debug, Clone, PartialEq)]
@@ -436,7 +439,7 @@ macro_rules! tagged_union {
                 let discriminator =
                     $crate::kernel::object_discriminator(&value).map_err(D::Error::custom)?;
                 match discriminator.as_str() {
-                    $($wire => serde_json::from_value::<$ty>(value)
+                    $($wire $(| $alias)* => serde_json::from_value::<$ty>(value)
                         .map(Self::$variant)
                         .map_err(D::Error::custom),)+
                     _ => $crate::UnknownTaggedObject::from_value(value)

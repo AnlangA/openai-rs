@@ -12,9 +12,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Number, Value};
 use thiserror::Error;
 
+use crate::kernel::UnknownTaggedObject;
 use crate::{
     ExtraFields, FileId, Nullable, Omittable, VectorStoreId, opaque_string_id, open_string_enum,
-    responses::UnknownTaggedObject,
 };
 
 opaque_string_id! {
