@@ -14,12 +14,12 @@ use crate::{ExtraFields, Nullable, Omittable, open_string_enum, responses};
 /// String-to-string metadata accepted by Evals resources.
 pub type EvalMetadata = BTreeMap<String, String>;
 
-/// Pinned `EvalSamplingParams.max_completions_tokens` `minimum: 1`.
+/// Pinned `EvalGraderSamplingParams.max_completions_tokens` `minimum: 1`.
 pub const MIN_EVAL_MAX_COMPLETIONS_TOKENS: u64 = 1;
 /// Official `EvalResponsesSource.created_after` / `created_before` `minimum`.
 pub const MIN_EVAL_CREATED_TIMESTAMP: i64 = 0;
 
-/// Opt-in pin violations for [`EvalSamplingParams`].
+/// Opt-in pin violations for [`EvalGraderSamplingParams`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum EvalSamplingConstraintError {
@@ -467,6 +467,11 @@ impl StringCheckGrader {
 }
 
 /// A text-similarity grader.
+///
+/// Grader-side form of the pinned `GraderTextSimilarity` schema: it carries no
+/// `pass_threshold`, which only exists on the Eval resource side
+/// (`EvalGraderTextSimilarity`, modeled as [`EvalTextSimilarityGrader`] with a
+/// required threshold).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextSimilarityGrader {
     #[serde(rename = "type")]
@@ -475,8 +480,6 @@ pub struct TextSimilarityGrader {
     input: String,
     reference: String,
     evaluation_metric: TextSimilarityMetric,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pass_threshold: Omittable<f64>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -496,20 +499,16 @@ impl TextSimilarityGrader {
             input: input.into(),
             reference: reference.into(),
             evaluation_metric,
-            pass_threshold: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
-    }
-
-    /// Sets a pass threshold used by Eval criteria.
-    #[must_use]
-    pub fn pass_threshold(mut self, threshold: f64) -> Self {
-        self.pass_threshold = Omittable::Value(threshold);
-        self
     }
 }
 
 /// A Python grader.
+///
+/// Eval-resource form of the pinned `GraderPython` schema plus the
+/// `EvalGraderPython` `pass_threshold` extension. The alpha grader union uses
+/// the threshold-free [`PythonGraderParam`] instead.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PythonGrader {
     #[serde(rename = "type")]
@@ -553,9 +552,255 @@ impl PythonGrader {
     }
 }
 
-/// Sampling controls for a model grader or run.
+/// A Python grader restricted to the pinned grader-side schema.
+///
+/// Mirrors `GraderPython` exactly: unlike [`PythonGrader`] this Param form
+/// carries no `pass_threshold`, which only exists on the Eval resource side
+/// (`EvalGraderPython`). It is the variant accepted by the experimental
+/// [`Grader`] run/validate endpoints and by [`MultiGraderMember`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PythonGraderParam {
+    #[serde(rename = "type")]
+    kind: PythonGraderTag,
+    name: String,
+    source: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    image_tag: Omittable<String>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl PythonGraderParam {
+    /// Creates a Python grader param.
+    #[must_use]
+    pub fn new(name: impl Into<String>, source: impl Into<String>) -> Self {
+        Self {
+            kind: PythonGraderTag::Python,
+            name: name.into(),
+            source: source.into(),
+            image_tag: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Selects a Python grader image.
+    #[must_use]
+    pub fn image_tag(mut self, image_tag: impl Into<String>) -> Self {
+        self.image_tag = Omittable::Value(image_tag.into());
+        self
+    }
+}
+
+impl From<PythonGrader> for PythonGraderParam {
+    /// Reuses an Eval Python grader in the alpha grader endpoints, dropping
+    /// the Eval-only `pass_threshold`.
+    fn from(value: PythonGrader) -> Self {
+        Self {
+            kind: value.kind,
+            name: value.name,
+            source: value.source,
+            image_tag: value.image_tag,
+            extra: value.extra,
+        }
+    }
+}
+
+impl From<PythonGraderParam> for PythonGrader {
+    /// Lifts an alpha Python grader into the Eval criterion form with
+    /// `pass_threshold` omitted.
+    fn from(value: PythonGraderParam) -> Self {
+        Self {
+            kind: value.kind,
+            name: value.name,
+            source: value.source,
+            image_tag: value.image_tag,
+            pass_threshold: Omittable::Omitted,
+            extra: value.extra,
+        }
+    }
+}
+
+/// Sampling controls attached to a Completions run data source.
+///
+/// Mirrors the pinned `CreateEvalCompletionsRunDataSource.sampling_params`
+/// object. Every pinned property on this host is non-null, so explicit nulls
+/// are not expressible here; the grader counterpart
+/// [`EvalGraderSamplingParams`] is the anyOf-null host.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct EvalSamplingParams {
+pub struct EvalCompletionsSamplingParams {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    reasoning_effort: Omittable<responses::ReasoningEffort>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    temperature: Omittable<f64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    max_completion_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    top_p: Omittable<f64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    seed: Omittable<i64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    response_format: Omittable<Value>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    tools: Omittable<Vec<Value>>,
+}
+
+impl EvalCompletionsSamplingParams {
+    /// Creates empty sampling controls.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets reasoning effort.
+    #[must_use]
+    pub fn reasoning_effort(mut self, value: responses::ReasoningEffort) -> Self {
+        self.reasoning_effort = Omittable::Value(value);
+        self
+    }
+
+    /// Sets sampling temperature.
+    #[must_use]
+    pub fn temperature(mut self, value: f64) -> Self {
+        self.temperature = Omittable::Value(value);
+        self
+    }
+
+    /// Sets maximum generated tokens.
+    #[must_use]
+    pub fn max_completion_tokens(mut self, value: u64) -> Self {
+        self.max_completion_tokens = Omittable::Value(value);
+        self
+    }
+
+    /// Sets nucleus sampling probability.
+    #[must_use]
+    pub fn top_p(mut self, value: f64) -> Self {
+        self.top_p = Omittable::Value(value);
+        self
+    }
+
+    /// Sets a deterministic seed.
+    #[must_use]
+    pub fn seed(mut self, value: i64) -> Self {
+        self.seed = Omittable::Value(value);
+        self
+    }
+
+    /// Serializes Chat-style `response_format` without requiring JSON text.
+    pub fn response_format<T: Serialize>(
+        mut self,
+        response_format: &T,
+    ) -> Result<Self, serde_json::Error> {
+        self.response_format = Omittable::Value(serde_json::to_value(response_format)?);
+        Ok(self)
+    }
+
+    /// Serializes and adds one tool without requiring JSON text.
+    pub fn tool<T: Serialize>(mut self, tool: &T) -> Result<Self, serde_json::Error> {
+        let mut tools = match std::mem::take(&mut self.tools) {
+            Omittable::Value(tools) => tools,
+            Omittable::Omitted => Vec::new(),
+        };
+        tools.push(serde_json::to_value(tool)?);
+        self.tools = Omittable::Value(tools);
+        Ok(self)
+    }
+}
+
+/// Sampling controls attached to a Responses run data source.
+///
+/// Mirrors the pinned `CreateEvalResponsesRunDataSource.sampling_params`
+/// object: the same domain as [`EvalCompletionsSamplingParams`] with the
+/// Responses-style `text` configuration replacing `response_format`. Every
+/// pinned property on this host is non-null.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EvalResponsesSamplingParams {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    reasoning_effort: Omittable<responses::ReasoningEffort>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    temperature: Omittable<f64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    max_completion_tokens: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    top_p: Omittable<f64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    seed: Omittable<i64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    text: Omittable<Value>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    tools: Omittable<Vec<Value>>,
+}
+
+impl EvalResponsesSamplingParams {
+    /// Creates empty sampling controls.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets reasoning effort.
+    #[must_use]
+    pub fn reasoning_effort(mut self, value: responses::ReasoningEffort) -> Self {
+        self.reasoning_effort = Omittable::Value(value);
+        self
+    }
+
+    /// Sets sampling temperature.
+    #[must_use]
+    pub fn temperature(mut self, value: f64) -> Self {
+        self.temperature = Omittable::Value(value);
+        self
+    }
+
+    /// Sets maximum generated tokens.
+    #[must_use]
+    pub fn max_completion_tokens(mut self, value: u64) -> Self {
+        self.max_completion_tokens = Omittable::Value(value);
+        self
+    }
+
+    /// Sets nucleus sampling probability.
+    #[must_use]
+    pub fn top_p(mut self, value: f64) -> Self {
+        self.top_p = Omittable::Value(value);
+        self
+    }
+
+    /// Sets a deterministic seed.
+    #[must_use]
+    pub fn seed(mut self, value: i64) -> Self {
+        self.seed = Omittable::Value(value);
+        self
+    }
+
+    /// Serializes Responses-style `text` configuration without requiring JSON
+    /// text.
+    pub fn text<T: Serialize>(mut self, text: &T) -> Result<Self, serde_json::Error> {
+        self.text = Omittable::Value(serde_json::to_value(text)?);
+        Ok(self)
+    }
+
+    /// Serializes and adds one tool without requiring JSON text.
+    pub fn tool<T: Serialize>(mut self, tool: &T) -> Result<Self, serde_json::Error> {
+        let mut tools = match std::mem::take(&mut self.tools) {
+            Omittable::Value(tools) => tools,
+            Omittable::Omitted => Vec::new(),
+        };
+        tools.push(serde_json::to_value(tool)?);
+        self.tools = Omittable::Value(tools);
+        Ok(self)
+    }
+}
+
+/// Sampling controls attached to a model grader.
+///
+/// Mirrors the pinned `GraderScoreModel.sampling_params` object: `seed`,
+/// `top_p`, `temperature`, and the `max_completions_tokens` field spelling are
+/// official anyOf-null shapes, so explicit nulls stay expressible on this
+/// host. The token cap uses the grader spelling, not the run
+/// `max_completion_tokens` one.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EvalGraderSamplingParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     seed: Omittable<Nullable<i64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -563,30 +808,22 @@ pub struct EvalSamplingParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     temperature: Omittable<Nullable<f64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    max_completion_tokens: Omittable<Nullable<u64>>,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     max_completions_tokens: Omittable<Nullable<u64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     reasoning_effort: Omittable<responses::ReasoningEffort>,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    response_format: Omittable<Value>,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    tools: Omittable<Vec<Value>>,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    text: Omittable<Value>,
 }
 
-impl EvalSamplingParams {
+impl EvalGraderSamplingParams {
     /// Creates empty sampling controls.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Sets sampling temperature.
+    /// Sets a deterministic seed.
     #[must_use]
-    pub fn temperature(mut self, value: f64) -> Self {
-        self.temperature = Omittable::Value(Nullable::Value(value));
+    pub fn seed(mut self, value: i64) -> Self {
+        self.seed = Omittable::Value(Nullable::Value(value));
         self
     }
 
@@ -597,60 +834,55 @@ impl EvalSamplingParams {
         self
     }
 
-    /// Sets a deterministic seed.
+    /// Sets sampling temperature.
     #[must_use]
-    pub fn seed(mut self, value: i64) -> Self {
-        self.seed = Omittable::Value(Nullable::Value(value));
+    pub fn temperature(mut self, value: f64) -> Self {
+        self.temperature = Omittable::Value(Nullable::Value(value));
         self
     }
 
-    /// Sets maximum generated tokens using the current run field name.
-    #[must_use]
-    pub fn max_completion_tokens(mut self, value: u64) -> Self {
-        self.max_completion_tokens = Omittable::Value(Nullable::Value(value));
-        self
-    }
-
-    /// Sets the alpha grader field spelling used by the grader schema and by
-    /// some pinned run examples.
+    /// Sets maximum tokens the grader model may generate, using the grader
+    /// field spelling.
     #[must_use]
     pub fn max_completions_tokens(mut self, value: u64) -> Self {
         self.max_completions_tokens = Omittable::Value(Nullable::Value(value));
         self
     }
 
-    /// Sends official `seed: null` on the Eval sampling-params object.
+    /// Sends official `seed: null` on the grader sampling-params object.
     #[must_use]
     pub fn seed_null(mut self) -> Self {
         self.seed = Omittable::Value(Nullable::Null);
         self
     }
 
-    /// Sends official `top_p: null` on the Eval sampling-params object.
+    /// Sends official `top_p: null` on the grader sampling-params object.
     #[must_use]
     pub fn top_p_null(mut self) -> Self {
         self.top_p = Omittable::Value(Nullable::Null);
         self
     }
 
-    /// Sends official `temperature: null` on the Eval sampling-params object.
+    /// Sends official `temperature: null` on the grader sampling-params
+    /// object.
     #[must_use]
     pub fn temperature_null(mut self) -> Self {
         self.temperature = Omittable::Value(Nullable::Null);
         self
     }
 
-    /// Sends official `max_completion_tokens: null` on the Eval sampling-params object.
-    #[must_use]
-    pub fn max_completion_tokens_null(mut self) -> Self {
-        self.max_completion_tokens = Omittable::Value(Nullable::Null);
-        self
-    }
-
-    /// Sends official `max_completions_tokens: null` on the Eval sampling-params object.
+    /// Sends official `max_completions_tokens: null` on the grader
+    /// sampling-params object.
     #[must_use]
     pub fn max_completions_tokens_null(mut self) -> Self {
         self.max_completions_tokens = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sets reasoning effort.
+    #[must_use]
+    pub fn reasoning_effort(mut self, value: responses::ReasoningEffort) -> Self {
+        self.reasoning_effort = Omittable::Value(value);
         self
     }
 
@@ -666,42 +898,54 @@ impl EvalSamplingParams {
         }
         Ok(())
     }
+}
 
-    /// Sets reasoning effort.
-    #[must_use]
-    pub fn reasoning_effort(mut self, value: responses::ReasoningEffort) -> Self {
-        self.reasoning_effort = Omittable::Value(value);
-        self
+fn into_nullable<T>(value: Omittable<T>) -> Omittable<Nullable<T>> {
+    match value {
+        Omittable::Value(inner) => Omittable::Value(Nullable::Value(inner)),
+        Omittable::Omitted => Omittable::Omitted,
     }
+}
 
-    /// Serializes and adds one tool without requiring JSON text.
-    pub fn tool<T: Serialize>(mut self, tool: &T) -> Result<Self, serde_json::Error> {
-        let mut tools = match std::mem::take(&mut self.tools) {
-            Omittable::Value(tools) => tools,
-            Omittable::Omitted => Vec::new(),
-        };
-        tools.push(serde_json::to_value(tool)?);
-        self.tools = Omittable::Value(tools);
-        Ok(self)
+impl From<EvalCompletionsSamplingParams> for EvalGraderSamplingParams {
+    /// Carries the shared controls (`seed`, `top_p`, `temperature`,
+    /// `reasoning_effort`) plus the token cap, renaming the run
+    /// `max_completion_tokens` spelling to the grader `max_completions_tokens`
+    /// spelling. `response_format` and `tools` have no grader counterpart and
+    /// are dropped.
+    fn from(value: EvalCompletionsSamplingParams) -> Self {
+        Self {
+            seed: into_nullable(value.seed),
+            top_p: into_nullable(value.top_p),
+            temperature: into_nullable(value.temperature),
+            max_completions_tokens: into_nullable(value.max_completion_tokens),
+            reasoning_effort: value.reasoning_effort,
+        }
     }
+}
 
-    /// Serializes Chat-style `response_format` without requiring JSON text.
-    pub fn response_format<T: Serialize>(
-        mut self,
-        response_format: &T,
-    ) -> Result<Self, serde_json::Error> {
-        self.response_format = Omittable::Value(serde_json::to_value(response_format)?);
-        Ok(self)
-    }
-
-    /// Serializes Responses-style `text` configuration without requiring JSON text.
-    pub fn text<T: Serialize>(mut self, text: &T) -> Result<Self, serde_json::Error> {
-        self.text = Omittable::Value(serde_json::to_value(text)?);
-        Ok(self)
+impl From<EvalResponsesSamplingParams> for EvalGraderSamplingParams {
+    /// Carries the shared controls (`seed`, `top_p`, `temperature`,
+    /// `reasoning_effort`) plus the token cap, renaming the run
+    /// `max_completion_tokens` spelling to the grader `max_completions_tokens`
+    /// spelling. `text` and `tools` have no grader counterpart and are
+    /// dropped.
+    fn from(value: EvalResponsesSamplingParams) -> Self {
+        Self {
+            seed: into_nullable(value.seed),
+            top_p: into_nullable(value.top_p),
+            temperature: into_nullable(value.temperature),
+            max_completions_tokens: into_nullable(value.max_completion_tokens),
+            reasoning_effort: value.reasoning_effort,
+        }
     }
 }
 
 /// A score-model grader.
+///
+/// Eval-resource form of the pinned `GraderScoreModel` schema plus the
+/// `EvalGraderScoreModel` `pass_threshold` extension. The alpha grader union
+/// uses the threshold-free [`ScoreModelGraderParam`] instead.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScoreModelGrader {
     #[serde(rename = "type")]
@@ -710,7 +954,7 @@ pub struct ScoreModelGrader {
     input: Vec<EvalMessage>,
     model: String,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    sampling_params: Omittable<EvalSamplingParams>,
+    sampling_params: Omittable<EvalGraderSamplingParams>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     range: Omittable<Vec<f64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -737,7 +981,7 @@ impl ScoreModelGrader {
 
     /// Sets model sampling controls.
     #[must_use]
-    pub fn sampling_params(mut self, params: EvalSamplingParams) -> Self {
+    pub fn sampling_params(mut self, params: EvalGraderSamplingParams) -> Self {
         self.sampling_params = Omittable::Value(params);
         self
     }
@@ -754,6 +998,91 @@ impl ScoreModelGrader {
     pub fn pass_threshold(mut self, threshold: f64) -> Self {
         self.pass_threshold = Omittable::Value(threshold);
         self
+    }
+}
+
+/// A score-model grader restricted to the pinned grader-side schema.
+///
+/// Mirrors `GraderScoreModel` exactly: unlike [`ScoreModelGrader`] this Param
+/// form carries no `pass_threshold`, which only exists on the Eval resource
+/// side (`EvalGraderScoreModel`). It is the variant accepted by the
+/// experimental [`Grader`] run/validate endpoints and by
+/// [`MultiGraderMember`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScoreModelGraderParam {
+    #[serde(rename = "type")]
+    kind: ScoreModelGraderTag,
+    name: String,
+    input: Vec<EvalMessage>,
+    model: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    sampling_params: Omittable<EvalGraderSamplingParams>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    range: Omittable<Vec<f64>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ScoreModelGraderParam {
+    /// Creates a score-model grader param.
+    #[must_use]
+    pub fn new(name: impl Into<String>, model: impl Into<String>, input: Vec<EvalMessage>) -> Self {
+        Self {
+            kind: ScoreModelGraderTag::ScoreModel,
+            name: name.into(),
+            input,
+            model: model.into(),
+            sampling_params: Omittable::Omitted,
+            range: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Sets model sampling controls.
+    #[must_use]
+    pub fn sampling_params(mut self, params: EvalGraderSamplingParams) -> Self {
+        self.sampling_params = Omittable::Value(params);
+        self
+    }
+
+    /// Sets the score range.
+    #[must_use]
+    pub fn range(mut self, minimum: f64, maximum: f64) -> Self {
+        self.range = Omittable::Value(vec![minimum, maximum]);
+        self
+    }
+}
+
+impl From<ScoreModelGrader> for ScoreModelGraderParam {
+    /// Reuses an Eval score-model grader in the alpha grader endpoints,
+    /// dropping the Eval-only `pass_threshold`.
+    fn from(value: ScoreModelGrader) -> Self {
+        Self {
+            kind: value.kind,
+            name: value.name,
+            input: value.input,
+            model: value.model,
+            sampling_params: value.sampling_params,
+            range: value.range,
+            extra: value.extra,
+        }
+    }
+}
+
+impl From<ScoreModelGraderParam> for ScoreModelGrader {
+    /// Lifts an alpha score-model grader into the Eval criterion form with
+    /// `pass_threshold` omitted.
+    fn from(value: ScoreModelGraderParam) -> Self {
+        Self {
+            kind: value.kind,
+            name: value.name,
+            input: value.input,
+            model: value.model,
+            sampling_params: value.sampling_params,
+            range: value.range,
+            pass_threshold: Omittable::Omitted,
+            extra: value.extra,
+        }
     }
 }
 
@@ -811,12 +1140,14 @@ pub const EVAL_CONTENT_ITEM_DISCRIMINATORS: [&str; 4] =
 
 tagged_union! {
     /// Nested member accepted by `multi.graders` (multi is intentionally not
-    /// recursive, while label_model is allowed here).
+    /// recursive, while label_model is allowed here). Members mirror the
+    /// pinned `GraderMulti.graders` union, so every variant is free of the
+    /// Eval-resource-only `pass_threshold`.
     pub enum MultiGraderMember {
         StringCheck(StringCheckGrader) => "string_check",
         TextSimilarity(TextSimilarityGrader) => "text_similarity",
-        Python(PythonGrader) => "python",
-        ScoreModel(Box<ScoreModelGrader>) => "score_model",
+        Python(PythonGraderParam) => "python",
+        ScoreModel(Box<ScoreModelGraderParam>) => "score_model",
         LabelModel(LabelModelGrader) => "label_model"
     }
 }
@@ -880,11 +1211,17 @@ impl MultiGrader {
 
 tagged_union! {
     /// Grader union used by the experimental run/validate endpoints.
+    ///
+    /// Mirrors the pinned grader-side `Grader*` schemas: `text_similarity`,
+    /// `python`, and `score_model` variants use the threshold-free forms
+    /// ([`TextSimilarityGrader`], [`PythonGraderParam`],
+    /// [`ScoreModelGraderParam`]); the Eval-resource `pass_threshold` only
+    /// exists on [`TestingCriterion`] variants.
     pub enum Grader {
         StringCheck(StringCheckGrader) => "string_check",
         TextSimilarity(TextSimilarityGrader) => "text_similarity",
-        Python(PythonGrader) => "python",
-        ScoreModel(Box<ScoreModelGrader>) => "score_model",
+        Python(PythonGraderParam) => "python",
+        ScoreModel(Box<ScoreModelGraderParam>) => "score_model",
         Multi(MultiGrader) => "multi"
     }
 }
@@ -1930,7 +2267,7 @@ impl EvalJsonlRunDataSource {
 }
 
 macro_rules! model_run_data_source {
-    ($name:ident, $tag:ident, $variant:ident, $source:ty) => {
+    ($name:ident, $tag:ident, $variant:ident, $source:ty, $params:ty) => {
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct $name {
             #[serde(rename = "type")]
@@ -1939,7 +2276,7 @@ macro_rules! model_run_data_source {
             #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
             input_messages: Omittable<EvalInputMessages>,
             #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-            sampling_params: Omittable<Nullable<EvalSamplingParams>>,
+            sampling_params: Omittable<Nullable<$params>>,
             #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
             model: Omittable<String>,
             #[serde(flatten)]
@@ -1974,9 +2311,9 @@ macro_rules! model_run_data_source {
                 self
             }
 
-            /// Sets sampling controls.
+            /// Sets host-specific sampling controls.
             #[must_use]
-            pub fn sampling_params(mut self, params: EvalSamplingParams) -> Self {
+            pub fn sampling_params(mut self, params: $params) -> Self {
                 self.sampling_params = Omittable::Value(Nullable::Value(params));
                 self
             }
@@ -1995,13 +2332,15 @@ model_run_data_source!(
     EvalCompletionsRunDataSource,
     EvalCompletionsRunDataSourceTag,
     Completions,
-    EvalCompletionsSource
+    EvalCompletionsSource,
+    EvalCompletionsSamplingParams
 );
 model_run_data_source!(
     EvalResponsesRunDataSource,
     EvalResponsesRunDataSourceTag,
     Responses,
-    EvalResponsesRunSource
+    EvalResponsesRunSource,
+    EvalResponsesSamplingParams
 );
 
 tagged_union! {
@@ -2106,6 +2445,38 @@ pub struct EvalRunResultCounts {
     extra: ExtraFields,
 }
 
+impl EvalRunResultCounts {
+    /// Returns the total number of graded items.
+    #[must_use]
+    pub const fn total(&self) -> u64 {
+        self.total
+    }
+
+    /// Returns the number of items whose sampling errored.
+    #[must_use]
+    pub const fn errored(&self) -> u64 {
+        self.errored
+    }
+
+    /// Returns the number of items that failed their criteria.
+    #[must_use]
+    pub const fn failed(&self) -> u64 {
+        self.failed
+    }
+
+    /// Returns the number of items that passed.
+    #[must_use]
+    pub const fn passed(&self) -> u64 {
+        self.passed
+    }
+
+    /// Returns unknown response fields.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 /// Per-model usage for a run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvalRunModelUsage {
@@ -2136,6 +2507,26 @@ pub struct EvalApiError {
     message: String,
     #[serde(flatten)]
     extra: ExtraFields,
+}
+
+impl EvalApiError {
+    /// Returns the machine-readable error code.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// Returns the human-readable failure message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns unknown response fields.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 literal_tag!(EvalRunObjectTag, EvalRun, "eval.run");
@@ -2173,6 +2564,24 @@ impl EvalRun {
     #[must_use]
     pub const fn status(&self) -> &EvalRunStatus {
         &self.status
+    }
+
+    /// Returns aggregate pass/fail/error counts for the run.
+    #[must_use]
+    pub const fn result_counts(&self) -> &EvalRunResultCounts {
+        &self.result_counts
+    }
+
+    /// Returns run-level failure details when the run errored.
+    ///
+    /// The pinned schema requires the `error` key and allows explicit `null`
+    /// for runs that have not failed; explicit null maps to `None` here.
+    #[must_use]
+    pub const fn error(&self) -> Option<&EvalApiError> {
+        match &self.error {
+            Nullable::Value(error) => Some(error),
+            Nullable::Null => None,
+        }
     }
 
     /// Returns unknown response fields.
@@ -2401,6 +2810,18 @@ impl EvalSample {
     pub const fn usage(&self) -> &EvalSampleUsage {
         &self.usage
     }
+
+    /// Returns the sampled model error when the underlying call errored.
+    ///
+    /// The pinned schema requires the `error` key and allows explicit `null`
+    /// for successful samples; explicit null maps to `None` here.
+    #[must_use]
+    pub const fn error(&self) -> Option<&EvalApiError> {
+        match &self.error {
+            Nullable::Value(error) => Some(error),
+            Nullable::Null => None,
+        }
+    }
 }
 
 literal_tag!(EvalOutputItemObjectTag, OutputItem, "eval.run.output_item");
@@ -2430,10 +2851,23 @@ impl EvalRunOutputItem {
         &self.id
     }
 
+    /// Returns the item's pass/fail/error status.
+    #[must_use]
+    pub const fn status(&self) -> &EvalOutputItemStatus {
+        &self.status
+    }
+
     /// Returns grader results.
     #[must_use]
     pub fn results(&self) -> &[EvalOutputItemResult] {
         &self.results
+    }
+
+    /// Returns the sampled model input, output, and error captured for this
+    /// item.
+    #[must_use]
+    pub const fn sample(&self) -> &EvalSample {
+        &self.sample
     }
 
     /// Returns future response fields.
@@ -2612,6 +3046,107 @@ pub mod experimental {
         extra: ExtraFields,
     }
 
+    impl RunGraderErrors {
+        /// Returns whether the multi-grader formula failed to parse.
+        #[must_use]
+        pub const fn formula_parse_error(&self) -> bool {
+            self.formula_parse_error
+        }
+
+        /// Returns whether the model sample failed to parse.
+        #[must_use]
+        pub const fn sample_parse_error(&self) -> bool {
+            self.sample_parse_error
+        }
+
+        /// Returns whether a truncated observation was rejected.
+        #[must_use]
+        pub const fn truncated_observation_error(&self) -> bool {
+            self.truncated_observation_error
+        }
+
+        /// Returns whether the reward never responded.
+        #[must_use]
+        pub const fn unresponsive_reward_error(&self) -> bool {
+            self.unresponsive_reward_error
+        }
+
+        /// Returns whether a template variable was invalid.
+        #[must_use]
+        pub const fn invalid_variable_error(&self) -> bool {
+            self.invalid_variable_error
+        }
+
+        /// Returns whether an unclassified error occurred.
+        #[must_use]
+        pub const fn other_error(&self) -> bool {
+            self.other_error
+        }
+
+        /// Returns whether the Python grader server failed.
+        #[must_use]
+        pub const fn python_grader_server_error(&self) -> bool {
+            self.python_grader_server_error
+        }
+
+        /// Returns the Python grader server error type when present.
+        #[must_use]
+        pub fn python_grader_server_error_type(&self) -> Option<&str> {
+            match &self.python_grader_server_error_type {
+                Nullable::Value(value) => Some(value),
+                Nullable::Null => None,
+            }
+        }
+
+        /// Returns whether the Python grader raised at runtime.
+        #[must_use]
+        pub const fn python_grader_runtime_error(&self) -> bool {
+            self.python_grader_runtime_error
+        }
+
+        /// Returns the Python grader runtime error details when present.
+        #[must_use]
+        pub fn python_grader_runtime_error_details(&self) -> Option<&str> {
+            match &self.python_grader_runtime_error_details {
+                Nullable::Value(value) => Some(value),
+                Nullable::Null => None,
+            }
+        }
+
+        /// Returns whether the model grader server failed.
+        #[must_use]
+        pub const fn model_grader_server_error(&self) -> bool {
+            self.model_grader_server_error
+        }
+
+        /// Returns whether the model grader refused the request.
+        #[must_use]
+        pub const fn model_grader_refusal_error(&self) -> bool {
+            self.model_grader_refusal_error
+        }
+
+        /// Returns whether the model grader output failed to parse.
+        #[must_use]
+        pub const fn model_grader_parse_error(&self) -> bool {
+            self.model_grader_parse_error
+        }
+
+        /// Returns the model grader server error details when present.
+        #[must_use]
+        pub fn model_grader_server_error_details(&self) -> Option<&str> {
+            match &self.model_grader_server_error_details {
+                Nullable::Value(value) => Some(value),
+                Nullable::Null => None,
+            }
+        }
+
+        /// Returns unknown response fields.
+        #[must_use]
+        pub const fn extra_fields(&self) -> &ExtraFields {
+            &self.extra
+        }
+    }
+
     /// Execution metadata for an experimental grader run.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct RunGraderMetadata {
@@ -2624,6 +3159,62 @@ pub mod experimental {
         sampled_model_name: Nullable<String>,
         #[serde(flatten)]
         extra: ExtraFields,
+    }
+
+    impl RunGraderMetadata {
+        /// Returns the executed grader name.
+        #[must_use]
+        pub fn name(&self) -> &str {
+            &self.name
+        }
+
+        /// Returns the executed grader's wire `type` discriminator.
+        #[must_use]
+        pub fn kind(&self) -> &str {
+            &self.r#type
+        }
+
+        /// Returns the grader's detailed error flags.
+        #[must_use]
+        pub const fn errors(&self) -> &RunGraderErrors {
+            &self.errors
+        }
+
+        /// Returns the grader execution time in seconds.
+        #[must_use]
+        pub const fn execution_time(&self) -> f64 {
+            self.execution_time
+        }
+
+        /// Returns per-criterion grader scores.
+        #[must_use]
+        pub const fn scores(&self) -> &BTreeMap<String, Value> {
+            &self.scores
+        }
+
+        /// Returns grader token usage when present.
+        #[must_use]
+        pub const fn token_usage(&self) -> Option<&GraderTokenUsage> {
+            match &self.token_usage {
+                Nullable::Value(usage) => Some(usage),
+                Nullable::Null => None,
+            }
+        }
+
+        /// Returns the sampled model name when present.
+        #[must_use]
+        pub fn sampled_model_name(&self) -> Option<&str> {
+            match &self.sampled_model_name {
+                Nullable::Value(value) => Some(value),
+                Nullable::Null => None,
+            }
+        }
+
+        /// Returns unknown response fields.
+        #[must_use]
+        pub const fn extra_fields(&self) -> &ExtraFields {
+            &self.extra
+        }
     }
 
     /// Result of the experimental grader run endpoint.
@@ -2642,6 +3233,12 @@ pub mod experimental {
         #[must_use]
         pub const fn reward(&self) -> f64 {
             self.reward
+        }
+
+        /// Returns the grader execution metadata, including error flags.
+        #[must_use]
+        pub const fn metadata(&self) -> &RunGraderMetadata {
+            &self.metadata
         }
     }
 
@@ -2705,8 +3302,12 @@ mod tests {
         assert_json_dto::<TextSimilarityGrader>();
         assert_json_dto::<EvalTextSimilarityGrader>();
         assert_json_dto::<PythonGrader>();
-        assert_json_dto::<EvalSamplingParams>();
+        assert_json_dto::<PythonGraderParam>();
+        assert_json_dto::<EvalCompletionsSamplingParams>();
+        assert_json_dto::<EvalResponsesSamplingParams>();
+        assert_json_dto::<EvalGraderSamplingParams>();
         assert_json_dto::<ScoreModelGrader>();
+        assert_json_dto::<ScoreModelGraderParam>();
         assert_json_dto::<TestingCriterion>();
         assert_json_dto::<MultiGraderMember>();
         assert_json_dto::<MultiGraderMembers>();
@@ -2896,6 +3497,132 @@ mod tests {
     }
 
     #[test]
+    fn alpha_grader_unions_carry_no_pass_threshold() {
+        let similarity = Grader::TextSimilarity(TextSimilarityGrader::new(
+            "similarity",
+            "{{sample.output_text}}",
+            "{{item.label}}",
+            TextSimilarityMetric::Cosine,
+        ));
+        let similarity_value = serde_json::to_value(&similarity).expect("encode similarity grader");
+        assert!(similarity_value.get("pass_threshold").is_none());
+
+        let python = Grader::Python(
+            PythonGraderParam::new("exact-script", "def grade(sample, item): return 1.0")
+                .image_tag("2025-05-08"),
+        );
+        assert_eq!(
+            serde_json::to_value(&python).expect("encode python grader"),
+            json!({
+                "type": "python",
+                "name": "exact-script",
+                "source": "def grade(sample, item): return 1.0",
+                "image_tag": "2025-05-08"
+            })
+        );
+
+        let score = Grader::ScoreModel(Box::new(
+            ScoreModelGraderParam::new("score", "gpt-test", Vec::new())
+                .sampling_params(
+                    EvalGraderSamplingParams::new()
+                        .seed(42)
+                        .max_completions_tokens(1024),
+                )
+                .range(0.0, 1.0),
+        ));
+        let score_value = serde_json::to_value(&score).expect("encode score grader");
+        assert!(score_value.get("pass_threshold").is_none());
+        assert_eq!(
+            score_value["sampling_params"]["max_completions_tokens"],
+            1024
+        );
+
+        let multi = MultiGrader::many(
+            "combined",
+            vec![
+                MultiGraderMember::TextSimilarity(TextSimilarityGrader::new(
+                    "similarity",
+                    "a",
+                    "b",
+                    TextSimilarityMetric::Cosine,
+                )),
+                MultiGraderMember::Python(PythonGraderParam::new("py", "src")),
+                MultiGraderMember::ScoreModel(Box::new(ScoreModelGraderParam::new(
+                    "score",
+                    "gpt-test",
+                    Vec::new(),
+                ))),
+            ],
+            "0.5 * similarity + 0.5 * exact",
+        );
+        let multi_value = serde_json::to_value(Grader::Multi(multi)).expect("encode multi grader");
+        for member in multi_value["graders"].as_array().expect("array graders") {
+            assert!(member.get("pass_threshold").is_none());
+        }
+
+        // A pin-illegal pass_threshold decoded through the alpha union stays a
+        // lossless extra field instead of becoming a typed setter.
+        let fixture = json!({
+            "type": "text_similarity",
+            "name": "similarity",
+            "input": "a",
+            "reference": "b",
+            "evaluation_metric": "cosine",
+            "pass_threshold": 0.8
+        });
+        let grader: Grader =
+            serde_json::from_value(fixture.clone()).expect("decode threshold-carrying grader");
+        assert_eq!(
+            serde_json::to_value(grader).expect("round-trip threshold-carrying grader"),
+            fixture
+        );
+    }
+
+    #[test]
+    fn grader_param_forms_convert_with_and_without_pass_threshold() {
+        let python = PythonGrader::new("py", "def grade(sample, item): return 1.0")
+            .image_tag("2025-05-08")
+            .pass_threshold(0.8);
+        let python_param = PythonGraderParam::from(python);
+        let python_param_value = serde_json::to_value(&python_param).expect("encode python param");
+        assert!(python_param_value.get("pass_threshold").is_none());
+        assert_eq!(
+            serde_json::to_value(PythonGrader::from(python_param)).expect("encode python grader"),
+            json!({
+                "type": "python",
+                "name": "py",
+                "source": "def grade(sample, item): return 1.0",
+                "image_tag": "2025-05-08"
+            })
+        );
+
+        let score = ScoreModelGrader::new("score", "gpt-test", Vec::new())
+            .sampling_params(EvalGraderSamplingParams::new().seed(42))
+            .range(0.0, 1.0)
+            .pass_threshold(0.75);
+        let score_param = ScoreModelGraderParam::from(score);
+        let score_param_value = serde_json::to_value(&score_param).expect("encode score param");
+        assert!(score_param_value.get("pass_threshold").is_none());
+        let lifted = ScoreModelGrader::from(score_param);
+        let lifted_value = serde_json::to_value(&lifted).expect("encode lifted score grader");
+        assert!(lifted_value.get("pass_threshold").is_none());
+        assert_eq!(lifted_value["range"], json!([0.0, 1.0]));
+        assert_eq!(lifted_value["sampling_params"]["seed"], 42);
+
+        // The stable criterion side keeps the pass_threshold semantics.
+        let criterion_value = serde_json::to_value(TestingCriterion::Python(
+            PythonGrader::new("py", "src").pass_threshold(0.8),
+        ))
+        .expect("encode criterion");
+        assert_eq!(criterion_value["pass_threshold"], 0.8);
+        let similarity_criterion = serde_json::to_value(TestingCriterion::TextSimilarity(
+            EvalTextSimilarityGrader::new("sim", "a", "b", TextSimilarityMetric::Cosine, 0.9),
+        ))
+        .expect("encode similarity criterion");
+        assert_eq!(similarity_criterion["pass_threshold"], 0.9);
+    }
+
+    #[test]
     fn multi_grader_accepts_pinned_single_and_official_example_array() {
         let member = json!({
             "type": "string_check",
@@ -2988,13 +3715,11 @@ mod tests {
                 .model("gpt-test")
                 .input_messages(messages)
                 .sampling_params(
-                    EvalSamplingParams::new()
+                    EvalCompletionsSamplingParams::new()
                         .temperature(0.2)
                         .max_completion_tokens(128)
                         .response_format(&json!({"type": "json_object"}))
-                        .expect("serialize response_format")
-                        .text(&json!({"format": {"type": "text"}}))
-                        .expect("serialize text"),
+                        .expect("serialize response_format"),
                 ),
         );
         let request = CreateEvalRunRequest::new(data_source)
@@ -3026,8 +3751,21 @@ mod tests {
             value["data_source"]["sampling_params"]["response_format"]["type"],
             "json_object"
         );
+
+        let responses_data_source =
+            EvalResponsesRunDataSource::new(EvalResponsesRunSource::FileContent(inline_source()))
+                .model("gpt-test")
+                .sampling_params(
+                    EvalResponsesSamplingParams::new()
+                        .temperature(0.2)
+                        .text(&json!({"format": {"type": "text"}}))
+                        .expect("serialize text"),
+                );
+        let responses_value =
+            serde_json::to_value(responses_data_source).expect("encode responses run request");
+        assert_eq!(responses_value["type"], "responses");
         assert_eq!(
-            value["data_source"]["sampling_params"]["text"]["format"]["type"],
+            responses_value["sampling_params"]["text"]["format"]["type"],
             "text"
         );
 
@@ -3048,17 +3786,21 @@ mod tests {
             .is_err()
         );
 
-        for fixture in [
-            json!({"max_completion_tokens": 32}),
-            json!({"max_completions_tokens": 32}),
-        ] {
-            let params: EvalSamplingParams =
-                serde_json::from_value(fixture.clone()).expect("decode token spelling");
-            assert_eq!(
-                serde_json::to_value(params).expect("round-trip token spelling"),
-                fixture
-            );
-        }
+        let completions_fixture = json!({"max_completion_tokens": 32});
+        let completions_params: EvalCompletionsSamplingParams =
+            serde_json::from_value(completions_fixture.clone())
+                .expect("decode completions token spelling");
+        assert_eq!(
+            serde_json::to_value(completions_params).expect("round-trip completions spelling"),
+            completions_fixture
+        );
+        let grader_fixture = json!({"max_completions_tokens": 32});
+        let grader_params: EvalGraderSamplingParams =
+            serde_json::from_value(grader_fixture.clone()).expect("decode grader token spelling");
+        assert_eq!(
+            serde_json::to_value(grader_params).expect("round-trip grader spelling"),
+            grader_fixture
+        );
     }
 
     #[test]
@@ -3119,12 +3861,11 @@ mod tests {
     }
 
     #[test]
-    fn eval_sampling_params_sends_official_nulls_and_enforces_pin_limits() {
-        let params = EvalSamplingParams::new()
+    fn grader_sampling_params_sends_official_nulls_and_enforces_pin_limits() {
+        let params = EvalGraderSamplingParams::new()
             .seed_null()
             .top_p_null()
             .temperature_null()
-            .max_completion_tokens_null()
             .max_completions_tokens_null();
         let value = serde_json::to_value(&params).expect("serialize official nulls");
         assert_eq!(
@@ -3133,32 +3874,32 @@ mod tests {
                 "seed": null,
                 "top_p": null,
                 "temperature": null,
-                "max_completion_tokens": null,
                 "max_completions_tokens": null
             })
         );
         assert_eq!(
-            serde_json::from_value::<EvalSamplingParams>(value.clone()).expect("decode"),
+            serde_json::from_value::<EvalGraderSamplingParams>(value.clone()).expect("decode"),
             params
         );
         params
             .validate()
             .expect("null tokens skip the numeric bound");
 
-        EvalSamplingParams::new()
+        EvalGraderSamplingParams::new()
             .max_completions_tokens(MIN_EVAL_MAX_COMPLETIONS_TOKENS)
             .validate()
             .expect("minimum 1 is accepted");
         assert_eq!(
-            EvalSamplingParams::new()
+            EvalGraderSamplingParams::new()
                 .max_completions_tokens(0)
                 .validate(),
             Err(EvalSamplingConstraintError::MaxCompletionsTokens)
         );
 
-        let illegal =
-            serde_json::from_value::<EvalSamplingParams>(json!({"max_completions_tokens": 0}))
-                .expect("serde remains lossless");
+        let illegal = serde_json::from_value::<EvalGraderSamplingParams>(json!({
+            "max_completions_tokens": 0
+        }))
+        .expect("serde remains lossless");
         assert_eq!(
             illegal.validate(),
             Err(EvalSamplingConstraintError::MaxCompletionsTokens)
@@ -3166,6 +3907,63 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&illegal).expect("round-trip illegal value"),
             json!({"max_completions_tokens": 0})
+        );
+    }
+
+    #[test]
+    fn run_sampling_params_hosts_are_non_null_and_convert_to_grader_params() {
+        assert!(
+            serde_json::from_value::<EvalCompletionsSamplingParams>(json!({"seed": null})).is_err(),
+            "completions host has no official null fields"
+        );
+        assert!(
+            serde_json::from_value::<EvalResponsesSamplingParams>(json!({"top_p": null})).is_err(),
+            "responses host has no official null fields"
+        );
+
+        let completions = EvalCompletionsSamplingParams::new()
+            .seed(42)
+            .temperature(0.5)
+            .top_p(0.9)
+            .max_completion_tokens(1024)
+            .reasoning_effort(responses::ReasoningEffort::Medium);
+        let completions_value =
+            serde_json::to_value(&completions).expect("encode completions params");
+        assert_eq!(
+            completions_value,
+            json!({
+                "reasoning_effort": "medium",
+                "temperature": 0.5,
+                "max_completion_tokens": 1024,
+                "top_p": 0.9,
+                "seed": 42
+            })
+        );
+
+        let grader = EvalGraderSamplingParams::from(completions);
+        assert_eq!(
+            serde_json::to_value(&grader).expect("encode converted grader params"),
+            json!({
+                "seed": 42,
+                "top_p": 0.9,
+                "temperature": 0.5,
+                "max_completions_tokens": 1024,
+                "reasoning_effort": "medium"
+            })
+        );
+        grader
+            .validate()
+            .expect("converted token cap stays in range");
+
+        let responses_params = EvalResponsesSamplingParams::new()
+            .seed(7)
+            .max_completion_tokens(64)
+            .text(&json!({"format": {"type": "text"}}))
+            .expect("serialize text");
+        let grader_from_responses = EvalGraderSamplingParams::from(responses_params);
+        assert_eq!(
+            serde_json::to_value(&grader_from_responses).expect("encode converted grader params"),
+            json!({"seed": 7, "max_completions_tokens": 64})
         );
     }
 
@@ -3243,6 +4041,44 @@ mod tests {
         assert_eq!(status.as_str(), "paused");
     }
 
+    #[test]
+    fn eval_run_result_counts_and_error_are_readable() {
+        // The documented-null run keeps the failure surface absent.
+        let null_run: EvalRun =
+            serde_json::from_value(run_fixture()).expect("decode null-error run");
+        assert!(null_run.error().is_none());
+        assert_eq!(null_run.result_counts().total(), 0);
+        assert_eq!(null_run.result_counts().errored(), 0);
+        assert_eq!(null_run.result_counts().failed(), 0);
+        assert_eq!(null_run.result_counts().passed(), 0);
+
+        let mut fixture = run_fixture();
+        fixture["status"] = json!("failed");
+        fixture["result_counts"] = json!({
+            "total": 12,
+            "errored": 2,
+            "failed": 3,
+            "passed": 7,
+            "future_count": 1
+        });
+        fixture["error"] = json!({
+            "code": "run_failed",
+            "message": "sampling exhausted retries",
+            "future_error": true
+        });
+        let run: EvalRun = serde_json::from_value(fixture).expect("decode failed run");
+        let counts = run.result_counts();
+        assert_eq!(counts.total(), 12);
+        assert_eq!(counts.errored(), 2);
+        assert_eq!(counts.failed(), 3);
+        assert_eq!(counts.passed(), 7);
+        assert_eq!(counts.extra_fields().get("future_count"), Some(&json!(1)));
+        let error = run.error().expect("failed run carries error details");
+        assert_eq!(error.code(), "run_failed");
+        assert_eq!(error.message(), "sampling exhausted retries");
+        assert_eq!(error.extra_fields().get("future_error"), Some(&json!(true)));
+    }
+
     fn output_item_fixture() -> Value {
         json!({
             "object": "eval.run.output_item",
@@ -3296,6 +4132,36 @@ mod tests {
         assert_eq!(
             serde_json::to_value(item).expect("round-trip output item"),
             fixture
+        );
+    }
+
+    #[test]
+    fn output_item_status_sample_and_sample_error_are_readable() {
+        // The passing fixture keeps the sample error null.
+        let passing: EvalRunOutputItem =
+            serde_json::from_value(output_item_fixture()).expect("decode passing item");
+        assert_eq!(passing.status(), &EvalOutputItemStatus::Pass);
+        assert!(passing.sample().error().is_none());
+        assert_eq!(passing.sample().usage().total_tokens, 4);
+
+        let mut fixture = output_item_fixture();
+        fixture["status"] = json!("error");
+        fixture["sample"]["error"] = json!({
+            "code": "rate_limit_exceeded",
+            "message": "sample hit the model rate limit",
+            "future_sample_error": 1
+        });
+        let item: EvalRunOutputItem = serde_json::from_value(fixture).expect("decode errored item");
+        assert_eq!(item.status(), &EvalOutputItemStatus::Error);
+        let error = item
+            .sample()
+            .error()
+            .expect("errored sample carries details");
+        assert_eq!(error.code(), "rate_limit_exceeded");
+        assert_eq!(error.message(), "sample hit the model rate limit");
+        assert_eq!(
+            error.extra_fields().get("future_sample_error"),
+            Some(&json!(1))
         );
     }
 
@@ -3392,6 +4258,83 @@ mod tests {
             serde_json::to_value(validation).expect("encode validation"),
             json!({})
         );
+    }
+
+    #[test]
+    fn run_grader_metadata_and_error_flags_are_readable() {
+        let mut fixture = json!({
+            "reward": 0.0,
+            "metadata": {
+                "name": "exact",
+                "type": "string_check",
+                "errors": {
+                    "formula_parse_error": false,
+                    "sample_parse_error": true,
+                    "truncated_observation_error": false,
+                    "unresponsive_reward_error": false,
+                    "invalid_variable_error": false,
+                    "other_error": false,
+                    "python_grader_server_error": true,
+                    "python_grader_server_error_type": "python_grader_timeout",
+                    "python_grader_runtime_error": false,
+                    "python_grader_runtime_error_details": null,
+                    "model_grader_server_error": false,
+                    "model_grader_refusal_error": false,
+                    "model_grader_parse_error": false,
+                    "model_grader_server_error_details": null,
+                    "future_error_flag": "kept"
+                },
+                "execution_time": 1.5,
+                "scores": {"exact": 0.0},
+                "token_usage": 9,
+                "sampled_model_name": "gpt-test"
+            },
+            "sub_rewards": {"exact": 0.0},
+            "model_grader_token_usage_per_model": {}
+        });
+        let response: experimental::RunGraderResponse =
+            serde_json::from_value(fixture.clone()).expect("decode grader response");
+        let metadata = response.metadata();
+        assert_eq!(metadata.name(), "exact");
+        assert_eq!(metadata.kind(), "string_check");
+        assert_eq!(metadata.execution_time(), 1.5);
+        assert_eq!(metadata.scores().get("exact"), Some(&json!(0.0)));
+        assert_eq!(metadata.sampled_model_name(), Some("gpt-test"));
+        assert!(matches!(
+            metadata.token_usage(),
+            Some(experimental::GraderTokenUsage::Total(9))
+        ));
+
+        let errors = metadata.errors();
+        assert!(!errors.formula_parse_error());
+        assert!(errors.sample_parse_error());
+        assert!(!errors.truncated_observation_error());
+        assert!(!errors.unresponsive_reward_error());
+        assert!(!errors.invalid_variable_error());
+        assert!(!errors.other_error());
+        assert!(errors.python_grader_server_error());
+        assert_eq!(
+            errors.python_grader_server_error_type(),
+            Some("python_grader_timeout")
+        );
+        assert!(!errors.python_grader_runtime_error());
+        assert_eq!(errors.python_grader_runtime_error_details(), None);
+        assert!(!errors.model_grader_server_error());
+        assert!(!errors.model_grader_refusal_error());
+        assert!(!errors.model_grader_parse_error());
+        assert_eq!(errors.model_grader_server_error_details(), None);
+        assert_eq!(
+            errors.extra_fields().get("future_error_flag"),
+            Some(&json!("kept"))
+        );
+
+        // Null metadata fields stay distinguishable from values.
+        fixture["metadata"]["token_usage"] = Value::Null;
+        fixture["metadata"]["sampled_model_name"] = Value::Null;
+        let nulls: experimental::RunGraderResponse =
+            serde_json::from_value(fixture).expect("decode null metadata");
+        assert!(nulls.metadata().token_usage().is_none());
+        assert_eq!(nulls.metadata().sampled_model_name(), None);
     }
 
     #[test]

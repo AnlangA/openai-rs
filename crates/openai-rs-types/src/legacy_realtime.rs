@@ -3,6 +3,11 @@
 //! These endpoints use the historical flat session shape. They intentionally
 //! do not alias the GA nested `audio` session types. Only leaf values whose
 //! JSON representation is identical are shared with [`crate::realtime`].
+//!
+//! Numeric ranges follow the crate-wide opt-in policy (D0015/D0017/D0153):
+//! request constructors reject out-of-range values, Serde decode stays a
+//! lossless pass-through, and the request-level `validate` hooks re-check
+//! values that entered through Serde before they are sent.
 
 use std::{collections::BTreeMap, fmt};
 
@@ -320,69 +325,85 @@ pub enum LegacyRealtimeValidationError {
     },
 }
 
-/// Validated spoken-response speed for a legacy session.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize)]
+fn validate_speed(value: f64) -> Result<(), LegacyRealtimeValidationError> {
+    if value.is_finite() && (0.25..=1.5).contains(&value) {
+        Ok(())
+    } else {
+        Err(LegacyRealtimeValidationError::InvalidSpeed {
+            value: value.to_string(),
+        })
+    }
+}
+
+fn validate_temperature(value: f64) -> Result<(), LegacyRealtimeValidationError> {
+    if value.is_finite() && (0.6..=1.2).contains(&value) {
+        Ok(())
+    } else {
+        Err(LegacyRealtimeValidationError::InvalidTemperature {
+            value: value.to_string(),
+        })
+    }
+}
+
+fn validate_max_response_output_tokens(tokens: i64) -> Result<(), LegacyRealtimeValidationError> {
+    if (1..=4096).contains(&tokens) {
+        Ok(())
+    } else {
+        Err(LegacyRealtimeValidationError::InvalidMaxResponseOutputTokens { tokens })
+    }
+}
+
+fn validate_secret_lifetime(seconds: i64) -> Result<(), LegacyRealtimeValidationError> {
+    if (10..=7200).contains(&seconds) {
+        Ok(())
+    } else {
+        Err(LegacyRealtimeValidationError::InvalidSecretLifetime { seconds })
+    }
+}
+
+/// Spoken-response speed for a legacy session.
+///
+/// Construction enforces the pinned `0.25..=1.5` range; Serde decode is a
+/// lossless pass-through, and decoded values are re-checked by
+/// [`LegacyRealtimeSessionCreateRequest::validate`].
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct LegacyRealtimeSpeed(f64);
 
 impl LegacyRealtimeSpeed {
     /// Creates a finite speed within `0.25..=1.5`.
     pub fn new(value: f64) -> Result<Self, LegacyRealtimeValidationError> {
-        if value.is_finite() && (0.25..=1.5).contains(&value) {
-            Ok(Self(value))
-        } else {
-            Err(LegacyRealtimeValidationError::InvalidSpeed {
-                value: value.to_string(),
-            })
-        }
+        validate_speed(value)?;
+        Ok(Self(value))
     }
 
-    /// Returns the validated speed.
+    /// Returns the speed.
     #[must_use]
     pub const fn get(self) -> f64 {
         self.0
     }
 }
 
-impl<'de> Deserialize<'de> for LegacyRealtimeSpeed {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::new(f64::deserialize(deserializer)?).map_err(D::Error::custom)
-    }
-}
-
-/// Validated sampling temperature for a legacy session.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize)]
+/// Sampling temperature for a legacy session.
+///
+/// Construction enforces the documented `0.6..=1.2` range; Serde decode is a
+/// lossless pass-through, and decoded values are re-checked by
+/// [`LegacyRealtimeSessionCreateRequest::validate`].
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct LegacyRealtimeTemperature(f64);
 
 impl LegacyRealtimeTemperature {
     /// Creates a finite temperature within `0.6..=1.2`.
     pub fn new(value: f64) -> Result<Self, LegacyRealtimeValidationError> {
-        if value.is_finite() && (0.6..=1.2).contains(&value) {
-            Ok(Self(value))
-        } else {
-            Err(LegacyRealtimeValidationError::InvalidTemperature {
-                value: value.to_string(),
-            })
-        }
+        validate_temperature(value)?;
+        Ok(Self(value))
     }
 
-    /// Returns the validated temperature.
+    /// Returns the temperature.
     #[must_use]
     pub const fn get(self) -> f64 {
         self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for LegacyRealtimeTemperature {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::new(f64::deserialize(deserializer)?).map_err(D::Error::custom)
     }
 }
 
@@ -390,25 +411,22 @@ impl<'de> Deserialize<'de> for LegacyRealtimeTemperature {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LegacyRealtimeMaxResponseOutputTokens {
-    /// A limit in `1..=4096`.
-    Limited(u16),
+    /// A finite token limit; construction enforces the documented `1..=4096`.
+    Limited(i64),
     /// The historical `"inf"` service default.
     Unlimited,
 }
 
 impl LegacyRealtimeMaxResponseOutputTokens {
-    /// Creates a finite token limit.
+    /// Creates a finite token limit in `1..=4096`.
     pub fn limited(tokens: i64) -> Result<Self, LegacyRealtimeValidationError> {
-        if (1..=4096).contains(&tokens) {
-            Ok(Self::Limited(tokens as u16))
-        } else {
-            Err(LegacyRealtimeValidationError::InvalidMaxResponseOutputTokens { tokens })
-        }
+        validate_max_response_output_tokens(tokens)?;
+        Ok(Self::Limited(tokens))
     }
 
     /// Returns the finite limit, or `None` for `"inf"`.
     #[must_use]
-    pub const fn finite(self) -> Option<u16> {
+    pub const fn finite(self) -> Option<i64> {
         match self {
             Self::Limited(tokens) => Some(tokens),
             Self::Unlimited => None,
@@ -422,7 +440,7 @@ impl Serialize for LegacyRealtimeMaxResponseOutputTokens {
         S: Serializer,
     {
         match self {
-            Self::Limited(tokens) => serializer.serialize_u16(*tokens),
+            Self::Limited(tokens) => serializer.serialize_i64(*tokens),
             Self::Unlimited => serializer.serialize_str("inf"),
         }
     }
@@ -437,8 +455,8 @@ impl<'de> Deserialize<'de> for LegacyRealtimeMaxResponseOutputTokens {
         match value {
             serde_json::Value::Number(number) => number
                 .as_i64()
-                .ok_or_else(|| D::Error::custom("legacy Realtime token limit must be an integer"))
-                .and_then(|tokens| Self::limited(tokens).map_err(D::Error::custom)),
+                .map(Self::Limited)
+                .ok_or_else(|| D::Error::custom("legacy Realtime token limit must be an integer")),
             serde_json::Value::String(value) if value == "inf" => Ok(Self::Unlimited),
             _ => Err(D::Error::custom(
                 "legacy Realtime token limit must be an integer or `inf`",
@@ -448,7 +466,12 @@ impl<'de> Deserialize<'de> for LegacyRealtimeMaxResponseOutputTokens {
 }
 
 /// Expiration policy nested inside legacy client-secret options.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+///
+/// Construction enforces the documented `10..=7200`-second lifetime; Serde
+/// decode is a lossless pass-through, and decoded values are re-checked by the
+/// legacy request `validate` hooks.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LegacyRealtimeSecretExpiration {
     anchor: RealtimeClientSecretExpirationAnchor,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -475,38 +498,6 @@ impl LegacyRealtimeSecretExpiration {
     #[must_use]
     pub fn seconds(&self) -> Option<i64> {
         present(&self.seconds).copied()
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LegacyRealtimeSecretExpirationWire {
-    anchor: RealtimeClientSecretExpirationAnchor,
-    #[serde(default)]
-    seconds: Omittable<i64>,
-}
-
-impl<'de> Deserialize<'de> for LegacyRealtimeSecretExpiration {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = LegacyRealtimeSecretExpirationWire::deserialize(deserializer)?;
-        if let Omittable::Value(seconds) = wire.seconds {
-            validate_secret_lifetime(seconds).map_err(D::Error::custom)?;
-        }
-        Ok(Self {
-            anchor: wire.anchor,
-            seconds: wire.seconds,
-        })
-    }
-}
-
-fn validate_secret_lifetime(seconds: i64) -> Result<(), LegacyRealtimeValidationError> {
-    if (10..=7200).contains(&seconds) {
-        Ok(())
-    } else {
-        Err(LegacyRealtimeValidationError::InvalidSecretLifetime { seconds })
     }
 }
 
@@ -603,6 +594,33 @@ impl LegacyRealtimeSessionCreateRequest {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Checks the documented legacy value ranges without sending the request.
+    ///
+    /// Serde decode is a lossless pass-through, so values that entered the
+    /// request through Serde are re-checked here: the client-secret lifetime,
+    /// `speed`, `temperature`, and `max_response_output_tokens`. Builder
+    /// construction already rejects out-of-range values at the leaf types.
+    pub fn validate(&self) -> Result<(), LegacyRealtimeValidationError> {
+        if let Omittable::Value(options) = &self.client_secret
+            && let Omittable::Value(expiration) = &options.expires_after
+            && let Some(seconds) = expiration.seconds()
+        {
+            validate_secret_lifetime(seconds)?;
+        }
+        if let Omittable::Value(speed) = self.speed {
+            validate_speed(speed.get())?;
+        }
+        if let Omittable::Value(temperature) = self.temperature {
+            validate_temperature(temperature.get())?;
+        }
+        if let Omittable::Value(tokens) = &self.max_response_output_tokens
+            && let Some(tokens) = tokens.finite()
+        {
+            validate_max_response_output_tokens(tokens)?;
+        }
+        Ok(())
     }
 
     /// Selects the legacy Realtime model.
@@ -803,6 +821,23 @@ impl LegacyRealtimeTranscriptionSessionCreateRequest {
         Self::default()
     }
 
+    /// Checks the documented legacy secret lifetime without sending the
+    /// request.
+    ///
+    /// Serde decode is a lossless pass-through, so a
+    /// `client_secret.expires_at.seconds` value that entered the request
+    /// through Serde is re-checked here; builder construction already rejects
+    /// out-of-range lifetimes at the leaf type.
+    pub fn validate(&self) -> Result<(), LegacyRealtimeValidationError> {
+        if let Omittable::Value(options) = &self.client_secret
+            && let Omittable::Value(expiration) = &options.expires_at
+            && let Some(seconds) = expiration.seconds()
+        {
+            validate_secret_lifetime(seconds)?;
+        }
+        Ok(())
+    }
+
     /// Sets client-secret expiration options.
     #[must_use]
     pub fn with_client_secret(
@@ -915,9 +950,15 @@ impl fmt::Debug for LegacyRealtimeClientSecret {
 }
 
 /// Response from deprecated `POST /realtime/sessions`.
+///
+/// The historical flat shape always embeds `client_secret`; the newer nested
+/// session shape drops it in favor of a top-level `expires_at`. The field is
+/// therefore [`Omittable`] so the new shape decodes, with its undiscovered
+/// fields retained in [`ExtraFields`].
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LegacyRealtimeSessionCreateResponse {
-    client_secret: LegacyRealtimeClientSecret,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    client_secret: Omittable<LegacyRealtimeClientSecret>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     id: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -959,9 +1000,13 @@ pub struct LegacyRealtimeSessionCreateResponse {
 }
 
 impl LegacyRealtimeSessionCreateResponse {
-    /// Returns the redacting client secret wrapper.
+    /// Returns the exact client-secret presence state.
+    ///
+    /// The flat shape always embeds a secret; the newer nested session shape
+    /// omits the field and surfaces `expires_at` at the top level instead
+    /// (retained in [`Self::extra_fields`]).
     #[must_use]
-    pub const fn client_secret(&self) -> &LegacyRealtimeClientSecret {
+    pub const fn client_secret(&self) -> &Omittable<LegacyRealtimeClientSecret> {
         &self.client_secret
     }
 
@@ -1149,15 +1194,186 @@ mod tests {
         let response: LegacyRealtimeSessionCreateResponse =
             serde_json::from_value(fixture.clone()).expect("decode legacy session response");
         assert_eq!(response.id(), Some("sess_001"));
-        assert_eq!(
-            response.client_secret().with_exposed(ToOwned::to_owned),
-            "ek_private_value"
-        );
+        let secret = match response.client_secret() {
+            Omittable::Value(secret) => secret,
+            Omittable::Omitted => panic!("flat session shape embeds a client secret"),
+        };
+        assert_eq!(secret.with_exposed(ToOwned::to_owned), "ek_private_value");
         assert!(!format!("{response:?}").contains("ek_private_value"));
         assert!(!format!("{:?}", response.client_secret()).contains("ek_private_value"));
         assert_eq!(
             serde_json::to_value(response).expect("round-trip legacy session response"),
             fixture
+        );
+    }
+
+    #[test]
+    fn session_response_without_client_secret_decodes_new_nested_shape() {
+        let fixture = json!({
+            "id": "sess_001",
+            "object": "realtime.session",
+            "expires_at": 1_756_310_470_i64,
+            "model": "gpt-realtime",
+            "output_modalities": ["text"],
+            "instructions": "friendly",
+            "audio": {
+                "input": { "format": "pcm16" },
+                "output": { "format": "pcm16" }
+            },
+            "max_output_tokens": "inf",
+            "include": ["item.input_audio_transcription.logprobs"]
+        });
+        let response: LegacyRealtimeSessionCreateResponse = serde_json::from_value(fixture.clone())
+            .expect("decode new nested session shape without client_secret");
+        assert!(response.client_secret().is_omitted());
+        assert_eq!(response.id(), Some("sess_001"));
+        for field in [
+            "expires_at",
+            "output_modalities",
+            "audio",
+            "max_output_tokens",
+            "include",
+        ] {
+            assert!(
+                response.extra_fields().get(field).is_some(),
+                "new-shape field {field} should be retained in ExtraFields"
+            );
+        }
+        assert!(!format!("{response:?}").contains("ek_"));
+        assert_eq!(
+            serde_json::to_value(response).expect("round-trip new nested session shape"),
+            fixture
+        );
+    }
+
+    #[test]
+    fn out_of_range_numeric_values_decode_losslessly_and_round_trip() {
+        let speed: LegacyRealtimeSpeed =
+            serde_json::from_value(json!(0.24)).expect("decode out-of-range speed");
+        assert_eq!(
+            serde_json::to_value(speed).expect("re-encode speed"),
+            json!(0.24)
+        );
+
+        let temperature: LegacyRealtimeTemperature =
+            serde_json::from_value(json!(1.21)).expect("decode out-of-range temperature");
+        assert_eq!(
+            serde_json::to_value(temperature).expect("re-encode temperature"),
+            json!(1.21)
+        );
+
+        let tokens: LegacyRealtimeMaxResponseOutputTokens =
+            serde_json::from_value(json!(8192)).expect("decode out-of-range token limit");
+        assert_eq!(tokens.finite(), Some(8192));
+        assert_eq!(
+            serde_json::to_value(tokens).expect("re-encode token limit"),
+            json!(8192)
+        );
+
+        let expiration: LegacyRealtimeSecretExpiration =
+            serde_json::from_value(json!({ "anchor": "created_at", "seconds": 7_201_i64 }))
+                .expect("decode out-of-range secret lifetime");
+        assert_eq!(expiration.seconds(), Some(7_201));
+        assert_eq!(
+            serde_json::to_value(expiration).expect("re-encode secret lifetime"),
+            json!({ "anchor": "created_at", "seconds": 7_201_i64 })
+        );
+
+        let response_fixture = json!({
+            "id": "sess_001",
+            "object": "realtime.session",
+            "client_secret": {
+                "value": "ek_private_value",
+                "expires_at": 1234567890
+            },
+            "speed": 2.0,
+            "temperature": 0.5,
+            "max_response_output_tokens": 8192
+        });
+        let response: LegacyRealtimeSessionCreateResponse =
+            serde_json::from_value(response_fixture.clone())
+                .expect("decode session with out-of-range echoes");
+        assert_eq!(
+            serde_json::to_value(response).expect("round-trip out-of-range echoes"),
+            response_fixture
+        );
+
+        let request_fixture = json!({
+            "client_secret": { "expires_after": { "anchor": "created_at", "seconds": 5_i64 } },
+            "speed": 2.0,
+            "temperature": 0.5,
+            "max_response_output_tokens": 0
+        });
+        let request: LegacyRealtimeSessionCreateRequest =
+            serde_json::from_value(request_fixture.clone())
+                .expect("decode request with out-of-range values");
+        assert_eq!(
+            serde_json::to_value(request).expect("round-trip out-of-range request"),
+            request_fixture
+        );
+    }
+
+    #[test]
+    fn request_validate_rejects_decoded_out_of_range_values() {
+        let decode = |body: serde_json::Value| {
+            serde_json::from_value::<LegacyRealtimeSessionCreateRequest>(body)
+                .expect("lossless request decode")
+        };
+
+        assert_eq!(
+            decode(json!({ "speed": 1.75 })).validate(),
+            Err(LegacyRealtimeValidationError::InvalidSpeed {
+                value: "1.75".to_owned()
+            })
+        );
+        assert_eq!(
+            decode(json!({ "temperature": 1.5 })).validate(),
+            Err(LegacyRealtimeValidationError::InvalidTemperature {
+                value: "1.5".to_owned()
+            })
+        );
+        assert_eq!(
+            decode(json!({ "max_response_output_tokens": 0 })).validate(),
+            Err(LegacyRealtimeValidationError::InvalidMaxResponseOutputTokens { tokens: 0 })
+        );
+        assert_eq!(
+            decode(json!({
+                "client_secret": {
+                    "expires_after": { "anchor": "created_at", "seconds": 7_201_i64 }
+                }
+            }))
+            .validate(),
+            Err(LegacyRealtimeValidationError::InvalidSecretLifetime { seconds: 7_201 })
+        );
+
+        let transcription: LegacyRealtimeTranscriptionSessionCreateRequest =
+            serde_json::from_value(json!({
+                "client_secret": {
+                    "expires_at": { "anchor": "created_at", "seconds": 9_i64 }
+                }
+            }))
+            .expect("lossless transcription request decode");
+        assert_eq!(
+            transcription.validate(),
+            Err(LegacyRealtimeValidationError::InvalidSecretLifetime { seconds: 9 })
+        );
+
+        let in_range = decode(json!({
+            "speed": 1.5,
+            "temperature": 0.6,
+            "max_response_output_tokens": 4096,
+            "client_secret": {
+                "expires_after": { "anchor": "created_at", "seconds": 7_200_i64 }
+            }
+        }));
+        assert_eq!(in_range.validate(), Ok(()));
+        assert_eq!(
+            decode(json!({ "max_response_output_tokens": "inf" })).validate(),
+            Ok(())
+        );
+        assert_eq!(
+            LegacyRealtimeTranscriptionSessionCreateRequest::new().validate(),
+            Ok(())
         );
     }
 

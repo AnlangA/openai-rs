@@ -111,6 +111,7 @@ impl Evals {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id().as_str()),
+                    page.data().last().map(|eval| eval.id().as_str()),
                     &mut seen,
                     "Eval",
                 )?;
@@ -196,6 +197,7 @@ impl EvalRuns {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id().as_str()),
+                    page.data().last().map(|run| run.id().as_str()),
                     &mut seen,
                     "Eval run",
                 )?;
@@ -235,6 +237,12 @@ impl EvalRuns {
     }
 
     /// Polls until the run reaches completed, canceled, or failed.
+    ///
+    /// Eval runs finish in minutes rather than hours, so the default
+    /// [`PollOptions::new`] deadline of ten minutes is usually sufficient;
+    /// start from [`PollOptions::for_eval_runs`] (1-second interval,
+    /// 30-minute timeout) to poll at the cadence this surface is designed
+    /// for.
     pub async fn poll(
         &self,
         eval_id: &EvalId,
@@ -317,6 +325,7 @@ impl EvalRunOutputItems {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id().as_str()),
+                    page.data().last().map(|item| item.id().as_str()),
                     &mut seen,
                     "Eval output-item",
                 )?;

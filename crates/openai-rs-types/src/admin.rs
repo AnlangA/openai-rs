@@ -169,9 +169,11 @@ crate::open_string_enum! {
 
 crate::open_string_enum! {
     /// Common administration list discriminator.
+    ///
+    /// Every pinned Administration list envelope pins `object` to the constant
+    /// `list`; the usage/costs `page` envelope has its own [`UsagePageTag`].
     pub enum AdminListObject {
-        List = "list",
-        Page = "page"
+        List = "list"
     }
 }
 
@@ -1305,10 +1307,30 @@ pub struct DeleteCertificateResponse {
 }
 
 crate::open_string_enum! {
-    /// Organization/project data-retention mode.
+    /// Project data-retention mode, which is the pinned superset domain.
+    ///
+    /// This enum also backs the shared resource side ([`DataRetentionResource`]):
+    /// it is open, so the four organization values, the two project-only
+    /// values (`organization_default`, `none`), and any future service value
+    /// all decode losslessly.
     pub enum DataRetentionType {
         OrganizationDefault = "organization_default",
         None = "none",
+        ZeroDataRetention = "zero_data_retention",
+        ModifiedAbuseMonitoring = "modified_abuse_monitoring",
+        EnhancedZeroDataRetention = "enhanced_zero_data_retention",
+        EnhancedModifiedAbuseMonitoring = "enhanced_modified_abuse_monitoring"
+    }
+}
+
+crate::open_string_enum! {
+    /// Organization data-retention mode.
+    ///
+    /// The pinned `UpdateOrganizationDataRetentionBody.retention_type` and
+    /// `OrganizationDataRetention.type` enumerate exactly these four values;
+    /// `organization_default` and `none` are project-only and decode as
+    /// `Unknown` rather than named variants.
+    pub enum OrganizationDataRetentionType {
         ZeroDataRetention = "zero_data_retention",
         ModifiedAbuseMonitoring = "modified_abuse_monitoring",
         EnhancedZeroDataRetention = "enhanced_zero_data_retention",
@@ -1338,10 +1360,16 @@ pub type ProjectDataRetention = DataRetentionResource;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UpdateOrganizationDataRetentionBody {
-    pub retention_type: DataRetentionType,
+    pub retention_type: OrganizationDataRetentionType,
 }
 
-pub type UpdateProjectDataRetentionBody = UpdateOrganizationDataRetentionBody;
+/// Project data-retention update body. Distinct from
+/// [`UpdateOrganizationDataRetentionBody`] because the pinned project domain
+/// additionally allows `organization_default` and `none`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UpdateProjectDataRetentionBody {
+    pub retention_type: DataRetentionType,
+}
 
 crate::open_string_enum! {
     /// Group type.
@@ -1453,17 +1481,18 @@ pub struct CreateGroupUserBody {
 
 crate::open_string_enum! {
     /// Assignment/deletion object discriminator.
+    ///
+    /// `group.user`/`group.role`/`user.role`/`group.user.deleted` are pinned
+    /// schema constants; `group.role.deleted`/`user.role.deleted` appear in the
+    /// pinned `DeletedRoleAssignmentResource.object` description ("such as …")
+    /// whose free-form string stays lossless through [`Unknown`].
     pub enum AssignmentObject {
         GroupUser = "group.user",
         GroupRole = "group.role",
         UserRole = "user.role",
         GroupUserDeleted = "group.user.deleted",
         GroupRoleDeleted = "group.role.deleted",
-        UserRoleDeleted = "user.role.deleted",
-        GroupUserAssignment = "organization.group.user.assignment",
-        GroupRoleAssignment = "organization.group.role.assignment",
-        UserRoleAssignment = "organization.user.role.assignment",
-        Deleted = "organization.role.assignment.deleted"
+        UserRoleDeleted = "user.role.deleted"
     }
 }
 
@@ -1792,10 +1821,13 @@ pub struct DeletedRoleAssignmentResource {
 
 crate::open_string_enum! {
     /// Organization invite role.
+    ///
+    /// The pinned `Invite.role` / `InviteRequest.role` enum is exactly
+    /// `owner` / `reader`. Project memberships use [`InviteProjectRole`],
+    /// which is where `member` lives.
     pub enum InviteRole {
         Owner = "owner",
-        Reader = "reader",
-        Member = "member"
+        Reader = "reader"
     }
 }
 
@@ -2044,6 +2076,19 @@ crate::open_string_enum! {
 }
 
 crate::open_string_enum! {
+    /// Service-account role accepted by the update body.
+    ///
+    /// The pinned `UpdateProjectServiceAccountBody.role` enumerates exactly
+    /// `member`/`owner` (openai-python and openai-node agree); the
+    /// resource-side [`ProjectServiceAccountRole`] additionally carries `none`,
+    /// which decodes as `Unknown` here.
+    pub enum ProjectServiceAccountUpdateRole {
+        Member = "member",
+        Owner = "owner"
+    }
+}
+
+crate::open_string_enum! {
     /// Project service-account discriminator.
     pub enum ProjectServiceAccountObject {
         Account = "organization.project.service_account"
@@ -2073,7 +2118,7 @@ pub struct UpdateProjectServiceAccountBody {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub role: Omittable<ProjectServiceAccountRole>,
+    pub role: Omittable<ProjectServiceAccountUpdateRole>,
 }
 
 crate::open_string_enum! {
@@ -2526,6 +2571,30 @@ crate::open_string_enum! {
     }
 }
 
+crate::open_string_enum! {
+    /// Cost-query bucket width.
+    ///
+    /// The pinned `GET /organization/costs` `bucket_width` enumerates only `1d`
+    /// (openai-python and openai-node both use `Literal["1d"]`); the usage-side
+    /// `1m`/`1h` widths decode as `Unknown` here.
+    pub enum UsageCostsBucketWidth {
+        Day = "1d"
+    }
+}
+
+crate::open_string_enum! {
+    /// Cost-query grouping dimension.
+    ///
+    /// The pinned `GET /organization/costs` `group_by` items enumerate exactly
+    /// these three values; the usage-side dimensions (`user_id`, `model`,
+    /// `batch`, `service_tier`, ...) decode as `Unknown` here.
+    pub enum UsageCostsGroupBy {
+        ProjectId = "project_id",
+        LineItem = "line_item",
+        ApiKeyId = "api_key_id"
+    }
+}
+
 /// Superset of stable dimensions returned when usage endpoints group results.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UsageDimensions {
@@ -2549,6 +2618,31 @@ pub struct UsageDimensions {
     pub vector_store_id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub context_level: Omittable<Nullable<String>>,
+}
+
+crate::open_string_enum! {
+    /// Usage-query grouping dimension.
+    ///
+    /// Union of the per-endpoint `group_by` item enums across the pinned usage
+    /// routes: `completions` adds `batch`/`service_tier`, `images` adds
+    /// `size`/`source`, `file_search_calls` adds `vector_store_id`, and
+    /// `web_search_calls` adds `context_level` over the shared
+    /// `project_id`/`user_id`/`api_key_id`/`model` core. The field set equals
+    /// [`UsageDimensions`]. The costs-only `line_item` and any future value
+    /// decode as `Unknown`; construct via [`UsageGroupBy::from_raw`] when an
+    /// endpoint-scoped domain is required.
+    pub enum UsageGroupBy {
+        ProjectId = "project_id",
+        UserId = "user_id",
+        ApiKeyId = "api_key_id",
+        Model = "model",
+        Batch = "batch",
+        ServiceTier = "service_tier",
+        Source = "source",
+        Size = "size",
+        VectorStoreId = "vector_store_id",
+        ContextLevel = "context_level"
+    }
 }
 
 /// Shared query superset for Usage endpoints.
@@ -2578,7 +2672,7 @@ pub struct UsageQueryParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub context_levels: Omittable<Vec<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub group_by: Omittable<Vec<String>>,
+    pub group_by: Omittable<Vec<UsageGroupBy>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<u64>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2602,6 +2696,50 @@ impl UsageQueryParams {
             sizes: Omittable::Omitted,
             vector_store_ids: Omittable::Omitted,
             context_levels: Omittable::Omitted,
+            group_by: Omittable::Omitted,
+            limit: Omittable::Omitted,
+            page: Omittable::Omitted,
+        }
+    }
+}
+
+/// Query parameters for `GET /organization/costs`.
+///
+/// Distinct from [`UsageQueryParams`] because the pinned costs route accepts
+/// only these eight parameters: `bucket_width` supports `1d` alone and
+/// `group_by` enumerates `project_id`/`line_item`/`api_key_id`. The usage-side
+/// filters (`user_ids`, `models`, `batch`, `sources`, `sizes`,
+/// `vector_store_ids`, `context_levels`) are not defined for costs and are
+/// absent here.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UsageCostsQueryParams {
+    pub start_time: u64,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub end_time: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub bucket_width: Omittable<UsageCostsBucketWidth>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub project_ids: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub api_key_ids: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub group_by: Omittable<Vec<UsageCostsGroupBy>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub limit: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub page: Omittable<String>,
+}
+
+impl UsageCostsQueryParams {
+    /// Construct the required inclusive start timestamp.
+    #[must_use]
+    pub fn new(start_time: u64) -> Self {
+        Self {
+            start_time,
+            end_time: Omittable::Omitted,
+            bucket_width: Omittable::Omitted,
+            project_ids: Omittable::Omitted,
+            api_key_ids: Omittable::Omitted,
             group_by: Omittable::Omitted,
             limit: Omittable::Omitted,
             page: Omittable::Omitted,
@@ -2929,6 +3067,9 @@ macro_rules! admin_op {
         admin_op!($id, $method, $path, "()", $response)
     };
     ($id:literal, $method:literal, $path:literal, "UsageQueryParams", $response:literal) => {
+        admin_op!($id, $method, $path, "()", $response)
+    };
+    ($id:literal, $method:literal, $path:literal, "UsageCostsQueryParams", $response:literal) => {
         admin_op!($id, $method, $path, "()", $response)
     };
     ($id:literal, $method:literal, $path:literal, "()", $response:literal) => {
@@ -3763,7 +3904,7 @@ pub const ADMIN_OPERATION_MANIFEST: &[AdminOperationDto] = &[
         "usage-costs",
         "GET",
         "/organization/costs",
-        "UsageQueryParams",
+        "UsageCostsQueryParams",
         "UsageResponse"
     ),
     admin_op!(
@@ -4335,7 +4476,7 @@ mod tests {
             serde_json::from_value::<ProjectRateLimit>(json!({
                 "object": "project.rate_limit",
                 "id": "rl_1",
-                "model": "gpt-5.6",
+                "model": "gpt-5.6-sol",
                 "max_requests_per_1_minute": 10
             }))
             .is_err()
@@ -4427,12 +4568,196 @@ mod tests {
     }
 
     #[test]
+    fn usage_group_by_pins_the_ten_value_union_of_the_usage_endpoints() {
+        // Union of the pinned per-endpoint `group_by` item enums; the field
+        // set matches `UsageDimensions`, and the costs-only `line_item` stays
+        // outside this domain (it belongs to `UsageCostsGroupBy`).
+        const OFFICIAL_USAGE_GROUP_BY: [(&str, UsageGroupBy); 10] = [
+            ("project_id", UsageGroupBy::ProjectId),
+            ("user_id", UsageGroupBy::UserId),
+            ("api_key_id", UsageGroupBy::ApiKeyId),
+            ("model", UsageGroupBy::Model),
+            ("batch", UsageGroupBy::Batch),
+            ("service_tier", UsageGroupBy::ServiceTier),
+            ("source", UsageGroupBy::Source),
+            ("size", UsageGroupBy::Size),
+            ("vector_store_id", UsageGroupBy::VectorStoreId),
+            ("context_level", UsageGroupBy::ContextLevel),
+        ];
+        for (value, expected) in OFFICIAL_USAGE_GROUP_BY {
+            let decoded = UsageGroupBy::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official usage group_by {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+        }
+        for costs_only in ["line_item", "cost_center"] {
+            let decoded = UsageGroupBy::from_raw(costs_only);
+            assert!(
+                !decoded.is_known(),
+                "usage group_by `{costs_only}` is outside the pinned usage union"
+            );
+            assert_eq!(decoded.as_str(), costs_only);
+        }
+
+        let usage = UsageQueryParams {
+            group_by: Omittable::Value(vec![
+                UsageGroupBy::ProjectId,
+                UsageGroupBy::Model,
+                UsageGroupBy::ServiceTier,
+                UsageGroupBy::from_raw("future_dimension"),
+            ]),
+            ..UsageQueryParams::new(100)
+        };
+        assert_eq!(
+            ok(serde_json::to_value(&usage)),
+            json!({
+                "start_time": 100,
+                "group_by": ["project_id", "model", "service_tier", "future_dimension"]
+            })
+        );
+
+        // Decode stays lossless for known and future dimensions alike.
+        let decoded = ok(serde_json::from_value::<UsageQueryParams>(json!({
+            "start_time": 100,
+            "group_by": ["batch", "context_level", "line_item"]
+        })));
+        match decoded.group_by {
+            Omittable::Value(groups) => {
+                assert!(groups[0].is_known());
+                assert!(groups[1].is_known());
+                assert!(!groups[2].is_known());
+                assert_eq!(groups[2].as_str(), "line_item");
+            }
+            Omittable::Omitted => panic!("usage group_by must decode"),
+        }
+        assert!(
+            serde_json::from_value::<UsageQueryParams>(json!({
+                "start_time": 100,
+                "group_by": null
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn admin_list_object_pins_the_single_list_constant() {
+        assert_eq!(AdminListObject::from_raw("list"), AdminListObject::List);
+        // Every pinned Administration list envelope uses the `list` constant;
+        // the usage/costs `page` envelope is carried by `UsagePageTag`, so
+        // `page` must not be a named `AdminListObject` variant anymore.
+        assert!(!AdminListObject::from_raw("page").is_known());
+        assert_eq!(AdminListObject::from_raw("page").as_str(), "page");
+    }
+
+    #[test]
+    fn usage_costs_query_pins_one_day_bucket_and_three_value_group_by() {
+        assert!(serde_json::from_value::<UsageCostsQueryParams>(json!({})).is_err());
+        let params = UsageCostsQueryParams::new(100);
+        assert_eq!(ok(serde_json::to_value(params)), json!({"start_time": 100}));
+
+        // GET /organization/costs supports only `1d`; the usage-side 1m/1h
+        // widths fall to Unknown on the costs domain but stay known on the
+        // shared usage domain.
+        assert!(UsageCostsBucketWidth::from_raw("1d").is_known());
+        for usage_only in ["1m", "1h"] {
+            assert!(
+                !UsageCostsBucketWidth::from_raw(usage_only).is_known(),
+                "costs bucket width `{usage_only}` belongs to the usage endpoints only"
+            );
+            assert!(UsageBucketWidth::from_raw(usage_only).is_known());
+        }
+
+        const OFFICIAL_COSTS_GROUP_BY: [(&str, UsageCostsGroupBy); 3] = [
+            ("project_id", UsageCostsGroupBy::ProjectId),
+            ("line_item", UsageCostsGroupBy::LineItem),
+            ("api_key_id", UsageCostsGroupBy::ApiKeyId),
+        ];
+        for (value, expected) in OFFICIAL_COSTS_GROUP_BY {
+            let decoded = UsageCostsGroupBy::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official costs group_by {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+        }
+        for usage_only in ["user_id", "model", "batch", "service_tier"] {
+            assert!(
+                !UsageCostsGroupBy::from_raw(usage_only).is_known(),
+                "costs group_by `{usage_only}` belongs to the usage endpoints only"
+            );
+        }
+
+        let costs = UsageCostsQueryParams {
+            start_time: 100,
+            end_time: Omittable::Value(200),
+            bucket_width: Omittable::Value(UsageCostsBucketWidth::Day),
+            project_ids: Omittable::Value(vec!["proj_1".to_owned()]),
+            api_key_ids: Omittable::Value(vec!["key_1".to_owned()]),
+            group_by: Omittable::Value(vec![
+                UsageCostsGroupBy::ProjectId,
+                UsageCostsGroupBy::LineItem,
+                UsageCostsGroupBy::ApiKeyId,
+            ]),
+            limit: Omittable::Value(7),
+            page: Omittable::Value("cursor_1".to_owned()),
+        };
+        assert_eq!(
+            ok(serde_json::to_value(&costs)),
+            json!({
+                "start_time": 100,
+                "end_time": 200,
+                "bucket_width": "1d",
+                "project_ids": ["proj_1"],
+                "api_key_ids": ["key_1"],
+                "group_by": ["project_id", "line_item", "api_key_id"],
+                "limit": 7,
+                "page": "cursor_1"
+            })
+        );
+        assert!(
+            serde_json::from_value::<UsageCostsQueryParams>(json!({
+                "start_time": 100,
+                "group_by": null
+            }))
+            .is_err()
+        );
+
+        // Future service values still decode losslessly through the open enums.
+        let future = ok(serde_json::from_value::<UsageCostsQueryParams>(json!({
+            "start_time": 100,
+            "bucket_width": "1w",
+            "group_by": ["cost_center"]
+        })));
+        match future.bucket_width {
+            Omittable::Value(width) => {
+                assert!(!width.is_known());
+                assert_eq!(width.as_str(), "1w");
+            }
+            _ => panic!("costs bucket width must decode"),
+        }
+        match future.group_by {
+            Omittable::Value(groups) => {
+                assert_eq!(groups.len(), 1);
+                assert!(!groups[0].is_known());
+                assert_eq!(groups[0].as_str(), "cost_center");
+            }
+            _ => panic!("costs group_by must decode"),
+        }
+    }
+
+    #[test]
     fn admin_query_filters_match_openapi() {
-        let mut page = AdminListParams::default();
-        page.before = Omittable::Value("cursor_0".to_owned());
-        page.emails = Omittable::Value(vec!["user@example.com".to_owned()]);
-        page.include_archived = Omittable::Value(true);
-        page.owner_project_access = Omittable::Value(ProjectAccessFilter::Any);
+        let page = AdminListParams {
+            before: Omittable::Value("cursor_0".to_owned()),
+            emails: Omittable::Value(vec!["user@example.com".to_owned()]),
+            include_archived: Omittable::Value(true),
+            owner_project_access: Omittable::Value(ProjectAccessFilter::Any),
+            ..AdminListParams::default()
+        };
         let encoded = ok(serde_json::to_value(&page));
         assert_eq!(
             encoded,
@@ -4454,10 +4779,12 @@ mod tests {
                 .is_err()
         );
 
-        let mut audit = AuditLogListParams::default();
-        audit.actor_emails = Omittable::Value(vec!["actor@example.com".to_owned()]);
-        audit.resource_ids = Omittable::Value(vec!["proj_1".to_owned()]);
-        audit.tenant_only = Omittable::Value(true);
+        let audit = AuditLogListParams {
+            actor_emails: Omittable::Value(vec!["actor@example.com".to_owned()]),
+            resource_ids: Omittable::Value(vec!["proj_1".to_owned()]),
+            tenant_only: Omittable::Value(true),
+            ..AuditLogListParams::default()
+        };
         let encoded = ok(serde_json::to_value(&audit));
         assert_eq!(
             encoded,
@@ -4477,11 +4804,13 @@ mod tests {
             serde_json::from_value::<AuditLogListParams>(json!({"tenant_only": null})).is_err()
         );
 
-        let mut usage = UsageQueryParams::new(100);
-        usage.sources = Omittable::Value(vec!["image.generation".to_owned()]);
-        usage.sizes = Omittable::Value(vec!["1024x1024".to_owned()]);
-        usage.vector_store_ids = Omittable::Value(vec!["vs_1".to_owned()]);
-        usage.context_levels = Omittable::Value(vec!["high".to_owned()]);
+        let usage = UsageQueryParams {
+            sources: Omittable::Value(vec!["image.generation".to_owned()]),
+            sizes: Omittable::Value(vec!["1024x1024".to_owned()]),
+            vector_store_ids: Omittable::Value(vec!["vs_1".to_owned()]),
+            context_levels: Omittable::Value(vec!["high".to_owned()]),
+            ..UsageQueryParams::new(100)
+        };
         let encoded = ok(serde_json::to_value(&usage));
         assert_eq!(encoded["start_time"], 100);
         assert_eq!(encoded["sources"], json!(["image.generation"]));
@@ -4496,16 +4825,18 @@ mod tests {
             .is_err()
         );
 
-        let mut certificate = CertificateGetParams::default();
-        certificate.include = Omittable::Value(vec![CertificateInclude::Content]);
+        let certificate = CertificateGetParams {
+            include: Omittable::Value(vec![CertificateInclude::Content]),
+        };
         assert_eq!(
             ok(serde_json::to_value(&certificate)),
             json!({"include": ["content"]})
         );
         assert!(serde_json::from_value::<CertificateGetParams>(json!({"include": null})).is_err());
 
-        let mut group = ProjectGroupGetParams::default();
-        group.group_type = Omittable::Value(GroupType::TenantGroup);
+        let group = ProjectGroupGetParams {
+            group_type: Omittable::Value(GroupType::TenantGroup),
+        };
         assert_eq!(
             ok(serde_json::to_value(&group)),
             json!({"group_type": "tenant_group"})
@@ -4786,6 +5117,32 @@ mod tests {
             AssignmentObject::GroupUserDeleted.as_str(),
             "group.user.deleted"
         );
+        // The pinned `DeletedRoleAssignmentResource.object` description cites
+        // `group.role.deleted` / `user.role.deleted` as examples, so they stay
+        // named variants on the open enum.
+        assert_eq!(
+            AssignmentObject::GroupRoleDeleted.as_str(),
+            "group.role.deleted"
+        );
+        assert_eq!(
+            AssignmentObject::UserRoleDeleted.as_str(),
+            "user.role.deleted"
+        );
+        // The `organization.*.assignment` discriminators exist nowhere in the
+        // pin and were fabricated; they must decode as Unknown, losslessly.
+        for phantom in [
+            "organization.group.user.assignment",
+            "organization.group.role.assignment",
+            "organization.user.role.assignment",
+            "organization.role.assignment.deleted",
+        ] {
+            let decoded = AssignmentObject::from_raw(phantom);
+            assert!(
+                !decoded.is_known(),
+                "assignment object {phantom} has no baseline and must not be a named variant"
+            );
+            assert_eq!(decoded.as_str(), phantom);
+        }
     }
 
     #[test]
@@ -4828,6 +5185,205 @@ mod tests {
             assert_eq!(response.object, expected);
             assert_eq!(ok(serde_json::to_value(&response))["object"], value);
         }
+    }
+
+    #[test]
+    fn official_invite_role_pins_owner_and_reader_only() {
+        const OFFICIAL_INVITE_ROLES: [(&str, InviteRole); 2] =
+            [("owner", InviteRole::Owner), ("reader", InviteRole::Reader)];
+        for (value, expected) in OFFICIAL_INVITE_ROLES {
+            let decoded = InviteRole::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official invite role {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+        }
+
+        // `member` belongs to InviteProjectRole only; an org-level `member`
+        // is not a named InviteRole variant anymore.
+        let project_only = InviteRole::from_raw("member");
+        assert!(
+            !project_only.is_known(),
+            "invite role `member` is outside the pinned owner/reader domain"
+        );
+        assert_eq!(project_only.as_str(), "member");
+        assert!(
+            !InviteRole::from_raw("").is_known(),
+            "empty invite role must stay unknown"
+        );
+
+        let request = InviteRequest {
+            email: "user@example.com".to_owned(),
+            role: InviteRole::Reader,
+            projects: Omittable::Omitted,
+        };
+        assert_eq!(
+            ok(serde_json::to_value(&request)),
+            json!({"email": "user@example.com", "role": "reader"})
+        );
+
+        // Resource-side losslessness: an invite echoing an unofficial role
+        // still decodes verbatim through the open-enum fallback.
+        let invite = ok(serde_json::from_value::<Invite>(json!({
+            "object": "organization.invite",
+            "id": "inv_1",
+            "email": "user@example.com",
+            "role": "member",
+            "status": "pending",
+            "created_at": 1,
+            "projects": []
+        })));
+        assert!(!invite.role.is_known());
+        assert_eq!(invite.role.as_str(), "member");
+        assert_eq!(
+            ok(serde_json::to_value(&invite))["role"],
+            json!("member"),
+            "unofficial invite role must round-trip losslessly"
+        );
+    }
+
+    #[test]
+    fn official_org_data_retention_pins_four_value_domain() {
+        const OFFICIAL_ORG_TYPES: [(&str, OrganizationDataRetentionType); 4] = [
+            (
+                "zero_data_retention",
+                OrganizationDataRetentionType::ZeroDataRetention,
+            ),
+            (
+                "modified_abuse_monitoring",
+                OrganizationDataRetentionType::ModifiedAbuseMonitoring,
+            ),
+            (
+                "enhanced_zero_data_retention",
+                OrganizationDataRetentionType::EnhancedZeroDataRetention,
+            ),
+            (
+                "enhanced_modified_abuse_monitoring",
+                OrganizationDataRetentionType::EnhancedModifiedAbuseMonitoring,
+            ),
+        ];
+        for (value, expected) in OFFICIAL_ORG_TYPES {
+            let decoded = OrganizationDataRetentionType::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official organization data-retention type {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+
+            let body = UpdateOrganizationDataRetentionBody {
+                retention_type: expected,
+            };
+            assert_eq!(
+                ok(serde_json::to_value(&body)),
+                json!({"retention_type": value})
+            );
+        }
+
+        // Project-only values are rejected from the organization domain: they
+        // carry no named variant on OrganizationDataRetentionType.
+        for project_only in ["organization_default", "none"] {
+            assert!(
+                !OrganizationDataRetentionType::from_raw(project_only).is_known(),
+                "organization data-retention type `{project_only}` is project-only"
+            );
+        }
+
+        // The project body keeps the full six-value pinned domain.
+        for value in [
+            "organization_default",
+            "none",
+            "zero_data_retention",
+            "modified_abuse_monitoring",
+            "enhanced_zero_data_retention",
+            "enhanced_modified_abuse_monitoring",
+        ] {
+            let body = UpdateProjectDataRetentionBody {
+                retention_type: DataRetentionType::from_raw(value),
+            };
+            assert!(
+                body.retention_type.is_known(),
+                "project data-retention type {value} must be a named variant"
+            );
+            assert_eq!(
+                ok(serde_json::to_value(&body)),
+                json!({"retention_type": value})
+            );
+        }
+
+        // The shared resource side stays the open superset: organization and
+        // project payloads both decode losslessly.
+        let organization = ok(serde_json::from_value::<OrganizationDataRetention>(json!({
+            "object": "organization.data_retention",
+            "type": "modified_abuse_monitoring"
+        })));
+        assert_eq!(
+            organization.retention_type,
+            DataRetentionType::ModifiedAbuseMonitoring
+        );
+        let project = ok(serde_json::from_value::<ProjectDataRetention>(json!({
+            "object": "project.data_retention",
+            "type": "organization_default"
+        })));
+        assert_eq!(
+            project.retention_type,
+            DataRetentionType::OrganizationDefault
+        );
+    }
+
+    #[test]
+    fn project_service_account_update_role_pins_member_and_owner() {
+        const OFFICIAL_UPDATE_ROLES: [(&str, ProjectServiceAccountUpdateRole); 2] = [
+            ("member", ProjectServiceAccountUpdateRole::Member),
+            ("owner", ProjectServiceAccountUpdateRole::Owner),
+        ];
+        for (value, expected) in OFFICIAL_UPDATE_ROLES {
+            let decoded = ProjectServiceAccountUpdateRole::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official update role {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+        }
+
+        // `none` exists only on the resource side: the update body has no
+        // named variant for it and cannot ask for it.
+        let resource_only = ProjectServiceAccountUpdateRole::from_raw("none");
+        assert!(
+            !resource_only.is_known(),
+            "update role `none` is resource-side only"
+        );
+        assert_eq!(resource_only.as_str(), "none");
+
+        let body = UpdateProjectServiceAccountBody {
+            name: Omittable::Omitted,
+            role: Omittable::Value(ProjectServiceAccountUpdateRole::Member),
+        };
+        assert_eq!(ok(serde_json::to_value(&body)), json!({"role": "member"}));
+
+        // The resource and create-response sides keep the three-value superset.
+        let account = ok(serde_json::from_value::<ProjectServiceAccount>(json!({
+            "object": "organization.project.service_account",
+            "id": "sa_1",
+            "name": "bot",
+            "role": "none",
+            "created_at": 1
+        })));
+        assert_eq!(account.role, ProjectServiceAccountRole::None);
+        let created = ok(
+            serde_json::from_value::<ProjectServiceAccountCreateResponse>(json!({
+                "object": "organization.project.service_account",
+                "id": "sa_1",
+                "name": "bot",
+                "role": "owner",
+                "created_at": 1,
+                "api_key": null
+            })),
+        );
+        assert_eq!(created.role, ProjectServiceAccountRole::Owner);
     }
 
     #[test]

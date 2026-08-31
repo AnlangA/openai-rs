@@ -78,5 +78,9 @@ required-features = ["client", "structured-output"]
 name = "conversations"
 required-features = ["client"]
 
+[[example]]
+name = "rmcp_bridge"
+required-features = ["rmcp"]
+
 [lints]
 workspace = true

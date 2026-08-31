@@ -511,13 +511,32 @@ pub mod experimental_graders {
 
     strict_tagged_union! {
         /// Grader definition accepted by reinforcement and alpha wire schemas.
+        ///
+        /// Mirrors the pinned top-level grader unions (reinforcement method,
+        /// validate, and run): exactly five variants with no `label_model`,
+        /// which the pinned schema only allows nested inside
+        /// [`MultiGrader::graders`] as a [`ReinforcementGraderMember`].
         pub enum Grader {
             StringCheck(StringCheckGrader) = "string_check",
             TextSimilarity(TextSimilarityGrader) = "text_similarity",
             Python(PythonGrader) = "python",
             ScoreModel(Box<ScoreModelGrader>) = "score_model",
-            LabelModel(Box<LabelModelGrader>) = "label_model",
             Multi(Box<MultiGrader>) = "multi"
+        }
+    }
+
+    strict_tagged_union! {
+        /// Nested member accepted by `multi.graders`.
+        ///
+        /// Mirrors the pinned `GraderMulti.graders` union: `label_model` is
+        /// allowed only here, while `multi` is excluded so the nested union is
+        /// not recursive — the inverse of the top-level [`Grader`] split.
+        pub enum ReinforcementGraderMember {
+            StringCheck(StringCheckGrader) = "string_check",
+            TextSimilarity(TextSimilarityGrader) = "text_similarity",
+            Python(PythonGrader) = "python",
+            ScoreModel(Box<ScoreModelGrader>) = "score_model",
+            LabelModel(Box<LabelModelGrader>) = "label_model"
         }
     }
 
@@ -528,9 +547,9 @@ pub mod experimental_graders {
     #[non_exhaustive]
     pub enum GraderCollection {
         /// One nested grader, matching the machine schema.
-        One(Box<Grader>),
+        One(Box<ReinforcementGraderMember>),
         /// Multiple nested graders, matching official examples/runtime behavior.
-        Many(Vec<Grader>),
+        Many(Vec<ReinforcementGraderMember>),
     }
 
     literal_tag!(MultiGraderTag, Multi, "multi");
@@ -552,11 +571,28 @@ pub mod experimental_graders {
     }
 
     impl MultiGrader {
-        /// Construct a multi grader from a list of graders.
+        /// Construct a multi grader holding the pinned single-member shape.
+        #[must_use]
+        pub fn one(
+            name: impl Into<String>,
+            grader: ReinforcementGraderMember,
+            calculate_output: impl Into<String>,
+        ) -> Self {
+            Self {
+                kind: MultiGraderTag::Multi,
+                name: name.into(),
+                graders: GraderCollection::One(Box::new(grader)),
+                calculate_output: calculate_output.into(),
+                extra: ExtraFields::new(),
+            }
+        }
+
+        /// Construct a multi grader from the array shape used by official
+        /// examples and runtime behavior.
         #[must_use]
         pub fn many(
             name: impl Into<String>,
-            graders: impl IntoIterator<Item = Grader>,
+            graders: impl IntoIterator<Item = ReinforcementGraderMember>,
             calculate_output: impl Into<String>,
         ) -> Self {
             Self {
@@ -599,15 +635,39 @@ pub mod experimental_graders {
         }
     }
 
-    impl From<LabelModelGrader> for Grader {
-        fn from(value: LabelModelGrader) -> Self {
-            Self::LabelModel(Box::new(value))
-        }
-    }
-
     impl From<MultiGrader> for Grader {
         fn from(value: MultiGrader) -> Self {
             Self::Multi(Box::new(value))
+        }
+    }
+
+    impl From<StringCheckGrader> for ReinforcementGraderMember {
+        fn from(value: StringCheckGrader) -> Self {
+            Self::StringCheck(value)
+        }
+    }
+
+    impl From<TextSimilarityGrader> for ReinforcementGraderMember {
+        fn from(value: TextSimilarityGrader) -> Self {
+            Self::TextSimilarity(value)
+        }
+    }
+
+    impl From<PythonGrader> for ReinforcementGraderMember {
+        fn from(value: PythonGrader) -> Self {
+            Self::Python(value)
+        }
+    }
+
+    impl From<ScoreModelGrader> for ReinforcementGraderMember {
+        fn from(value: ScoreModelGrader) -> Self {
+            Self::ScoreModel(Box::new(value))
+        }
+    }
+
+    impl From<LabelModelGrader> for ReinforcementGraderMember {
+        fn from(value: LabelModelGrader) -> Self {
+            Self::LabelModel(Box::new(value))
         }
     }
 
@@ -1467,31 +1527,49 @@ fn validate_reinforcement_grader(
 ) -> Result<(), CreateFineTuningJobConstraintError> {
     match grader {
         experimental_graders::Grader::ScoreModel(grader) => {
-            if let Omittable::Value(params) = &grader.sampling_params
-                && let Omittable::Value(Nullable::Value(tokens)) = params.max_completions_tokens
-                && tokens < MIN_FINE_TUNE_MAX_COMPLETIONS_TOKENS
-            {
-                return Err(CreateFineTuningJobConstraintError::MaxCompletionsTokens {
-                    actual: tokens,
-                    minimum: MIN_FINE_TUNE_MAX_COMPLETIONS_TOKENS,
-                });
-            }
+            validate_score_model_sampling_params(&grader.sampling_params)
         }
         experimental_graders::Grader::Multi(grader) => match &grader.graders {
             experimental_graders::GraderCollection::One(inner) => {
-                validate_reinforcement_grader(inner)?;
+                validate_reinforcement_grader_member(inner)
             }
-            experimental_graders::GraderCollection::Many(inners) => {
-                for inner in inners {
-                    validate_reinforcement_grader(inner)?;
-                }
-            }
+            experimental_graders::GraderCollection::Many(inners) => inners
+                .iter()
+                .try_for_each(validate_reinforcement_grader_member),
         },
         experimental_graders::Grader::StringCheck(_)
         | experimental_graders::Grader::TextSimilarity(_)
         | experimental_graders::Grader::Python(_)
-        | experimental_graders::Grader::LabelModel(_)
-        | experimental_graders::Grader::Unknown(_) => {}
+        | experimental_graders::Grader::Unknown(_) => Ok(()),
+    }
+}
+
+fn validate_reinforcement_grader_member(
+    member: &experimental_graders::ReinforcementGraderMember,
+) -> Result<(), CreateFineTuningJobConstraintError> {
+    match member {
+        experimental_graders::ReinforcementGraderMember::ScoreModel(grader) => {
+            validate_score_model_sampling_params(&grader.sampling_params)
+        }
+        experimental_graders::ReinforcementGraderMember::StringCheck(_)
+        | experimental_graders::ReinforcementGraderMember::TextSimilarity(_)
+        | experimental_graders::ReinforcementGraderMember::Python(_)
+        | experimental_graders::ReinforcementGraderMember::LabelModel(_)
+        | experimental_graders::ReinforcementGraderMember::Unknown(_) => Ok(()),
+    }
+}
+
+fn validate_score_model_sampling_params(
+    params: &Omittable<experimental_graders::ScoreModelSamplingParams>,
+) -> Result<(), CreateFineTuningJobConstraintError> {
+    if let Omittable::Value(params) = params
+        && let Omittable::Value(Nullable::Value(tokens)) = params.max_completions_tokens
+        && tokens < MIN_FINE_TUNE_MAX_COMPLETIONS_TOKENS
+    {
+        return Err(CreateFineTuningJobConstraintError::MaxCompletionsTokens {
+            actual: tokens,
+            minimum: MIN_FINE_TUNE_MAX_COMPLETIONS_TOKENS,
+        });
     }
     Ok(())
 }
@@ -2065,6 +2143,8 @@ mod tests {
     assert_impl_all!(ListFineTuningJobEventsResponse: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(ListFineTuningJobCheckpointsResponse: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(Grader: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(ReinforcementGraderMember: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(GraderCollection: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(RunGraderRequest: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(RunGraderResponse: Serialize, DeserializeOwned, Send, Sync);
 
@@ -2208,6 +2288,108 @@ mod tests {
         let decoded = ok(serde_json::from_value::<Grader>(future.clone()));
         assert!(matches!(decoded, Grader::Unknown(_)));
         assert_eq!(ok(serde_json::to_value(decoded)), future);
+    }
+
+    fn label_model_fixture() -> Value {
+        json!({
+            "type": "label_model",
+            "name": "classifier",
+            "model": "gpt-5-mini",
+            "input": [{"role": "user", "content": "Classify {{item.response}}"}],
+            "labels": ["positive", "negative"],
+            "passing_labels": ["positive"]
+        })
+    }
+
+    #[test]
+    fn top_level_label_model_grader_is_not_constructible_but_stays_lossless() {
+        // The pinned top-level unions (reinforcement method, validate, run)
+        // carry five variants without `label_model`, so a label-model grader
+        // cannot be constructed as a typed `Grader` and decodes as a lossless
+        // future object instead.
+        let fixture = label_model_fixture();
+        let decoded = ok(serde_json::from_value::<Grader>(fixture.clone()));
+        assert!(matches!(decoded, Grader::Unknown(_)));
+        assert_eq!(ok(serde_json::to_value(decoded)), fixture);
+
+        // The same object is a typed member of the pinned nested union and
+        // round-trips through both collection shapes.
+        let member = ok(serde_json::from_value::<ReinforcementGraderMember>(
+            fixture.clone(),
+        ));
+        assert!(matches!(member, ReinforcementGraderMember::LabelModel(_)));
+        let built = MultiGrader::one("combined", member, "classifier_score");
+        let value = ok(serde_json::to_value(Grader::from(built)));
+        assert_eq!(value["type"], "multi");
+        assert_eq!(value["graders"]["type"], "label_model");
+        assert_eq!(
+            ok(serde_json::from_value::<Grader>(value.clone())),
+            ok(serde_json::from_value::<Grader>(value))
+        );
+    }
+
+    #[test]
+    fn nested_multi_member_is_not_recursively_constructible_but_stays_lossless() {
+        // The pinned `GraderMulti.graders` union has no `multi` member, so a
+        // recursive multi decodes as a lossless future member instead of a
+        // typed variant.
+        let nested = json!({
+            "type": "multi",
+            "name": "outer",
+            "graders": [{
+                "type": "multi",
+                "name": "inner",
+                "graders": {
+                    "type": "string_check",
+                    "name": "exact",
+                    "input": "a",
+                    "reference": "b",
+                    "operation": "eq"
+                },
+                "calculate_output": "exact"
+            }],
+            "calculate_output": "inner"
+        });
+        let decoded = ok(serde_json::from_value::<Grader>(nested.clone()));
+        let Grader::Multi(outer) = &decoded else {
+            panic!("outer multi must stay typed");
+        };
+        match &outer.graders {
+            GraderCollection::Many(members) => {
+                assert!(matches!(members[0], ReinforcementGraderMember::Unknown(_)));
+            }
+            GraderCollection::One(_) => panic!("array graders must decode as Many"),
+        }
+        assert_eq!(ok(serde_json::to_value(decoded)), nested);
+
+        // Nested score-model members still hit the token-floor validation.
+        let score = ok(ScoreModelGrader::from_serializable_inputs(
+            "judge",
+            "gpt-5-mini",
+            [GraderInput {
+                role: "user",
+                content: "Score {{sample.output_text}}",
+            }],
+        ));
+        let mut params = ScoreModelSamplingParams::default();
+        params.max_completions_tokens = Omittable::Value(Nullable::Value(0));
+        let score = score.with_sampling_params(params);
+        let multi = Grader::from(MultiGrader::many(
+            "combined",
+            [ReinforcementGraderMember::from(score)],
+            "judge_score",
+        ));
+        assert!(matches!(
+            CreateFineTuningJobRequest::new("gpt-5-mini", "file_train")
+                .with_method(ReinforcementFineTuneMethod::new(
+                    FineTuneReinforcementMethodConfig::new(multi),
+                ))
+                .validate(),
+            Err(CreateFineTuningJobConstraintError::MaxCompletionsTokens {
+                actual: 0,
+                minimum: 1
+            })
+        ));
     }
 
     fn job_fixture(status: &str) -> Value {

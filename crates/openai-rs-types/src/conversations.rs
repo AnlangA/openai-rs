@@ -1078,7 +1078,7 @@ impl ConversationMessage {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(responses::StoredInputMessage::new(role, content)
-                    .status(self.status.clone())
+                    .status(responses::MessageStatus::from_raw(self.status.as_str()))
                     .into())
             }
             _ => Err(ConversationItemConversionError::UnsupportedMessageRole {
@@ -1120,7 +1120,13 @@ pub struct ConversationFunctionCall {
     call_id: String,
     name: String,
     arguments: JsonText,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    namespace: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    caller: Omittable<Nullable<responses::ToolCallCaller>>,
     status: responses::ResponseItemStatus,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    created_by: Omittable<String>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1141,7 +1147,10 @@ impl ConversationFunctionCall {
             call_id: call_id.into(),
             name: name.into(),
             arguments,
+            namespace: Omittable::Omitted,
+            caller: Omittable::Omitted,
             status,
+            created_by: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -1169,11 +1178,47 @@ impl ConversationFunctionCall {
     pub const fn arguments(&self) -> &JsonText {
         &self.arguments
     }
+
+    /// Returns the function namespace when present.
+    #[must_use]
+    pub fn namespace(&self) -> Option<&str> {
+        match &self.namespace {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
+    }
+
+    /// Returns the execution context when present.
+    #[must_use]
+    pub const fn caller_ref(&self) -> Option<&responses::ToolCallCaller> {
+        match &self.caller {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
+    /// Returns the creating actor id when present.
+    #[must_use]
+    pub fn created_by(&self) -> Option<&str> {
+        match &self.created_by {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
+    }
+
+    /// Returns future properties retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// One persisted item in a Conversation.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+// Boxing the largest shell-call variants would be a breaking public-API
+// refactor tracked separately from wire fixes.
+#[allow(clippy::large_enum_variant)]
 pub enum ConversationItem {
     /// General input/output message resource.
     Message(ConversationMessage),
@@ -1940,13 +1985,13 @@ mod tests {
             json!({ "mode": "explicit" })
         );
         assert_eq!(
-            serde_json::to_value(&ConversationInputFile::from_file_id("file_2").file_id_null())
+            serde_json::to_value(ConversationInputFile::from_file_id("file_2").file_id_null())
                 .expect("serialize conversation file_id null")["file_id"],
             Value::Null
         );
         assert_eq!(
             serde_json::to_value(
-                &ConversationInputImage::from_url(
+                ConversationInputImage::from_url(
                     "https://example.com/a.png",
                     responses::ImageDetail::Low,
                 )
@@ -1981,7 +2026,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(
-                &ConversationMessage::new(
+                ConversationMessage::new(
                     "msg_2",
                     responses::ResponseItemStatus::Completed,
                     ConversationMessageRole::Assistant,
@@ -2095,6 +2140,136 @@ mod tests {
         assert_eq!(deleted.extra_fields().get("future"), Some(&json!(1)));
     }
 
+    #[test]
+    fn function_call_resource_caller_namespace_and_created_by_match_responses_shape() {
+        let fixture = json!({
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": "{}",
+            "namespace": "tools",
+            "caller": {"type": "program", "caller_id": "prog_1"},
+            "status": "completed",
+            "created_by": "user_9"
+        });
+        let item: ConversationItem =
+            serde_json::from_value(fixture.clone()).expect("decode function call resource");
+        let ConversationItem::FunctionCall(call) = &item else {
+            panic!("expected function call resource");
+        };
+        assert_eq!(call.id().as_str(), "fc_1");
+        assert_eq!(call.call_id(), "call_1");
+        assert_eq!(call.name(), "lookup");
+        assert_eq!(call.namespace(), Some("tools"));
+        assert_eq!(call.created_by(), Some("user_9"));
+        assert!(matches!(
+            call.caller_ref(),
+            Some(responses::ToolCallCaller::Program(_))
+        ));
+        assert!(!call.extra_fields().contains_key("namespace"));
+        assert!(!call.extra_fields().contains_key("caller"));
+        assert!(!call.extra_fields().contains_key("created_by"));
+        assert_eq!(
+            serde_json::to_value(&item).expect("round-trip function call"),
+            fixture
+        );
+        let input = item
+            .to_response_input_item()
+            .expect("convert persisted function call to a Responses input item");
+        let input_value = serde_json::to_value(&input).expect("serialize converted input item");
+        assert_eq!(input_value["namespace"], "tools");
+        assert_eq!(input_value["caller"]["caller_id"], "prog_1");
+        assert_eq!(input_value["created_by"], "user_9");
+
+        let null_caller: ConversationFunctionCall = serde_json::from_value(json!({
+            "type": "function_call",
+            "id": "fc_2",
+            "call_id": "call_2",
+            "name": "lookup",
+            "arguments": "{}",
+            "caller": null,
+            "status": "completed"
+        }))
+        .expect("decode official caller null");
+        assert!(null_caller.caller_ref().is_none());
+        assert_eq!(
+            serde_json::to_value(&null_caller).expect("encode official caller null")["caller"],
+            Value::Null
+        );
+
+        let minimal: ConversationFunctionCall = serde_json::from_value(json!({
+            "type": "function_call",
+            "id": "fc_3",
+            "call_id": "call_3",
+            "name": "lookup",
+            "arguments": "{}",
+            "status": "completed"
+        }))
+        .expect("decode minimal function call");
+        assert_eq!(minimal.namespace(), None);
+        assert!(minimal.caller_ref().is_none());
+        assert_eq!(minimal.created_by(), None);
+        assert_eq!(
+            serde_json::to_value(&minimal).expect("encode minimal function call"),
+            json!({
+                "type": "function_call",
+                "id": "fc_3",
+                "call_id": "call_3",
+                "name": "lookup",
+                "arguments": "{}",
+                "status": "completed"
+            })
+        );
+
+        // In-file consistency: the adjacent function_call_output resource branch
+        // decodes the same caller/namespace/created_by fields verbatim.
+        let output_fixture = json!({
+            "type": "function_call_output",
+            "id": "fco_1",
+            "call_id": "call_1",
+            "name": "lookup",
+            "namespace": "tools",
+            "caller": {"type": "direct"},
+            "status": "completed",
+            "output": "ok",
+            "created_by": "user_9"
+        });
+        let ConversationItem::FunctionCallOutput(output) =
+            serde_json::from_value::<ConversationItem>(output_fixture.clone())
+                .expect("decode function call output resource")
+        else {
+            panic!("expected function call output resource");
+        };
+        assert_eq!(output.created_by(), Some("user_9"));
+        assert_eq!(
+            serde_json::to_value(&output).expect("round-trip function call output"),
+            output_fixture
+        );
+
+        let typed = ConversationFunctionCall::new(
+            "fc_4",
+            "call_4",
+            "lookup",
+            JsonText::from("{}"),
+            responses::ResponseItemStatus::Completed,
+        );
+        assert_eq!(typed.namespace(), None);
+        assert!(typed.caller_ref().is_none());
+        assert_eq!(typed.created_by(), None);
+        assert_eq!(
+            serde_json::to_value(&typed).expect("encode constructed function call"),
+            json!({
+                "type": "function_call",
+                "id": "fc_4",
+                "call_id": "call_4",
+                "name": "lookup",
+                "arguments": "{}",
+                "status": "completed"
+            })
+        );
+    }
+
     fn user_message_fixture() -> Value {
         json!({
             "type": "message",
@@ -2168,7 +2343,7 @@ mod tests {
     fn output_message_converts_to_conversation_and_back_without_json_authorship() {
         let output = responses::OutputMessage::new(
             "msg_1",
-            responses::ResponseItemStatus::Completed,
+            responses::MessageStatus::Completed,
             [responses::OutputText::new("answer")],
         );
         let item = ConversationItem::try_from(responses::ResponseOutputItem::Message(output))

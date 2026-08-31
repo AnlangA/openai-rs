@@ -9,7 +9,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new(api_key)?;
 
     let request = ChatCompletionRequest::new(
-        "gpt-5.6",
+        "gpt-5.6-sol",
         ChatUserMessage::text("Hello! Introduce yourself in one sentence."),
     )
     .with_message(ChatSystemMessage::new(

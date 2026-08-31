@@ -168,6 +168,7 @@ impl VoiceConsents {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     page.last_id().map(|id| id.as_str()),
+                    page.data().last().map(|consent| consent.id().as_str()),
                     &mut seen,
                     "voice-consent",
                 )?;
@@ -186,9 +187,12 @@ async fn prepare_bounded(
 ) -> Result<PreparedReplayableSource, Error> {
     let prepared = PreparedReplayableSource::prepare(source).await?;
     if prepared.length() > MAX_CUSTOM_VOICE_AUDIO_BYTES {
-        return Err(Error::InvalidConfiguration(
-            "custom-voice audio exceeds the 10 MiB limit".into(),
-        ));
+        // Send-time half of the two-phase check: in-memory sources fail at
+        // construction with `VoiceRequestError::AudioTooLarge`, while file and
+        // stream sources only become measurable here.
+        return Err(Error::RequestPayloadTooLarge {
+            limit_bytes: MAX_CUSTOM_VOICE_AUDIO_BYTES as usize,
+        });
     }
     Ok(prepared)
 }
@@ -389,6 +393,23 @@ mod tests {
             .expect("safe filename")
             .try_with_media_type("audio/x-wav")
             .expect("safe MIME")
+    }
+
+    #[tokio::test]
+    async fn oversized_send_time_audio_reports_request_payload_too_large() {
+        // The byte source exceeds the pinned 10 MiB cap by one byte; only the
+        // send-time half of the two-phase check can observe prepared length.
+        let oversized: &'static [u8] =
+            Box::leak(vec![0u8; 10 * 1024 * 1024 + 1].into_boxed_slice());
+        let error = super::prepare_bounded(&source(oversized))
+            .await
+            .map(|_| ())
+            .expect_err("oversized audio must fail before transport");
+        assert!(matches!(
+            error,
+            crate::error::Error::RequestPayloadTooLarge { limit_bytes }
+                if limit_bytes == 10 * 1024 * 1024
+        ));
     }
 
     fn consent_json() -> Value {

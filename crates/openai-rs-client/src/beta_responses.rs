@@ -341,6 +341,10 @@ impl BetaResponseInputItems {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id()),
+                    // Beta response input items are a tagged union without a
+                    // shared id accessor, so no per-item fallback cursor is
+                    // available.
+                    None,
                     &mut seen,
                     "beta response input item",
                 )?;
@@ -1106,9 +1110,9 @@ mod tests {
     use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
     use hyper_util::rt::TokioIo;
     use openai_rs_types::beta_responses::{
-        BetaAgentInputText, BetaAgentMessage, BetaMultiAgentAction, BetaMultiAgentCallOutput,
-        BetaMultiAgentConfig, BetaMultiAgentOutputText, BetaResponseIncludable,
-        BetaResponseInputItem, BetaResponseItemOrder,
+        BetaAgentInputText, BetaAgentMessageParam, BetaMultiAgentAction,
+        BetaMultiAgentCallOutputParam, BetaMultiAgentConfig, BetaMultiAgentOutputText,
+        BetaResponseIncludable, BetaResponseInputItem, BetaResponseItemOrder,
     };
     use serde_json::{Value, json};
     use tokio::{net::TcpListener, sync::oneshot};
@@ -1235,7 +1239,7 @@ mod tests {
             response_json("completed"),
         )
         .await;
-        let routed = BetaAgentMessage::new(
+        let routed = BetaAgentMessageParam::new(
             "root",
             "root/research",
             [BetaAgentInputText::new("inspect")],
@@ -1540,11 +1544,13 @@ mod tests {
         socket
             .send_inject(BetaResponseInjectEvent::new(
                 "resp_beta_1",
-                [BetaResponseInputItem::from(BetaMultiAgentCallOutput::new(
-                    BetaMultiAgentAction::WaitAgent,
-                    "call_1",
-                    [BetaMultiAgentOutputText::new("done")],
-                ))],
+                [BetaResponseInputItem::from(
+                    BetaMultiAgentCallOutputParam::new(
+                        BetaMultiAgentAction::WaitAgent,
+                        "call_1",
+                        [BetaMultiAgentOutputText::new("done")],
+                    ),
+                )],
             ))
             .await
             .expect("send inject event");

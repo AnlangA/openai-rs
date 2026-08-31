@@ -147,7 +147,13 @@ impl CompletionEventStream {
             for dispatch in dispatches {
                 match dispatch {
                     SseDispatch::Event(frame) | SseDispatch::Terminal(frame) => {
-                        yield decode_chunk(&frame.data, &stream_meta);
+                        match decode_chunk(&frame.data, &stream_meta) {
+                            Ok(chunk) => yield Ok(chunk),
+                            Err(error) => {
+                                yield Err(error);
+                                return;
+                            }
+                        }
                     }
                     SseDispatch::RemoteError(frame) => {
                         yield Err(StreamError::from_body(
@@ -196,13 +202,40 @@ impl fmt::Debug for CompletionEventStream {
 }
 
 fn decode_chunk(data: &str, meta: &ResponseMeta) -> Result<Completion, Error> {
-    deserialize_json(data.as_bytes()).map_err(|error| Error::Decode {
-        source: error.source,
-        path: error.path,
+    let value: serde_json::Value =
+        deserialize_json(data.as_bytes()).map_err(|error| Error::Decode {
+            source: error.source,
+            path: error.path,
+            meta_status: meta.status(),
+            request_id: meta.request_id().map(Box::<str>::from),
+            body: BodyPreview::from_bytes(data.as_bytes(), false),
+        })?;
+    if value.get("error").is_some_and(error_is_truthy) {
+        return Err(StreamError::from_body(meta.request_id(), data.as_bytes()).into());
+    }
+    serde_json::from_value(value).map_err(|source| Error::Decode {
+        source,
+        path: None,
         meta_status: meta.status(),
         request_id: meta.request_id().map(Box::<str>::from),
         body: BodyPreview::from_bytes(data.as_bytes(), false),
     })
+}
+
+/// Whether an in-band `error` field marks the frame as a remote error.
+///
+/// Mirrors openai-python's `data.get("error")` truthiness: `null`, `false`,
+/// `0`, `""`, `[]`, `{}`, and a missing key all pass (falsy), while any other
+/// value is treated as an in-band error.
+fn error_is_truthy(error: &serde_json::Value) -> bool {
+    match error {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(flag) => *flag,
+        serde_json::Value::Number(number) => number.as_f64().is_some_and(|n| n != 0.0),
+        serde_json::Value::String(text) => !text.is_empty(),
+        serde_json::Value::Array(items) => !items.is_empty(),
+        serde_json::Value::Object(fields) => !fields.is_empty(),
+    }
 }
 
 fn sse_error(source: crate::sse::SseDecodeError, meta: &ResponseMeta) -> Error {
@@ -418,5 +451,167 @@ mod tests {
         let body: Value = serde_json::from_slice(&request.body).expect("stream body");
         assert_eq!(body["stream"], true);
         assert_eq!(body["prompt"], json!([1212, 318, 257]));
+    }
+
+    #[test]
+    fn error_key_truthiness_matches_python() {
+        // openai-python branches on `data.get("error")` truthiness: only
+        // missing, null, false, zero, and empty scalar/container values pass.
+        for falsy in [
+            Value::Null,
+            Value::Bool(false),
+            json!(0),
+            json!(-0.0),
+            json!(""),
+            json!([]),
+            json!({}),
+        ] {
+            assert!(!error_is_truthy(&falsy), "expected falsy: {falsy}");
+        }
+        for truthy in [
+            Value::Bool(true),
+            json!(1),
+            json!(-1),
+            json!(0.5),
+            json!("message"),
+            json!([0]),
+            json!({"code": "overloaded"}),
+        ] {
+            assert!(error_is_truthy(&truthy), "expected truthy: {truthy}");
+        }
+    }
+
+    #[tokio::test]
+    async fn create_stream_surfaces_in_band_data_error() {
+        let body = concat!(
+            "data: {\"error\":{\"message\":\"bad Bearer private\",\"code\":\"stream_failed\"}}\n\n",
+            "data: {\"id\":\"cmpl_1\"}\n\n",
+            "data: [DONE]\n\n",
+        )
+        .to_owned();
+        let (client, _captured) = serve_once("text/event-stream; charset=utf-8", body).await;
+        let mut stream = client
+            .completions()
+            .create_stream(CreateStreamingCompletionRequest::new(
+                "gpt-3.5-turbo-instruct",
+                "Say hello",
+            ))
+            .await
+            .expect("stream handshake");
+        let error = stream
+            .next()
+            .await
+            .expect("remote error item")
+            .expect_err("in-band data error");
+        match error {
+            Error::Stream(error) => {
+                assert_eq!(error.code(), Some("stream_failed"));
+                assert!(!error.message().contains("private"));
+            }
+            other => panic!("expected stream error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_stream_decodes_falsy_error_keys_as_payload() {
+        let body = format!(
+            "data: {}\n\ndata: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+            completion_json(" one", Value::Null),
+            {
+                let mut chunk = completion_json(" two", Value::Null);
+                chunk["error"] = json!({});
+                chunk
+            },
+            {
+                let mut chunk = completion_json(" three", Value::Null);
+                chunk["error"] = json!(false);
+                chunk
+            },
+        );
+        let (client, _captured) = serve_once("text/event-stream; charset=utf-8", body).await;
+        let mut stream = client
+            .completions()
+            .create_stream(CreateStreamingCompletionRequest::new(
+                "gpt-3.5-turbo-instruct",
+                "Say hello",
+            ))
+            .await
+            .expect("stream handshake");
+        for expected in [" one", " two", " three"] {
+            let chunk = stream
+                .next()
+                .await
+                .expect("chunk despite falsy error key")
+                .expect("typed chunk");
+            assert_eq!(chunk.choices()[0].text(), expected);
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_stream_surfaces_truthy_error_scalars_as_stream_errors() {
+        let body = format!(
+            "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+            {
+                let mut chunk = completion_json(" never", Value::Null);
+                chunk["error"] = json!(true);
+                chunk
+            },
+            {
+                let mut chunk = completion_json(" never", Value::Null);
+                chunk["error"] = json!("overloaded");
+                chunk
+            },
+        );
+        let (client, _captured) = serve_once("text/event-stream; charset=utf-8", body).await;
+        let mut stream = client
+            .completions()
+            .create_stream(CreateStreamingCompletionRequest::new(
+                "gpt-3.5-turbo-instruct",
+                "Say hello",
+            ))
+            .await
+            .expect("stream handshake");
+        let error = stream
+            .next()
+            .await
+            .expect("error item")
+            .expect_err("truthy error scalar");
+        assert!(matches!(error, Error::Stream(_)));
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn eof_without_done_yields_one_error_and_no_later_items() {
+        let body = format!("data: {}\n\n", completion_json("This", Value::Null));
+        let (client, _captured) = serve_once("text/event-stream; charset=utf-8", body).await;
+        let mut stream = client
+            .completions()
+            .create_stream(CreateStreamingCompletionRequest::new(
+                "gpt-3.5-turbo-instruct",
+                "Say hello",
+            ))
+            .await
+            .expect("stream handshake");
+        let chunk = stream
+            .next()
+            .await
+            .expect("one chunk")
+            .expect("typed chunk");
+        assert_eq!(chunk.choices()[0].text(), "This");
+        let error = stream
+            .next()
+            .await
+            .expect("EOF flush error")
+            .expect_err("missing [DONE] sentinel");
+        match error {
+            Error::Sse {
+                source: crate::sse::SseDecodeError::UnexpectedEof { .. },
+                ..
+            } => {}
+            other => panic!("expected unexpected EOF, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
     }
 }

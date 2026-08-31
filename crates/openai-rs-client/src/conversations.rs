@@ -176,6 +176,9 @@ impl ConversationItems {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id().as_str()),
+                    // Conversation items are a tagged union without a shared id
+                    // accessor, so no per-item fallback cursor is available.
+                    None,
                     &mut seen,
                     "conversation item",
                 )?;

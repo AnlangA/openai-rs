@@ -1,10 +1,13 @@
 //! Typed wire models for Vector Stores, attached files, file batches, and search.
 //!
 //! The types in this module preserve missing, explicit `null`, and present
-//! values independently. Attribute maps and numeric ranges are validated both
-//! by builders and during deserialization; recursive search filters use a
-//! discriminator-aware enum so malformed known variants cannot silently become
-//! unknown variants.
+//! values independently. Attribute maps and numeric ranges are validated by
+//! builders; metadata maps additionally decode losslessly and move their
+//! documented 16/64/512 limits into the opt-in `validate` hooks of
+//! [`CreateVectorStoreRequest`] and [`UpdateVectorStoreRequest`], matching the
+//! pinned-schema-only constraints of D0015/D0017. Recursive search filters use
+//! a discriminator-aware enum so malformed known variants cannot silently
+//! become unknown variants.
 
 use std::{collections::BTreeMap, fmt};
 
@@ -177,10 +180,11 @@ pub const MAX_STATIC_CHUNK_TOKENS: u32 = 4_096;
 pub const MIN_VECTOR_STORE_EXPIRATION_DAYS: u16 = 1;
 /// Maximum expiration period in days.
 pub const MAX_VECTOR_STORE_EXPIRATION_DAYS: u16 = 365;
-/// Default list page size.
+/// Effective page size when `limit` is omitted.
+///
+/// The pinned list schemas document a default of 20 but impose no `maximum`,
+/// so no upper bound is invented here.
 pub const DEFAULT_VECTOR_STORE_LIST_LIMIT: u32 = 20;
-/// Maximum list page size.
-pub const MAX_VECTOR_STORE_LIST_LIMIT: u32 = 100;
 /// Default number of vector search results.
 pub const DEFAULT_VECTOR_STORE_SEARCH_RESULTS: u8 = 10;
 /// Maximum vector search result count.
@@ -233,6 +237,16 @@ pub enum VectorStoreValidationError {
     /// Both or neither file-batch input alternatives were supplied.
     #[error("vector-store file batch must contain exactly one of file_ids or files")]
     InvalidBatchInputChoice,
+    /// Global request fields were combined with the per-file `files` form.
+    ///
+    /// The pinned `anyOf` accepts this combination on the wire because the
+    /// `files` branch is satisfied, but the global `attributes` and
+    /// `chunking_strategy` fields are documented as ignored for the per-file
+    /// form, so builders reject it instead of silently dropping intent.
+    #[error(
+        "vector-store file-batch global fields (attributes, chunking_strategy) apply only to the file_ids form and cannot be combined with the per-file files form; set them on each per-file request instead"
+    )]
+    GlobalFieldsWithPerFileBatch,
     /// Expiration period is outside `1..=365`.
     #[error("vector-store expiration must be 1..=365 days, got {days}")]
     InvalidExpirationDays {
@@ -253,8 +267,8 @@ pub enum VectorStoreValidationError {
         /// Selected maximum chunk size.
         maximum: u32,
     },
-    /// Page size is outside `1..=100`.
-    #[error("vector-store list limit must be 1..=100, got {limit}")]
+    /// Page size is below the schema-backed minimum of 1.
+    #[error("vector-store list limit must be at least 1, got {limit}")]
     InvalidListLimit {
         /// Rejected value.
         limit: u32,
@@ -263,10 +277,10 @@ pub enum VectorStoreValidationError {
     #[error("vector-store search query array must not be empty")]
     EmptySearchQueries,
     /// Search result count is outside `1..=50`.
-    #[error("vector-store max_num_results must be 1..=50, got {maximum}")]
+    #[error("vector-store max_num_results must be 1..=50, got {actual}")]
     InvalidMaxResults {
         /// Rejected value.
-        maximum: u8,
+        actual: u8,
     },
     /// A score is non-finite or outside `[0, 1]`.
     #[error("vector-store score must be finite and between 0 and 1, got {score}")]
@@ -303,6 +317,12 @@ fn validate_string_value(value: &str) -> Result<(), VectorStoreValidationError> 
 }
 
 /// Validated string metadata attached to a vector store.
+///
+/// Deserialization is lossless so oversized maps returned by the service still
+/// decode. The documented 16/64/512 limits are enforced by [`insert`] and by
+/// the opt-in `validate` methods on create/update requests.
+///
+/// [`insert`]: VectorStoreMetadata::insert
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct VectorStoreMetadata(BTreeMap<String, String>);
 
@@ -330,6 +350,25 @@ impl VectorStoreMetadata {
             });
         }
         Ok(self.0.insert(key, value))
+    }
+
+    /// Checks the documented map limits without mutating this value.
+    ///
+    /// Decoding accepts oversized metadata so responses stay readable; senders
+    /// that want the documented limits enforced before a request call this
+    /// method (or one of the request-level `validate` hooks).
+    pub fn validate(&self) -> Result<(), VectorStoreValidationError> {
+        if self.0.len() > MAX_VECTOR_STORE_PROPERTIES {
+            return Err(VectorStoreValidationError::TooManyProperties {
+                actual: self.0.len(),
+                maximum: MAX_VECTOR_STORE_PROPERTIES,
+            });
+        }
+        for (key, value) in &self.0 {
+            validate_map_key(key)?;
+            validate_string_value(value)?;
+        }
+        Ok(())
     }
 
     /// Iterates over pairs in stable key order.
@@ -375,21 +414,7 @@ impl<'de> Deserialize<'de> for VectorStoreMetadata {
     where
         D: Deserializer<'de>,
     {
-        let values = BTreeMap::<String, String>::deserialize(deserializer)?;
-        if values.len() > MAX_VECTOR_STORE_PROPERTIES {
-            return Err(serde::de::Error::custom(
-                VectorStoreValidationError::TooManyProperties {
-                    actual: values.len(),
-                    maximum: MAX_VECTOR_STORE_PROPERTIES,
-                },
-            ));
-        }
-        for (key, value) in &values {
-            validate_map_key(key)
-                .and_then(|()| validate_string_value(value))
-                .map_err(serde::de::Error::custom)?;
-        }
-        Ok(Self(values))
+        BTreeMap::<String, String>::deserialize(deserializer).map(Self)
     }
 }
 
@@ -599,8 +624,14 @@ pub struct StaticChunkingStrategy {
 }
 
 impl StaticChunkingStrategy {
-    /// Creates a static strategy and enforces overlap no greater than half the
-    /// maximum chunk size.
+    /// Creates a static strategy, enforcing the pinned `100..=4096` schema
+    /// range for `max_chunk_size_tokens`.
+    ///
+    /// The descriptive `chunk_overlap_tokens <= max_chunk_size_tokens / 2`
+    /// rule has no schema constraint; check it through [`validate`] before
+    /// sending.
+    ///
+    /// [`validate`]: StaticChunkingStrategy::validate
     pub fn new(
         max_chunk_size_tokens: u32,
         chunk_overlap_tokens: u32,
@@ -610,16 +641,22 @@ impl StaticChunkingStrategy {
                 tokens: max_chunk_size_tokens,
             });
         }
-        if chunk_overlap_tokens > max_chunk_size_tokens / 2 {
-            return Err(VectorStoreValidationError::InvalidChunkOverlap {
-                overlap: chunk_overlap_tokens,
-                maximum: max_chunk_size_tokens,
-            });
-        }
         Ok(Self {
             max_chunk_size_tokens,
             chunk_overlap_tokens,
         })
+    }
+
+    /// Checks the documented rule that overlap must not exceed half the
+    /// maximum chunk size.
+    pub fn validate(&self) -> Result<(), VectorStoreValidationError> {
+        if self.chunk_overlap_tokens > self.max_chunk_size_tokens / 2 {
+            return Err(VectorStoreValidationError::InvalidChunkOverlap {
+                overlap: self.chunk_overlap_tokens,
+                maximum: self.max_chunk_size_tokens,
+            });
+        }
+        Ok(())
     }
 
     /// Maximum tokens in one chunk.
@@ -726,6 +763,14 @@ impl VectorStoreChunkingStrategyRequest {
     #[must_use]
     pub const fn static_strategy(strategy: StaticChunkingStrategy) -> Self {
         Self::Static(strategy)
+    }
+
+    /// Checks the descriptive overlap rule on a static strategy.
+    pub fn validate(&self) -> Result<(), VectorStoreValidationError> {
+        match self {
+            Self::Static(strategy) => strategy.validate(),
+            Self::Auto | Self::Unknown(_) => Ok(()),
+        }
     }
 }
 
@@ -1084,6 +1129,22 @@ impl CreateVectorStoreRequest {
         self
     }
 
+    /// Checks the documented request limits without sending the request.
+    ///
+    /// Decoding stays lossless (see [`VectorStoreMetadata`]), so oversized
+    /// values can still be constructed and echoed; this opt-in hook enforces
+    /// the pinned metadata 16/64/512 limits and the descriptive static-chunk
+    /// overlap rule before the body is transmitted.
+    pub fn validate(&self) -> Result<(), VectorStoreValidationError> {
+        if let Omittable::Value(strategy) = &self.chunking_strategy {
+            strategy.validate()?;
+        }
+        if let Omittable::Value(Nullable::Value(metadata)) = &self.metadata {
+            metadata.validate()?;
+        }
+        Ok(())
+    }
+
     /// Exact initial-file presence state.
     #[must_use]
     pub const fn file_ids(&self) -> &Omittable<VectorStoreInitialFileIds> {
@@ -1201,6 +1262,17 @@ impl UpdateVectorStoreRequest {
     pub fn clear_metadata(mut self) -> Self {
         self.metadata = Omittable::Omitted;
         self
+    }
+
+    /// Checks the documented metadata limits without sending the request.
+    ///
+    /// Mirrors [`CreateVectorStoreRequest::validate`] for the fields this
+    /// patch body can carry.
+    pub fn validate(&self) -> Result<(), VectorStoreValidationError> {
+        if let Omittable::Value(Nullable::Value(metadata)) = &self.metadata {
+            metadata.validate()?;
+        }
+        Ok(())
     }
 
     /// Exact name patch state.
@@ -1408,9 +1480,12 @@ impl DeletedVectorStore {
 pub struct VectorStoreListLimit(u32);
 
 impl VectorStoreListLimit {
-    /// Creates a limit in `1..=100`.
+    /// Validates a page size of at least 1.
+    ///
+    /// The pinned schemas document "between 1 and 100" in prose but carry no
+    /// `maximum`, so no upper bound is enforced.
     pub const fn new(value: u32) -> Result<Self, VectorStoreValidationError> {
-        if value == 0 || value > MAX_VECTOR_STORE_LIST_LIMIT {
+        if value == 0 {
             Err(VectorStoreValidationError::InvalidListLimit { limit: value })
         } else {
             Ok(Self(value))
@@ -2071,13 +2146,14 @@ impl CreateVectorStoreFileBatchRequest {
     }
 
     /// Applies one global chunking strategy. The API ignores this field for the
-    /// per-file `files` form, so this method rejects that ambiguous combination.
+    /// per-file `files` form, so this method rejects that ambiguous
+    /// combination.
     pub fn with_chunking_strategy(
         mut self,
         strategy: VectorStoreChunkingStrategyRequest,
     ) -> Result<Self, VectorStoreValidationError> {
         if self.files.is_value() {
-            return Err(VectorStoreValidationError::InvalidBatchInputChoice);
+            return Err(VectorStoreValidationError::GlobalFieldsWithPerFileBatch);
         }
         self.chunking_strategy = Omittable::Value(strategy);
         Ok(self)
@@ -2089,7 +2165,7 @@ impl CreateVectorStoreFileBatchRequest {
         attributes: VectorStoreFileAttributes,
     ) -> Result<Self, VectorStoreValidationError> {
         if self.files.is_value() {
-            return Err(VectorStoreValidationError::InvalidBatchInputChoice);
+            return Err(VectorStoreValidationError::GlobalFieldsWithPerFileBatch);
         }
         self.attributes = Omittable::Value(Nullable::Value(attributes));
         Ok(self)
@@ -2098,7 +2174,7 @@ impl CreateVectorStoreFileBatchRequest {
     /// Applies explicit `null` global attributes to the bare-ID form.
     pub fn with_attributes_null(mut self) -> Result<Self, VectorStoreValidationError> {
         if self.files.is_value() {
-            return Err(VectorStoreValidationError::InvalidBatchInputChoice);
+            return Err(VectorStoreValidationError::GlobalFieldsWithPerFileBatch);
         }
         self.attributes = Omittable::Value(Nullable::Null);
         Ok(self)
@@ -2162,11 +2238,12 @@ impl<'de> Deserialize<'de> for CreateVectorStoreFileBatchRequest {
         D: Deserializer<'de>,
     {
         let wire = CreateVectorStoreFileBatchRequestWire::deserialize(deserializer)?;
-        let file_ids_present = wire.file_ids.is_value();
-        let files_present = wire.files.is_value();
-        if file_ids_present == files_present
-            || (files_present && (wire.chunking_strategy.is_value() || wire.attributes.is_value()))
-        {
+        // The pinned anyOf requires exactly one of file_ids/files to be
+        // present. A per-file `files` body combined with the global
+        // `attributes`/`chunking_strategy` fields satisfies the schema (the
+        // `files` branch alone validates), so decoding keeps it; only the
+        // builders reject that ambiguous combination.
+        if wire.file_ids.is_value() == wire.files.is_value() {
             return Err(serde::de::Error::custom(
                 VectorStoreValidationError::InvalidBatchInputChoice,
             ));
@@ -2313,7 +2390,7 @@ impl VectorStoreMaxResults {
     /// Creates a result count in `1..=50`.
     pub const fn new(value: u8) -> Result<Self, VectorStoreValidationError> {
         if value == 0 || value > MAX_VECTOR_STORE_SEARCH_RESULTS {
-            Err(VectorStoreValidationError::InvalidMaxResults { maximum: value })
+            Err(VectorStoreValidationError::InvalidMaxResults { actual: value })
         } else {
             Ok(Self(value))
         }
@@ -2812,6 +2889,52 @@ mod tests {
     }
 
     #[test]
+    fn vector_store_list_limit_requires_at_least_one() {
+        // The pinned list schemas document "between 1 and 100" in prose but
+        // carry no `maximum`, and the official Python SDK passes the value
+        // through unbounded, so only the schema-backed lower bound is enforced
+        // (D0154).
+        assert!(VectorStoreListLimit::new(0).is_err());
+        assert!(serde_json::from_str::<VectorStoreListLimit>("0").is_err());
+        assert_eq!(
+            VectorStoreListLimit::new(1)
+                .expect("minimum is valid")
+                .get(),
+            1_u32
+        );
+        assert_eq!(
+            VectorStoreListLimit::new(u32::MAX)
+                .expect("no invented upper bound")
+                .get(),
+            u32::MAX
+        );
+        assert_eq!(
+            serde_json::from_str::<VectorStoreListLimit>("101")
+                .expect("value above the documented prose ceiling stays valid")
+                .get(),
+            101_u32
+        );
+
+        // The default stays the pinned 20 and both params surfaces share the
+        // validated type.
+        assert_eq!(
+            VectorStoreListParams::new().effective_limit(),
+            DEFAULT_VECTOR_STORE_LIST_LIMIT
+        );
+        let above_ceiling = VectorStoreListLimit::new(500).expect("prose-only ceiling");
+        let encoded = serde_json::to_value(VectorStoreListParams::new().with_limit(above_ceiling))
+            .expect("encode list params");
+        assert_eq!(encoded, json!({"limit": 500}));
+        let decoded: VectorStoreListParams =
+            serde_json::from_value(encoded).expect("decode list params");
+        assert_eq!(decoded.effective_limit(), 500);
+        let file_params =
+            serde_json::to_value(VectorStoreFileListParams::new().with_limit(above_ceiling))
+                .expect("encode file list params");
+        assert_eq!(file_params, json!({"limit": 500}));
+    }
+
+    #[test]
     fn attributes_enforce_shape_and_limits_on_decode() {
         let mut attributes = VectorStoreFileAttributes::new();
         attributes
@@ -2840,15 +2963,138 @@ mod tests {
     }
 
     #[test]
-    fn chunking_validates_cross_field_constraint() {
+    fn chunking_schema_range_is_decode_enforced_and_overlap_is_opt_in() {
         assert!(StaticChunkingStrategy::new(99, 0).is_err());
-        assert!(StaticChunkingStrategy::new(800, 401).is_err());
-        let strategy = StaticChunkingStrategy::new(800, 400).expect("boundary accepted");
-        let request = VectorStoreChunkingStrategyRequest::static_strategy(strategy);
+        assert!(StaticChunkingStrategy::new(4097, 0).is_err());
+        // The overlap ceiling is descriptive (no schema constraint), so the
+        // constructor and decode accept it and only validate() rejects.
+        let oversized = StaticChunkingStrategy::new(800, 401).expect("constructor accepts overlap");
+        assert!(matches!(
+            oversized.validate(),
+            Err(VectorStoreValidationError::InvalidChunkOverlap {
+                overlap: 401,
+                maximum: 800
+            })
+        ));
+
+        let boundary = StaticChunkingStrategy::new(800, 400).expect("boundary accepted");
+        boundary.validate().expect("half-overlap is valid");
+        let request = VectorStoreChunkingStrategyRequest::static_strategy(boundary);
+        request.validate().expect("request strategy validates");
         assert_eq!(
             serde_json::to_value(request).expect("encode"),
             json!({"type": "static", "static": {"max_chunk_size_tokens": 800, "chunk_overlap_tokens": 400}})
         );
+        assert!(
+            serde_json::from_value::<VectorStoreChunkingStrategyRequest>(json!({
+                "type": "static",
+                "static": {"max_chunk_size_tokens": 800, "chunk_overlap_tokens": 400}
+            }))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<VectorStoreChunkingStrategyRequest>(json!({
+                "type": "static",
+                "static": {"max_chunk_size_tokens": 99, "chunk_overlap_tokens": 0}
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn oversized_metadata_decodes_and_request_validate_rejects() {
+        let oversized = (0..=MAX_VECTOR_STORE_PROPERTIES)
+            .map(|index| (format!("k{index}"), json!("v")))
+            .collect::<serde_json::Map<_, _>>();
+        let decoded: VectorStoreMetadata =
+            serde_json::from_value(Value::Object(oversized.clone())).expect("lossless decode");
+        assert_eq!(decoded.len(), MAX_VECTOR_STORE_PROPERTIES + 1);
+        assert_eq!(
+            serde_json::to_value(decoded.clone()).expect("re-encode"),
+            Value::Object(oversized.clone())
+        );
+
+        let long_key = Value::Object(
+            [("k".repeat(MAX_VECTOR_STORE_KEY_CHARS + 1), Value::from("v"))]
+                .into_iter()
+                .collect(),
+        );
+        let long_value = json!({"k": "v".repeat(MAX_VECTOR_STORE_VALUE_CHARS + 1)});
+        assert!(
+            serde_json::from_value::<VectorStoreMetadata>(long_key.clone()).is_ok(),
+            "oversized keys stay decodable"
+        );
+        assert!(
+            serde_json::from_value::<VectorStoreMetadata>(long_value.clone()).is_ok(),
+            "oversized values stay decodable"
+        );
+
+        let mut store_value = minimal_store();
+        store_value["metadata"] = Value::Object(oversized.clone());
+        let store: VectorStore = serde_json::from_value(store_value.clone()).expect("decode store");
+        let Nullable::Value(store_metadata) = store.metadata() else {
+            panic!("oversized metadata must decode as a value");
+        };
+        assert_eq!(store_metadata.len(), MAX_VECTOR_STORE_PROPERTIES + 1);
+        assert_eq!(serde_json::to_value(store).expect("re-encode"), store_value);
+
+        let create = CreateVectorStoreRequest::new()
+            .with_metadata(decoded.clone())
+            .validate();
+        assert!(matches!(
+            create,
+            Err(VectorStoreValidationError::TooManyProperties { actual, .. })
+                if actual == MAX_VECTOR_STORE_PROPERTIES + 1
+        ));
+
+        let long_key_metadata: VectorStoreMetadata =
+            serde_json::from_value(long_key).expect("decode oversized key");
+        assert!(matches!(
+            CreateVectorStoreRequest::new()
+                .with_metadata(long_key_metadata.clone())
+                .validate(),
+            Err(VectorStoreValidationError::KeyTooLong { .. })
+        ));
+        assert!(matches!(
+            UpdateVectorStoreRequest::new()
+                .with_metadata(long_key_metadata)
+                .validate(),
+            Err(VectorStoreValidationError::KeyTooLong { .. })
+        ));
+
+        let long_value_metadata: VectorStoreMetadata =
+            serde_json::from_value(long_value).expect("decode oversized value");
+        assert!(matches!(
+            CreateVectorStoreRequest::new()
+                .with_metadata(long_value_metadata)
+                .validate(),
+            Err(VectorStoreValidationError::ValueTooLong { .. })
+        ));
+
+        // Omitted and explicit-null metadata never trip the opt-in check.
+        CreateVectorStoreRequest::new()
+            .validate()
+            .expect("empty body validates");
+        UpdateVectorStoreRequest::new()
+            .with_metadata_null()
+            .validate()
+            .expect("explicit null validates");
+    }
+
+    #[test]
+    fn create_request_validate_checks_chunking_overlap() {
+        let strategy = StaticChunkingStrategy::new(800, 401).expect("constructor accepts overlap");
+        let request = CreateVectorStoreRequest::new().with_chunking_strategy(
+            VectorStoreChunkingStrategyRequest::static_strategy(strategy),
+        );
+        assert!(matches!(
+            request.validate(),
+            Err(VectorStoreValidationError::InvalidChunkOverlap { .. })
+        ));
+
+        let auto = CreateVectorStoreRequest::new()
+            .with_chunking_strategy(VectorStoreChunkingStrategyRequest::auto());
+        auto.validate().expect("auto strategy has no overlap rule");
     }
 
     #[test]
@@ -2967,11 +3213,82 @@ mod tests {
                 "file-a",
             )])
             .expect("valid per-file batch");
-        assert!(
+        assert!(matches!(
             per_file
+                .clone()
                 .with_chunking_strategy(VectorStoreChunkingStrategyRequest::auto())
-                .is_err()
+                .expect_err("global chunking rejects per-file form"),
+            VectorStoreValidationError::GlobalFieldsWithPerFileBatch
+        ));
+        let mut attributes = VectorStoreFileAttributes::new();
+        attributes
+            .insert("tenant", VectorStoreAttributeValue::Boolean(true))
+            .expect("attribute");
+        assert!(matches!(
+            per_file
+                .clone()
+                .with_attributes(attributes)
+                .expect_err("global attributes reject per-file form"),
+            VectorStoreValidationError::GlobalFieldsWithPerFileBatch
+        ));
+        assert!(matches!(
+            per_file
+                .with_attributes_null()
+                .expect_err("null global attributes reject per-file form"),
+            VectorStoreValidationError::GlobalFieldsWithPerFileBatch
+        ));
+    }
+
+    #[test]
+    fn per_file_batch_with_global_fields_decodes_but_builders_reject() {
+        // The pinned anyOf is satisfied by the `files` branch alone, so the
+        // schema-legal combinations below must decode and round-trip.
+        let files_with_chunking = json!({
+            "files": [{"file_id": "file-a"}],
+            "chunking_strategy": {"type": "auto"}
+        });
+        let decoded: CreateVectorStoreFileBatchRequest =
+            serde_json::from_value(files_with_chunking.clone()).expect("schema-legal combination");
+        assert!(decoded.files().is_value());
+        assert!(decoded.chunking_strategy().is_value());
+        assert_eq!(
+            serde_json::to_value(decoded).expect("re-encode"),
+            files_with_chunking
         );
+
+        let files_with_attributes = json!({
+            "files": [{"file_id": "file-a", "attributes": {"tenant": "blue"}}],
+            "attributes": null
+        });
+        let decoded: CreateVectorStoreFileBatchRequest =
+            serde_json::from_value(files_with_attributes.clone()).expect("null global attributes");
+        assert!(matches!(
+            decoded.attributes(),
+            Omittable::Value(Nullable::Null)
+        ));
+        assert_eq!(
+            serde_json::to_value(decoded).expect("re-encode"),
+            files_with_attributes
+        );
+
+        let mut attributes = VectorStoreFileAttributes::new();
+        attributes
+            .insert(
+                "tenant",
+                VectorStoreAttributeValue::string("blue").expect("value"),
+            )
+            .expect("attribute");
+        let file_ids_with_globals =
+            CreateVectorStoreFileBatchRequest::from_file_ids(vec![FileId::new("file-a")])
+                .expect("valid batch")
+                .with_chunking_strategy(VectorStoreChunkingStrategyRequest::auto())
+                .expect("bare-ID form accepts globals")
+                .with_attributes(attributes)
+                .expect("bare-ID form accepts attributes");
+        let encoded = serde_json::to_value(file_ids_with_globals).expect("encode");
+        assert_eq!(encoded["file_ids"], json!(["file-a"]));
+        assert_eq!(encoded["chunking_strategy"], json!({"type": "auto"}));
+        assert_eq!(encoded["attributes"]["tenant"], "blue");
     }
 
     #[test]
@@ -2994,6 +3311,33 @@ mod tests {
         assert_eq!(value["query"], "quarterly revenue");
         assert_eq!(value["filters"]["type"], "gt");
         assert_eq!(value["ranking_options"]["score_threshold"], 0.4);
+    }
+
+    #[test]
+    fn max_results_bounds_report_the_rejected_actual_value() {
+        assert_eq!(
+            VectorStoreMaxResults::new(0),
+            Err(VectorStoreValidationError::InvalidMaxResults { actual: 0 })
+        );
+        assert_eq!(
+            VectorStoreMaxResults::new(MAX_VECTOR_STORE_SEARCH_RESULTS + 1),
+            Err(VectorStoreValidationError::InvalidMaxResults {
+                actual: MAX_VECTOR_STORE_SEARCH_RESULTS + 1
+            })
+        );
+        // The rendered message keeps its original wording.
+        assert_eq!(
+            VectorStoreMaxResults::new(51)
+                .expect_err("above the ceiling")
+                .to_string(),
+            "vector-store max_num_results must be 1..=50, got 51"
+        );
+        assert_eq!(
+            VectorStoreMaxResults::new(MAX_VECTOR_STORE_SEARCH_RESULTS)
+                .expect("ceiling is valid")
+                .get(),
+            MAX_VECTOR_STORE_SEARCH_RESULTS
+        );
     }
 
     #[test]

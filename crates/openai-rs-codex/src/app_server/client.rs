@@ -17,23 +17,33 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tracing::Instrument;
+use url::Url;
 
 use super::codec::read_bounded_line;
 use crate::credentials::apply_credential;
 use crate::{
-    AccountRateLimitsResponse, AccountReadResponse, AccountUsageParams, AccountUsageResponse,
-    BrowserLogin, BrowserLoginOptions, CancelLoginResponse, ClientInfo, CodexCredentialMarker,
-    ConnectionFailure, ConnectionFailureKind, DeviceCodeLogin, EmptyResponse, Error,
-    InitializeParams, InitializeResponse, LoginAccountResponse, ManagedAppServerCredential,
-    Notification, RpcError, RpcId, RuntimeCompatibility, RuntimeIdentity, ThreadStartParams,
-    ThreadStartResponse, TurnInterruptParams, TurnStartParams, TurnStartResponse,
-    decode_notification,
+    AccountRateLimitsResponse, AccountReadResponse, AccountUsageResponse, BrowserLogin,
+    BrowserLoginOptions, CancelLoginResponse, ClientInfo, CodexCredentialMarker, ConnectionFailure,
+    ConnectionFailureKind, DeviceCodeLogin, EmptyResponse, Error, InitializeParams,
+    InitializeResponse, LoginAccountResponse, ManagedAppServerCredential, Notification, RpcError,
+    RpcId, RuntimeCompatibility, RuntimeIdentity, ThreadStartParams, ThreadStartResponse,
+    TurnInterruptParams, TurnStartParams, TurnStartResponse, decode_notification,
 };
 
-const DEFAULT_LINE_LIMIT: usize = 4 * 1024 * 1024;
+/// Default inbound JSONL frame limit.
+///
+/// 32 MiB mirrors the SSE-side stance recorded as decision D0144: a single
+/// Codex payload (for example a serialized turn carrying a large tool output
+/// or a Responses-style partial-image snapshot) can reach several MiB in one
+/// physical line, and a transport-level line cap below the payload size would
+/// tear down an otherwise official session. The frame cap remains the DoS
+/// guard and is tunable through [`AppServerLimits::max_line_bytes`].
+const DEFAULT_LINE_LIMIT: usize = 32 * 1024 * 1024;
 const DEFAULT_STDERR_LIMIT: usize = 64 * 1024;
 const DEFAULT_PENDING_LIMIT: usize = 128;
 const DEFAULT_EVENT_CAPACITY: usize = 512;
+/// Bytes of the rolling stderr tail attached to a reaped child-exit failure.
+const CHILD_EXIT_STDERR_SNIPPET: usize = 2048;
 
 /// Hard resource limits for one app-server child.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -455,15 +465,11 @@ where
         self.request_without_params("account/rateLimits/read").await
     }
 
-    pub async fn account_usage(
-        &self,
-        params: AccountUsageParams,
-    ) -> Result<AccountUsageResponse, Error> {
-        if params.thread_id.is_none() {
-            self.request_without_params("account/usage/read").await
-        } else {
-            self.request("account/usage/read", Some(params)).await
-        }
+    /// Read account token usage. The pinned schema types the
+    /// `account/usage/read` params as `null`, so the request is always sent
+    /// without a `params` key.
+    pub async fn account_usage(&self) -> Result<AccountUsageResponse, Error> {
+        self.request_without_params("account/usage/read").await
     }
 
     pub async fn thread_start(
@@ -513,9 +519,9 @@ where
     where
         R: DeserializeOwned,
     {
-        self.request_value(method, None)
-            .await
-            .and_then(|value| serde_json::from_value(value).map_err(Error::Json))
+        self.request_value(method, None).await.and_then(|value| {
+            serde_json::from_value(value).map_err(|source| Error::ResponseDecode { method, source })
+        })
     }
 
     async fn request<P, R>(&self, method: &'static str, params: Option<P>) -> Result<R, Error>
@@ -525,7 +531,7 @@ where
     {
         let params = params.map(serde_json::to_value).transpose()?;
         let value = self.request_value(method, params).await?;
-        serde_json::from_value(value).map_err(Error::Json)
+        serde_json::from_value(value).map_err(|source| Error::ResponseDecode { method, source })
     }
 
     #[tracing::instrument(
@@ -602,6 +608,7 @@ where
             Err(_) => {
                 lock(&self.inner.pending).remove(&id);
                 Err(Error::RequestTimeout {
+                    method,
                     id,
                     timeout: self.inner.limits.request_timeout,
                 })
@@ -698,9 +705,12 @@ impl AppServerClient<ManagedAppServerCredential> {
             login_id: response.login_id.ok_or_else(|| {
                 Error::UnexpectedResponse("browser login response omitted loginId".to_owned())
             })?,
-            auth_url: response.auth_url.ok_or_else(|| {
-                Error::UnexpectedResponse("browser login response omitted authUrl".to_owned())
-            })?,
+            auth_url: response
+                .auth_url
+                .ok_or_else(|| {
+                    Error::UnexpectedResponse("browser login response omitted authUrl".to_owned())
+                })
+                .and_then(|auth_url| parse_login_url("authUrl", auth_url))?,
         })
     }
 
@@ -729,11 +739,16 @@ impl AppServerClient<ManagedAppServerCredential> {
             login_id: response.login_id.ok_or_else(|| {
                 Error::UnexpectedResponse("device login response omitted loginId".to_owned())
             })?,
-            verification_url: response.verification_url.ok_or_else(|| {
-                Error::UnexpectedResponse(
-                    "device login response omitted verificationUrl".to_owned(),
-                )
-            })?,
+            verification_url: response
+                .verification_url
+                .ok_or_else(|| {
+                    Error::UnexpectedResponse(
+                        "device login response omitted verificationUrl".to_owned(),
+                    )
+                })
+                .and_then(|verification_url| {
+                    parse_login_url("verificationUrl", verification_url)
+                })?,
             user_code: response.user_code.ok_or_else(|| {
                 Error::UnexpectedResponse("device login response omitted userCode".to_owned())
             })?,
@@ -757,6 +772,22 @@ impl AppServerClient<ManagedAppServerCredential> {
         )
         .await
     }
+}
+
+/// Resolve a login URL from the wire DTO into the public [`Url`] type.
+///
+/// The pinned schema types `authUrl`/`verificationUrl` as plain strings with
+/// no `uri` constraint, so [`LoginAccountResponse`] keeps them unparsed and a
+/// single malformed field cannot fail the whole response at decode time. The
+/// parse happens here instead: a non-absolute or otherwise unparsable value is
+/// reported as [`Error::UnexpectedResponse`] naming the offending wire key,
+/// never silently replaced or passed through.
+fn parse_login_url(wire_key: &'static str, value: String) -> Result<Url, Error> {
+    Url::parse(&value).map_err(|error| {
+        Error::UnexpectedResponse(format!(
+            "login response {wire_key} {value:?} is not a parsable absolute URL: {error}"
+        ))
+    })
 }
 
 fn validate_config<C>(config: &AppServerConfig<C>) -> Result<(), Error>
@@ -907,14 +938,7 @@ fn spawn_stdout_reader(
                         let Some(inner) = inner.upgrade() else {
                             return;
                         };
-                        let _ = terminate(
-                            &inner,
-                            ConnectionFailure::new(
-                                ConnectionFailureKind::EndOfFile,
-                                "app-server stdout reached end of file",
-                            ),
-                        )
-                        .await;
+                        let _ = terminate(&inner, stdout_end_failure(&inner).await).await;
                         return;
                     }
                     Err(failure) => {
@@ -1079,11 +1103,87 @@ fn send_event(inner: &Arc<Inner>, event: AppServerEvent) -> Result<(), Connectio
     })
 }
 
+/// Terminal failure for clean stdout EOF.
+///
+/// 4-38: EOF alone cannot distinguish a crashed or killed child from an
+/// orderly shutdown, so the child is reaped first (bounded by the shutdown
+/// timeout, because a daemonizing child may close stdout while still running).
+/// A reaped exit status becomes a `ChildExit` failure carrying the status and
+/// a truncated stderr tail; a still-running child keeps the plain EOF failure
+/// and the regular terminate path performs the kill.
+async fn stdout_end_failure(inner: &Arc<Inner>) -> ConnectionFailure {
+    let eof = || {
+        ConnectionFailure::new(
+            ConnectionFailureKind::EndOfFile,
+            "app-server stdout reached end of file",
+        )
+    };
+    let waited = {
+        let mut child_guard = inner.child.lock().await;
+        let Some(child) = child_guard.as_mut() else {
+            return eof();
+        };
+        tokio::time::timeout(inner.limits.shutdown_timeout, child.wait()).await
+    };
+    match waited {
+        Ok(Ok(status)) => child_exit_failure(inner, &status),
+        _ => eof(),
+    }
+}
+
+/// Build the `ChildExit` terminal failure for a reaped child exit status,
+/// attaching a truncated stderr tail when one was captured.
+fn child_exit_failure(inner: &Arc<Inner>, status: &std::process::ExitStatus) -> ConnectionFailure {
+    let stderr = lock(&inner.stderr).lossy_string();
+    let mut message = format!("app-server child exited with status {status}");
+    if !stderr.is_empty() {
+        let snippet: String = stderr.chars().take(CHILD_EXIT_STDERR_SNIPPET).collect();
+        message.push_str("; stderr tail: ");
+        message.push_str(&snippet);
+        if snippet.len() < stderr.len() {
+            message.push_str("...[truncated]");
+        }
+    }
+    ConnectionFailure::new(ConnectionFailureKind::ChildExit, message)
+}
+
+/// Non-blocking reap probe used to fold an already-exited child's status into
+/// a terminal failure that would otherwise not mention it.
+async fn already_exited_status(inner: &Arc<Inner>) -> Option<std::process::ExitStatus> {
+    let mut child_guard = inner.child.lock().await;
+    match child_guard.as_mut() {
+        Some(child) => child.try_wait().ok().flatten(),
+        None => None,
+    }
+}
+
 async fn terminate(inner: &Arc<Inner>, failure: ConnectionFailure) -> Result<(), Error> {
     let first = !inner.closed.swap(true, Ordering::AcqRel);
     if !first {
         return Ok(());
     }
+    // 4-38: a child that already exited is the more specific terminal fact.
+    // Fold its reaped status into the failure before it is stored and
+    // broadcast, so a crash is never downgraded to a generic transport
+    // failure. Failures that already carry an exit status, and the
+    // user-initiated close, keep their own message.
+    let failure = match already_exited_status(inner).await {
+        Some(status)
+            if !matches!(
+                failure.kind,
+                ConnectionFailureKind::Closed | ConnectionFailureKind::ChildExit
+            ) =>
+        {
+            ConnectionFailure::new(
+                failure.kind,
+                format!(
+                    "{message}; app-server child exited with status {status}",
+                    message = failure.message
+                ),
+            )
+        }
+        _ => failure,
+    };
     *lock(&inner.terminal_failure) = Some(failure.clone());
     lock(&inner.events_tx).take();
 
@@ -1103,12 +1203,12 @@ async fn terminate(inner: &Arc<Inner>, failure: ConnectionFailure) -> Result<(),
     let Some(mut child) = child else {
         return Ok(());
     };
-    match child.try_wait().map_err(Error::Io)? {
-        Some(_) => return Ok(()),
-        None => {
-            child.start_kill().map_err(Error::Io)?;
-        }
+    // The exit status of an already-exited child was folded into the terminal
+    // failure above; this branch only has to stop a live child.
+    if child.try_wait().map_err(Error::Io)?.is_some() {
+        return Ok(());
     }
+    child.start_kill().map_err(Error::Io)?;
     tokio::time::timeout(inner.limits.shutdown_timeout, child.wait())
         .await
         .map_err(|_| {
@@ -1139,10 +1239,11 @@ mod tests {
         AppServerClient, AppServerConfig, AppServerEvent, AppServerLimits, StderrTail, sha256_file,
     };
     use crate::{
-        AccountUsageParams, BrowserLoginOptions, ClientInfo, Error, Notification,
-        RuntimeCompatibility, RuntimeIdentity, ThreadStartParams, TurnInterruptParams,
-        TurnStartParams,
+        BrowserLoginOptions, CancelLoginStatus, ClientInfo, ConnectionFailureKind, Error,
+        Notification, PlanType, RateLimitReachedType, RuntimeCompatibility, RuntimeIdentity,
+        ThreadStartParams, TurnInterruptParams, TurnStartParams, TurnStatus,
     };
+    use openai_rs_types::kernel::{Nullable, Omittable};
 
     fn fake_runtime(executable: &Path) -> Result<RuntimeCompatibility, Box<dyn std::error::Error>> {
         let executable = executable.canonicalize()?;
@@ -1162,6 +1263,195 @@ mod tests {
         assert_eq!(tail.lossy_string(), "cdef");
     }
 
+    /// 4-40: the default inbound frame limit matches the payload scale argued
+    /// in D0144 (several MiB in one physical line) instead of tearing an
+    /// otherwise official session apart at 4 MiB.
+    #[test]
+    fn default_line_limit_matches_the_payload_scale() {
+        assert_eq!(
+            AppServerLimits::default().max_line_bytes,
+            32 * 1024 * 1024,
+            "DEFAULT_LINE_LIMIT must stay aligned with the D0144-style rationale"
+        );
+    }
+
+    /// 4-38 / 4-39: a child that crashes (exit 1) after accepting two requests
+    /// reports the reaped exit status and stderr tail through a `ChildExit`
+    /// failure broadcast to every in-flight request, not a bare EOF.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn child_crash_exit_status_reaches_in_flight_requests()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            echo "child exploded" >&2
+            IFS= read -r init || exit 71
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 72
+            IFS= read -r first || exit 73
+            IFS= read -r second || exit 74
+            exit 1
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        // Make the stderr capture deterministic: the fake wrote its line
+        // before the initialize reply, so the rolling tail must contain it
+        // before the crash is triggered.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !client.stderr_tail().contains("child exploded") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "stderr tail never captured the crash line"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let (first, second) = tokio::join!(
+            client.request_value("test/first", None),
+            client.request_value("test/second", None)
+        );
+        for result in [first, second] {
+            match result {
+                Err(Error::Connection(failure)) => {
+                    assert_eq!(failure.kind, ConnectionFailureKind::ChildExit);
+                    assert!(
+                        failure
+                            .message
+                            .contains("app-server child exited with status exit status: 1"),
+                        "unexpected message: {}",
+                        failure.message
+                    );
+                    assert!(
+                        failure.message.contains("stderr tail: child exploded"),
+                        "unexpected message: {}",
+                        failure.message
+                    );
+                }
+                other => {
+                    return Err(format!("unexpected first-request result: {other:?}").into());
+                }
+            }
+        }
+        let terminal = client
+            .connection_failure()
+            .ok_or("missing terminal failure after crash")?;
+        assert_eq!(terminal.kind, ConnectionFailureKind::ChildExit);
+        assert!(client.is_closed());
+        Ok(())
+    }
+
+    /// 4-39: an `error` JSON-RPC response propagates as `Error::Rpc` with the
+    /// code, message, and structured data preserved verbatim.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rpc_error_response_preserves_code_message_and_data()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 75
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 76
+            IFS= read -r first || exit 77
+            printf '%s\n' '{"id":2,"error":{"code":-32000,"message":"turn exploded","data":{"turnId":"turn_9"}}}'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        match client.request_value("test/first", None).await {
+            Err(Error::Rpc(rpc)) => {
+                assert_eq!(rpc.code, -32000);
+                assert_eq!(rpc.message, "turn exploded");
+                assert_eq!(
+                    rpc.data,
+                    Omittable::Value(Nullable::Value(json!({"turnId": "turn_9"})))
+                );
+            }
+            other => return Err(format!("unexpected request result: {other:?}").into()),
+        }
+        client.close().await?;
+        Ok(())
+    }
+
+    /// 4-39: stdout ending in the middle of a JSONL frame is a terminal
+    /// `EndOfFile` failure for in-flight requests, with the reaped child exit
+    /// folded into the same terminal failure.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn eof_mid_frame_fails_in_flight_requests() -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 78
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 79
+            IFS= read -r first || exit 80
+            printf '%s' '{"id":2,"res'
+            exit 0
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        match client.request_value("test/first", None).await {
+            Err(Error::Connection(failure)) => {
+                assert_eq!(failure.kind, ConnectionFailureKind::EndOfFile);
+                assert!(
+                    failure
+                        .message
+                        .contains("app-server stdout ended in the middle of a JSONL frame"),
+                    "unexpected message: {}",
+                    failure.message
+                );
+            }
+            other => return Err(format!("unexpected request result: {other:?}").into()),
+        }
+        let terminal = client
+            .connection_failure()
+            .ok_or("missing terminal failure after half frame")?;
+        assert_eq!(terminal.kind, ConnectionFailureKind::EndOfFile);
+        Ok(())
+    }
+
+    /// 4-39: a non-JSON frame is a terminal `InvalidJson` failure delivered to
+    /// the pending request instead of being silently skipped.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn invalid_json_frame_fails_in_flight_requests() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 81
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 82
+            IFS= read -r first || exit 83
+            printf 'not-json\n'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        match client.request_value("test/first", None).await {
+            Err(Error::Connection(failure)) => {
+                assert_eq!(failure.kind, ConnectionFailureKind::InvalidJson);
+                assert!(
+                    failure.message.contains("invalid JSON from app-server"),
+                    "unexpected message: {}",
+                    failure.message
+                );
+            }
+            other => return Err(format!("unexpected request result: {other:?}").into()),
+        }
+        Ok(())
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn fake_child_handshake_correlation_and_unknown_notification()
@@ -1173,6 +1463,8 @@ mod tests {
             test -d "$CODEX_HOME" || exit 11
             IFS= read -r init || exit 12
             case "$init" in *'"method":"initialize"'*'"id":1'*) ;; *) exit 13 ;; esac
+            case "$init" in *'"params":{"clientInfo":{"name":"test","version":"0.0.0"}}'*) ;; *) exit 28 ;; esac
+            case "$init" in *capabilities*) exit 29 ;; esac
             printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
             IFS= read -r initialized || exit 14
             case "$initialized" in *'"method":"initialized"'*) ;; *) exit 15 ;; esac
@@ -1263,6 +1555,8 @@ mod tests {
 
             IFS= read -r usage || exit 43
             case "$usage" in *'"method":"account/usage/read"'*) ;; *) exit 44 ;; esac
+            case "$usage" in *threadId*) exit 52 ;; esac
+            case "$usage" in *'"params"'*) exit 53 ;; esac
             printf '%s\n' '{"id":7,"result":{"summary":{"lifetimeTokens":123,"peakDailyTokens":45,"longestRunningTurnSec":9,"currentStreakDays":2,"longestStreakDays":3},"dailyUsageBuckets":[{"startDate":"2026-08-30","tokens":12}]}}'
 
             IFS= read -r thread || exit 45
@@ -1294,21 +1588,24 @@ mod tests {
         assert_eq!(device.user_code, "ABCD-1234");
         assert_eq!(
             client.account_login_cancel(device.login_id).await?.status,
-            "canceled"
+            CancelLoginStatus::Canceled
         );
 
         let account = client.account_read(false).await?;
         assert_eq!(
             account.account.and_then(|account| account.plan_type),
-            Some("future_plan".to_owned())
+            Some(PlanType::from_raw("future_plan"))
         );
         let limits = client.account_rate_limits().await?;
-        assert_eq!(limits.rate_limits.plan_type.as_deref(), Some("future_plan"));
         assert_eq!(
-            limits.rate_limits.rate_limit_reached_type.as_deref(),
-            Some("future_state")
+            limits.rate_limits.plan_type,
+            Some(PlanType::from_raw("future_plan"))
         );
-        let usage = client.account_usage(AccountUsageParams::default()).await?;
+        assert_eq!(
+            limits.rate_limits.rate_limit_reached_type,
+            Some(RateLimitReachedType::from_raw("future_state"))
+        );
+        let usage = client.account_usage().await?;
         assert_eq!(usage.summary.lifetime_tokens, Some(123));
 
         let thread = client.thread_start(ThreadStartParams::default()).await?;
@@ -1331,11 +1628,66 @@ mod tests {
             AppServerEvent::Notification(notification) => match *notification {
                 Notification::TurnCompleted(completed) => {
                     assert_eq!(completed.thread_id, "thr_123");
-                    assert_eq!(completed.turn.status, "completed");
+                    assert_eq!(completed.turn.status, TurnStatus::Completed);
                 }
                 other => return Err(format!("unexpected notification: {other:?}").into()),
             },
             other => return Err(format!("unexpected event: {other:?}").into()),
+        }
+
+        client.close().await?;
+        Ok(())
+    }
+
+    /// Non-absolute `authUrl`/`verificationUrl` values are pinned-legal wire
+    /// strings, so the DTO decodes them; the public login methods must then
+    /// fail with an explicit `UnexpectedResponse` naming the field instead of
+    /// a decode error or a silently mangled value.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn login_start_rejects_non_absolute_urls_with_explicit_errors()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 61
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 62
+            IFS= read -r browser || exit 63
+            printf '%s\n' '{"id":2,"result":{"type":"chatgpt","loginId":"login-browser","authUrl":"chatgpt.com/auth"}}'
+            IFS= read -r device || exit 64
+            printf '%s\n' '{"id":3,"result":{"type":"chatgptDeviceCode","loginId":"login-device","verificationUrl":"codex/device","userCode":"ABCD-1234"}}'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        match client
+            .account_login_browser(BrowserLoginOptions::default())
+            .await
+        {
+            Err(Error::UnexpectedResponse(message)) => {
+                assert!(message.contains("authUrl"), "unexpected message: {message}");
+                assert!(
+                    message.contains("chatgpt.com/auth"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => return Err(format!("unexpected browser login result: {other:?}").into()),
+        }
+        match client.account_login_device().await {
+            Err(Error::UnexpectedResponse(message)) => {
+                assert!(
+                    message.contains("verificationUrl"),
+                    "unexpected message: {message}"
+                );
+                assert!(
+                    message.contains("codex/device"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => return Err(format!("unexpected device login result: {other:?}").into()),
         }
 
         client.close().await?;

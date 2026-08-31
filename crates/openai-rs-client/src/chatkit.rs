@@ -158,6 +158,7 @@ impl ChatKitThreads {
                 let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after().map(|cursor| cursor.as_str()),
+                    page.data.last().map(|thread| thread.id.as_str()),
                     &mut seen,
                     "ChatKit thread",
                 )?;
@@ -209,6 +210,9 @@ impl ChatKitThreads {
                 let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after().map(|cursor| cursor.as_str()),
+                    // Thread items are a tagged union without a shared id
+                    // accessor, so no per-item fallback cursor is available.
+                    None,
                     &mut seen,
                     "ChatKit item",
                 )?;

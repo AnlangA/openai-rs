@@ -10,13 +10,14 @@ pub struct RetryPolicy {
 
 impl RetryPolicy {
     /// OpenAI-compatible defaults: two retries for replayable requests and a
-    /// 60-second upper bound on server-requested delay.
+    /// 120-second upper bound on server-requested delay, matching
+    /// openai-python's `MAX_RETRY_AFTER_DELAY`.
     #[must_use]
     pub const fn openai_compatible() -> Self {
         Self {
             max_retries: 2,
             retry_replayable_mutations: true,
-            max_server_delay: Duration::from_secs(60),
+            max_server_delay: Duration::from_secs(120),
         }
     }
 
@@ -47,8 +48,9 @@ impl RetryPolicy {
         self
     }
 
-    /// Sets the maximum accepted `Retry-After` delay. A larger server value
-    /// stops retrying instead of causing an unbounded wait.
+    /// Sets the maximum honored `Retry-After` delay. A larger server value
+    /// falls back to local exponential backoff instead of causing an
+    /// unbounded wait.
     #[must_use]
     pub const fn max_server_delay(mut self, max_server_delay: Duration) -> Self {
         self.max_server_delay = max_server_delay;

@@ -22,7 +22,13 @@ const UTF8_BOM: &[u8; 3] = b"\xef\xbb\xbf";
 const FEED_SLICE_BYTES: usize = 8 * 1024;
 
 /// Default maximum size of one physical SSE line, excluding its terminator.
-pub const DEFAULT_MAX_SSE_LINE_BYTES: usize = 1024 * 1024;
+///
+/// This matches [`DEFAULT_MAX_SSE_EVENT_BYTES`] in magnitude. Both official
+/// SDKs decode without imposing a line or event size limit, and official
+/// payloads such as `response.image_generation_call.partial_image` carry a
+/// multi-MiB base64 `data` line in a single physical line, so the DoS boundary
+/// is the joined-event limit rather than the line limit.
+pub const DEFAULT_MAX_SSE_LINE_BYTES: usize = 32 * 1024 * 1024;
 
 /// Default maximum size of the joined `data` value for one SSE event.
 pub const DEFAULT_MAX_SSE_EVENT_BYTES: usize = 32 * 1024 * 1024;
@@ -639,12 +645,16 @@ impl SseEndpointPolicy {
     /// exposed as a typed Responses event. A standalone `error` event is
     /// surfaced once as a remote error; `response.failed` and
     /// `response.incomplete` remain ordinary typed terminal lifecycle events.
+    /// The terminal table matches the 58 pinned `ResponseStreamEvent`
+    /// discriminators (no `response.cancelled`, which exists only as a
+    /// webhook event) and the typed
+    /// [`ResponseStreamEvent::is_terminal`](openai_rs_types::responses::ResponseStreamEvent::is_terminal)
+    /// set of completed/failed/incomplete/error.
     pub fn responses() -> Self {
         Self::new(SseEofBehavior::RequireTerminal)
             .with_terminal_event("response.completed")
             .with_terminal_event("response.failed")
             .with_terminal_event("response.incomplete")
-            .with_terminal_event("response.cancelled")
             .with_consumed_data_sentinel("[DONE]")
             .with_remote_error_event("error")
     }
@@ -1126,6 +1136,44 @@ mod tests {
     }
 
     #[test]
+    fn default_line_limit_matches_the_event_limit() {
+        // Both official SDKs impose no line or event size limit, so the line
+        // limit must stay in the same magnitude class as the event limit that
+        // actually bounds memory; a 1 MiB line limit rejected official
+        // single-line `partial_image` base64 payloads.
+        assert_eq!(DEFAULT_MAX_SSE_LINE_BYTES, 32 * 1024 * 1024);
+        assert_eq!(DEFAULT_MAX_SSE_LINE_BYTES, DEFAULT_MAX_SSE_EVENT_BYTES);
+        assert_eq!(
+            SseLimits::default().max_line_bytes(),
+            DEFAULT_MAX_SSE_LINE_BYTES
+        );
+    }
+
+    #[test]
+    fn decodes_a_single_data_line_above_one_mebibyte() {
+        // `response.image_generation_call.partial_image` delivers a multi-MiB
+        // base64 payload as one physical `data:` line, which the previous 1 MiB
+        // default line limit rejected before the event limit was ever reached.
+        const PAYLOAD_BYTES: usize = 1024 * 1024 + 4096;
+
+        let mut input = Vec::with_capacity(PAYLOAD_BYTES + "data: \n\n".len());
+        input.extend_from_slice(b"data: ");
+        input.extend(std::iter::repeat_n(b'A', PAYLOAD_BYTES));
+        input.extend_from_slice(b"\n\n");
+
+        let mut decoder = SseDecoder::default();
+        // Cross the internal 8 KiB feed quantum and an arbitrary chunk boundary
+        // so the incomplete-line limit check also sees the oversized line.
+        let mut frames = ok(decoder.push(&input[..64 * 1024]));
+        frames.extend(ok(decoder.push(&input[64 * 1024..])));
+        frames.extend(ok(decoder.finish()));
+
+        let frame = one(frames);
+        assert_eq!(frame.data.len(), PAYLOAD_BYTES);
+        assert!(frame.data.bytes().all(|byte| byte == b'A'));
+    }
+
+    #[test]
     fn legacy_done_is_consumed_and_closes_the_decoder() {
         let mut decoder = SseStreamDecoder::with_default_limits(SseEndpointPolicy::legacy_done());
         let dispatches =
@@ -1164,7 +1212,6 @@ mod tests {
             "response.completed",
             "response.failed",
             "response.incomplete",
-            "response.cancelled",
         ] {
             let mut decoder = SseStreamDecoder::with_default_limits(SseEndpointPolicy::responses());
             let input = format!("event: {terminal}\ndata: {{\"type\":\"{terminal}\"}}\n\n");
@@ -1174,6 +1221,28 @@ mod tests {
             assert_eq!(dispatches[0].frame().event.as_deref(), Some(terminal));
             assert_eq!(decoder.state(), SseStreamState::Completed);
         }
+    }
+
+    #[test]
+    fn responses_terminal_table_matches_pinned_stream_events() {
+        // The pinned ResponseStreamEvent union has 58 discriminators and no
+        // `response.cancelled` (that tag exists only as a webhook event), so
+        // the SSE policy must treat it as an ordinary event rather than a
+        // terminator, mirroring types-side `is_terminal()`.
+        let mut decoder = SseStreamDecoder::with_default_limits(SseEndpointPolicy::responses());
+        let dispatches = ok(decoder.push(
+            concat!(
+                "event: response.cancelled\n",
+                "data: {\"type\":\"response.cancelled\"}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\"}\n\n",
+            )
+            .as_bytes(),
+        ));
+        assert_eq!(dispatches.len(), 2);
+        assert!(matches!(dispatches[0], SseDispatch::Event(_)));
+        assert!(matches!(dispatches[1], SseDispatch::Terminal(_)));
+        assert_eq!(decoder.state(), SseStreamState::Completed);
     }
 
     #[test]

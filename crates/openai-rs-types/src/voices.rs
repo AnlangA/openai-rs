@@ -57,7 +57,27 @@ macro_rules! opaque_id {
 opaque_id!(VoiceConsentId);
 opaque_id!(VoiceId);
 
-/// Invalid multipart custom-voice input.
+/// Invalid multipart custom-voice input rejected at request construction.
+///
+/// # Two-phase audio size checks
+///
+/// The pinned 10 MiB limit ([`MAX_CUSTOM_VOICE_AUDIO_BYTES`]) is enforced in
+/// two phases that deliberately report through different error channels:
+///
+/// - **Construction (this type).** [`CreateVoiceConsentRequest::new`] and
+///   [`CreateVoiceRequest::new`] measure in-memory byte sources eagerly, so an
+///   oversized buffer fails before any client call with
+///   [`VoiceRequestError::AudioTooLarge`].
+/// - **Send time (client error channel).** File- and stream-backed sources
+///   have no known length at construction, so the client re-checks the
+///   prepared length against the same constant just before upload. That
+///   failure is discovered while preparing the transport request, not while
+///   validating input values, so it surfaces through the client's own error
+///   type rather than this one.
+///
+/// Both phases compare against the same [`MAX_CUSTOM_VOICE_AUDIO_BYTES`]
+/// constant, so a source accepted here can only be rejected later when its
+/// length was unknowable at construction time.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum VoiceRequestError {
@@ -67,7 +87,12 @@ pub enum VoiceRequestError {
     /// The declared MIME type is not in the pinned allowlist.
     #[error("unsupported custom-voice audio MIME type")]
     UnsupportedAudioMediaType,
-    /// In-memory audio exceeded 10 MiB.
+    /// In-memory audio exceeded 10 MiB at construction time.
+    ///
+    /// This covers only sources whose bytes are already available
+    /// ([`ReplayableMultipartSource::as_bytes`]); file- and stream-backed
+    /// sources are re-checked at send time through the client error channel.
+    /// See the enum documentation for the full two-phase split.
     #[error("custom-voice audio exceeds the 10 MiB limit")]
     AudioTooLarge,
     /// A required text field was empty.
@@ -91,6 +116,12 @@ pub fn is_supported_voice_audio_media_type(media_type: &str) -> bool {
     )
 }
 
+/// Construction-phase validation shared by both multipart request builders.
+///
+/// This is the first of the two audio size checks: it only measures sources
+/// whose bytes are already in memory. Sources whose length becomes known only
+/// after client-side preparation are re-checked at send time through the
+/// client error channel; see [`VoiceRequestError`] for the full split.
 fn validate_source(source: &ReplayableMultipartSource) -> Result<(), VoiceRequestError> {
     let media_type = source
         .media_type()

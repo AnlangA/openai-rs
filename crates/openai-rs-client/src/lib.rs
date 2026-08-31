@@ -121,7 +121,10 @@ pub use multipart::{
 pub use operation::{ApiResponse, RateLimitMetadata, ResponseMeta};
 pub use poll::{PollCancellationToken, PollError, PollOptions};
 #[cfg(feature = "realtime")]
-pub use realtime::{Realtime, RealtimeCallCreated, RealtimeWebSocket, RealtimeWebSocketConfig};
+pub use realtime::{
+    Realtime, RealtimeCallCreated, RealtimeConnectTarget, RealtimeKeepalive, RealtimeWebSocket,
+    RealtimeWebSocketConfig,
+};
 pub use response_stream::ResponseEventStream;
 pub use responses::{
     DeleteResponseResult, InputItems, InputTokens, ResponseInputItemPageStream, Responses,

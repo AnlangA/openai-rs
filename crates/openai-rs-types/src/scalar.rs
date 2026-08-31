@@ -113,11 +113,18 @@ macro_rules! open_string_enum {
             }
         }
 
-        impl ::std::borrow::Borrow<str> for $name {
-            fn borrow(&self) -> &str {
-                self.as_str()
-            }
-        }
+        // `Borrow<str>` is deliberately not implemented. The derived
+        // `Hash` of a unit variant writes only the variant discriminant -
+        // the wire string never participates - and the derived `Ord` sorts
+        // by discriminant first, so the owned ordering can contradict the
+        // borrowed string ordering. `Borrow`'s contract that borrowed and
+        // owned values stay `Eq`/`Ord`/`Hash`-equivalent would not hold, and
+        // `HashMap<$name, _>::get("wire-string")` would compile while the
+        // derived hash probes a different bucket - a silent miss.
+        // `AsRef<str>` above carries no equivalence requirement and is the
+        // supported way to reach the wire string. `opaque_string_id!`
+        // structs keep their `Borrow<str>` because a transparent newtype
+        // hashes and orders exactly like the `str` it wraps.
 
         impl ::std::fmt::Display for $name {
             fn fmt(
@@ -284,10 +291,7 @@ opaque_string_id! {
 pub struct ModelId(Cow<'static, str>);
 
 impl ModelId {
-    /// Official GPT-5.6 alias, currently routing to [`Self::GPT_5_6_SOL`].
-    pub const GPT_5_6: Self = Self(Cow::Borrowed("gpt-5.6"));
-
-    /// GPT-5.6 snapshot currently aliased by [`Self::GPT_5_6`].
+    /// GPT-5.6 Sol snapshot.
     pub const GPT_5_6_SOL: Self = Self(Cow::Borrowed("gpt-5.6-sol"));
 
     /// GPT-5.6 Terra snapshot.
@@ -295,6 +299,9 @@ impl ModelId {
 
     /// GPT-5.6 Luna snapshot.
     pub const GPT_5_6_LUNA: Self = Self(Cow::Borrowed("gpt-5.6-luna"));
+
+    /// GPT-5.6 Cyber snapshot (Responses-only availability).
+    pub const GPT_5_6_CYBER: Self = Self(Cow::Borrowed("gpt-5.6-cyber"));
 
     /// Creates an open model ID from a static or owned string.
     #[must_use]
@@ -542,7 +549,8 @@ impl<'de, T> Deserialize<'de> for JsonText<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
+    use std::hash::Hasher;
 
     use proptest::prelude::*;
     use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -564,7 +572,7 @@ mod tests {
         units: String,
     }
 
-    assert_impl_all!(TestStatus: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(TestStatus: Serialize, DeserializeOwned, Send, Sync, AsRef<str>);
     assert_impl_all!(ResponseId: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(FileId: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(BatchId: Serialize, DeserializeOwned, Send, Sync);
@@ -594,6 +602,46 @@ mod tests {
         assert!(status.is_known());
     }
 
+    /// Type-level check that open enums expose their wire string through
+    /// `AsRef<str>` only - never through `Borrow<str>` - so maps keyed by an
+    /// open enum cannot be probed with a bare `&str` at compile time.
+    fn assert_wire_string_access_is_as_ref_only<T: AsRef<str>>() {}
+
+    #[test]
+    fn open_enum_borrow_is_as_ref_only_and_keys_stay_whole_values() {
+        assert_wire_string_access_is_as_ref_only::<TestStatus>();
+
+        // Known wire strings normalize onto their variant, so an enum-keyed
+        // map already unifies `from_raw("completed")` with `Completed`.
+        let mut counts = HashMap::new();
+        counts.insert(TestStatus::Completed, 1);
+        counts.insert(TestStatus::from_raw("completed"), 2);
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts.get(&TestStatus::Completed), Some(&2));
+        assert_eq!(TestStatus::Completed.as_ref(), "completed");
+        assert_eq!(TestStatus::from_raw("completed").as_ref(), "completed");
+
+        // Why `Borrow<str>` is not implemented: the derived `Hash` of a unit
+        // variant never touches the wire string, and the derived `Ord` sorts
+        // by discriminant first, so owned and borrowed order disagree. With
+        // `Borrow<str>`, `counts.get("completed")` would compile while the
+        // probe hashes to a different bucket - a silent miss. Without it,
+        // lookups stay keyed by the whole enum value.
+        let owned = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&TestStatus::Completed, &mut hasher);
+            hasher.finish()
+        };
+        let borrowed = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&"completed", &mut hasher);
+            hasher.finish()
+        };
+        assert_ne!(owned, borrowed);
+        assert!(TestStatus::InProgress < TestStatus::Unknown("a".into()));
+        assert!("in_progress" > "a");
+    }
+
     #[test]
     fn ids_are_transparent_and_do_not_validate_prefixes() {
         let id = ResponseId::new("entirely-new-id-format");
@@ -616,10 +664,10 @@ mod tests {
         let decoded = serde_json::from_str::<ModelId>(&encoded).expect("decode model ID");
 
         assert_eq!(decoded, model);
-        assert_eq!(ModelId::GPT_5_6.as_str(), "gpt-5.6");
         assert_eq!(ModelId::GPT_5_6_SOL.as_str(), "gpt-5.6-sol");
         assert_eq!(ModelId::GPT_5_6_TERRA.as_str(), "gpt-5.6-terra");
         assert_eq!(ModelId::GPT_5_6_LUNA.as_str(), "gpt-5.6-luna");
+        assert_eq!(ModelId::GPT_5_6_CYBER.as_str(), "gpt-5.6-cyber");
     }
 
     #[test]

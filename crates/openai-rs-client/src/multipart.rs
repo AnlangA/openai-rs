@@ -1290,10 +1290,19 @@ fn retry_delay(headers: &http::HeaderMap, retries: u32, maximum: Duration) -> Op
         .get("retry-after-ms")
         .and_then(|value| value.to_str().ok())
         && let Ok(milliseconds) = value.parse::<f64>()
-        && milliseconds.is_finite()
-        && milliseconds >= 0.0
     {
-        return bounded_delay(milliseconds / 1000.0, maximum);
+        // A parseable `retry-after-ms` short-circuits exactly like the shared
+        // transport: an over-limit, non-positive, or non-finite (`nan`/`inf`)
+        // value falls back to local exponential backoff instead of consulting
+        // `Retry-After`, so a stale coarse header cannot override the
+        // millisecond header the server actually emitted. An unparseable
+        // value keeps falling through, mirroring `server_retry_delay`.
+        if milliseconds > 0.0
+            && let Some(delay) = bounded_delay(milliseconds / 1000.0, maximum)
+        {
+            return Some(delay);
+        }
+        return Some(local_retry_delay(retries));
     }
     if let Some(value) = headers
         .get(header::RETRY_AFTER)
@@ -1301,15 +1310,17 @@ fn retry_delay(headers: &http::HeaderMap, retries: u32, maximum: Duration) -> Op
     {
         if let Ok(seconds) = value.parse::<f64>()
             && seconds.is_finite()
-            && seconds >= 0.0
+            && seconds > 0.0
+            && let Some(delay) = bounded_delay(seconds, maximum)
         {
-            return bounded_delay(seconds, maximum);
+            return Some(delay);
         }
-        if let Ok(time) = httpdate::parse_http_date(value) {
-            let delay = time
-                .duration_since(SystemTime::now())
-                .unwrap_or(Duration::ZERO);
-            return (delay <= maximum).then_some(delay);
+        if let Ok(time) = httpdate::parse_http_date(value)
+            && let Ok(delay) = time.duration_since(SystemTime::now())
+            && delay > Duration::ZERO
+            && delay <= maximum
+        {
+            return Some(delay);
         }
     }
     Some(local_retry_delay(retries))
@@ -1722,5 +1733,57 @@ mod tests {
         let debug = format!("{source:?}");
         assert!(!debug.contains("private-name"));
         assert!(!debug.contains("text/plain"));
+    }
+
+    #[test]
+    fn retry_after_ms_short_circuits_and_never_falls_back_to_retry_after() {
+        let maximum = RetryPolicy::openai_compatible().max_server_delay;
+
+        // An over-limit `retry-after-ms` beside an in-bound `Retry-After` must
+        // use the local backoff (0.375-0.5s for the first retry) rather than
+        // the stale five-second coarse header.
+        let mut headers = http::HeaderMap::new();
+        headers.insert("retry-after-ms", HeaderValue::from_static("130000"));
+        headers.insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+        let delay = retry_delay(&headers, 0, maximum).expect("local backoff");
+        assert!(
+            delay >= Duration::from_millis(375),
+            "expected the local backoff floor, got {delay:?}"
+        );
+        assert!(
+            delay <= Duration::from_secs(1),
+            "must not fall back to `Retry-After: 5`, got {delay:?}"
+        );
+
+        // Non-finite and non-positive parseable values short-circuit the same
+        // way instead of letting `Retry-After` take over.
+        for value in ["nan", "inf", "-inf", "0", "-1"] {
+            let mut headers = http::HeaderMap::new();
+            headers.insert("retry-after-ms", HeaderValue::from_static(value));
+            headers.insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+            let delay = retry_delay(&headers, 0, maximum).expect("local backoff");
+            assert!(
+                delay <= Duration::from_secs(1),
+                "`retry-after-ms: {value}` must use local backoff, got {delay:?}"
+            );
+        }
+
+        // A bounded millisecond value keeps winning over `Retry-After`, and an
+        // unparseable one still defers to the coarse header like the transport.
+        let mut headers = http::HeaderMap::new();
+        headers.insert("retry-after-ms", HeaderValue::from_static("250"));
+        headers.insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+        assert_eq!(
+            retry_delay(&headers, 0, maximum),
+            Some(Duration::from_millis(250))
+        );
+
+        let mut headers = http::HeaderMap::new();
+        headers.insert("retry-after-ms", HeaderValue::from_static("soon"));
+        headers.insert(header::RETRY_AFTER, HeaderValue::from_static("2"));
+        assert_eq!(
+            retry_delay(&headers, 0, maximum),
+            Some(Duration::from_secs(2))
+        );
     }
 }

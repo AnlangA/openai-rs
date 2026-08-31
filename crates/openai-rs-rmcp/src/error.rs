@@ -64,13 +64,39 @@ pub enum BridgeError {
     #[error("MCP tool execution timed out after {timeout:?}")]
     Timeout { timeout: Duration },
 
-    /// Local cancellation won the race with tool completion.
+    /// Tool execution ended by cancellation before completing.
+    ///
+    /// This variant carries both cancellation directions, which share the
+    /// same shape (an optional human-readable reason):
+    ///
+    /// - Local cancellation: the caller signalled the
+    ///   [`crate::CancellationToken`] attached to
+    ///   [`crate::ExecutionControl`], and the executor observed it before the
+    ///   result arrived. For the RMCP client executor the
+    ///   `notifications/cancelled` notification is delivered best-effort, so
+    ///   a peer that keeps running still produces this error.
+    /// - Peer cancellation: the MCP peer sent `notifications/cancelled` for
+    ///   the in-flight request, which rmcp surfaces as a
+    ///   cancellation-completed request.
     #[error("MCP tool execution was cancelled")]
     Cancelled { reason: Option<String> },
 
     /// The executor returned an operation-specific failure.
     #[error("MCP executor failed: {message}")]
     Executor { message: String },
+
+    /// The peer completed the exchange with a result kind this bridge cannot
+    /// adapt to a Responses function-call output.
+    ///
+    /// These are successful MCP protocol exchanges whose result shape needs
+    /// an application-driven continuation the bridge does not provide:
+    /// `kind` is `"input_required"` for SEP-2322 multi round-trip results
+    /// (the caller must answer the server's input requests and retry) and
+    /// `"task"` for SEP-2663 task handles (the caller must poll the task to
+    /// completion). Applications that need either continuation should drive
+    /// them through [`crate::RmcpExecutor::peer`] directly.
+    #[error("MCP result kind `{kind}` is not supported by the Responses bridge")]
+    UnsupportedResult { kind: &'static str },
 }
 
 impl BridgeError {

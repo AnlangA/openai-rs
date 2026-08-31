@@ -11,7 +11,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Number, Value};
 use thiserror::Error;
 
-use crate::{ExtraFields, JsonText, Nullable, Omittable, open_string_enum};
+use crate::containers::{MAX_DOMAIN_SECRET_VALUE_CHARS, MIN_DOMAIN_SECRET_CHARS};
+use crate::{ExtraFields, JsonText, Nullable, Omittable, WireSecret, open_string_enum};
 
 pub use crate::kernel::{UnknownTaggedObject, UnknownTaggedObjectError};
 
@@ -42,6 +43,188 @@ open_string_enum! {
         Interpreting = "interpreting",
         Calling = "calling",
         Failed = "failed"
+    }
+}
+
+open_string_enum! {
+    /// Status of a message item, per the pinned `MessageStatus`.
+    ///
+    /// Construction domain for message items; the decode side keeps the
+    /// shared open [`ResponseItemStatus`].
+    pub enum MessageStatus {
+        InProgress = "in_progress",
+        Completed = "completed",
+        Incomplete = "incomplete"
+    }
+}
+
+open_string_enum! {
+    /// Status of a function-call item, per the pinned
+    /// `FunctionCallItemStatus` / `FunctionCallOutputStatusEnum`.
+    ///
+    /// Construction domain for function-call items and their outputs; the
+    /// decode side keeps the shared open [`ResponseItemStatus`].
+    pub enum FunctionCallItemStatus {
+        InProgress = "in_progress",
+        Completed = "completed",
+        Incomplete = "incomplete"
+    }
+}
+
+open_string_enum! {
+    /// Status of an MCP tool-call item, per the pinned `MCPToolCallStatus`.
+    ///
+    /// Adds `calling` / `failed` on top of the message trio; the decode side
+    /// keeps the shared open [`ResponseItemStatus`].
+    pub enum McpToolCallStatus {
+        InProgress = "in_progress",
+        Completed = "completed",
+        Incomplete = "incomplete",
+        Calling = "calling",
+        Failed = "failed"
+    }
+}
+
+open_string_enum! {
+    /// Status of a web-search tool call, per the pinned `WebSearchToolCall.status`.
+    ///
+    /// Carries `searching` / `failed` but no `incomplete`; the decode side
+    /// keeps the shared open [`ResponseItemStatus`].
+    pub enum WebSearchToolCallStatus {
+        InProgress = "in_progress",
+        Searching = "searching",
+        Completed = "completed",
+        Failed = "failed"
+    }
+}
+
+open_string_enum! {
+    /// Status of a file-search tool call, per the pinned
+    /// `FileSearchToolCall.status`.
+    ///
+    /// The full five-value domain (`in_progress`/`searching`/`completed`/
+    /// `incomplete`/`failed`); the decode side keeps the shared open
+    /// [`ResponseItemStatus`].
+    pub enum FileSearchToolCallStatus {
+        InProgress = "in_progress",
+        Searching = "searching",
+        Completed = "completed",
+        Incomplete = "incomplete",
+        Failed = "failed"
+    }
+}
+
+open_string_enum! {
+    /// Status of an image-generation call, per the pinned
+    /// `ImageGenToolCall.status`.
+    ///
+    /// Carries `generating` / `failed` but no `incomplete` or `searching`;
+    /// the decode side keeps the shared open [`ResponseItemStatus`].
+    pub enum ImageGenToolCallStatus {
+        InProgress = "in_progress",
+        Completed = "completed",
+        Generating = "generating",
+        Failed = "failed"
+    }
+}
+
+open_string_enum! {
+    /// Status of a code-interpreter call, per the pinned
+    /// `CodeInterpreterToolCall.status`.
+    ///
+    /// Carries `interpreting` / `incomplete` / `failed`; the decode side
+    /// keeps the shared open [`ResponseItemStatus`].
+    pub enum CodeInterpreterToolCallStatus {
+        InProgress = "in_progress",
+        Completed = "completed",
+        Incomplete = "incomplete",
+        Interpreting = "interpreting",
+        Failed = "failed"
+    }
+}
+
+impl From<MessageStatus> for ResponseItemStatus {
+    fn from(value: MessageStatus) -> Self {
+        match value {
+            MessageStatus::InProgress => Self::InProgress,
+            MessageStatus::Completed => Self::Completed,
+            MessageStatus::Incomplete => Self::Incomplete,
+            MessageStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<FunctionCallItemStatus> for ResponseItemStatus {
+    fn from(value: FunctionCallItemStatus) -> Self {
+        match value {
+            FunctionCallItemStatus::InProgress => Self::InProgress,
+            FunctionCallItemStatus::Completed => Self::Completed,
+            FunctionCallItemStatus::Incomplete => Self::Incomplete,
+            FunctionCallItemStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<McpToolCallStatus> for ResponseItemStatus {
+    fn from(value: McpToolCallStatus) -> Self {
+        match value {
+            McpToolCallStatus::InProgress => Self::InProgress,
+            McpToolCallStatus::Completed => Self::Completed,
+            McpToolCallStatus::Incomplete => Self::Incomplete,
+            McpToolCallStatus::Calling => Self::Calling,
+            McpToolCallStatus::Failed => Self::Failed,
+            McpToolCallStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<WebSearchToolCallStatus> for ResponseItemStatus {
+    fn from(value: WebSearchToolCallStatus) -> Self {
+        match value {
+            WebSearchToolCallStatus::InProgress => Self::InProgress,
+            WebSearchToolCallStatus::Searching => Self::Searching,
+            WebSearchToolCallStatus::Completed => Self::Completed,
+            WebSearchToolCallStatus::Failed => Self::Failed,
+            WebSearchToolCallStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<FileSearchToolCallStatus> for ResponseItemStatus {
+    fn from(value: FileSearchToolCallStatus) -> Self {
+        match value {
+            FileSearchToolCallStatus::InProgress => Self::InProgress,
+            FileSearchToolCallStatus::Searching => Self::Searching,
+            FileSearchToolCallStatus::Completed => Self::Completed,
+            FileSearchToolCallStatus::Incomplete => Self::Incomplete,
+            FileSearchToolCallStatus::Failed => Self::Failed,
+            FileSearchToolCallStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<ImageGenToolCallStatus> for ResponseItemStatus {
+    fn from(value: ImageGenToolCallStatus) -> Self {
+        match value {
+            ImageGenToolCallStatus::InProgress => Self::InProgress,
+            ImageGenToolCallStatus::Completed => Self::Completed,
+            ImageGenToolCallStatus::Generating => Self::Generating,
+            ImageGenToolCallStatus::Failed => Self::Failed,
+            ImageGenToolCallStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<CodeInterpreterToolCallStatus> for ResponseItemStatus {
+    fn from(value: CodeInterpreterToolCallStatus) -> Self {
+        match value {
+            CodeInterpreterToolCallStatus::InProgress => Self::InProgress,
+            CodeInterpreterToolCallStatus::Completed => Self::Completed,
+            CodeInterpreterToolCallStatus::Incomplete => Self::Incomplete,
+            CodeInterpreterToolCallStatus::Interpreting => Self::Interpreting,
+            CodeInterpreterToolCallStatus::Failed => Self::Failed,
+            CodeInterpreterToolCallStatus::Unknown(value) => Self::Unknown(value),
+        }
     }
 }
 
@@ -225,6 +408,17 @@ open_string_enum! {
 }
 
 open_string_enum! {
+    /// Ordering for a response input-item page.
+    ///
+    /// The pinned `GET /responses/{id}/input_items` `order` query parameter
+    /// enumerates `asc` / `desc` (default `desc`).
+    pub enum ResponseItemOrder {
+        Ascending = "asc",
+        Descending = "desc"
+    }
+}
+
+open_string_enum! {
     /// Retention policy for cached prompt prefixes.
     pub enum PromptCacheRetention {
         InMemory = "in_memory",
@@ -242,6 +436,23 @@ open_string_enum! {
         Priority = "priority",
         Fast = "fast",
         Ultrafast = "ultrafast"
+    }
+}
+
+open_string_enum! {
+    /// Processing tier accepted by the GA compact request.
+    ///
+    /// Members match the pinned `ServiceTierEnum` (auto/default/fast/flex/
+    /// priority) exactly — the same domain the beta side models as
+    /// [`crate::beta_responses::BetaCompactServiceTier`]. The create and
+    /// response-echo sides keep the wider [`ServiceTier`] domain, which also
+    /// accepts `scale` / `ultrafast`.
+    pub enum CompactServiceTier {
+        Auto = "auto",
+        Default = "default",
+        Fast = "fast",
+        Flex = "flex",
+        Priority = "priority"
     }
 }
 
@@ -509,6 +720,42 @@ pub enum CreateResponseConstraintError {
     CodeInterpreterFileIds {
         /// Observed file-id count.
         actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// Code-interpreter allowlist `domain_secrets` is present and empty (`minItems: 1`).
+    #[error(
+        "code_interpreter allowlist domain_secrets must contain at least one secret when present"
+    )]
+    EmptyDomainSecrets,
+    /// Code-interpreter allowlist `allowed_domains` is empty (`minItems: 1`).
+    #[error("code_interpreter allowlist allowed_domains must contain at least one domain")]
+    EmptyAllowedDomains,
+    /// Code-interpreter domain-secret `domain` is empty (`minLength` 1).
+    #[error("code_interpreter domain_secret domain has {actual} characters; minimum is {minimum}")]
+    DomainSecretDomain {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+    },
+    /// Code-interpreter domain-secret `name` is empty (`minLength` 1).
+    #[error("code_interpreter domain_secret name has {actual} characters; minimum is {minimum}")]
+    DomainSecretName {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+    },
+    /// Code-interpreter domain-secret `value` is empty or longer than 10,485,760 characters.
+    #[error(
+        "code_interpreter domain_secret value has {actual} characters; must be {minimum}..={maximum}"
+    )]
+    DomainSecretValue {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
         /// Contract maximum.
         maximum: usize,
     },
@@ -1319,7 +1566,12 @@ impl InputFile {
 }
 
 tagged_union! {
-    /// One rich content part in an input message.
+    /// One rich content part in an item-form input message.
+    ///
+    /// This is the widest input content union: the pinned item-form `Message`
+    /// branch is the only request location where `computer_screenshot` is
+    /// legal. The easy-form message and function-call outputs use the
+    /// three-branch [`EasyInputContent`] instead.
     pub enum InputContent {
         Text(InputText) => "input_text",
         Image(InputImage) => "input_image",
@@ -1352,6 +1604,39 @@ impl From<ComputerScreenshot> for InputContent {
     }
 }
 
+tagged_union! {
+    /// One rich content part accepted by easy-form message content.
+    ///
+    /// Members match the pinned `InputContent` request schema — the union
+    /// behind `EasyInputMessage.content` / python's
+    /// `ResponseInputMessageContentListParam` — exactly: `computer_screenshot`
+    /// is legal only inside item-form messages ([`InputContent`]) and is not
+    /// constructible here. The open `Unknown` variant keeps decoding lossless.
+    pub enum EasyInputContent {
+        Text(InputText) => "input_text",
+        Image(InputImage) => "input_image",
+        File(InputFile) => "input_file"
+    }
+}
+
+impl From<InputText> for EasyInputContent {
+    fn from(value: InputText) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<InputImage> for EasyInputContent {
+    fn from(value: InputImage) -> Self {
+        Self::Image(value)
+    }
+}
+
+impl From<InputFile> for EasyInputContent {
+    fn from(value: InputFile) -> Self {
+        Self::File(value)
+    }
+}
+
 /// Text or an ordered list of rich message content parts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -1359,7 +1644,7 @@ pub enum MessageContent {
     /// Plain text content.
     Text(String),
     /// Rich content parts.
-    Parts(Vec<InputContent>),
+    Parts(Vec<EasyInputContent>),
 }
 
 impl From<String> for MessageContent {
@@ -1374,8 +1659,8 @@ impl From<&str> for MessageContent {
     }
 }
 
-impl From<Vec<InputContent>> for MessageContent {
-    fn from(value: Vec<InputContent>) -> Self {
+impl From<Vec<EasyInputContent>> for MessageContent {
+    fn from(value: Vec<EasyInputContent>) -> Self {
         Self::Parts(value)
     }
 }
@@ -1384,7 +1669,9 @@ impl From<Vec<InputContent>> for MessageContent {
 ///
 /// The service accepts request messages without an explicit `type`; the
 /// constructor emits that compact shape. Decoding also accepts an explicit
-/// `"type":"message"` and validates it when present.
+/// `"type":"message"` and validates it when present. Construction pins the
+/// four-role [`EasyInputMessageRole`] and the three-branch
+/// [`EasyInputContent`] content union; decoding keeps both domains open.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InputMessage {
     #[serde(
@@ -1403,11 +1690,15 @@ pub struct InputMessage {
 
 impl InputMessage {
     /// Creates a message for the supplied role.
+    ///
+    /// The constructor domain is the pinned four-value
+    /// [`EasyInputMessageRole`]; decoding keeps the open [`MessageRole`] so
+    /// multi-agent roles stay lossless.
     #[must_use]
-    pub fn new(role: MessageRole, content: impl Into<MessageContent>) -> Self {
+    pub fn new(role: EasyInputMessageRole, content: impl Into<MessageContent>) -> Self {
         Self {
             kind: Omittable::Omitted,
-            role,
+            role: role.into(),
             content: content.into(),
             phase: Omittable::Omitted,
             extra: ExtraFields::new(),
@@ -1417,19 +1708,25 @@ impl InputMessage {
     /// Creates a user message.
     #[must_use]
     pub fn user(content: impl Into<MessageContent>) -> Self {
-        Self::new(MessageRole::User, content)
+        Self::new(EasyInputMessageRole::User, content)
+    }
+
+    /// Creates an assistant message.
+    #[must_use]
+    pub fn assistant(content: impl Into<MessageContent>) -> Self {
+        Self::new(EasyInputMessageRole::Assistant, content)
     }
 
     /// Creates a developer message.
     #[must_use]
     pub fn developer(content: impl Into<MessageContent>) -> Self {
-        Self::new(MessageRole::Developer, content)
+        Self::new(EasyInputMessageRole::Developer, content)
     }
 
     /// Creates a system message.
     #[must_use]
     pub fn system(content: impl Into<MessageContent>) -> Self {
-        Self::new(MessageRole::System, content)
+        Self::new(EasyInputMessageRole::System, content)
     }
 
     /// Emits the optional `type: "message"` request property.
@@ -1485,7 +1782,35 @@ impl InputMessage {
     }
 }
 
-/// Role accepted by the stored `InputMessage` schema.
+open_string_enum! {
+    /// Role accepted by the easy-form input message when constructing requests.
+    ///
+    /// Members match the pinned `EasyInputMessage.role` / python
+    /// `EasyInputMessageParam.role` Literal (user/assistant/system/developer)
+    /// exactly. Multi-agent roles such as `critic` or `tool` decode through
+    /// the open [`MessageRole`] but cannot be constructed here.
+    pub enum EasyInputMessageRole {
+        User = "user",
+        Assistant = "assistant",
+        System = "system",
+        Developer = "developer"
+    }
+}
+
+impl From<EasyInputMessageRole> for MessageRole {
+    fn from(value: EasyInputMessageRole) -> Self {
+        match value {
+            EasyInputMessageRole::User => Self::User,
+            EasyInputMessageRole::Assistant => Self::Assistant,
+            EasyInputMessageRole::System => Self::System,
+            EasyInputMessageRole::Developer => Self::Developer,
+            EasyInputMessageRole::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+/// Role accepted by the stored `InputMessage` schema when constructing
+/// requests (`user` / `system` / `developer`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StoredInputMessageRole {
@@ -1497,11 +1822,33 @@ pub enum StoredInputMessageRole {
     Developer,
 }
 
+impl From<StoredInputMessageRole> for MessageRole {
+    fn from(value: StoredInputMessageRole) -> Self {
+        match value {
+            StoredInputMessageRole::User => Self::User,
+            StoredInputMessageRole::System => Self::System,
+            StoredInputMessageRole::Developer => Self::Developer,
+        }
+    }
+}
+
+impl From<StoredInputMessageRole> for EasyInputMessageRole {
+    fn from(value: StoredInputMessageRole) -> Self {
+        match value {
+            StoredInputMessageRole::User => Self::User,
+            StoredInputMessageRole::System => Self::System,
+            StoredInputMessageRole::Developer => Self::Developer,
+        }
+    }
+}
+
 /// The item-form input message used inside the expanded `Item` union.
 ///
 /// This differs from [`InputMessage`]'s ergonomic schema: content is always an
 /// array, assistant is not an accepted role, and a returned item may carry a
-/// status.
+/// status. Decoding keeps the role as the open [`MessageRole`]: compacted and
+/// listed items echo multi-agent roles such as `critic` or `tool` that the
+/// request-side constructor intentionally cannot produce.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredInputMessage {
     #[serde(
@@ -1510,7 +1857,7 @@ pub struct StoredInputMessage {
         skip_serializing_if = "Omittable::is_omitted"
     )]
     kind: Omittable<InputMessageTag>,
-    role: StoredInputMessageRole,
+    role: MessageRole,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     status: Omittable<ResponseItemStatus>,
     content: Vec<InputContent>,
@@ -1527,17 +1874,30 @@ impl StoredInputMessage {
     ) -> Self {
         Self {
             kind: Omittable::Value(InputMessageTag::Message),
-            role,
+            role: role.into(),
             status: Omittable::Omitted,
             content: content.into_iter().map(Into::into).collect(),
             extra: ExtraFields::new(),
         }
     }
 
-    /// Sets the returned item status.
+    /// Returns the role exactly as observed on the wire.
+    ///
+    /// Stored items decode through the open [`MessageRole`], so multi-agent
+    /// roles such as `critic` or `tool` are preserved verbatim instead of
+    /// failing the decode.
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(status);
+    pub const fn role(&self) -> &MessageRole {
+        &self.role
+    }
+
+    /// Sets the returned item status.
+    ///
+    /// The pinned `MessageStatus` domain is the three message-trio values;
+    /// decoded statuses replay through [`MessageStatus::from_raw`].
+    #[must_use]
+    pub fn status(mut self, status: MessageStatus) -> Self {
+        self.status = Omittable::Value(status.into());
         self
     }
 
@@ -1978,9 +2338,23 @@ fn validate_input_contents(parts: &[InputContent]) -> Result<(), CreateResponseC
     Ok(())
 }
 
+fn validate_easy_input_contents(
+    parts: &[EasyInputContent],
+) -> Result<(), CreateResponseConstraintError> {
+    for part in parts {
+        match part {
+            EasyInputContent::File(file) => file.validate()?,
+            EasyInputContent::Image(image) => image.validate()?,
+            EasyInputContent::Text(text) => text.validate()?,
+            EasyInputContent::Unknown(_) => {}
+        }
+    }
+    Ok(())
+}
+
 fn validate_message_content(content: &MessageContent) -> Result<(), CreateResponseConstraintError> {
     if let MessageContent::Parts(parts) = content {
-        validate_input_contents(parts)?;
+        validate_easy_input_contents(parts)?;
     }
     Ok(())
 }
@@ -1998,7 +2372,7 @@ fn validate_function_call_output_value(
                 });
             }
         }
-        FunctionCallOutputValue::Content(parts) => validate_input_contents(parts)?,
+        FunctionCallOutputValue::Content(parts) => validate_easy_input_contents(parts)?,
     }
     Ok(())
 }
@@ -2022,8 +2396,7 @@ fn validate_function_call_output_param_value(
                     FunctionCallOutputContent::Text(text) => text.validate()?,
                     FunctionCallOutputContent::Image(image) => image.validate()?,
                     FunctionCallOutputContent::File(file) => file.validate()?,
-                    FunctionCallOutputContent::ComputerScreenshot(_)
-                    | FunctionCallOutputContent::Unknown(_) => {}
+                    FunctionCallOutputContent::Unknown(_) => {}
                 }
             }
         }
@@ -2108,7 +2481,7 @@ fn is_valid_mcp_tunnel_id(tunnel_id: &str) -> bool {
     rest.len() == 32
         && rest
             .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'z').contains(&byte))
+            .all(|byte: u8| byte.is_ascii_digit() || byte.is_ascii_lowercase())
 }
 
 /// Restricts an MCP tool set by name and/or read-only annotation.
@@ -2665,13 +3038,18 @@ pub struct FunctionCall {
 
 impl FunctionCall {
     /// Creates a complete function call item.
+    ///
+    /// `status` still takes the shared open [`ResponseItemStatus`] because
+    /// in-crate structured-output and RMCP adapters replay decoded statuses
+    /// verbatim; the pinned construction domain is the narrower
+    /// [`FunctionCallItemStatus`], accepted by [`Self::with_status`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
         call_id: impl Into<String>,
         name: impl Into<String>,
         arguments: JsonText,
-        status: ResponseItemStatus,
+        status: FunctionCallItemStatus,
     ) -> Self {
         Self {
             kind: FunctionCallTag::FunctionCall,
@@ -2681,7 +3059,7 @@ impl FunctionCall {
             arguments,
             namespace: Omittable::Omitted,
             caller: Omittable::Omitted,
-            status: Omittable::Value(status),
+            status: Omittable::Value(status.into()),
             created_by: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
@@ -2712,9 +3090,13 @@ impl FunctionCall {
     }
 
     /// Sets the item status when echoing a returned call.
+    ///
+    /// The pinned `FunctionCallItemStatus` domain is the three message-trio
+    /// values; tool-call-only states such as `searching` stay
+    /// construction-invalid.
     #[must_use]
-    pub fn with_status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(status);
+    pub fn with_status(mut self, status: FunctionCallItemStatus) -> Self {
+        self.status = Omittable::Value(status.into());
         self
     }
 
@@ -2801,14 +3183,19 @@ impl FunctionCall {
     }
 }
 
-/// String or rich content supplied as a function call output.
+/// String or rich content supplied as a function or custom tool call output.
+///
+/// Content parts follow the pinned three-branch
+/// `FunctionAndCustomToolCallOutput` union (text/image/file) modeled as
+/// [`EasyInputContent`]; `computer_screenshot` is not a legal tool-output
+/// part and decodes as the open `Unknown` retention.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FunctionCallOutputValue {
     /// An opaque text value, commonly a JSON string.
     Text(String),
     /// Typed text/image/file content parts.
-    Content(Vec<InputContent>),
+    Content(Vec<EasyInputContent>),
 }
 
 impl From<String> for FunctionCallOutputValue {
@@ -2823,19 +3210,23 @@ impl From<&str> for FunctionCallOutputValue {
     }
 }
 
-impl From<Vec<InputContent>> for FunctionCallOutputValue {
-    fn from(value: Vec<InputContent>) -> Self {
+impl From<Vec<EasyInputContent>> for FunctionCallOutputValue {
+    fn from(value: Vec<EasyInputContent>) -> Self {
         Self::Content(value)
     }
 }
 
 tagged_union! {
     /// One official `FunctionCallOutputItemParam` output content part.
+    ///
+    /// Members match the pinned three-branch request union (text/image/file)
+    /// and the response-side `FunctionAndCustomToolCallOutput` exactly;
+    /// `computer_screenshot` is not a legal function-output part and decodes
+    /// as the open [`EasyInputContent`]-style `Unknown` retention instead.
     pub enum FunctionCallOutputContent {
         Text(InputText) => "input_text",
         Image(InputImageParam) => "input_image",
-        File(InputFile) => "input_file",
-        ComputerScreenshot(ComputerScreenshot) => "computer_screenshot"
+        File(InputFile) => "input_file"
     }
 }
 
@@ -2857,14 +3248,13 @@ impl From<InputFile> for FunctionCallOutputContent {
     }
 }
 
-impl From<InputContent> for FunctionCallOutputContent {
-    fn from(value: InputContent) -> Self {
+impl From<EasyInputContent> for FunctionCallOutputContent {
+    fn from(value: EasyInputContent) -> Self {
         match value {
-            InputContent::Text(text) => Self::Text(text),
-            InputContent::Image(image) => Self::Image(image.into()),
-            InputContent::File(file) => Self::File(file),
-            InputContent::ComputerScreenshot(value) => Self::ComputerScreenshot(value),
-            InputContent::Unknown(value) => Self::Unknown(value),
+            EasyInputContent::Text(text) => Self::Text(text),
+            EasyInputContent::Image(image) => Self::Image(image.into()),
+            EasyInputContent::File(file) => Self::File(file),
+            EasyInputContent::Unknown(value) => Self::Unknown(value),
         }
     }
 }
@@ -2897,14 +3287,9 @@ impl From<Vec<FunctionCallOutputContent>> for FunctionCallOutputParamValue {
     }
 }
 
-impl From<Vec<InputContent>> for FunctionCallOutputParamValue {
-    fn from(value: Vec<InputContent>) -> Self {
-        Self::Content(
-            value
-                .into_iter()
-                .map(FunctionCallOutputContent::from)
-                .collect(),
-        )
+impl From<Vec<EasyInputContent>> for FunctionCallOutputParamValue {
+    fn from(value: Vec<EasyInputContent>) -> Self {
+        Self::Content(value.into_iter().map(Into::into).collect())
     }
 }
 
@@ -2996,9 +3381,12 @@ impl FunctionCallOutput {
     }
 
     /// Sets an item status for stored input items.
+    ///
+    /// The pinned `FunctionCallOutputStatusEnum` domain is the three
+    /// message-trio values.
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(Nullable::Value(status));
+    pub fn status(mut self, status: FunctionCallItemStatus) -> Self {
+        self.status = Omittable::Value(Nullable::Value(status.into()));
         self
     }
 
@@ -3249,7 +3637,7 @@ impl McpListTools {
 
     /// Records a list-tools error message.
     #[must_use]
-    pub fn error(mut self, error: impl Into<String>) -> Self {
+    pub fn with_error(mut self, error: impl Into<String>) -> Self {
         self.error = Omittable::Value(Nullable::Value(error.into()));
         self
     }
@@ -3259,6 +3647,12 @@ impl McpListTools {
     pub fn error_null(mut self) -> Self {
         self.error = Omittable::Value(Nullable::Null);
         self
+    }
+
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
     /// Returns the server label.
@@ -3271,6 +3665,15 @@ impl McpListTools {
     #[must_use]
     pub fn tools(&self) -> &[McpListedTool] {
         &self.tools
+    }
+
+    /// Returns the list-tools error message when present and non-null.
+    #[must_use]
+    pub fn error(&self) -> Option<&str> {
+        match &self.error {
+            Omittable::Value(Nullable::Value(error)) => Some(error),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
     }
 }
 
@@ -3482,6 +3885,15 @@ impl McpCall {
         &self.arguments
     }
 
+    /// Returns the item status when present.
+    #[must_use]
+    pub fn status(&self) -> Option<&ResponseItemStatus> {
+        match &self.status {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
+    }
+
     /// Returns the structured MCP error when present.
     #[must_use]
     pub const fn error(&self) -> Option<&McpCallError> {
@@ -3514,9 +3926,12 @@ impl McpCall {
     }
 
     /// Sets the item status when echoing a returned call.
+    ///
+    /// The pinned `MCPToolCallStatus` domain adds `calling` / `failed` on
+    /// top of the message trio.
     #[must_use]
-    pub fn with_status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(status);
+    pub fn with_status(mut self, status: McpToolCallStatus) -> Self {
+        self.status = Omittable::Value(status.into());
         self
     }
 
@@ -3903,9 +4318,9 @@ pub struct OutputText {
     #[serde(rename = "type")]
     kind: OutputTextTag,
     text: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     annotations: Vec<Annotation>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     logprobs: Vec<LogProb>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -4027,16 +4442,20 @@ pub struct OutputMessage {
 
 impl OutputMessage {
     /// Creates an assistant message, primarily for adapters and tests.
+    ///
+    /// `status` still takes the shared open [`ResponseItemStatus`] because
+    /// in-crate conversation adapters replay decoded statuses verbatim; the
+    /// pinned construction domain is the narrower [`MessageStatus`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
-        status: ResponseItemStatus,
+        status: MessageStatus,
         content: impl IntoIterator<Item = impl Into<OutputContent>>,
     ) -> Self {
         Self {
             kind: OutputMessageTag::Message,
             id: id.into(),
-            status,
+            status: status.into(),
             role: AssistantRoleTag::Assistant,
             content: content.into_iter().map(Into::into).collect(),
             phase: Omittable::Omitted,
@@ -4114,6 +4533,9 @@ impl OutputMessage {
 /// A typed item accepted as Responses input.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+// Boxing the largest shell-call variants would be a breaking public-API
+// refactor tracked separately from wire fixes.
+#[allow(clippy::large_enum_variant)]
 pub enum ResponseInputItem {
     /// A request message, whose `type` property may be omitted.
     Message(InputMessage),
@@ -6261,6 +6683,10 @@ impl ResponsesWebSocketErrorEvent {
 /// `ErrorPayload` under `error`.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+// The Stream variant wraps the 58-branch ResponseStreamEvent union by
+// value; boxing it would be a breaking public-API refactor tracked
+// separately from wire fixes.
+#[allow(clippy::large_enum_variant)]
 pub enum ResponsesServerEvent {
     /// An SSE-shaped Responses event, including future unknown tags.
     Stream {
@@ -6537,8 +6963,14 @@ impl ResponseUsage {
 #[non_exhaustive]
 pub enum OutputParseError {
     /// The response was incomplete.
-    #[error("response was incomplete: {0:?}")]
+    #[error(
+        "response was incomplete: {reason}",
+        reason = .0.as_deref().unwrap_or("reason not provided")
+    )]
     Incomplete(Option<String>),
+    /// The response failed with a service error.
+    #[error("response failed: {}", .0.message())]
+    Failed(ResponseError),
     /// The model refused to respond.
     #[error("model refused to respond: {0}")]
     Refusal(String),
@@ -6597,7 +7029,7 @@ pub struct Response {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     service_tier: Omittable<Nullable<ServiceTier>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    store: Omittable<bool>,
+    store: Omittable<Nullable<bool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     text: Omittable<ResponseTextConfig>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -6761,14 +7193,27 @@ impl Response {
 
     /// Parses assistant output text into a declared Rust type.
     ///
-    /// Refusal and incomplete states are routed to dedicated error variants
-    /// rather than being treated as malformed JSON.
+    /// Refusal, incomplete, and failed states are routed to dedicated error
+    /// variants rather than being treated as malformed JSON.
     pub fn output_parsed<T: serde::de::DeserializeOwned>(&self) -> Result<T, OutputParseError> {
         if matches!(self.status(), Some(ResponseStatus::Incomplete)) {
             let reason = self
                 .incomplete_details()
                 .and_then(|details| details.reason().map(|reason| reason.as_str().to_owned()));
             return Err(OutputParseError::Incomplete(reason));
+        }
+        if matches!(self.status(), Some(ResponseStatus::Failed)) {
+            let error = match &self.error {
+                Nullable::Value(error) => error.clone(),
+                // The pin pairs `status: "failed"` with a populated error
+                // object; keep a readable fallback for the degenerate null.
+                Nullable::Null => ResponseError {
+                    code: ResponseErrorCode::from_raw("failed_without_error"),
+                    message: "response failed without an error payload".to_owned(),
+                    extra: ExtraFields::new(),
+                },
+            };
+            return Err(OutputParseError::Failed(error));
         }
         if let Some(refusal) = self.refusal() {
             return Err(OutputParseError::Refusal(refusal.to_owned()));
@@ -6901,7 +7346,7 @@ impl Response {
                         id: Omittable::Value(Nullable::Value(value.id.clone())),
                         caller: value.caller.clone(),
                         status: Omittable::Value(Nullable::Value(value.status.clone())),
-                        max_output_length: Omittable::Value(value.max_output_length.clone()),
+                        max_output_length: Omittable::Value(value.max_output_length),
                         extra: value.extra.clone(),
                     })
                 }
@@ -7039,7 +7484,7 @@ pub struct CompactResponseRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     prompt_cache_retention: Omittable<Nullable<PromptCacheRetention>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    service_tier: Omittable<Nullable<ServiceTier>>,
+    service_tier: Omittable<Nullable<CompactServiceTier>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -7176,9 +7621,13 @@ impl CompactResponseRequest {
     }
 
     /// Sets the requested service tier.
+    ///
+    /// The compact body pins the five-value `ServiceTierEnum`; the create
+    /// side's wider [`ServiceTier`] domain (with `scale` / `ultrafast`) does
+    /// not apply here.
     #[must_use]
-    pub fn service_tier(mut self, service_tier: impl Into<ServiceTier>) -> Self {
-        self.service_tier = Omittable::Value(Nullable::Value(service_tier.into()));
+    pub fn service_tier(mut self, service_tier: CompactServiceTier) -> Self {
+        self.service_tier = Omittable::Value(Nullable::Value(service_tier));
         self
     }
 
@@ -7252,13 +7701,19 @@ pub enum CompactResponseConstraintError {
 literal_tag!(CompactedResponseTag, Compaction, "response.compaction");
 
 /// A compacted Responses resource.
+///
+/// `output` follows the pinned `CompactResource.output.items` → `ItemField`
+/// union: compaction returns the conversation's user-role messages plus a
+/// final compaction item, so items decode with the input-side codec where
+/// user/system/developer roles and the `CompactionSummaryItemParam` shape
+/// are accepted.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompactedResponse {
     id: String,
     created_at: i64,
     #[serde(rename = "object")]
     object: CompactedResponseTag,
-    output: Vec<ResponseOutputItem>,
+    output: Vec<ResponseInputItem>,
     usage: ResponseUsage,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -7273,7 +7728,7 @@ impl CompactedResponse {
 
     /// Returns compacted output items in order.
     #[must_use]
-    pub fn output(&self) -> &[ResponseOutputItem] {
+    pub fn output(&self) -> &[ResponseInputItem] {
         &self.output
     }
 
@@ -7300,7 +7755,7 @@ pub struct ListResponseInputItemsParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     limit: Omittable<u32>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    order: Omittable<String>,
+    order: Omittable<ResponseItemOrder>,
 }
 
 impl ListResponseInputItemsParams {
@@ -7339,7 +7794,7 @@ impl ListResponseInputItemsParams {
 
     /// Sets ascending or descending ordering.
     #[must_use]
-    pub fn order(mut self, order: impl Into<String>) -> Self {
+    pub fn order(mut self, order: impl Into<ResponseItemOrder>) -> Self {
         self.order = Omittable::Value(order.into());
         self
     }
@@ -7892,7 +8347,7 @@ pub struct OutputTextDeltaEvent {
     content_index: u64,
     delta: String,
     sequence_number: u64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     logprobs: Vec<EventLogProb>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -7946,7 +8401,7 @@ pub struct OutputTextDoneEvent {
     content_index: u64,
     text: String,
     sequence_number: u64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     logprobs: Vec<EventLogProb>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -8275,6 +8730,15 @@ impl StreamErrorEvent {
         }
     }
 
+    /// Returns the offending request parameter when the service sent a string.
+    #[must_use]
+    pub fn param(&self) -> Option<&str> {
+        match &self.param {
+            Nullable::Value(param) => Some(param.as_str()),
+            Nullable::Null => None,
+        }
+    }
+
     /// Returns the human-readable message.
     #[must_use]
     pub fn message(&self) -> &str {
@@ -8369,6 +8833,12 @@ impl ResponseStreamEvent {
             self,
             Self::Completed(_) | Self::Failed(_) | Self::Incomplete(_) | Self::Error(_)
         )
+    }
+
+    /// Returns whether this is the standalone SSE error event.
+    #[must_use]
+    pub const fn is_error(&self) -> bool {
+        matches!(self, Self::Error(_))
     }
 
     /// Returns the event sequence number when it is known to this crate.
@@ -8666,11 +9136,13 @@ impl ResponseAccumulator {
             }
             ResponseStreamEvent::Error(event) => {
                 return Err(ResponseAccumulatorError::Stream {
-                    code: match event.code {
-                        Nullable::Value(code) => code,
-                        Nullable::Null => String::new(),
-                    },
+                    code: event.code.into_option().map(|code| code.into_boxed_str()),
                     message: event.message,
+                    param: event
+                        .param
+                        .into_option()
+                        .map(|param| param.into_boxed_str()),
+                    sequence_number: event.sequence_number,
                 });
             }
             ResponseStreamEvent::AudioDelta(_)
@@ -8985,12 +9457,21 @@ pub enum ResponseAccumulatorError {
         received: String,
     },
     /// The SSE protocol emitted its standalone error event.
-    #[error("Responses stream error `{code}`: {message}")]
+    #[error(
+        "Responses stream error{code_clause}{param_clause} at sequence {sequence_number}: {message}",
+        code_clause = .code.as_ref().map(|code| format!(" `{code}`")).unwrap_or_default(),
+        param_clause = .param.as_ref().map(|param| format!(" on `{param}`")).unwrap_or_default(),
+    )]
     Stream {
-        /// Machine-readable service error code.
-        code: String,
+        /// Machine-readable service error code, or `None` when the service
+        /// sent the official `code: null`.
+        code: Option<Box<str>>,
         /// Human-readable service message.
         message: String,
+        /// Offending request parameter, or `None` when absent or null.
+        param: Option<Box<str>>,
+        /// Sequence number carried by the error event.
+        sequence_number: u64,
     },
     /// The stream ended without completed, failed, or incomplete response.
     #[error("Responses stream ended before a terminal response")]
@@ -9156,11 +9637,19 @@ impl ProgramItem {
     }
 }
 
+open_string_enum! {
+    /// Terminal status of a programmatic tool-calling program output.
+    pub enum ProgramOutputStatus {
+        Completed = "completed",
+        Incomplete = "incomplete"
+    }
+}
+
 required_tagged_record!(ProgramOutputItem, ProgramOutputItemTag, ProgramOutput, "program_output", {
     id: String,
     call_id: String,
     result: String,
-    status: String
+    status: ProgramOutputStatus
 });
 
 impl ProgramOutputItem {
@@ -9170,7 +9659,7 @@ impl ProgramOutputItem {
         id: impl Into<String>,
         call_id: impl Into<String>,
         result: impl Into<String>,
-        status: impl Into<String>,
+        status: impl Into<ProgramOutputStatus>,
     ) -> Self {
         Self {
             kind: ProgramOutputItemTag::ProgramOutput,
@@ -9220,7 +9709,7 @@ pub struct FileSearchResult {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     filename: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    attributes: Omittable<BTreeMap<String, FileSearchAttributeValue>>,
+    attributes: Omittable<Nullable<BTreeMap<String, FileSearchAttributeValue>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     score: Omittable<f64>,
     #[serde(flatten)]
@@ -9268,8 +9757,20 @@ impl FileSearchResult {
         mut self,
         attributes: impl IntoIterator<Item = (impl Into<String>, FileSearchAttributeValue)>,
     ) -> Self {
-        self.attributes =
-            Omittable::Value(attributes.into_iter().map(|(k, v)| (k.into(), v)).collect());
+        self.attributes = Omittable::Value(Nullable::Value(
+            attributes.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+        ));
+        self
+    }
+
+    /// Sends official `attributes: null`.
+    ///
+    /// The pinned `VectorStoreFileAttributes` schema is
+    /// `anyOf [{attribute map}, null]`, so an explicit null is an official
+    /// echo form for a result without attributes.
+    #[must_use]
+    pub fn attributes_null(mut self) -> Self {
+        self.attributes = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -9286,6 +9787,15 @@ impl FileSearchResult {
         match &self.file_id {
             Omittable::Value(value) => Some(value),
             Omittable::Omitted => None,
+        }
+    }
+
+    /// Returns file attributes when present and non-null.
+    #[must_use]
+    pub fn attributes_ref(&self) -> Option<&BTreeMap<String, FileSearchAttributeValue>> {
+        match &self.attributes {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
     }
 
@@ -9330,16 +9840,19 @@ pub struct FileSearchCall {
 
 impl FileSearchCall {
     /// Creates a file-search call without results.
+    ///
+    /// `status` takes the pinned five-value [`FileSearchToolCallStatus`];
+    /// decoding keeps the shared open [`ResponseItemStatus`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
-        status: ResponseItemStatus,
+        status: FileSearchToolCallStatus,
         queries: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         Self {
             kind: FileSearchCallTag::FileSearchCall,
             id: id.into(),
-            status,
+            status: status.into(),
             queries: queries.into_iter().map(Into::into).collect(),
             results: Omittable::Omitted,
             extra: ExtraFields::new(),
@@ -9364,6 +9877,18 @@ impl FileSearchCall {
     #[must_use]
     pub fn queries(&self) -> &[String] {
         &self.queries
+    }
+
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the call status.
+    #[must_use]
+    pub const fn status(&self) -> &ResponseItemStatus {
+        &self.status
     }
 
     /// Returns results when present.
@@ -10020,18 +10545,22 @@ pub struct ComputerCall {
 
 impl ComputerCall {
     /// Creates a computer-use call from the official required fields.
+    ///
+    /// `status` takes the pinned three-value [`FunctionCallItemStatus`]
+    /// domain, which matches the pinned `ComputerCall.status`; decoding
+    /// keeps the shared open [`ResponseItemStatus`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
         call_id: impl Into<String>,
-        status: ResponseItemStatus,
+        status: FunctionCallItemStatus,
     ) -> Self {
         Self {
             kind: ComputerCallTag::ComputerCall,
             id: id.into(),
             call_id: call_id.into(),
             pending_safety_checks: Vec::new(),
-            status,
+            status: status.into(),
             action: Omittable::Omitted,
             actions: Omittable::Omitted,
             extra: ExtraFields::new(),
@@ -10062,10 +10591,22 @@ impl ComputerCall {
         self
     }
 
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     /// Returns the model-generated call id.
     #[must_use]
     pub fn call_id(&self) -> &str {
         &self.call_id
+    }
+
+    /// Returns the call status.
+    #[must_use]
+    pub const fn status(&self) -> &ResponseItemStatus {
+        &self.status
     }
 
     /// Returns the single requested action when present.
@@ -10472,19 +11013,35 @@ pub struct WebSearchCall {
 
 impl WebSearchCall {
     /// Creates a web-search call from the official required fields.
+    ///
+    /// `status` takes the pinned four-value [`WebSearchToolCallStatus`]
+    /// (`in_progress`/`searching`/`completed`/`failed`); decoding keeps the
+    /// shared open [`ResponseItemStatus`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
-        status: ResponseItemStatus,
+        status: WebSearchToolCallStatus,
         action: impl Into<WebSearchAction>,
     ) -> Self {
         Self {
             kind: WebSearchCallTag::WebSearchCall,
             id: id.into(),
-            status,
+            status: status.into(),
             action: action.into(),
             extra: ExtraFields::new(),
         }
+    }
+
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the call status.
+    #[must_use]
+    pub const fn status(&self) -> &ResponseItemStatus {
+        &self.status
     }
 
     /// Returns the recorded web-search action.
@@ -10571,7 +11128,7 @@ pub struct ToolSearchCallInput {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     call_id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    execution: Omittable<String>,
+    execution: Omittable<ToolSearchExecution>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     status: Omittable<Nullable<ResponseItemStatus>>,
     #[serde(flatten)]
@@ -10609,15 +11166,19 @@ impl ToolSearchCallInput {
 
     /// Sets whether tool search ran on the server or client.
     #[must_use]
-    pub fn execution(mut self, execution: impl Into<String>) -> Self {
+    pub fn execution(mut self, execution: impl Into<ToolSearchExecution>) -> Self {
         self.execution = Omittable::Value(execution.into());
         self
     }
 
     /// Sets the call status.
+    ///
+    /// `status` takes the pinned three-value [`FunctionCallItemStatus`]
+    /// domain, which matches the pinned `ToolSearchCall.status`; decoding
+    /// keeps the shared open [`ResponseItemStatus`].
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(Nullable::Value(status));
+    pub fn status(mut self, status: FunctionCallItemStatus) -> Self {
+        self.status = Omittable::Value(Nullable::Value(status.into()));
         self
     }
 
@@ -10663,7 +11224,7 @@ pub struct ToolSearchCall {
     kind: ToolSearchCallTag,
     id: String,
     call_id: Nullable<String>,
-    execution: String,
+    execution: ToolSearchExecution,
     arguments: Value,
     status: ResponseItemStatus,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -10706,7 +11267,7 @@ pub struct ToolSearchOutputInput {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     call_id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    execution: Omittable<String>,
+    execution: Omittable<ToolSearchExecution>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     status: Omittable<Nullable<ResponseItemStatus>>,
     #[serde(flatten)]
@@ -10775,7 +11336,7 @@ pub struct ToolSearchOutput {
     kind: ToolSearchOutputTag,
     id: String,
     call_id: Nullable<String>,
-    execution: String,
+    execution: ToolSearchExecution,
     tools: Vec<ResponseTool>,
     status: ResponseItemStatus,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -11000,9 +11561,13 @@ impl ReasoningItem {
     }
 
     /// Sets the item status.
+    ///
+    /// `status` takes the pinned three-value [`FunctionCallItemStatus`]
+    /// domain, which matches the pinned `ReasoningItem.status`; decoding
+    /// keeps the shared open [`ResponseItemStatus`].
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(status);
+    pub fn status(mut self, status: FunctionCallItemStatus) -> Self {
+        self.status = Omittable::Value(status.into());
         self
     }
 
@@ -11107,12 +11672,16 @@ required_tagged_record!(
 
 impl ImageGenerationCall {
     /// Creates an image-generation call with official required `result: null`.
+    ///
+    /// `status` takes the pinned [`ImageGenToolCallStatus`] domain, which
+    /// carries `generating` but not `incomplete`; decoding keeps the shared
+    /// open [`ResponseItemStatus`].
     #[must_use]
-    pub fn new(id: impl Into<String>, status: ResponseItemStatus) -> Self {
+    pub fn new(id: impl Into<String>, status: ImageGenToolCallStatus) -> Self {
         Self {
             kind: ImageGenerationCallTag::ImageGenerationCall,
             id: id.into(),
-            status,
+            status: status.into(),
             result: Nullable::Null,
             extra: ExtraFields::new(),
         }
@@ -11120,9 +11689,30 @@ impl ImageGenerationCall {
 
     /// Sets the generated image payload.
     #[must_use]
-    pub fn result(mut self, result: impl Into<String>) -> Self {
+    pub fn with_result(mut self, result: impl Into<String>) -> Self {
         self.result = Nullable::Value(result.into());
         self
+    }
+
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the call status.
+    #[must_use]
+    pub const fn status(&self) -> &ResponseItemStatus {
+        &self.status
+    }
+
+    /// Returns the generated image payload when present and non-null.
+    #[must_use]
+    pub fn result(&self) -> Option<&str> {
+        match &self.result {
+            Nullable::Value(result) => Some(result),
+            Nullable::Null => None,
+        }
     }
 }
 literal_tag!(CodeInterpreterLogsTag, Logs, "logs");
@@ -11253,16 +11843,20 @@ pub struct CodeInterpreterCall {
 
 impl CodeInterpreterCall {
     /// Creates a code-interpreter call with official required `code` / `outputs` nulls.
+    ///
+    /// `status` takes the pinned [`CodeInterpreterToolCallStatus`] domain,
+    /// which carries `interpreting`; decoding keeps the shared open
+    /// [`ResponseItemStatus`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
-        status: ResponseItemStatus,
+        status: CodeInterpreterToolCallStatus,
         container_id: impl Into<String>,
     ) -> Self {
         Self {
             kind: CodeInterpreterCallTag::CodeInterpreterCall,
             id: id.into(),
-            status,
+            status: status.into(),
             container_id: container_id.into(),
             code: Nullable::Null,
             outputs: Nullable::Null,
@@ -11272,7 +11866,7 @@ impl CodeInterpreterCall {
 
     /// Sets the code to run.
     #[must_use]
-    pub fn code(mut self, code: impl Into<String>) -> Self {
+    pub fn with_code(mut self, code: impl Into<String>) -> Self {
         self.code = Nullable::Value(code.into());
         self
     }
@@ -11282,6 +11876,33 @@ impl CodeInterpreterCall {
     pub fn with_outputs(mut self, outputs: impl Into<Vec<CodeInterpreterOutput>>) -> Self {
         self.outputs = Nullable::Value(outputs.into());
         self
+    }
+
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the call status.
+    #[must_use]
+    pub const fn status(&self) -> &ResponseItemStatus {
+        &self.status
+    }
+
+    /// Returns the container the interpreter ran in.
+    #[must_use]
+    pub fn container_id(&self) -> &str {
+        &self.container_id
+    }
+
+    /// Returns the code to run when present and non-null.
+    #[must_use]
+    pub fn code(&self) -> Option<&str> {
+        match &self.code {
+            Nullable::Value(code) => Some(code),
+            Nullable::Null => None,
+        }
     }
 
     /// Returns the interpreter outputs when present.
@@ -11455,21 +12076,43 @@ pub struct LocalShellCall {
 
 impl LocalShellCall {
     /// Creates a local-shell call from the official required fields.
+    ///
+    /// `status` takes the pinned three-value [`FunctionCallItemStatus`]
+    /// domain, which matches the pinned `LocalShellCall.status`; decoding
+    /// keeps the shared open [`ResponseItemStatus`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
         call_id: impl Into<String>,
         action: impl Into<LocalShellAction>,
-        status: ResponseItemStatus,
+        status: FunctionCallItemStatus,
     ) -> Self {
         Self {
             kind: LocalShellCallTag::LocalShellCall,
             id: id.into(),
             call_id: call_id.into(),
             action: action.into(),
-            status,
+            status: status.into(),
             extra: ExtraFields::new(),
         }
+    }
+
+    /// Returns the item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the model-generated call id.
+    #[must_use]
+    pub fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    /// Returns the call status.
+    #[must_use]
+    pub const fn status(&self) -> &ResponseItemStatus {
+        &self.status
     }
 
     /// Returns the requested action.
@@ -11527,9 +12170,13 @@ impl LocalShellCallOutput {
     }
 
     /// Sets the item status.
+    ///
+    /// `status` takes the pinned three-value [`FunctionCallItemStatus`]
+    /// domain, which matches the pinned `LocalShellCallOutput.status`;
+    /// decoding keeps the shared open [`ResponseItemStatus`].
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(Nullable::Value(status));
+    pub fn status(mut self, status: FunctionCallItemStatus) -> Self {
+        self.status = Omittable::Value(Nullable::Value(status.into()));
         self
     }
 
@@ -12365,13 +13012,29 @@ impl<'de> Deserialize<'de> for ApplyPatchOperation {
     }
 }
 
+open_string_enum! {
+    /// Lifecycle status of an apply-patch tool call.
+    pub enum ApplyPatchCallStatus {
+        InProgress = "in_progress",
+        Completed = "completed"
+    }
+}
+
+open_string_enum! {
+    /// Terminal status of an apply-patch tool call output.
+    pub enum ApplyPatchCallOutputStatus {
+        Completed = "completed",
+        Failed = "failed"
+    }
+}
+
 /// An apply-patch call supplied as input.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplyPatchCallInput {
     #[serde(rename = "type")]
     kind: ApplyPatchCallInputTag,
     call_id: String,
-    status: String,
+    status: ApplyPatchCallStatus,
     operation: ApplyPatchOperation,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     id: Omittable<Nullable<String>>,
@@ -12386,7 +13049,7 @@ impl ApplyPatchCallInput {
     #[must_use]
     pub fn new(
         call_id: impl Into<String>,
-        status: impl Into<String>,
+        status: impl Into<ApplyPatchCallStatus>,
         operation: ApplyPatchOperation,
     ) -> Self {
         Self {
@@ -12454,7 +13117,7 @@ pub struct ApplyPatchCall {
     kind: ApplyPatchCallTag,
     id: String,
     call_id: String,
-    status: String,
+    status: ApplyPatchCallStatus,
     operation: ApplyPatchOperation,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     caller: Omittable<Nullable<ToolCallCaller>>,
@@ -12484,7 +13147,7 @@ pub struct ApplyPatchCallOutputInput {
     #[serde(rename = "type")]
     kind: ApplyPatchCallOutputInputTag,
     call_id: String,
-    status: String,
+    status: ApplyPatchCallOutputStatus,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     output: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -12498,7 +13161,7 @@ pub struct ApplyPatchCallOutputInput {
 impl ApplyPatchCallOutputInput {
     /// Creates an apply-patch output item.
     #[must_use]
-    pub fn new(call_id: impl Into<String>, status: impl Into<String>) -> Self {
+    pub fn new(call_id: impl Into<String>, status: impl Into<ApplyPatchCallOutputStatus>) -> Self {
         Self {
             kind: ApplyPatchCallOutputInputTag::ApplyPatchCallOutput,
             call_id: call_id.into(),
@@ -12574,7 +13237,7 @@ pub struct ApplyPatchCallOutput {
     kind: ApplyPatchCallOutputTag,
     id: String,
     call_id: String,
-    status: String,
+    status: ApplyPatchCallOutputStatus,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     output: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -14488,12 +15151,71 @@ impl Default for CodeInterpreterNetworkDisabled {
     }
 }
 
+/// Domain-scoped secret injected into a code-interpreter container.
+///
+/// Wire shape mirrors the pinned `ContainerNetworkPolicyDomainSecretParam`
+/// (`domain`/`name` `minLength` 1, `value` `1..=10485760`) and reuses the
+/// D0076 containers-side limits; the value stays redacted in `Debug`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CodeInterpreterDomainSecret {
+    domain: String,
+    name: String,
+    value: WireSecret,
+}
+
+impl PartialEq for CodeInterpreterDomainSecret {
+    fn eq(&self, other: &Self) -> bool {
+        self.domain == other.domain
+            && self.name == other.name
+            && self
+                .value
+                .with_exposed(|left| other.value.with_exposed(|right| left == right))
+    }
+}
+
+impl Eq for CodeInterpreterDomainSecret {}
+
+impl CodeInterpreterDomainSecret {
+    /// Constructs a domain-scoped secret.
+    #[must_use]
+    pub fn new(
+        domain: impl Into<String>,
+        name: impl Into<String>,
+        value: impl Into<WireSecret>,
+    ) -> Self {
+        Self {
+            domain: domain.into(),
+            name: name.into(),
+            value: value.into(),
+        }
+    }
+
+    /// Returns the associated domain.
+    #[must_use]
+    pub fn domain(&self) -> &str {
+        &self.domain
+    }
+
+    /// Returns the injected secret name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 /// Allow outbound access only to listed domains.
+///
+/// `allowed_domains` mirrors the pinned
+/// `ContainerNetworkPolicyAllowlistParam.allowed_domains` (minItems 1) and
+/// `domain_secrets` mirrors its `domain_secrets` (minItems 1, elements of
+/// `ContainerNetworkPolicyDomainSecretParam`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CodeInterpreterNetworkAllowlist {
     #[serde(rename = "type")]
     kind: CodeInterpreterNetworkAllowlistTag,
     allowed_domains: Vec<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    domain_secrets: Omittable<Vec<CodeInterpreterDomainSecret>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -14505,14 +15227,49 @@ impl CodeInterpreterNetworkAllowlist {
         Self {
             kind: CodeInterpreterNetworkAllowlistTag::Allowlist,
             allowed_domains: allowed_domains.into_iter().map(Into::into).collect(),
+            domain_secrets: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
+    }
+
+    /// Adds one domain-scoped secret.
+    #[must_use]
+    pub fn with_secret(mut self, secret: CodeInterpreterDomainSecret) -> Self {
+        match &mut self.domain_secrets {
+            Omittable::Value(secrets) => secrets.push(secret),
+            Omittable::Omitted => self.domain_secrets = Omittable::Value(vec![secret]),
+        }
+        self
     }
 
     /// Returns the allowed domains.
     #[must_use]
     pub fn allowed_domains(&self) -> &[String] {
         &self.allowed_domains
+    }
+
+    /// Returns domain-scoped secrets when present.
+    #[must_use]
+    pub fn domain_secrets(&self) -> &[CodeInterpreterDomainSecret] {
+        match &self.domain_secrets {
+            Omittable::Value(secrets) => secrets,
+            Omittable::Omitted => &[],
+        }
+    }
+
+    fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        if self.allowed_domains.is_empty() {
+            return Err(CreateResponseConstraintError::EmptyAllowedDomains);
+        }
+        if let Omittable::Value(secrets) = &self.domain_secrets {
+            if secrets.is_empty() {
+                return Err(CreateResponseConstraintError::EmptyDomainSecrets);
+            }
+            for secret in secrets {
+                validate_domain_secret(secret)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -14643,8 +15400,44 @@ impl AutoCodeInterpreterContainer {
                 maximum: MAX_CODE_INTERPRETER_FILE_IDS,
             });
         }
+        if let Omittable::Value(CodeInterpreterNetworkPolicy::Allowlist(policy)) =
+            &self.network_policy
+        {
+            policy.validate()?;
+        }
         Ok(())
     }
+}
+
+/// Checks the pinned domain-secret length limits shared with Containers.
+fn validate_domain_secret(
+    secret: &CodeInterpreterDomainSecret,
+) -> Result<(), CreateResponseConstraintError> {
+    let domain = secret.domain.chars().count();
+    if domain < MIN_DOMAIN_SECRET_CHARS {
+        return Err(CreateResponseConstraintError::DomainSecretDomain {
+            actual: domain,
+            minimum: MIN_DOMAIN_SECRET_CHARS,
+        });
+    }
+    let name = secret.name.chars().count();
+    if name < MIN_DOMAIN_SECRET_CHARS {
+        return Err(CreateResponseConstraintError::DomainSecretName {
+            actual: name,
+            minimum: MIN_DOMAIN_SECRET_CHARS,
+        });
+    }
+    secret.value.with_exposed(|value| {
+        let actual = value.chars().count();
+        if !(MIN_DOMAIN_SECRET_CHARS..=MAX_DOMAIN_SECRET_VALUE_CHARS).contains(&actual) {
+            return Err(CreateResponseConstraintError::DomainSecretValue {
+                actual,
+                minimum: MIN_DOMAIN_SECRET_CHARS,
+                maximum: MAX_DOMAIN_SECRET_VALUE_CHARS,
+            });
+        }
+        Ok(())
+    })
 }
 
 impl Default for AutoCodeInterpreterContainer {
@@ -14962,6 +15755,31 @@ impl CustomTool {
 
 literal_tag!(NamespaceToolTag, Namespace, "namespace");
 
+tagged_union! {
+    /// A function or custom tool nested inside a namespace.
+    ///
+    /// The pinned `NamespaceToolParam.tools.items` union is
+    /// `oneOf [FunctionToolParam, CustomToolParam]`, so hosted tool types such
+    /// as `web_search` cannot be constructed for this position. A genuinely
+    /// future nested tool tag decodes losslessly as [`Unknown`].
+    pub enum NamespaceToolEntry {
+        Function(FunctionTool) => "function",
+        Custom(CustomTool) => "custom"
+    }
+}
+
+impl From<FunctionTool> for NamespaceToolEntry {
+    fn from(value: FunctionTool) -> Self {
+        Self::Function(value)
+    }
+}
+
+impl From<CustomTool> for NamespaceToolEntry {
+    fn from(value: CustomTool) -> Self {
+        Self::Custom(value)
+    }
+}
+
 /// A namespace that groups tools for deferred discovery.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NamespaceTool {
@@ -14969,18 +15787,18 @@ pub struct NamespaceTool {
     kind: NamespaceToolTag,
     name: String,
     description: String,
-    tools: Vec<ResponseTool>,
+    tools: Vec<NamespaceToolEntry>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
 
 impl NamespaceTool {
-    /// Creates a namespace and its nested tools.
+    /// Creates a namespace and its nested function/custom tools.
     #[must_use]
     pub fn new(
         name: impl Into<String>,
         description: impl Into<String>,
-        tools: impl IntoIterator<Item = impl Into<ResponseTool>>,
+        tools: impl IntoIterator<Item = impl Into<NamespaceToolEntry>>,
     ) -> Self {
         Self {
             kind: NamespaceToolTag::Namespace,
@@ -14991,6 +15809,12 @@ impl NamespaceTool {
         }
     }
 
+    /// Returns the nested function/custom tools.
+    #[must_use]
+    pub fn tools(&self) -> &[NamespaceToolEntry] {
+        &self.tools
+    }
+
     fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         if self.name.is_empty() {
             return Err(CreateResponseConstraintError::EmptyNamespaceName);
@@ -14998,7 +15822,14 @@ impl NamespaceTool {
         if self.tools.is_empty() {
             return Err(CreateResponseConstraintError::EmptyNamespaceTools);
         }
-        validate_response_tools(&self.tools)
+        for tool in &self.tools {
+            match tool {
+                NamespaceToolEntry::Function(tool) => tool.validate()?,
+                NamespaceToolEntry::Custom(tool) => tool.validate()?,
+                NamespaceToolEntry::Unknown(_) => {}
+            }
+        }
+        Ok(())
     }
 }
 
@@ -15087,10 +15918,13 @@ impl AllowedToolsChoice {
 
 open_string_enum! {
     /// Hosted tool types accepted by the tool-choice object branch.
+    ///
+    /// Members match the pinned `ToolChoiceTypes.type` domain exactly. The
+    /// tool-type strings `web_search` / `web_search_2025_08_26` name request
+    /// tools, not tool-choice values, and are therefore only reachable through
+    /// the open-enum `Unknown` escape hatch, which still decodes any string.
     pub enum HostedToolType {
         FileSearch = "file_search",
-        WebSearch = "web_search",
-        WebSearch20250826 = "web_search_2025_08_26",
         WebSearchPreview = "web_search_preview",
         Computer = "computer",
         ComputerUsePreview = "computer_use_preview",
@@ -15833,6 +16667,17 @@ mod tests {
         assert_json_dto::<UnknownTaggedObject>();
         assert_json_dto::<ResponseStatus>();
         assert_json_dto::<ResponseItemStatus>();
+        assert_json_dto::<MessageStatus>();
+        assert_json_dto::<FunctionCallItemStatus>();
+        assert_json_dto::<McpToolCallStatus>();
+        assert_json_dto::<WebSearchToolCallStatus>();
+        assert_json_dto::<FileSearchToolCallStatus>();
+        assert_json_dto::<ImageGenToolCallStatus>();
+        assert_json_dto::<CodeInterpreterToolCallStatus>();
+        assert_json_dto::<CompactServiceTier>();
+        assert_json_dto::<ProgramOutputStatus>();
+        assert_json_dto::<ApplyPatchCallStatus>();
+        assert_json_dto::<ApplyPatchCallOutputStatus>();
         assert_json_dto::<MessageRole>();
         assert_json_dto::<MessagePhase>();
         assert_json_dto::<ImageDetail>();
@@ -15847,8 +16692,10 @@ mod tests {
         assert_json_dto::<InputImageParam>();
         assert_json_dto::<InputFile>();
         assert_json_dto::<InputContent>();
+        assert_json_dto::<EasyInputContent>();
         assert_json_dto::<MessageContent>();
         assert_json_dto::<InputMessage>();
+        assert_json_dto::<EasyInputMessageRole>();
         assert_json_dto::<StoredInputMessageRole>();
         assert_json_dto::<StoredInputMessage>();
         assert_json_dto::<ResponseInput>();
@@ -15860,6 +16707,7 @@ mod tests {
         assert_json_dto::<McpRequireApproval>();
         assert_json_dto::<McpTool>();
         assert_json_dto::<ResponseTool>();
+        assert_json_dto::<NamespaceToolEntry>();
         assert_json_dto::<FunctionCall>();
         assert_json_dto::<FunctionCallOutput>();
         assert_json_dto::<DirectToolCallCaller>();
@@ -15892,6 +16740,8 @@ mod tests {
         assert_json_dto::<TextFormat>();
         assert_json_dto::<ResponseTextConfig>();
         assert_json_dto::<ResponseIncludable>();
+        assert_json_dto::<ResponseItemOrder>();
+        assert_json_dto::<CodeInterpreterDomainSecret>();
         assert_json_dto::<PromptCacheRetention>();
         assert_json_dto::<ServiceTier>();
         assert_json_dto::<ResponseTextVerbosity>();
@@ -16363,7 +17213,8 @@ mod tests {
             "output_index": 0,
             "content_index": 0,
             "delta": "Hi",
-            "sequence_number": 1
+            "sequence_number": 1,
+            "logprobs": []
         });
         let server: ResponsesServerEvent =
             serde_json::from_value(server_fixture.clone()).expect("decode WS server event");
@@ -16544,11 +17395,16 @@ mod tests {
             "critic"
         );
 
-        let input = InputMessage::new(MessageRole::Tool, "lookup result");
+        let input = InputMessage::new(EasyInputMessageRole::User, "lookup result");
         assert_eq!(
-            serde_json::to_value(&input).expect("serialize tool input role")["role"],
-            "tool"
+            serde_json::to_value(&input).expect("serialize easy input role")["role"],
+            "user"
         );
+        assert_eq!(
+            InputMessage::assistant("draft").role(),
+            &MessageRole::Assistant
+        );
+        assert_eq!(InputMessage::system("policy").role(), &MessageRole::System);
     }
 
     #[test]
@@ -16619,11 +17475,15 @@ mod tests {
                         {
                             "type": "output_text",
                             "text": "Hello ",
+                            "annotations": [],
+                            "logprobs": [],
                             "future_part_field": 1
                         },
                         {
                             "type": "output_text",
-                            "text": "world"
+                            "text": "world",
+                            "annotations": [],
+                            "logprobs": []
                         }
                     ],
                     "future_message_field": {"ok": true}
@@ -16865,7 +17725,7 @@ mod tests {
             "call_1",
             "weather",
             arguments,
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         );
         let parsed: WeatherArgs = call
             .arguments()
@@ -16947,6 +17807,22 @@ mod tests {
             panic!("expected stream error");
         };
         assert_eq!(error.code(), Some("server_error"));
+        assert_eq!(error.param(), None);
+        assert_eq!(error.message(), "retry later");
+        assert_eq!(error.sequence_number(), 9);
+
+        let param_error: ResponseStreamEvent = serde_json::from_value(json!({
+            "type": "error",
+            "code": "invalid_prompt",
+            "message": "unknown field",
+            "param": "input_text.text",
+            "sequence_number": 11
+        }))
+        .expect("decode stream error param");
+        let ResponseStreamEvent::Error(param_error) = param_error else {
+            panic!("expected stream error with param");
+        };
+        assert_eq!(param_error.param(), Some("input_text.text"));
 
         let null_code: ResponseStreamEvent = serde_json::from_value(json!({
             "type": "error",
@@ -16960,6 +17836,68 @@ mod tests {
             panic!("expected stream error");
         };
         assert_eq!(null_code.code(), None);
+        assert_eq!(null_code.param(), None);
+    }
+
+    #[test]
+    fn accumulator_stream_error_keeps_code_param_and_sequence_number() {
+        // The standalone SSE error event carries the offending parameter and
+        // its sequence number; a null code stays `None` instead of an empty
+        // string (4-05).
+        let mut accumulator = ResponseAccumulator::new();
+        let error = ResponseStreamEvent::Error(StreamErrorEvent {
+            kind: StreamErrorEventTag::Error,
+            code: Nullable::Value("invalid_prompt".into()),
+            message: "unknown field".into(),
+            param: Nullable::Value("input_text.text".into()),
+            sequence_number: 4,
+            extra: ExtraFields::new(),
+        });
+        let err = accumulator
+            .push(error)
+            .expect_err("stream error must surface");
+        assert_eq!(
+            err,
+            ResponseAccumulatorError::Stream {
+                code: Some("invalid_prompt".into()),
+                message: "unknown field".into(),
+                param: Some("input_text.text".into()),
+                sequence_number: 4,
+            }
+        );
+        assert_eq!(
+            err.to_string(),
+            "Responses stream error `invalid_prompt` on `input_text.text` at sequence 4: unknown field"
+        );
+
+        let mut null_accumulator = ResponseAccumulator::new();
+        let null_error = ResponseStreamEvent::Error(StreamErrorEvent {
+            kind: StreamErrorEventTag::Error,
+            code: Nullable::Null,
+            message: "retry later".into(),
+            param: Nullable::Null,
+            sequence_number: 5,
+            extra: ExtraFields::new(),
+        });
+        let null_err = null_accumulator
+            .push(null_error)
+            .expect_err("null-code stream error must still surface");
+        assert!(
+            matches!(
+                &null_err,
+                ResponseAccumulatorError::Stream {
+                    code: None,
+                    param: None,
+                    sequence_number: 5,
+                    ..
+                }
+            ),
+            "null code and param must round-trip as None: {null_err:?}"
+        );
+        assert_eq!(
+            null_err.to_string(),
+            "Responses stream error at sequence 5: retry later"
+        );
     }
 
     #[test]
@@ -17010,7 +17948,7 @@ mod tests {
             serde_json::json!({ "city": "Hangzhou", "country": null })
                 .to_string()
                 .into(),
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         );
         let parsed: WeatherQuery = call.arguments_as().expect("parse arguments");
         assert_eq!(
@@ -17074,11 +18012,11 @@ mod tests {
             incomplete_details: Nullable::Null,
             instructions: Nullable::Null,
             metadata: Nullable::Null,
-            model: "gpt-5.6".into(),
+            model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: vec![ResponseOutputItem::Message(OutputMessage::new(
                 "msg_1",
-                ResponseItemStatus::Completed,
+                MessageStatus::Completed,
                 vec![OutputContent::Text(OutputText::new(
                     "{\"temperature\":20.5,\"summary\":\"Cloudy\"}",
                 ))],
@@ -17124,11 +18062,11 @@ mod tests {
             incomplete_details: Nullable::Null,
             instructions: Nullable::Null,
             metadata: Nullable::Null,
-            model: "gpt-5.6".into(),
+            model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: vec![ResponseOutputItem::Message(OutputMessage::new(
                 "msg_2",
-                ResponseItemStatus::Completed,
+                MessageStatus::Completed,
                 vec![OutputContent::Refusal(Refusal::new(
                     "Cannot assist with that request",
                 ))],
@@ -17177,7 +18115,7 @@ mod tests {
             }),
             instructions: Nullable::Null,
             metadata: Nullable::Null,
-            model: "gpt-5.6".into(),
+            model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: vec![],
             parallel_tool_calls: false,
@@ -17212,7 +18150,53 @@ mod tests {
             .output_parsed::<WeatherReport>()
             .expect_err("incomplete must error");
         assert!(
-            matches!(inc_err, OutputParseError::Incomplete(Some(reason)) if reason == "max_output_tokens")
+            matches!(&inc_err, OutputParseError::Incomplete(Some(reason)) if reason == "max_output_tokens")
+        );
+        assert_eq!(
+            inc_err.to_string(),
+            "response was incomplete: max_output_tokens"
+        );
+
+        // Failed case routes the service error payload instead of losing it.
+        let failed_response = Response {
+            error: Nullable::Value(ResponseError {
+                code: ResponseErrorCode::RateLimitExceeded,
+                message: "Rate limit reached".into(),
+                extra: ExtraFields::new(),
+            }),
+            status: Omittable::Value(ResponseStatus::Failed),
+            ..incomplete_response
+        };
+        let failed_err = failed_response
+            .output_parsed::<WeatherReport>()
+            .expect_err("failed must error");
+        match &failed_err {
+            OutputParseError::Failed(error) => {
+                assert_eq!(error.code(), &ResponseErrorCode::RateLimitExceeded);
+                assert_eq!(error.message(), "Rate limit reached");
+            }
+            other => panic!("expected a failed error, got {other:?}"),
+        }
+        assert_eq!(
+            failed_err.to_string(),
+            "response failed: Rate limit reached"
+        );
+
+        // A failed status without an error object still reports readably.
+        let null_error_response = Response {
+            error: Nullable::Null,
+            status: Omittable::Value(ResponseStatus::Failed),
+            ..failed_response
+        };
+        let null_err = null_error_response
+            .output_parsed::<WeatherReport>()
+            .expect_err("failed without error must still error");
+        assert!(
+            matches!(&null_err, OutputParseError::Failed(error) if error.message() == "response failed without an error payload")
+        );
+        assert_eq!(
+            null_err.to_string(),
+            "response failed: response failed without an error payload"
         );
     }
 
@@ -17253,6 +18237,65 @@ mod tests {
             serde_json::from_value(done_json).expect("decode done without logprobs");
         assert_eq!(done_event.text(), "Hello, world!");
         assert!(done_event.logprobs().is_empty());
+    }
+
+    #[test]
+    fn output_text_required_empty_arrays_survive_decode_encode_round_trip() {
+        // Pinned OutputTextContent lists annotations and logprobs in
+        // `required` (the service always emits `[]`), so re-encoding a
+        // decoded value must keep both keys even when they are empty. A
+        // missing key still decodes through `#[serde(default)]` tolerance.
+        let official = json!({
+            "type": "output_text",
+            "text": "Hello, world!",
+            "annotations": [],
+            "logprobs": []
+        });
+        let decoded: OutputText =
+            serde_json::from_value(official.clone()).expect("decode official empty arrays");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode keeps required keys"),
+            official
+        );
+
+        let tolerant: OutputText = serde_json::from_value(json!({
+            "type": "output_text",
+            "text": "Hello, world!"
+        }))
+        .expect("missing keys still decode");
+        let encoded = serde_json::to_value(&tolerant).expect("re-encode fills required keys");
+        assert_eq!(encoded["annotations"], json!([]));
+        assert_eq!(encoded["logprobs"], json!([]));
+
+        let delta: OutputTextDeltaEvent = serde_json::from_value(json!({
+            "type": "response.output_text.delta",
+            "item_id": "item_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hello",
+            "sequence_number": 1,
+            "logprobs": []
+        }))
+        .expect("decode official delta empty logprobs");
+        assert_eq!(
+            serde_json::to_value(&delta).expect("re-encode delta")["logprobs"],
+            json!([])
+        );
+
+        let done: OutputTextDoneEvent = serde_json::from_value(json!({
+            "type": "response.output_text.done",
+            "item_id": "item_1",
+            "output_index": 0,
+            "content_index": 0,
+            "text": "Hello, world!",
+            "sequence_number": 2,
+            "logprobs": []
+        }))
+        .expect("decode official done empty logprobs");
+        assert_eq!(
+            serde_json::to_value(&done).expect("re-encode done")["logprobs"],
+            json!([])
+        );
     }
 
     #[test]
@@ -17300,7 +18343,7 @@ mod tests {
             incomplete_details: Nullable::Null,
             instructions: Nullable::Null,
             metadata: Nullable::Null,
-            model: "gpt-5.6".into(),
+            model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: outputs,
             parallel_tool_calls: false,
@@ -17348,6 +18391,633 @@ mod tests {
                 .len(),
             29
         );
+        // The replayed assistant message keeps the pin-required
+        // `annotations`/`logprobs` keys on its output_text part even when
+        // the decoded arrays are empty.
+        assert_eq!(
+            serialized_inputs[0]["content"][0]["annotations"],
+            json!([]),
+            "replayed output_text must keep the required annotations key"
+        );
+        assert_eq!(
+            serialized_inputs[0]["content"][0]["logprobs"],
+            json!([]),
+            "replayed output_text must keep the required logprobs key"
+        );
+    }
+
+    #[test]
+    fn official_status_and_execution_enums_retain_unknown_values() {
+        // Pinned domains: ProgramOutputStatus completed|incomplete,
+        // ApplyPatchCallStatus(Param) in_progress|completed,
+        // ApplyPatchCallOutputStatus(Param) completed|failed,
+        // ToolSearchExecutionType server|client.
+        assert_eq!(ProgramOutputStatus::Completed.as_str(), "completed");
+        assert_eq!(ProgramOutputStatus::Incomplete.as_str(), "incomplete");
+        assert_eq!(ApplyPatchCallStatus::InProgress.as_str(), "in_progress");
+        assert_eq!(ApplyPatchCallStatus::Completed.as_str(), "completed");
+        assert_eq!(ApplyPatchCallOutputStatus::Completed.as_str(), "completed");
+        assert_eq!(ApplyPatchCallOutputStatus::Failed.as_str(), "failed");
+        assert_eq!(ToolSearchExecution::Server.as_str(), "server");
+        assert_eq!(ToolSearchExecution::Client.as_str(), "client");
+
+        let fixtures = [
+            (
+                json!({
+                    "type": "program_output",
+                    "id": "po1",
+                    "call_id": "c_p1",
+                    "result": "1\n",
+                    "status": "queued"
+                }),
+                "queued",
+            ),
+            (
+                json!({
+                    "type": "apply_patch_call",
+                    "id": "ap1",
+                    "call_id": "apc1",
+                    "status": "retrying",
+                    "operation": {"type": "delete_file", "path": "main.rs"}
+                }),
+                "retrying",
+            ),
+            (
+                json!({
+                    "type": "apply_patch_call_output",
+                    "id": "apo1",
+                    "call_id": "apc1",
+                    "status": "cancelled",
+                    "output": "ok"
+                }),
+                "cancelled",
+            ),
+            (
+                json!({
+                    "type": "tool_search_call",
+                    "id": "tsc1",
+                    "call_id": null,
+                    "execution": "hybrid",
+                    "arguments": {},
+                    "status": "completed"
+                }),
+                "hybrid",
+            ),
+            (
+                json!({
+                    "type": "tool_search_output",
+                    "id": "tso1",
+                    "call_id": null,
+                    "execution": "offline",
+                    "tools": [],
+                    "status": "completed"
+                }),
+                "offline",
+            ),
+        ];
+        for (fixture, unknown) in fixtures {
+            let decoded: ResponseOutputItem =
+                serde_json::from_value(fixture.clone()).expect("unknown enum values stay lossless");
+            assert_eq!(
+                serde_json::to_value(&decoded).expect("round-trip unknown enum"),
+                fixture,
+                "unknown value {unknown} must round-trip"
+            );
+        }
+
+        let search = serde_json::from_value::<ResponseInputItem>(json!({
+            "type": "tool_search_call",
+            "arguments": {},
+            "execution": "hybrid"
+        }))
+        .expect("input-side unknown execution stays lossless");
+        assert_eq!(
+            serde_json::to_value(&search).expect("round-trip input execution")["execution"],
+            "hybrid"
+        );
+    }
+
+    #[test]
+    fn compact_service_tier_pins_the_five_official_values() {
+        // Pinned CompactResponseMethodPublicBody.service_tier references
+        // ServiceTierEnum: auto/default/fast/flex/priority. The create side
+        // keeps the wider seven-value ServiceTier domain (3-01).
+        const OFFICIAL_COMPACT_TIERS: [&str; 5] = ["auto", "default", "fast", "flex", "priority"];
+        for value in OFFICIAL_COMPACT_TIERS {
+            let decoded = CompactServiceTier::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official ServiceTierEnum value {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            let request =
+                CompactResponseRequest::new("gpt-5.6-sol", "compact me").service_tier(decoded);
+            assert_eq!(
+                serde_json::to_value(&request).expect("serialize compact tier")["service_tier"],
+                value
+            );
+        }
+        for create_only in ["scale", "ultrafast"] {
+            let decoded = CompactServiceTier::from_raw(create_only);
+            assert!(
+                !decoded.is_known(),
+                "{create_only} belongs to the create domain, not ServiceTierEnum"
+            );
+            assert_eq!(decoded.as_str(), create_only);
+            let round_tripped = serde_json::from_value::<CompactResponseRequest>(json!({
+                "model": "gpt-5.6-sol",
+                "service_tier": create_only
+            }))
+            .expect("unknown compact tiers stay lossless");
+            assert_eq!(
+                serde_json::to_value(&round_tripped).expect("re-encode")["service_tier"],
+                create_only
+            );
+        }
+        assert!(ServiceTier::from_raw("scale").is_known());
+        assert!(ServiceTier::from_raw("ultrafast").is_known());
+    }
+
+    #[test]
+    fn easy_input_message_role_pins_the_four_official_values() {
+        // Pinned EasyInputMessage.role: user/assistant/system/developer
+        // (python EasyInputMessageParam.role Literal). Multi-agent roles stay
+        // decode-only through the open MessageRole (D0137口径, 3-04).
+        const OFFICIAL_EASY_ROLES: [&str; 4] = ["user", "assistant", "system", "developer"];
+        for value in OFFICIAL_EASY_ROLES {
+            let decoded = EasyInputMessageRole::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official EasyInputMessage role {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            let message = InputMessage::new(decoded, "hello");
+            assert_eq!(message.role().as_str(), value);
+            assert_eq!(
+                serde_json::to_value(&message).expect("serialize easy role")["role"],
+                value
+            );
+        }
+        for decode_only in ["unknown", "critic", "discriminator", "tool"] {
+            let decoded = EasyInputMessageRole::from_raw(decode_only);
+            assert!(
+                !decoded.is_known(),
+                "{decode_only} is a decode-side MessageRole, not an easy-form role"
+            );
+        }
+        assert_eq!(
+            MessageRole::from(EasyInputMessageRole::Assistant),
+            MessageRole::Assistant
+        );
+        assert_eq!(
+            MessageRole::from(EasyInputMessageRole::from_raw("critic")),
+            MessageRole::Unknown("critic".into())
+        );
+        assert_eq!(
+            EasyInputMessageRole::from(StoredInputMessageRole::Developer),
+            EasyInputMessageRole::Developer
+        );
+
+        // Decoding keeps the open MessageRole: multi-agent roles echoed in an
+        // easy-form message remain lossless even though they cannot be built.
+        let decoded: InputMessage = serde_json::from_value(json!({
+            "role": "critic",
+            "content": "harsh feedback"
+        }))
+        .expect("easy-form decode keeps the open role domain");
+        assert_eq!(decoded.role(), &MessageRole::Critic);
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("round-trip critic role")["role"],
+            "critic"
+        );
+    }
+
+    #[test]
+    fn param_content_unions_exclude_computer_screenshot_outside_item_form() {
+        // Pinned request unions: EasyInputMessage.content ->
+        // InputMessageContentList -> InputContent {input_text, input_image,
+        // input_file}; FunctionCallOutputItemParam.output likewise. Only the
+        // item-form Message branch accepts ComputerScreenshotContent (3-05).
+        let item_form: StoredInputMessage = serde_json::from_value(json!({
+            "type": "message",
+            "role": "user",
+            "status": "completed",
+            "content": [
+                {"type": "computer_screenshot", "image_url": "https://example.test/s.png", "file_id": null, "detail": "auto"}
+            ]
+        }))
+        .expect("item-form message keeps the computer_screenshot branch");
+        assert!(matches!(
+            item_form.content()[0],
+            InputContent::ComputerScreenshot(_)
+        ));
+
+        let easy_form: InputMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [
+                {"type": "computer_screenshot", "image_url": "https://example.test/s.png", "file_id": null, "detail": "auto"}
+            ]
+        }))
+        .expect("easy-form decode stays lossless through Unknown retention");
+        let MessageContent::Parts(parts) = easy_form.content() else {
+            panic!("array content must decode as parts");
+        };
+        assert!(
+            !matches!(
+                parts[0],
+                EasyInputContent::Text(_) | EasyInputContent::Image(_) | EasyInputContent::File(_)
+            ),
+            "computer_screenshot is not a named easy-form branch"
+        );
+        assert_eq!(
+            serde_json::to_value(&easy_form).expect("round-trip easy-form part"),
+            json!({
+                "role": "user",
+                "content": [
+                    {"type": "computer_screenshot", "image_url": "https://example.test/s.png", "file_id": null, "detail": "auto"}
+                ]
+            })
+        );
+
+        let function_output: FunctionCallOutput = serde_json::from_value(json!({
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [
+                {"type": "computer_screenshot", "image_url": "https://example.test/s.png", "file_id": null, "detail": "auto"}
+            ]
+        }))
+        .expect("function output decode stays lossless through Unknown retention");
+        let FunctionCallOutputParamValue::Content(parts) = function_output.output() else {
+            panic!("array output must decode as content");
+        };
+        assert!(
+            !matches!(
+                parts[0],
+                FunctionCallOutputContent::Text(_)
+                    | FunctionCallOutputContent::Image(_)
+                    | FunctionCallOutputContent::File(_)
+            ),
+            "computer_screenshot is not a named function-output branch"
+        );
+        assert_eq!(
+            serde_json::to_value(&function_output).expect("round-trip function output part")["output"]
+                [0]["type"],
+            "computer_screenshot"
+        );
+
+        // The three-branch param unions stay isomorphic for legal parts.
+        let easy_parts = vec![EasyInputContent::from(InputText::new("done"))];
+        let converted: FunctionCallOutputParamValue = easy_parts.into();
+        assert!(matches!(
+            converted,
+            FunctionCallOutputParamValue::Content(parts)
+                if matches!(parts[0], FunctionCallOutputContent::Text(_))
+        ));
+        FunctionCallOutput::from_output(vec![EasyInputContent::from(InputImage::from_url(
+            "https://example.test/a.png",
+        ))])
+        .validate()
+        .expect("easy-form parts convert into valid function outputs");
+    }
+
+    #[test]
+    fn per_host_item_status_enums_pin_official_domains() {
+        // Pinned per-host domains (3-06): MessageStatus /
+        // FunctionCallItemStatus 3 values; MCPToolCallStatus adds
+        // calling/failed; WebSearchToolCall has searching+failed but no
+        // incomplete; FileSearchToolCall pins all five; ImageGenToolCall
+        // carries generating; CodeInterpreterToolCall carries interpreting.
+        // Computer / local-shell / tool-search / reasoning hosts pin the same
+        // three-value trio as function calls (4-01).
+        let hosts: [(&str, Vec<&str>, Vec<&str>); 12] = [
+            (
+                "message",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+            (
+                "function_call",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+            (
+                "mcp_call",
+                vec![
+                    "in_progress",
+                    "completed",
+                    "incomplete",
+                    "calling",
+                    "failed",
+                ],
+                vec!["searching", "generating", "interpreting"],
+            ),
+            (
+                "web_search_call",
+                vec!["in_progress", "searching", "completed", "failed"],
+                vec!["incomplete", "generating", "interpreting", "calling"],
+            ),
+            (
+                "file_search_call",
+                vec![
+                    "in_progress",
+                    "searching",
+                    "completed",
+                    "incomplete",
+                    "failed",
+                ],
+                vec!["generating", "interpreting", "calling"],
+            ),
+            (
+                "image_generation_call",
+                vec!["in_progress", "completed", "generating", "failed"],
+                vec!["searching", "incomplete", "interpreting", "calling"],
+            ),
+            (
+                "code_interpreter_call",
+                vec![
+                    "in_progress",
+                    "completed",
+                    "incomplete",
+                    "interpreting",
+                    "failed",
+                ],
+                vec!["searching", "generating", "calling"],
+            ),
+            (
+                "computer_call",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+            (
+                "local_shell_call",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+            (
+                "tool_search_call",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+            (
+                "reasoning",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+            (
+                "local_shell_call_output",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+        ];
+        for (host, official, foreign) in hosts {
+            let narrow = |value: &str| -> (bool, String) {
+                match host {
+                    "message" => {
+                        let decoded = MessageStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    "mcp_call" => {
+                        let decoded = McpToolCallStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    "web_search_call" => {
+                        let decoded = WebSearchToolCallStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    "file_search_call" => {
+                        let decoded = FileSearchToolCallStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    "image_generation_call" => {
+                        let decoded = ImageGenToolCallStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    "code_interpreter_call" => {
+                        let decoded = CodeInterpreterToolCallStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    // The function-call trio also hosts the computer /
+                    // local-shell / tool-search / reasoning item statuses.
+                    _ => {
+                        let decoded = FunctionCallItemStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                }
+            };
+            for value in &official {
+                let (known, observed) = narrow(value);
+                assert!(ResponseItemStatus::from_raw(*value).is_known());
+                assert!(
+                    known,
+                    "{host} official status {value} must be a named variant"
+                );
+                assert_eq!(observed, *value, "{host} status {value} must round-trip");
+            }
+            for value in &foreign {
+                let (known, observed) = narrow(value);
+                assert!(!known, "{host} must not claim foreign status {value}");
+                assert_eq!(observed, *value, "{host} retains {value} verbatim");
+            }
+        }
+
+        // Narrow enums convert into the shared decode-side enum, including
+        // verbatim Unknown passthrough.
+        assert_eq!(
+            ResponseItemStatus::from(WebSearchToolCallStatus::Searching),
+            ResponseItemStatus::Searching
+        );
+        assert_eq!(
+            ResponseItemStatus::from(McpToolCallStatus::Calling),
+            ResponseItemStatus::Calling
+        );
+        assert_eq!(
+            ResponseItemStatus::from(CodeInterpreterToolCallStatus::Interpreting),
+            ResponseItemStatus::Interpreting
+        );
+        assert_eq!(
+            ResponseItemStatus::from(ImageGenToolCallStatus::Generating),
+            ResponseItemStatus::Generating
+        );
+        assert_eq!(
+            ResponseItemStatus::from(FileSearchToolCallStatus::from_raw("paused")),
+            ResponseItemStatus::Unknown("paused".into())
+        );
+
+        // Narrowed setters and constructors emit the pinned statuses.
+        assert_eq!(
+            serde_json::to_value(FileSearchCall::new(
+                "fs_1",
+                FileSearchToolCallStatus::Searching,
+                ["rust"]
+            ))
+            .expect("serialize file search")["status"],
+            "searching"
+        );
+        assert_eq!(
+            serde_json::to_value(WebSearchCall::new(
+                "ws_1",
+                WebSearchToolCallStatus::Searching,
+                WebSearchSearchAction::new().query("openai")
+            ))
+            .expect("serialize web search")["status"],
+            "searching"
+        );
+        assert_eq!(
+            serde_json::to_value(ImageGenerationCall::new(
+                "ig_1",
+                ImageGenToolCallStatus::Generating
+            ))
+            .expect("serialize image gen")["status"],
+            "generating"
+        );
+        assert_eq!(
+            serde_json::to_value(CodeInterpreterCall::new(
+                "ci_1",
+                CodeInterpreterToolCallStatus::Interpreting,
+                "cntr_1"
+            ))
+            .expect("serialize interpreter")["status"],
+            "interpreting"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                McpCall::new("mcp_1", "docs", "search", JsonText::from("{}"))
+                    .with_status(McpToolCallStatus::Calling)
+            )
+            .expect("serialize mcp call")["status"],
+            "calling"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                FunctionCallOutput::from_output("ok").status(FunctionCallItemStatus::Incomplete)
+            )
+            .expect("serialize function output")["status"],
+            "incomplete"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                FunctionCall::call("c1", "lookup", JsonText::from("{}"))
+                    .with_status(FunctionCallItemStatus::Completed)
+            )
+            .expect("serialize function call")["status"],
+            "completed"
+        );
+        assert_eq!(
+            serde_json::to_value(ComputerCall::new(
+                "cc_2",
+                "call_cc",
+                FunctionCallItemStatus::InProgress
+            ))
+            .expect("serialize computer call")["status"],
+            "in_progress"
+        );
+        assert_eq!(
+            serde_json::to_value(LocalShellCall::new(
+                "ls_2",
+                "call_ls",
+                LocalShellExecAction::new(["echo"], [("PATH", "/bin")]),
+                FunctionCallItemStatus::Completed
+            ))
+            .expect("serialize local shell call")["status"],
+            "completed"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                ToolSearchCallInput::new(json!({"query": "tools"}))
+                    .status(FunctionCallItemStatus::Incomplete)
+            )
+            .expect("serialize tool search input")["status"],
+            "incomplete"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                ReasoningItem::new("rs_2", vec![SummaryTextContent::new("thought")])
+                    .status(FunctionCallItemStatus::Completed)
+            )
+            .expect("serialize reasoning item")["status"],
+            "completed"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                LocalShellCallOutput::new("lsco_2", "call_ls", "ok")
+                    .status(FunctionCallItemStatus::Incomplete)
+            )
+            .expect("serialize local shell output")["status"],
+            "incomplete"
+        );
+
+        // Decode side keeps the shared eight-value union: a status foreign to
+        // its host item stays lossless instead of failing the decode.
+        for (fixture, host) in [
+            (
+                json!({
+                    "type": "web_search_call",
+                    "id": "ws_2",
+                    "status": "incomplete",
+                    "action": {"type": "search", "query": "openai"}
+                }),
+                "web_search_call",
+            ),
+            (
+                json!({
+                    "type": "image_generation_call",
+                    "id": "ig_2",
+                    "status": "interpreting",
+                    "result": null
+                }),
+                "image_generation_call",
+            ),
+        ] {
+            let decoded: ResponseOutputItem =
+                serde_json::from_value(fixture.clone()).expect("decode keeps open statuses");
+            assert_eq!(
+                serde_json::to_value(&decoded).expect("round-trip open status"),
+                fixture,
+                "{host} must round-trip foreign statuses"
+            );
+        }
     }
 
     #[test]
@@ -17360,7 +19030,7 @@ mod tests {
         .expect("official prompt_cache_breakpoint null");
         assert_eq!(text.prompt_cache_breakpoint_ref(), None);
         assert_eq!(
-            serde_json::to_value(&InputText::new("hello").prompt_cache_breakpoint_null())
+            serde_json::to_value(InputText::new("hello").prompt_cache_breakpoint_null())
                 .expect("serialize")["prompt_cache_breakpoint"],
             Value::Null
         );
@@ -17413,7 +19083,7 @@ mod tests {
         }))
         .expect("official Prompt.version null");
         assert_eq!(
-            serde_json::to_value(&PromptReference::new("pmpt_weather").version_null())
+            serde_json::to_value(PromptReference::new("pmpt_weather").version_null())
                 .expect("serialize")["version"],
             Value::Null
         );
@@ -17516,7 +19186,7 @@ mod tests {
 
     #[test]
     fn create_request_sends_typed_context_moderation_and_explicit_nulls() {
-        let request = CreateResponseRequest::new("gpt-5.6", "hello")
+        let request = CreateResponseRequest::new("gpt-5.6-sol", "hello")
             .context_management(ContextManagement::compaction().compact_threshold(8_000))
             .moderation(ModerationConfig::new("omni-moderation-latest"))
             .safety_identifier_null()
@@ -17593,17 +19263,17 @@ mod tests {
             json!({ "allowed_domains": null })
         );
         assert_eq!(
-            serde_json::to_value(&WebSearchTool::new().user_location_null())
+            serde_json::to_value(WebSearchTool::new().user_location_null())
                 .expect("serialize web search")["user_location"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&WebSearchPreviewTool::new().user_location_null())
+            serde_json::to_value(WebSearchPreviewTool::new().user_location_null())
                 .expect("serialize preview")["user_location"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&ImageGenerationTool::new().input_fidelity_null())
+            serde_json::to_value(ImageGenerationTool::new().input_fidelity_null())
                 .expect("serialize image tool")["input_fidelity"],
             Value::Null
         );
@@ -17653,7 +19323,7 @@ mod tests {
         assert!(cleared_value.get("prompt_cache_options").is_none());
         assert!(
             serde_json::from_value::<CreateResponseRequest>(json!({
-                "model": "gpt-5.6",
+                "model": "gpt-5.6-sol",
                 "input": "hello",
                 "prompt_cache_options": null
             }))
@@ -17675,7 +19345,7 @@ mod tests {
 
     #[test]
     fn follow_up_from_copies_stable_prefix_fields() {
-        let previous = CreateResponseRequest::new("gpt-5.6", "first")
+        let previous = CreateResponseRequest::new("gpt-5.6-sol", "first")
             .instructions("Stay concise.")
             .tool(FunctionTool::new("lookup"));
         let response = Response {
@@ -17685,7 +19355,7 @@ mod tests {
             incomplete_details: Nullable::Null,
             instructions: Nullable::Null,
             metadata: Nullable::Null,
-            model: "gpt-5.6".into(),
+            model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: vec![],
             parallel_tool_calls: false,
@@ -17724,7 +19394,7 @@ mod tests {
 
         assert!(
             serde_json::from_value::<CreateResponseRequest>(json!({
-                "model": "gpt-5.6",
+                "model": "gpt-5.6-sol",
                 "input": "hello",
                 "instructions": [{"type": "message", "role": "developer", "content": "no"}]
             }))
@@ -17733,7 +19403,7 @@ mod tests {
         );
         assert!(
             serde_json::from_value::<CompactResponseRequest>(json!({
-                "model": "gpt-5.6",
+                "model": "gpt-5.6-sol",
                 "instructions": [{"type": "message", "role": "developer", "content": "no"}]
             }))
             .is_err(),
@@ -17787,7 +19457,7 @@ mod tests {
             "incomplete_details": null,
             "instructions": null,
             "metadata": null,
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "output": [],
             "parallel_tool_calls": true,
             "temperature": 1.0,
@@ -17847,8 +19517,59 @@ mod tests {
     }
 
     #[test]
+    fn response_store_null_echo_decodes_and_round_trips() {
+        let value = json!({
+            "id": "resp_store",
+            "object": "response",
+            "created_at": 1,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-5.6-sol",
+            "output": [],
+            "parallel_tool_calls": true,
+            "temperature": 1.0,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "store": null
+        });
+        let response: Response = serde_json::from_value(value.clone())
+            .expect("unofficial store null echo must not fail the decode");
+        assert_eq!(
+            serde_json::to_value(&response).expect("re-encode store null")["store"],
+            Value::Null
+        );
+
+        let omitted: Response = serde_json::from_value(json!({
+            "id": "resp_store",
+            "object": "response",
+            "created_at": 1,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-5.6-sol",
+            "output": [],
+            "parallel_tool_calls": true,
+            "temperature": 1.0,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0
+        }))
+        .expect("decode without store");
+        assert!(
+            serde_json::to_value(&omitted)
+                .expect("re-encode omitted store")
+                .get("store")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn create_request_service_tier_null_matches_openapi() {
-        let request = CreateResponseRequest::new("gpt-5.6", "hello").service_tier_null();
+        let request = CreateResponseRequest::new("gpt-5.6-sol", "hello").service_tier_null();
         let value = serde_json::to_value(&request).expect("serialize");
         assert_eq!(value["service_tier"], Value::Null);
         request.validate().expect("null service_tier is in range");
@@ -17856,7 +19577,7 @@ mod tests {
 
     #[test]
     fn create_request_validate_enforces_pinned_limits() {
-        let ok = CreateResponseRequest::new("gpt-5.6", "hello")
+        let ok = CreateResponseRequest::new("gpt-5.6-sol", "hello")
             .temperature(0.0)
             .top_p(1.0)
             .top_logprobs(20)
@@ -17866,49 +19587,49 @@ mod tests {
         ok.validate().expect("boundary values are accepted");
 
         assert!(matches!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .temperature(2.1)
                 .validate(),
             Err(CreateResponseConstraintError::Temperature { .. })
         ));
         assert!(matches!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .top_p(-0.1)
                 .validate(),
             Err(CreateResponseConstraintError::TopP { .. })
         ));
         assert!(matches!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .top_logprobs(21)
                 .validate(),
             Err(CreateResponseConstraintError::TopLogprobs { actual: 21, .. })
         ));
         assert!(matches!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .max_output_tokens(15)
                 .validate(),
             Err(CreateResponseConstraintError::MaxOutputTokens { actual: 15, .. })
         ));
         assert!(matches!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .safety_identifier("a".repeat(65))
                 .validate(),
             Err(CreateResponseConstraintError::SafetyIdentifier { actual: 65, .. })
         ));
-        CreateResponseRequest::new("gpt-5.6", "hello")
+        CreateResponseRequest::new("gpt-5.6-sol", "hello")
             .context_management(
                 ContextManagement::compaction().compact_threshold(MIN_COMPACT_THRESHOLD),
             )
             .validate()
             .expect("compact_threshold 1000 is accepted");
         assert!(matches!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .context_management(ContextManagement::compaction().compact_threshold(999))
                 .validate(),
             Err(CreateResponseConstraintError::CompactThreshold { actual: 999, .. })
         ));
         let decoded = serde_json::from_value::<CreateResponseRequest>(json!({
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "input": "hello",
             "context_management": [{ "type": "compaction", "compact_threshold": 1 }]
         }))
@@ -17917,7 +19638,7 @@ mod tests {
             decoded.validate(),
             Err(CreateResponseConstraintError::CompactThreshold { actual: 1, .. })
         ));
-        CreateResponseRequest::new("gpt-5.6", "hello")
+        CreateResponseRequest::new("gpt-5.6-sol", "hello")
             .context_management(ContextManagement::compaction().compact_threshold_null())
             .validate()
             .expect("official compact_threshold null skips the numeric bound");
@@ -17939,7 +19660,7 @@ mod tests {
             .validate()
             .expect("short input_text is accepted");
         CreateResponseRequest::new(
-            "gpt-5.6",
+            "gpt-5.6-sol",
             ResponseInput::items([InputMessage::user(MessageContent::Parts(vec![
                 InputText::new("hello").into(),
             ]))]),
@@ -17960,7 +19681,7 @@ mod tests {
         assert!(matches!(
             ApplyPatchCallInput::new(
                 "ap_1",
-                "completed",
+                ApplyPatchCallStatus::Completed,
                 ApplyPatchOperation::DeleteFile(ApplyPatchDeleteFile::new("")),
             )
             .validate(),
@@ -17979,7 +19700,7 @@ mod tests {
         ));
         ApplyPatchCallInput::new(
             "ap_1",
-            "completed",
+            ApplyPatchCallStatus::Completed,
             ApplyPatchOperation::CreateFile(ApplyPatchCreateFile::new(
                 "README.md",
                 "--- /dev/null\n+++ README.md\n",
@@ -18006,7 +19727,7 @@ mod tests {
             .validate()
             .expect("official image_url null skips the length bound");
         CreateResponseRequest::new(
-            "gpt-5.6",
+            "gpt-5.6-sol",
             ResponseInput::items([InputMessage::user(MessageContent::Parts(vec![
                 InputImage::from_url("https://example.test/a.png").into(),
             ]))]),
@@ -18036,7 +19757,7 @@ mod tests {
             .expect("official file_data null skips the length bound");
 
         let file_request = CreateResponseRequest::new(
-            "gpt-5.6",
+            "gpt-5.6-sol",
             ResponseInput::items([InputMessage::user(MessageContent::Parts(vec![
                 InputFile::from_base64("Zg==", "note.txt").into(),
             ]))]),
@@ -18066,7 +19787,7 @@ mod tests {
         ));
 
         let empty_inline =
-            CreateResponseRequest::new("gpt-5.6", "hello").tools([FunctionShellTool::new()
+            CreateResponseRequest::new("gpt-5.6-sol", "hello").tools([FunctionShellTool::new()
                 .environment(FunctionShellEnvironment::ContainerAuto(
                     FunctionShellContainerAuto::new().skills(vec![ContainerSkill::Inline(
                         InlineSkill::new("lint", "Run lints", InlineSkillSource::zip("")),
@@ -18076,7 +19797,7 @@ mod tests {
             empty_inline.validate(),
             Err(CreateResponseConstraintError::InlineSkillSourceData { actual: 0, .. })
         ));
-        CreateResponseRequest::new("gpt-5.6", "hello")
+        CreateResponseRequest::new("gpt-5.6-sol", "hello")
             .tools([
                 FunctionShellTool::new().environment(FunctionShellEnvironment::ContainerAuto(
                     FunctionShellContainerAuto::new().skills(vec![ContainerSkill::Inline(
@@ -18088,7 +19809,7 @@ mod tests {
             .expect("documented inline skill zip data is accepted");
 
         let decoded = serde_json::from_value::<CreateResponseRequest>(json!({
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "input": [{
                 "type": "message",
                 "role": "user",
@@ -18126,15 +19847,15 @@ mod tests {
             Err(CreateResponseConstraintError::StreamId { actual: 7, .. })
         ));
 
-        ResponsesCreateEvent::new("gpt-5.6", "hello")
+        ResponsesCreateEvent::new("gpt-5.6-sol", "hello")
             .validate()
             .expect("omitted stream_id skips the bound");
-        ResponsesCreateEvent::new("gpt-5.6", "hello")
+        ResponsesCreateEvent::new("gpt-5.6-sol", "hello")
             .stream_id("agent_1")
             .validate()
             .expect("documented create-event stream_id is accepted");
         assert!(matches!(
-            ResponsesCreateEvent::new("gpt-5.6", "hello")
+            ResponsesCreateEvent::new("gpt-5.6-sol", "hello")
                 .stream_id("agent/1")
                 .validate(),
             Err(CreateResponseConstraintError::StreamId { .. })
@@ -18142,7 +19863,7 @@ mod tests {
         let decoded = serde_json::from_value::<ResponsesCreateEvent>(json!({
             "type": "response.create",
             "stream_id": "bad id",
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "input": "hello"
         }))
         .expect("serde remains lossless for unofficial stream_id");
@@ -18154,7 +19875,7 @@ mod tests {
 
     #[test]
     fn create_response_fields_match_python_and_openapi_inventory() {
-        let request = CreateResponseRequest::new("gpt-5.6", "hello")
+        let request = CreateResponseRequest::new("gpt-5.6-sol", "hello")
             .instructions("Stay concise.")
             .background(true)
             .conversation("conv_1")
@@ -18211,7 +19932,7 @@ mod tests {
 
     #[test]
     fn compact_request_fields_match_python_and_openapi_inventory() {
-        let request = CompactResponseRequest::new("gpt-5.6", "compact me")
+        let request = CompactResponseRequest::new("gpt-5.6-sol", "compact me")
             .instructions("Keep the gist.")
             .previous_response_id("resp_1")
             .prompt_cache_key("cache")
@@ -18260,7 +19981,7 @@ mod tests {
         .expect("official ModelIdsCompaction includes null");
         assert_eq!(decoded.model, Nullable::Null);
         assert_eq!(
-            serde_json::to_value(&CompactResponseRequest::empty()).expect("serialize empty")["model"],
+            serde_json::to_value(CompactResponseRequest::empty()).expect("serialize empty")["model"],
             Value::Null
         );
     }
@@ -18290,19 +20011,19 @@ mod tests {
 
     #[test]
     fn compact_request_validate_enforces_prompt_cache_key_limit() {
-        CompactResponseRequest::new("gpt-5.6", "hello")
+        CompactResponseRequest::new("gpt-5.6-sol", "hello")
             .prompt_cache_key("a".repeat(MAX_PROMPT_CACHE_KEY_CHARS))
             .validate()
             .expect("64-character key is accepted");
         assert!(matches!(
-            CompactResponseRequest::new("gpt-5.6", "hello")
+            CompactResponseRequest::new("gpt-5.6-sol", "hello")
                 .prompt_cache_key("a".repeat(MAX_PROMPT_CACHE_KEY_CHARS + 1))
                 .validate(),
             Err(CompactResponseConstraintError::PromptCacheKey { actual: 65, .. })
         ));
 
         let decoded = serde_json::from_value::<CompactResponseRequest>(json!({
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "input": null,
             "prompt_cache_key": "a".repeat(65),
             "service_tier": null
@@ -18327,7 +20048,7 @@ mod tests {
         ));
         assert!(
             CreateResponseRequest::new(
-                "gpt-5.6",
+                "gpt-5.6-sol",
                 vec![ResponseInputItem::AdditionalTools(extra_tools.clone())]
             )
             .validate()
@@ -18341,7 +20062,7 @@ mod tests {
         ));
         assert!(
             CreateResponseRequest::new(
-                "gpt-5.6",
+                "gpt-5.6-sol",
                 vec![ResponseInputItem::ToolSearchOutput(search.clone())]
             )
             .validate()
@@ -18350,7 +20071,7 @@ mod tests {
 
         assert!(matches!(
             CompactResponseRequest::new(
-                "gpt-5.6",
+                "gpt-5.6-sol",
                 vec![ResponseInputItem::AdditionalTools(extra_tools)]
             )
             .validate(),
@@ -18368,7 +20089,7 @@ mod tests {
         ));
         assert!(matches!(
             CountInputTokensRequest::new(
-                "gpt-5.6",
+                "gpt-5.6-sol",
                 vec![ResponseInputItem::ToolSearchOutput(search)]
             )
             .validate(),
@@ -18376,10 +20097,10 @@ mod tests {
                 CreateResponseConstraintError::EmptyAllowedCallers
             ))
         ));
-        CompactResponseRequest::new("gpt-5.6", "hello")
+        CompactResponseRequest::new("gpt-5.6-sol", "hello")
             .validate()
             .expect("text input stays in range");
-        CountInputTokensRequest::new("gpt-5.6", "hello")
+        CountInputTokensRequest::new("gpt-5.6-sol", "hello")
             .tool(FunctionTool::new("lookup"))
             .validate()
             .expect("in-range tools stay accepted");
@@ -18526,6 +20247,138 @@ mod tests {
     }
 
     #[test]
+    fn official_compact_resource_output_decodes_user_messages_and_compaction_item() {
+        // Pinned OpenAPI example for CompactResource, including the user-role
+        // messages that the assistant-only ResponseOutputItem codec rejected
+        // before the ItemField-equivalent input union was used. `usage` is
+        // completed with the schema-required token-detail objects, which the
+        // abbreviated spec example omits.
+        let official = json!({
+            "id": "resp_001",
+            "object": "response.compaction",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Summarize our launch checklist from last week."
+                        }
+                    ]
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "You are performing a CONTEXT CHECKPOINT COMPACTION..."
+                        }
+                    ]
+                },
+                {
+                    "type": "compaction",
+                    "id": "cmp_001",
+                    "encrypted_content": "encrypted-summary"
+                }
+            ],
+            "created_at": 1731459200,
+            "usage": {
+                "input_tokens": 42897,
+                "input_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 0 },
+                "output_tokens": 12000,
+                "output_tokens_details": { "reasoning_tokens": 0 },
+                "total_tokens": 54912
+            }
+        });
+        let compacted: CompactedResponse =
+            serde_json::from_value(official.clone()).expect("official CompactResource example");
+        assert_eq!(compacted.id(), "resp_001");
+        let output = compacted.output();
+        assert_eq!(output.len(), 3);
+        for item in &output[..2] {
+            assert!(
+                matches!(item, ResponseInputItem::StoredMessage(_)),
+                "user message must decode as a stored input message: {item:?}"
+            );
+            assert_eq!(
+                serde_json::to_value(item).expect("re-encode user message")["role"],
+                "user"
+            );
+        }
+        assert!(matches!(output[2], ResponseInputItem::Compaction(_)));
+        assert_eq!(
+            serde_json::to_value(&output[2]).expect("re-encode compaction item")["id"],
+            "cmp_001"
+        );
+        assert_eq!(
+            serde_json::to_value(&compacted).expect("round-trip official example"),
+            official
+        );
+    }
+
+    #[test]
+    fn compact_output_stored_messages_decode_multi_agent_roles_losslessly() {
+        // Compaction can echo multi-agent roles (critic/tool/discriminator)
+        // in stored messages. The pinned ItemField Message branch accepts any
+        // MessageRole, so decoding must keep unknown roles verbatim instead
+        // of failing the 200 body; request construction still only exposes
+        // the three StoredInputMessageRole values.
+        let fixture = json!({
+            "id": "resp_roles",
+            "object": "response.compaction",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "critic",
+                    "content": [{"type": "input_text", "text": "critique"}]
+                },
+                {
+                    "type": "message",
+                    "role": "tool",
+                    "content": [{"type": "input_text", "text": "tool output"}]
+                },
+                {
+                    "type": "message",
+                    "role": "future_role",
+                    "content": [{"type": "input_text", "text": "forward compatible"}]
+                },
+                {"type": "compaction", "id": "cmp_2", "encrypted_content": "enc"}
+            ],
+            "created_at": 1731459200,
+            "usage": {
+                "input_tokens": 1,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                "output_tokens": 1,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 2
+            }
+        });
+        let compacted: CompactedResponse =
+            serde_json::from_value(fixture.clone()).expect("multi-agent stored roles decode");
+        let output = compacted.output();
+        for (item, expected) in output.iter().zip(["critic", "tool", "future_role"]) {
+            let ResponseInputItem::StoredMessage(message) = item else {
+                panic!("role-bearing item must decode as a stored message: {item:?}");
+            };
+            assert_eq!(message.role().as_str(), expected);
+        }
+        assert_eq!(
+            serde_json::to_value(&compacted).expect("round-trip keeps roles verbatim"),
+            fixture
+        );
+        assert_eq!(
+            serde_json::to_value(StoredInputMessage::new(
+                StoredInputMessageRole::Developer,
+                [InputText::new("instructions")],
+            ))
+            .expect("request construction keeps the pinned role domain")["role"],
+            "developer"
+        );
+    }
+
+    #[test]
     fn official_response_item_list_requires_cursor_ids() {
         assert!(
             serde_json::from_value::<ResponseInputItemList>(json!({
@@ -18579,11 +20432,11 @@ mod tests {
             Value::Null
         );
         let official = serde_json::from_value::<CompactResponseRequest>(json!({
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "input": "compact me"
         }))
         .expect("official compact request");
-        assert_eq!(official.model, Nullable::Value("gpt-5.6".into()));
+        assert_eq!(official.model, Nullable::Value("gpt-5.6-sol".into()));
     }
 
     #[test]
@@ -18718,7 +20571,7 @@ mod tests {
             "official InputImageContent detail is not nullable"
         );
         assert_eq!(
-            serde_json::to_value(&InputImage::from_url("https://example.test/a.png"))
+            serde_json::to_value(InputImage::from_url("https://example.test/a.png"))
                 .expect("constructor sends documented default")["detail"],
             "auto"
         );
@@ -18754,7 +20607,7 @@ mod tests {
             other => panic!("expected content output, got {other:?}"),
         }
         assert_eq!(
-            serde_json::to_value(&InputImageParam::from_url("https://example.test/a.png"))
+            serde_json::to_value(InputImageParam::from_url("https://example.test/a.png"))
                 .expect("param constructor omits detail")
                 .get("detail"),
             None
@@ -18799,7 +20652,7 @@ mod tests {
             "Assistants FileSearchRanker is not a named Responses RankerVersionType"
         );
         assert_eq!(
-            serde_json::to_value(&FileSearchRankingOptions::new().ranker(FileSearchRanker::Auto))
+            serde_json::to_value(FileSearchRankingOptions::new().ranker(FileSearchRanker::Auto))
                 .expect("ranker")["ranker"],
             "auto"
         );
@@ -18953,7 +20806,7 @@ mod tests {
         );
         assert!(ImageDetail::from_raw("original").is_known());
         assert_eq!(
-            serde_json::to_value(&InputFile::from_file_id("file_1").detail(FileDetail::Low))
+            serde_json::to_value(InputFile::from_file_id("file_1").detail(FileDetail::Low))
                 .expect("setter")["detail"],
             "low"
         );
@@ -18971,7 +20824,7 @@ mod tests {
 
         let output = OutputMessage::new(
             "msg_1",
-            ResponseItemStatus::Completed,
+            MessageStatus::Completed,
             [OutputContent::from(OutputText::new("done"))],
         )
         .phase(MessagePhase::FinalAnswer);
@@ -18982,9 +20835,9 @@ mod tests {
         assert!(!decoded.extra_fields().contains_key("phase"));
         assert_eq!(
             serde_json::to_value(
-                &OutputMessage::new(
+                OutputMessage::new(
                     "msg_2",
-                    ResponseItemStatus::Completed,
+                    MessageStatus::Completed,
                     [OutputContent::from(OutputText::new("done"))],
                 )
                 .phase_null()
@@ -19063,7 +20916,7 @@ mod tests {
         .expect("serde remains lossless");
         assert!(decoded.validate().is_err());
         assert!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .tool(decoded)
                 .validate()
                 .is_err()
@@ -19152,13 +21005,18 @@ mod tests {
             }
             other => panic!("dated web search must stay typed, got {other:?}"),
         }
+        // `web_search_2025_08_26` is a valid request-tool type but is outside
+        // the pinned ToolChoiceTypes.type domain, so it decodes through the
+        // open-enum Unknown branch instead of a named HostedToolType variant.
         let choice: ToolChoice = serde_json::from_value(json!({
             "type": "web_search_2025_08_26"
         }))
-        .expect("official dated hosted tool_choice");
+        .expect("unofficial dated hosted tool_choice stays lossless");
         match choice {
             ToolChoice::Hosted(hosted) => {
-                assert_eq!(hosted.kind(), &HostedToolType::WebSearch20250826);
+                assert_eq!(hosted.kind().unknown_value(), Some("web_search_2025_08_26"));
+                assert!(!hosted.kind().is_known());
+                assert_eq!(hosted.kind().as_str(), "web_search_2025_08_26");
             }
             other => panic!("dated web search choice must stay hosted, got {other:?}"),
         }
@@ -19240,6 +21098,45 @@ mod tests {
     }
 
     #[test]
+    fn hosted_tool_choice_type_pins_the_eight_official_values() {
+        // Pinned ToolChoiceTypes.type enum: exactly the eight values below.
+        // `web_search` / `web_search_2025_08_26` are request-tool types, not
+        // tool-choice values, so they fall back to the open Unknown branch.
+        const OFFICIAL_HOSTED_TOOL_TYPES: [&str; 8] = [
+            "file_search",
+            "web_search_preview",
+            "computer",
+            "computer_use_preview",
+            "computer_use",
+            "web_search_preview_2025_03_11",
+            "image_generation",
+            "code_interpreter",
+        ];
+        for value in OFFICIAL_HOSTED_TOOL_TYPES {
+            let decoded = HostedToolType::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official ToolChoiceTypes value {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            let choice: ToolChoice =
+                serde_json::from_value(json!({ "type": value })).expect("decode hosted choice");
+            assert!(
+                matches!(choice, ToolChoice::Hosted(hosted) if hosted.kind().as_str() == value),
+                "official hosted choice {value} must stay routed to the Hosted branch"
+            );
+        }
+        for tool_only in ["web_search", "web_search_2025_08_26"] {
+            let decoded = HostedToolType::from_raw(tool_only);
+            assert!(
+                !decoded.is_known(),
+                "{tool_only} names a request tool, not a pinned tool_choice value"
+            );
+            assert_eq!(decoded.as_str(), tool_only);
+        }
+    }
+
+    #[test]
     fn image_generation_tool_validate_enforces_pinned_limits() {
         let decoded: ImageGenerationTool = serde_json::from_value(json!({
             "type": "image_generation",
@@ -19252,7 +21149,7 @@ mod tests {
             Err(CreateResponseConstraintError::ImageGenerationCompression { actual: 101, .. })
         ));
         assert!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .tool(ImageGenerationTool::new().partial_images(4))
                 .validate()
                 .is_err()
@@ -19296,17 +21193,17 @@ mod tests {
         );
 
         assert_eq!(
-            serde_json::to_value(&CustomTool::new("extract").allowed_callers_null())
+            serde_json::to_value(CustomTool::new("extract").allowed_callers_null())
                 .expect("serialize custom null")["allowed_callers"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&FunctionShellTool::new().allowed_callers_null())
+            serde_json::to_value(FunctionShellTool::new().allowed_callers_null())
                 .expect("serialize shell null")["allowed_callers"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&ApplyPatchTool::new().allowed_callers_null())
+            serde_json::to_value(ApplyPatchTool::new().allowed_callers_null())
                 .expect("serialize patch null")["allowed_callers"],
             Value::Null
         );
@@ -19326,7 +21223,7 @@ mod tests {
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&McpToolChoice::server("docs").name_null())
+            serde_json::to_value(McpToolChoice::server("docs").name_null())
                 .expect("serialize mcp name null")["name"],
             Value::Null
         );
@@ -19393,23 +21290,23 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(
-                &ComputerDragAction::new(vec![ComputerCoordinate::new(0, 0)]).keys_null()
+                ComputerDragAction::new(vec![ComputerCoordinate::new(0, 0)]).keys_null()
             )
             .expect("serialize drag keys")["keys"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&ComputerMoveAction::new(1, 2).keys_null())
+            serde_json::to_value(ComputerMoveAction::new(1, 2).keys_null())
                 .expect("serialize move keys")["keys"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&ComputerScrollAction::new(1, 2, 0, 10).keys_null())
+            serde_json::to_value(ComputerScrollAction::new(1, 2, 0, 10).keys_null())
                 .expect("serialize scroll keys")["keys"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&ComputerDoubleClickAction::new(1, 2).keys(["CTRL"]))
+            serde_json::to_value(ComputerDoubleClickAction::new(1, 2).keys(["CTRL"]))
                 .expect("serialize double-click keys")["keys"],
             json!(["CTRL"])
         );
@@ -19419,7 +21316,7 @@ mod tests {
         assert_eq!(safety_value["message"], Value::Null);
         assert_eq!(
             serde_json::to_value(
-                &serde_json::from_value::<ComputerClickAction>(json!({
+                serde_json::from_value::<ComputerClickAction>(json!({
                     "type": "click",
                     "button": "left",
                     "x": 1,
@@ -19470,10 +21367,154 @@ mod tests {
         }
         let _ = update;
 
-        let output = ApplyPatchCallOutputInput::new("call_ap", "completed").output("patched");
+        let output =
+            ApplyPatchCallOutputInput::new("call_ap", ApplyPatchCallOutputStatus::Completed)
+                .output("patched");
         let value = serde_json::to_value(&output).expect("serialize output");
         assert_eq!(value["output"], "patched");
         assert_eq!(value["status"], "completed");
+    }
+
+    #[test]
+    fn code_interpreter_allowlist_domain_secrets_serialize_and_validate() {
+        // Pinned ContainerNetworkPolicyAllowlistParam.domain_secrets:
+        // optional array (minItems 1) of {domain, name, value} with the
+        // D0076 length limits (value 1..=10,485,760 chars).
+        let policy = CodeInterpreterNetworkAllowlist::new(["api.example.test"])
+            .with_secret(CodeInterpreterDomainSecret::new(
+                "api.example.test",
+                "API_TOKEN",
+                "token-value",
+            ))
+            .with_secret(CodeInterpreterDomainSecret::new(
+                "cdn.example.test",
+                "CDN_KEY",
+                "cdn-value",
+            ));
+        assert_eq!(policy.allowed_domains(), ["api.example.test"]);
+        assert_eq!(policy.domain_secrets().len(), 2);
+        assert_eq!(policy.domain_secrets()[0].domain(), "api.example.test");
+        assert_eq!(policy.domain_secrets()[0].name(), "API_TOKEN");
+
+        let tool = CodeInterpreterTool::auto(
+            AutoCodeInterpreterContainer::new()
+                .network_policy(CodeInterpreterNetworkPolicy::Allowlist(policy)),
+        );
+        let value = serde_json::to_value(&tool).expect("serialize domain secrets");
+        assert_eq!(
+            value["container"]["network_policy"]["domain_secrets"],
+            json!([
+                {"domain": "api.example.test", "name": "API_TOKEN", "value": "token-value"},
+                {"domain": "cdn.example.test", "name": "CDN_KEY", "value": "cdn-value"}
+            ])
+        );
+        assert!(!format!("{tool:?}").contains("token-value"));
+        tool.validate()
+            .expect("in-range domain secrets are accepted");
+
+        let decoded: CodeInterpreterTool =
+            serde_json::from_value(value.clone()).expect("decode domain secrets");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("round-trip domain secrets"),
+            value
+        );
+        let auto = match decoded.container() {
+            CodeInterpreterContainer::Auto(auto) => auto,
+            other => panic!("expected auto container, got {other:?}"),
+        };
+        match &auto.network_policy {
+            Omittable::Value(CodeInterpreterNetworkPolicy::Allowlist(policy)) => {
+                assert_eq!(policy.domain_secrets().len(), 2);
+            }
+            other => panic!("expected allowlist policy, got {other:?}"),
+        }
+
+        let omitted =
+            serde_json::to_value(CodeInterpreterNetworkAllowlist::new(["a.example.test"]))
+                .expect("serialize without secrets");
+        assert!(omitted.get("domain_secrets").is_none());
+
+        // Pinned ContainerNetworkPolicyAllowlistParam.allowed_domains is
+        // minItems 1: an empty allowlist is rejected by validate() without
+        // sending the request (mirrors the containers-side
+        // EmptyAllowedDomains semantics).
+        assert!(matches!(
+            CodeInterpreterTool::auto(AutoCodeInterpreterContainer::new().network_policy(
+                CodeInterpreterNetworkPolicy::Allowlist(CodeInterpreterNetworkAllowlist::new(
+                    Vec::<String>::new()
+                ))
+            ))
+            .validate(),
+            Err(CreateResponseConstraintError::EmptyAllowedDomains)
+        ));
+        let decoded_empty = serde_json::from_value::<CodeInterpreterTool>(json!({
+            "type": "code_interpreter",
+            "container": {
+                "type": "auto",
+                "network_policy": {
+                    "type": "allowlist",
+                    "allowed_domains": []
+                }
+            }
+        }))
+        .expect("serde remains lossless for an empty allowlist");
+        assert!(matches!(
+            decoded_empty.validate(),
+            Err(CreateResponseConstraintError::EmptyAllowedDomains)
+        ));
+
+        let mut empty_secrets = CodeInterpreterNetworkAllowlist::new(["api.example.test"]);
+        empty_secrets.domain_secrets = Omittable::Value(Vec::new());
+        assert!(matches!(
+            CodeInterpreterTool::auto(
+                AutoCodeInterpreterContainer::new()
+                    .network_policy(CodeInterpreterNetworkPolicy::Allowlist(empty_secrets))
+            )
+            .validate(),
+            Err(CreateResponseConstraintError::EmptyDomainSecrets)
+        ));
+        assert!(matches!(
+            CodeInterpreterTool::auto(
+                AutoCodeInterpreterContainer::new().network_policy(
+                    CodeInterpreterNetworkPolicy::Allowlist(
+                        CodeInterpreterNetworkAllowlist::new(["api.example.test"]).with_secret(
+                            CodeInterpreterDomainSecret::new("", "API_TOKEN", "token")
+                        )
+                    )
+                )
+            )
+            .validate(),
+            Err(CreateResponseConstraintError::DomainSecretDomain { actual: 0, .. })
+        ));
+        assert!(matches!(
+            CodeInterpreterTool::auto(AutoCodeInterpreterContainer::new().network_policy(
+                CodeInterpreterNetworkPolicy::Allowlist(
+                    CodeInterpreterNetworkAllowlist::new(["api.example.test"]).with_secret(
+                        CodeInterpreterDomainSecret::new("api.example.test", "", "token")
+                    )
+                )
+            ))
+            .validate(),
+            Err(CreateResponseConstraintError::DomainSecretName { actual: 0, .. })
+        ));
+        assert!(matches!(
+            CodeInterpreterTool::auto(AutoCodeInterpreterContainer::new().network_policy(
+                CodeInterpreterNetworkPolicy::Allowlist(
+                    CodeInterpreterNetworkAllowlist::new(["api.example.test"]).with_secret(
+                        CodeInterpreterDomainSecret::new(
+                            "api.example.test",
+                            "API_TOKEN",
+                            "x".repeat(MAX_DOMAIN_SECRET_VALUE_CHARS + 1)
+                        )
+                    )
+                )
+            ))
+            .validate(),
+            Err(CreateResponseConstraintError::DomainSecretValue {
+                actual: 10_485_761,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -19536,7 +21577,7 @@ mod tests {
         let reasoning = ReasoningItem::new("rs_1", vec![SummaryTextContent::new("thought")])
             .encrypted_content("enc_1")
             .content(vec![ReasoningTextContent::new("step")])
-            .status(ResponseItemStatus::Completed);
+            .status(FunctionCallItemStatus::Completed);
         let value = serde_json::to_value(&reasoning).expect("serialize reasoning");
         let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
         keys.sort();
@@ -19576,12 +21617,12 @@ mod tests {
         assert_eq!(value["container"]["file_ids"], json!(["file-1"]));
         assert_eq!(value["container"]["memory_limit"], "4g");
         assert_eq!(
-            serde_json::to_value(&AutoCodeInterpreterContainer::new().memory_limit_null())
+            serde_json::to_value(AutoCodeInterpreterContainer::new().memory_limit_null())
                 .expect("serialize CI memory_limit null")["memory_limit"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&FunctionShellContainerAuto::new().memory_limit_null())
+            serde_json::to_value(FunctionShellContainerAuto::new().memory_limit_null())
                 .expect("serialize shell memory_limit null")["memory_limit"],
             Value::Null
         );
@@ -19649,13 +21690,13 @@ mod tests {
         assert_eq!(value["caller"]["type"], "direct");
         assert_eq!(value["max_output_length"], 1024);
         assert_eq!(
-            serde_json::to_value(&output.max_output_length_null())
+            serde_json::to_value(output.max_output_length_null())
                 .expect("serialize output length null")["max_output_length"],
             Value::Null
         );
         assert_eq!(
             serde_json::to_value(
-                &FunctionShellCallOutputInput::new(
+                FunctionShellCallOutputInput::new(
                     "s1",
                     vec![FunctionShellCallOutputContent::new(
                         "hello\n",
@@ -19779,7 +21820,7 @@ mod tests {
             "c1",
             "lookup",
             JsonText::from("{}"),
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         )
         .namespace("ns")
         .caller(ToolCallCaller::program("prg_1"));
@@ -19788,9 +21829,11 @@ mod tests {
         assert_eq!(value["caller"]["type"], "program");
         assert_eq!(value["caller"]["caller_id"], "prg_1");
 
-        let custom =
-            CustomToolCallOutput::new("cust1", vec![InputContent::from(InputText::new("done"))])
-                .caller(ToolCallCaller::direct());
+        let custom = CustomToolCallOutput::new(
+            "cust1",
+            vec![EasyInputContent::from(InputText::new("done"))],
+        )
+        .caller(ToolCallCaller::direct());
         let value = serde_json::to_value(&custom).expect("serialize custom output");
         assert_eq!(value["output"][0]["type"], "input_text");
         assert_eq!(value["caller"]["type"], "direct");
@@ -19808,8 +21851,66 @@ mod tests {
     }
 
     #[test]
+    fn file_search_result_attributes_support_omitted_null_and_present() {
+        let omitted: FileSearchResult =
+            serde_json::from_value(json!({ "file_id": "file-1", "text": "hit", "score": 0.5 }))
+                .expect("decode without attributes");
+        assert!(omitted.attributes_ref().is_none());
+        assert!(
+            serde_json::to_value(&omitted)
+                .expect("re-encode omitted attributes")
+                .get("attributes")
+                .is_none()
+        );
+
+        let null_echo: FileSearchResult = serde_json::from_value(json!({
+            "file_id": "file-1",
+            "text": "hit",
+            "attributes": null
+        }))
+        .expect("decode official attributes null");
+        assert!(null_echo.attributes_ref().is_none());
+        assert_eq!(
+            serde_json::to_value(&null_echo).expect("re-encode null attributes")["attributes"],
+            Value::Null
+        );
+
+        let call_json = json!({
+            "type": "file_search_call",
+            "id": "fs_1",
+            "status": "completed",
+            "queries": ["q"],
+            "results": [{
+                "file_id": "file-1",
+                "text": "hit",
+                "attributes": { "source": "docs", "rank": 1, "verified": true }
+            }]
+        });
+        let call: FileSearchCall =
+            serde_json::from_value(call_json.clone()).expect("decode present attributes");
+        let attributes = call.results_ref().expect("results")[0]
+            .attributes_ref()
+            .expect("present attributes");
+        assert_eq!(attributes.len(), 3);
+        assert!(matches!(
+            attributes.get("verified"),
+            Some(FileSearchAttributeValue::Boolean(true))
+        ));
+        assert_eq!(
+            serde_json::to_value(&call).expect("re-encode present attributes"),
+            call_json
+        );
+
+        assert_eq!(
+            serde_json::to_value(FileSearchResult::new().attributes_null())
+                .expect("serialize builder attributes null")["attributes"],
+            Value::Null
+        );
+    }
+
+    #[test]
     fn file_search_results_and_typed_stream_parts_match_openapi_inventory() {
-        let call = FileSearchCall::new("fs_1", ResponseItemStatus::Searching, ["rust sdk"])
+        let call = FileSearchCall::new("fs_1", FileSearchToolCallStatus::Searching, ["rust sdk"])
             .results(vec![
                 FileSearchResult::new()
                     .file_id("file-1")
@@ -19897,8 +21998,8 @@ mod tests {
                 if matches!(event.annotation, Nullable::Null)
         ));
 
-        let local =
-            LocalShellCallOutput::new("lsco1", "l1", "ok").status(ResponseItemStatus::Completed);
+        let local = LocalShellCallOutput::new("lsco1", "l1", "ok")
+            .status(FunctionCallItemStatus::Completed);
         assert_eq!(
             serde_json::to_value(&local).expect("serialize local output")["status"],
             "completed"
@@ -20016,7 +22117,7 @@ mod tests {
             "/skills/lint",
         )]);
         let value = serde_json::to_value(
-            &FunctionShellTool::new().environment(FunctionShellEnvironment::Local(local)),
+            FunctionShellTool::new().environment(FunctionShellEnvironment::Local(local)),
         )
         .expect("serialize local");
         assert_eq!(value["environment"]["skills"][0]["name"], "lint");
@@ -20045,7 +22146,7 @@ mod tests {
         .expect("serde remains lossless");
         assert!(decoded.validate().is_err());
         assert!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .tool(decoded)
                 .validate()
                 .is_err()
@@ -20130,9 +22231,10 @@ mod tests {
         .expect("decode approval resource");
         assert_eq!(resource.reason(), Some("denied"));
 
-        let output = ApplyPatchCallOutputInput::new("call_ap", "completed")
-            .output("patched")
-            .caller(ToolCallCaller::direct());
+        let output =
+            ApplyPatchCallOutputInput::new("call_ap", ApplyPatchCallOutputStatus::Completed)
+                .output("patched")
+                .caller(ToolCallCaller::direct());
         let value = serde_json::to_value(&output).expect("serialize apply-patch output");
         assert_eq!(value["caller"]["type"], "direct");
         assert_eq!(value["output"], "patched");
@@ -20155,8 +22257,8 @@ mod tests {
         let search = ToolSearchCallInput::new(json!({"q": "shell"}))
             .with_id("tsc_1")
             .call_id("call_ts")
-            .execution("server")
-            .status(ResponseItemStatus::Completed);
+            .execution(ToolSearchExecution::Server)
+            .status(FunctionCallItemStatus::Completed);
         let value = serde_json::to_value(&search).expect("serialize tool search");
         assert_eq!(value["id"], "tsc_1");
         assert_eq!(value["call_id"], "call_ts");
@@ -20200,7 +22302,7 @@ mod tests {
             "incomplete_details": null,
             "instructions": null,
             "metadata": null,
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "object": "response",
             "output": [{
                 "type": "function_call_output",
@@ -20347,7 +22449,7 @@ mod tests {
 
         let patch = ApplyPatchCallInput::new(
             "call_ap",
-            "completed",
+            ApplyPatchCallStatus::Completed,
             ApplyPatchOperation::CreateFile(ApplyPatchCreateFile::new(
                 "a.rs",
                 "@@\n+fn main() {}\n",
@@ -20360,10 +22462,11 @@ mod tests {
             serde_json::to_value(&patch).expect("serialize apply-patch nulls")["caller"],
             Value::Null
         );
-        let patch_out = ApplyPatchCallOutputInput::new("call_ap", "completed")
-            .id_null()
-            .caller_null()
-            .output_null();
+        let patch_out =
+            ApplyPatchCallOutputInput::new("call_ap", ApplyPatchCallOutputStatus::Completed)
+                .id_null()
+                .caller_null()
+                .output_null();
         patch_out.validate().expect("null log text stays in range");
         assert_eq!(
             serde_json::to_value(&patch_out).expect("serialize apply-patch output nulls")["output"],
@@ -20372,7 +22475,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(
-                &AdditionalToolsInput::new(vec![ResponseTool::from(FunctionTool::new("lookup"))])
+                AdditionalToolsInput::new(vec![ResponseTool::from(FunctionTool::new("lookup"))])
                     .id_null()
             )
             .expect("serialize additional tools null")["id"],
@@ -20390,7 +22493,7 @@ mod tests {
         assert_eq!(MAX_FUNCTION_CALL_OUTPUT_CHARS, 10_485_760);
 
         assert_eq!(
-            serde_json::to_value(&CustomToolCallOutput::new("cust1", "done").caller_null())
+            serde_json::to_value(CustomToolCallOutput::new("cust1", "done").caller_null())
                 .expect("serialize custom output caller null")["caller"],
             Value::Null
         );
@@ -20403,7 +22506,7 @@ mod tests {
             "c1",
             "lookup",
             JsonText::from("{}"),
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         )
         .caller_null();
         assert_eq!(
@@ -20421,7 +22524,7 @@ mod tests {
         assert!(matches!(decoded.caller, Omittable::Value(Nullable::Null)));
 
         assert_eq!(
-            serde_json::to_value(&CustomToolCall::new("cust1", "lookup", "{}").caller_null())
+            serde_json::to_value(CustomToolCall::new("cust1", "lookup", "{}").caller_null())
                 .expect("serialize custom caller null")["caller"],
             Value::Null
         );
@@ -20465,34 +22568,35 @@ mod tests {
         ));
         assert!(
             CreateResponseRequest::new(
-                "gpt-5.6",
+                "gpt-5.6-sol",
                 vec![ResponseInputItem::Program(illegal_program)]
             )
             .validate()
             .is_err()
         );
 
-        let program_out = ProgramOutputItem::new("po1", "c_p1", "1\n", "completed");
+        let program_out =
+            ProgramOutputItem::new("po1", "c_p1", "1\n", ProgramOutputStatus::Completed);
         program_out
             .validate()
             .expect("documented program output is in range");
         assert!(matches!(
-            ProgramOutputItem::new("po1", "", "1\n", "completed").validate(),
+            ProgramOutputItem::new("po1", "", "1\n", ProgramOutputStatus::Completed).validate(),
             Err(CreateResponseConstraintError::CallId { actual: 0, .. })
         ));
 
         assert_eq!(
-            serde_json::to_value(&McpApprovalResponse::approve("apr_1").id_null())
+            serde_json::to_value(McpApprovalResponse::approve("apr_1").id_null())
                 .expect("serialize approval id null")["id"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&LocalShellCallOutput::new("ls1", "c1", "ok").status_null())
+            serde_json::to_value(LocalShellCallOutput::new("ls1", "c1", "ok").status_null())
                 .expect("serialize local-shell status null")["status"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&WebSearchOpenPageAction::new().url_null())
+            serde_json::to_value(WebSearchOpenPageAction::new().url_null())
                 .expect("serialize open-page url null")["url"],
             Value::Null
         );
@@ -20517,7 +22621,7 @@ mod tests {
             "c1",
             "lookup",
             JsonText::from("{}"),
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         )
         .caller(ToolCallCaller::program("x".repeat(65)));
         assert!(matches!(
@@ -20526,7 +22630,7 @@ mod tests {
         ));
         assert!(
             CreateResponseRequest::new(
-                "gpt-5.6",
+                "gpt-5.6-sol",
                 vec![ResponseInputItem::FunctionCall(illegal_caller)]
             )
             .validate()
@@ -20548,13 +22652,13 @@ mod tests {
         );
         let echoed = call
             .with_id("fc_1")
-            .with_status(ResponseItemStatus::Completed);
+            .with_status(FunctionCallItemStatus::Completed);
         let echoed_value = serde_json::to_value(&echoed).expect("serialize echoed function call");
         assert_eq!(echoed_value["id"], "fc_1");
         assert_eq!(echoed_value["status"], "completed");
 
         assert_eq!(
-            serde_json::to_value(&FunctionCallOutput::from_output("ok"))
+            serde_json::to_value(FunctionCallOutput::from_output("ok"))
                 .expect("serialize official required-only function output"),
             json!({
                 "type": "function_call_output",
@@ -20562,7 +22666,7 @@ mod tests {
             })
         );
         assert_eq!(
-            serde_json::to_value(&FunctionCallOutput::from_output("ok").with_call_id("c1"))
+            serde_json::to_value(FunctionCallOutput::from_output("ok").with_call_id("c1"))
                 .expect("serialize function output call_id")["call_id"],
             "c1"
         );
@@ -20611,7 +22715,7 @@ mod tests {
             })
         );
         assert_eq!(
-            serde_json::to_value(&CustomToolCallOutput::new("cust1", "done").id("cto_1"))
+            serde_json::to_value(CustomToolCallOutput::new("cust1", "done").id("cto_1"))
                 .expect("serialize custom output id")["id"],
             "cto_1"
         );
@@ -20646,7 +22750,7 @@ mod tests {
         assert_eq!(listed_value["description"], Value::Null);
         assert_eq!(listed_value["annotations"], Value::Null);
         assert_eq!(
-            serde_json::to_value(&McpListTools::new("lt_1", "docs", [listed]).error_null())
+            serde_json::to_value(McpListTools::new("lt_1", "docs", [listed]).error_null())
                 .expect("serialize list-tools error null")["error"],
             Value::Null
         );
@@ -20655,7 +22759,7 @@ mod tests {
     #[test]
     fn hosted_call_constructors_match_openapi_required_fields() {
         assert_eq!(
-            serde_json::to_value(&McpApprovalRequest::new(
+            serde_json::to_value(McpApprovalRequest::new(
                 "apr_1",
                 "docs",
                 "search",
@@ -20672,7 +22776,7 @@ mod tests {
         );
 
         let computer =
-            ComputerCall::new("cc_1", "call_cc", ResponseItemStatus::Completed).with_action(
+            ComputerCall::new("cc_1", "call_cc", FunctionCallItemStatus::Completed).with_action(
                 ComputerAction::Click(ComputerClickAction::new(ComputerClickButton::Left, 1, 2)),
             );
         let computer_value = serde_json::to_value(&computer).expect("serialize computer call");
@@ -20682,7 +22786,7 @@ mod tests {
 
         let search = WebSearchCall::new(
             "ws_1",
-            ResponseItemStatus::Completed,
+            WebSearchToolCallStatus::Completed,
             WebSearchSearchAction::new().query("openai"),
         );
         assert_eq!(
@@ -20690,24 +22794,25 @@ mod tests {
             "openai"
         );
 
-        let image = ImageGenerationCall::new("ig_1", ResponseItemStatus::InProgress);
+        let image = ImageGenerationCall::new("ig_1", ImageGenToolCallStatus::InProgress);
         assert_eq!(
             serde_json::to_value(&image).expect("serialize image-gen required null")["result"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&image.result("img_b64")).expect("serialize image-gen result")["result"],
+            serde_json::to_value(image.with_result("img_b64")).expect("serialize image-gen result")
+                ["result"],
             "img_b64"
         );
 
         let interpreter =
-            CodeInterpreterCall::new("ci_1", ResponseItemStatus::InProgress, "cntr_1");
+            CodeInterpreterCall::new("ci_1", CodeInterpreterToolCallStatus::InProgress, "cntr_1");
         let interpreter_value =
             serde_json::to_value(&interpreter).expect("serialize interpreter required nulls");
         assert_eq!(interpreter_value["code"], Value::Null);
         assert_eq!(interpreter_value["outputs"], Value::Null);
         assert_eq!(
-            serde_json::to_value(&interpreter.code("print(1)"))
+            serde_json::to_value(interpreter.with_code("print(1)"))
                 .expect("serialize interpreter code")["code"],
             "print(1)"
         );
@@ -20716,11 +22821,123 @@ mod tests {
             "ls_1",
             "call_ls",
             LocalShellExecAction::new(["echo"], [("PATH", "/bin")]),
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         );
         assert_eq!(
             serde_json::to_value(&shell).expect("serialize local shell")["action"]["type"],
             "exec"
+        );
+    }
+
+    #[test]
+    fn tool_call_output_items_expose_read_accessors() {
+        // Every hosted tool-call output item exposes at least id() and
+        // status(); failure-relevant payloads stay readable the same way
+        // python/node expose them as attributes (4-02).
+        let file_search: FileSearchCall = serde_json::from_value(json!({
+            "type": "file_search_call",
+            "id": "fs_9",
+            "status": "failed",
+            "queries": ["rust"],
+            "results": null
+        }))
+        .expect("decode file search");
+        assert_eq!(file_search.id(), "fs_9");
+        assert_eq!(file_search.status(), &ResponseItemStatus::Failed);
+        assert_eq!(file_search.results_ref(), None);
+
+        let web_search: WebSearchCall = serde_json::from_value(json!({
+            "type": "web_search_call",
+            "id": "ws_9",
+            "status": "in_progress",
+            "action": {"type": "search", "query": "openai"}
+        }))
+        .expect("decode web search");
+        assert_eq!(web_search.id(), "ws_9");
+        assert_eq!(web_search.status(), &ResponseItemStatus::InProgress);
+
+        let computer: ComputerCall = serde_json::from_value(json!({
+            "type": "computer_call",
+            "id": "cc_9",
+            "call_id": "call_cc",
+            "status": "failed",
+            "pending_safety_checks": []
+        }))
+        .expect("decode computer call");
+        assert_eq!(computer.id(), "cc_9");
+        assert_eq!(computer.call_id(), "call_cc");
+        assert_eq!(computer.status(), &ResponseItemStatus::Failed);
+
+        let shell: LocalShellCall = serde_json::from_value(json!({
+            "type": "local_shell_call",
+            "id": "ls_9",
+            "call_id": "call_ls",
+            "status": "completed",
+            "action": {"type": "exec", "command": ["ls"], "env": {}}
+        }))
+        .expect("decode local shell call");
+        assert_eq!(shell.id(), "ls_9");
+        assert_eq!(shell.call_id(), "call_ls");
+        assert_eq!(shell.status(), &ResponseItemStatus::Completed);
+
+        let image: ImageGenerationCall = serde_json::from_value(json!({
+            "type": "image_generation_call",
+            "id": "ig_9",
+            "status": "completed",
+            "result": "aGVsbG8="
+        }))
+        .expect("decode image generation call");
+        assert_eq!(image.id(), "ig_9");
+        assert_eq!(image.status(), &ResponseItemStatus::Completed);
+        assert_eq!(image.result(), Some("aGVsbG8="));
+        assert_eq!(
+            ImageGenerationCall::new("ig_n", ImageGenToolCallStatus::InProgress).result(),
+            None
+        );
+
+        let interpreter: CodeInterpreterCall = serde_json::from_value(json!({
+            "type": "code_interpreter_call",
+            "id": "ci_9",
+            "status": "interpreting",
+            "container_id": "cntr_9",
+            "code": "print(1)",
+            "outputs": null
+        }))
+        .expect("decode interpreter call");
+        assert_eq!(interpreter.id(), "ci_9");
+        assert_eq!(interpreter.status(), &ResponseItemStatus::Interpreting);
+        assert_eq!(interpreter.container_id(), "cntr_9");
+        assert_eq!(interpreter.code(), Some("print(1)"));
+        assert_eq!(
+            CodeInterpreterCall::new("ci_n", CodeInterpreterToolCallStatus::InProgress, "cntr_n")
+                .code(),
+            None
+        );
+
+        let listed = McpListTools::new("lt_9", "docs", []);
+        assert_eq!(listed.id(), "lt_9");
+        assert_eq!(listed.error(), None);
+        assert_eq!(
+            McpListTools::new("lt_9", "docs", [])
+                .with_error("connection refused")
+                .error(),
+            Some("connection refused")
+        );
+
+        let mcp: McpCall = serde_json::from_value(json!({
+            "type": "mcp_call",
+            "id": "mcp_9",
+            "server_label": "docs",
+            "name": "search",
+            "arguments": "{}",
+            "status": "failed"
+        }))
+        .expect("decode mcp call");
+        assert_eq!(mcp.id(), "mcp_9");
+        assert_eq!(mcp.status(), Some(&ResponseItemStatus::Failed));
+        assert_eq!(
+            McpCall::new("mcp_n", "docs", "search", JsonText::from("{}")).status(),
+            None
         );
     }
 
@@ -20741,7 +22958,7 @@ mod tests {
         .expect("official parameters null");
         assert_eq!(null_params.parameters, Omittable::Value(Nullable::Null));
         assert_eq!(
-            serde_json::to_value(&FunctionTool::new("lookup").parameters_null())
+            serde_json::to_value(FunctionTool::new("lookup").parameters_null())
                 .expect("serialize null parameters")["parameters"],
             Value::Null
         );
@@ -20773,7 +22990,7 @@ mod tests {
             Err(CreateResponseConstraintError::FunctionToolName { actual: 8, .. })
         ));
         assert!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .tool(illegal)
                 .validate()
                 .is_err()
@@ -20785,12 +23002,12 @@ mod tests {
             Err(CreateResponseConstraintError::EmptyAllowedCallers)
         ));
 
-        let empty_ns = NamespaceTool::new("", "desc", Vec::<ResponseTool>::new());
+        let empty_ns = NamespaceTool::new("", "desc", Vec::<NamespaceToolEntry>::new());
         assert!(matches!(
             empty_ns.validate(),
             Err(CreateResponseConstraintError::EmptyNamespaceName)
         ));
-        let no_tools = NamespaceTool::new("crm", "desc", Vec::<ResponseTool>::new());
+        let no_tools = NamespaceTool::new("crm", "desc", Vec::<NamespaceToolEntry>::new());
         assert!(matches!(
             no_tools.validate(),
             Err(CreateResponseConstraintError::EmptyNamespaceTools)
@@ -20798,7 +23015,7 @@ mod tests {
         let nested = NamespaceTool::new(
             "crm",
             "desc",
-            vec![ResponseTool::from(
+            vec![NamespaceToolEntry::from(
                 FunctionTool::new("lookup").allowed_callers(Vec::<String>::new()),
             )],
         );
@@ -20823,6 +23040,62 @@ mod tests {
         }))
         .expect("serde remains lossless");
         assert!(decoded.validate().is_err());
+    }
+
+    #[test]
+    fn namespace_tool_entries_are_function_or_custom_only() {
+        // The pinned NamespaceToolParam.tools.items union is
+        // oneOf [FunctionToolParam, CustomToolParam]; hosted tools such as
+        // web_search cannot be constructed for this position, and a nested
+        // hosted-tool tag decodes losslessly as Unknown rather than silently
+        // becoming a valid namespace member.
+        let namespace = NamespaceTool::new(
+            "crm",
+            "CRM tools",
+            vec![
+                NamespaceToolEntry::from(FunctionTool::new("lookup")),
+                NamespaceToolEntry::from(CustomTool::new("render")),
+            ],
+        );
+        let value = serde_json::to_value(&namespace).expect("serialize namespace");
+        assert_eq!(value["type"], "namespace");
+        assert_eq!(value["tools"][0]["type"], "function");
+        assert_eq!(value["tools"][1]["type"], "custom");
+        namespace
+            .validate()
+            .expect("function/custom entries are valid");
+        assert_eq!(namespace.tools().len(), 2);
+
+        let decoded: NamespaceTool =
+            serde_json::from_value(value.clone()).expect("decode namespace");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("round-trip namespace"),
+            value
+        );
+
+        let nested_hosted: NamespaceTool = serde_json::from_value(json!({
+            "type": "namespace",
+            "name": "crm",
+            "description": "CRM tools",
+            "tools": [
+                {"type": "web_search"},
+                {"type": "future_nested_tool", "name": "new"}
+            ]
+        }))
+        .expect("unofficial nested tags stay lossless");
+        assert!(matches!(
+            nested_hosted.tools()[0],
+            NamespaceToolEntry::Unknown(_)
+        ));
+        assert!(matches!(
+            nested_hosted.tools()[1],
+            NamespaceToolEntry::Unknown(_)
+        ));
+        assert_eq!(
+            serde_json::to_value(&nested_hosted).expect("round-trip unknown nested tools")["tools"]
+                [0]["type"],
+            "web_search"
+        );
     }
 
     #[test]

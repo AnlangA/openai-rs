@@ -21,8 +21,6 @@ use crate::{
 };
 
 const OK: &[StatusCode] = &[StatusCode::OK];
-const BETA_HEADER_NAME: &str = "OpenAI-Beta";
-const BETA_HEADER_VALUE: &str = "assistants=v2";
 
 /// Deprecated REST session-token facade.
 ///
@@ -44,6 +42,9 @@ impl LegacyRealtimeSessions {
     }
 
     /// Creates a legacy flat Realtime session and ephemeral token.
+    ///
+    /// The pinned operations declare no `OpenAI-Beta` header, so no beta
+    /// header is sent; `assistants=v2` belongs to the Assistants family.
     pub async fn create(
         &self,
         request: LegacyRealtimeSessionCreateRequest,
@@ -54,13 +55,7 @@ impl LegacyRealtimeSessions {
         ];
         self.client
             .transport()
-            .execute_json_with_static_header::<CreateLegacyRealtimeSession, ()>(
-                &path,
-                None,
-                Some(&request),
-                BETA_HEADER_NAME,
-                BETA_HEADER_VALUE,
-            )
+            .execute_json::<CreateLegacyRealtimeSession, ()>(&path, None, Some(&request))
             .await
     }
 
@@ -75,12 +70,10 @@ impl LegacyRealtimeSessions {
         ];
         self.client
             .transport()
-            .execute_json_with_static_header::<CreateLegacyRealtimeTranscriptionSession, ()>(
+            .execute_json::<CreateLegacyRealtimeTranscriptionSession, ()>(
                 &path,
                 None,
                 Some(&request),
-                BETA_HEADER_NAME,
-                BETA_HEADER_VALUE,
             )
             .await
     }
@@ -101,7 +94,7 @@ impl Operation for CreateLegacyRealtimeSession {
         auth: AuthScope::Platform,
         request_encoding: RequestEncoding::Json,
         response_mode: ResponseMode::Json,
-        retry: RetryClass::Never,
+        retry: RetryClass::Replayable,
         success_statuses: OK,
     };
 }
@@ -121,7 +114,7 @@ impl Operation for CreateLegacyRealtimeTranscriptionSession {
         auth: AuthScope::Platform,
         request_encoding: RequestEncoding::Json,
         response_mode: ResponseMode::Json,
-        retry: RetryClass::Never,
+        retry: RetryClass::Replayable,
         success_statuses: OK,
     };
 }
@@ -237,7 +230,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_creation_uses_fixed_beta_route_and_redacts_secret() {
+    async fn session_creation_uses_pinned_route_without_beta_header() {
         let response = json!({
             "id": "sess_001",
             "object": "realtime.session",
@@ -274,7 +267,10 @@ mod tests {
             captured.authorization.as_deref(),
             Some("Bearer test-placeholder-key")
         );
-        assert_eq!(captured.beta.as_deref(), Some("assistants=v2"));
+        assert!(
+            captured.beta.is_none(),
+            "the pinned operation declares no OpenAI-Beta header"
+        );
         assert_eq!(captured.content_type.as_deref(), Some("application/json"));
         assert_eq!(
             serde_json::from_slice::<Value>(&captured.body).expect("legacy session body"),
@@ -289,11 +285,15 @@ mod tests {
             CreateLegacyRealtimeSession::META.route,
             "/realtime/sessions"
         );
-        assert_eq!(CreateLegacyRealtimeSession::META.retry, RetryClass::Never);
+        assert_eq!(
+            CreateLegacyRealtimeSession::META.retry,
+            RetryClass::Replayable,
+            "legacy session-token issuance is idempotent"
+        );
     }
 
     #[tokio::test]
-    async fn transcription_creation_uses_fixed_beta_route_and_nullable_secret() {
+    async fn transcription_creation_uses_pinned_route_and_nullable_secret() {
         let response = json!({
             "id": "sess_transcription",
             "object": "realtime.transcription_session",
@@ -320,7 +320,10 @@ mod tests {
             .expect("captured legacy transcription request");
         assert_eq!(captured.method, Method::POST);
         assert_eq!(captured.path, "/v1/realtime/transcription_sessions");
-        assert_eq!(captured.beta.as_deref(), Some("assistants=v2"));
+        assert!(
+            captured.beta.is_none(),
+            "the pinned operation declares no OpenAI-Beta header"
+        );
         assert_eq!(
             serde_json::from_slice::<Value>(&captured.body)
                 .expect("legacy transcription request body"),
@@ -335,7 +338,8 @@ mod tests {
         );
         assert_eq!(
             CreateLegacyRealtimeTranscriptionSession::META.retry,
-            RetryClass::Never
+            RetryClass::Replayable,
+            "legacy transcription-token issuance is idempotent"
         );
     }
 }

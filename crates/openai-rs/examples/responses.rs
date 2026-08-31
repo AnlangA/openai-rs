@@ -23,10 +23,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tool = FunctionTool::for_type::<WeatherArgs>("get_weather", "Return current weather")?;
 
-    let request =
-        CreateResponseRequest::new("gpt-5.6", "What is the weather in Shenzhen?").with_tool(tool);
+    let request = CreateResponseRequest::new("gpt-5.6-sol", "What is the weather in Shenzhen?")
+        .with_tool(tool);
 
-    let response = client.responses().create(request).await?;
+    let response = client.responses().create(request.clone()).await?;
 
     if let Some(call) = response.function_calls().next() {
         let args: WeatherArgs = call.arguments_as()?;
@@ -38,11 +38,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         )?;
 
-        // Official continuation path: send only the tool output with previous_response_id
+        // `previous_response_id` does not carry the previous request's tools, so
+        // every continuation turn must resend them (the official function-calling
+        // examples do the same). `follow_up_from` copies the tools — plus other
+        // stable prefix fields — from the original request onto the follow-up.
         // (Alternatively, use response.to_input_items() for local stateless multi-turn replay)
         let follow_up = client
             .responses()
-            .create(CreateResponseRequest::follow_up(
+            .create(CreateResponseRequest::follow_up_from(
+                &request,
                 &response,
                 vec![output.into()],
             ))

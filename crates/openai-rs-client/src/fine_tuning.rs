@@ -139,6 +139,7 @@ impl FineTuningJobs {
                 let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after().map(|cursor| cursor.as_str()),
+                    page.data.last().map(|job| job.id.as_str()),
                     &mut seen,
                     "fine-tuning jobs",
                 )?;
@@ -215,6 +216,10 @@ impl FineTuningJobs {
     /// Polls until the job succeeds, fails, or is cancelled.
     ///
     /// A paused or future unknown status is intentionally non-terminal.
+    ///
+    /// Fine-tuning jobs routinely run far longer than the ten-minute
+    /// [`PollOptions::new`] deadline; start from [`PollOptions::for_fine_tuning`]
+    /// (5-second interval, 24-hour timeout) instead.
     pub async fn poll(
         &self,
         fine_tuning_job_id: &FineTuningJobId,
@@ -278,6 +283,7 @@ impl FineTuningJobEvents {
                 let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after(),
+                    page.data.last().map(|event| event.id.as_str()),
                     &mut seen,
                     "fine-tuning events",
                 )?;
@@ -339,6 +345,7 @@ impl FineTuningJobCheckpoints {
                 let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after(),
+                    page.data.last().map(|checkpoint| checkpoint.id.as_str()),
                     &mut seen,
                     "fine-tuning checkpoints",
                 )?;
@@ -368,17 +375,13 @@ impl Serialize for FineTuningJobListQuery<'_> {
     where
         S: serde::Serializer,
     {
-        use serde::ser::Error as _;
-
         let params = self.0;
+        // An explicit-null metadata filter is silently omitted, matching
+        // openai-python where `metadata=None` produces no query item.
         let metadata_len = match &params.metadata {
             Omittable::Value(Nullable::Value(metadata)) => metadata.len(),
-            Omittable::Value(Nullable::Null) | Omittable::Omitted => 0,
-            _ => {
-                return Err(S::Error::custom(
-                    "unsupported fine-tuning metadata presence state",
-                ));
-            }
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => 0,
+            _ => 0,
         };
         let mut map = serializer.serialize_map(Some(3 + metadata_len))?;
         if let Omittable::Value(after) = &params.after {
@@ -387,20 +390,9 @@ impl Serialize for FineTuningJobListQuery<'_> {
         if let Omittable::Value(limit) = &params.limit {
             map.serialize_entry("limit", limit)?;
         }
-        match &params.metadata {
-            Omittable::Value(Nullable::Value(metadata)) => {
-                for (key, value) in metadata {
-                    map.serialize_entry(&format!("metadata[{key}]"), value)?;
-                }
-            }
-            Omittable::Value(Nullable::Null) => {
-                map.serialize_entry("metadata", &serde_json::Value::Null)?;
-            }
-            Omittable::Omitted => {}
-            _ => {
-                return Err(S::Error::custom(
-                    "unsupported fine-tuning metadata presence state",
-                ));
+        if let Omittable::Value(Nullable::Value(metadata)) = &params.metadata {
+            for (key, value) in metadata {
+                map.serialize_entry(&format!("metadata[{key}]"), value)?;
             }
         }
         map.end()
@@ -838,7 +830,30 @@ mod tests {
         };
         let encoded = serde_json::to_value(FineTuningJobListQuery(&null_params))
             .expect("explicit-null metadata query encodes");
-        assert_eq!(encoded, json!({"metadata": null}));
+        assert_eq!(encoded, json!({}));
+    }
+
+    #[tokio::test]
+    async fn jobs_list_omits_null_metadata_and_empty_after_query_keys() {
+        let (client, captures) = serve_script(vec![
+            r#"{"object":"list","data":[],"has_more":false}"#.to_owned(),
+        ])
+        .await;
+        let params = ListFineTuningJobsParams {
+            after: Omittable::Value(FineTuningJobId::new("")),
+            limit: Omittable::Omitted,
+            metadata: Omittable::Value(Nullable::Null),
+        };
+        FineTuning::new(client)
+            .jobs()
+            .list(params)
+            .await
+            .expect("list fine-tuning jobs without null filters");
+
+        let captures = captures.lock().expect("capture lock");
+        // `metadata=None` and an empty `after` cursor both produce no query
+        // item, matching openai-python's empty-serialization drop rule.
+        assert_eq!(captures[0].path_and_query, "/v1/fine_tuning/jobs");
     }
 
     #[tokio::test]
@@ -1004,5 +1019,88 @@ mod tests {
         assert!(pages.next().await.expect("first page").is_ok());
         let second = pages.next().await.expect("second page result");
         assert!(matches!(second, Err(Error::InvalidConfiguration(_))));
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pages_fall_back_to_the_last_item_id_when_last_id_is_null() {
+        // `has_more=true` with a null `last_id` used to hard-fail the stream;
+        // it must advance with the final element's id like openai-python's
+        // `data[-1].id` fallback.
+        let checkpoint_page = |id: Option<&str>, has_more: bool| {
+            json!({
+                "object": "list",
+                "data": match id {
+                    Some(id) => vec![json!({
+                        "id": id,
+                        "created_at": 1,
+                        "fine_tuned_model_checkpoint": "ft:gpt-test:org:abc",
+                        "step_number": 7,
+                        "metrics": {},
+                        "fine_tuning_job_id": "ftjob_1",
+                        "object": "fine_tuning.job.checkpoint"
+                    })],
+                    None => Vec::<Value>::new(),
+                },
+                "first_id": null,
+                "last_id": null,
+                "has_more": has_more
+            })
+            .to_string()
+        };
+        let (client, captures) = serve_script(vec![
+            checkpoint_page(Some("ckpt_1"), true),
+            checkpoint_page(None, false),
+        ])
+        .await;
+        let mut pages = FineTuning::new(client).jobs().checkpoints().list_pages(
+            FineTuningJobId::new("ftjob_1"),
+            ListFineTuningCheckpointsParams::default(),
+        );
+        let first = pages
+            .next()
+            .await
+            .expect("first page")
+            .expect("first page ok");
+        assert_eq!(
+            first.data.last().map(|checkpoint| checkpoint.id.as_str()),
+            Some("ckpt_1")
+        );
+        let second = pages
+            .next()
+            .await
+            .expect("second page")
+            .expect("second page ok");
+        assert!(second.data.is_empty());
+        assert!(pages.next().await.is_none());
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 2);
+        let follow_up = Url::parse(&format!("http://loopback{}", captures[1].path_and_query))
+            .expect("follow-up URL");
+        assert!(
+            follow_up
+                .query_pairs()
+                .any(|(name, value)| name == "after" && value == "ckpt_1"),
+            "expected the last item id as the fallback cursor, got {}",
+            captures[1].path_and_query
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_pages_fail_closed_when_last_id_is_null_and_data_is_empty() {
+        let (client, _) = serve_script(vec![
+            r#"{"object":"list","data":[],"first_id":null,"last_id":null,"has_more":true}"#
+                .to_owned(),
+        ])
+        .await;
+        let mut pages = FineTuning::new(client).jobs().checkpoints().list_pages(
+            FineTuningJobId::new("ftjob_1"),
+            ListFineTuningCheckpointsParams::default(),
+        );
+        // With no usable cursor of any kind the stream fails closed instead of
+        // re-requesting the same first page forever.
+        let first = pages.next().await.expect("page result");
+        assert!(matches!(first, Err(Error::InvalidConfiguration(_))));
+        assert!(pages.next().await.is_none());
     }
 }

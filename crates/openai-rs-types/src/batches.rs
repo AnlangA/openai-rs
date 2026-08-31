@@ -161,6 +161,13 @@ pub enum BatchValidationError {
 }
 
 /// Validated string-to-string metadata used by batch objects and requests.
+///
+/// Deserialization is lossless so oversized maps returned by the service still
+/// decode; the documented 16/64/512 limits are enforced by [`insert`] and the
+/// opt-in [`validate`] hooks instead (D0015/D0017 policy).
+///
+/// [`insert`]: BatchMetadata::insert
+/// [`validate`]: BatchMetadata::validate
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct BatchMetadata(BTreeMap<String, String>);
 
@@ -187,6 +194,15 @@ impl BatchMetadata {
             });
         }
         Ok(self.0.insert(key, value))
+    }
+
+    /// Checks the documented map limits without mutating this value.
+    ///
+    /// Decoding accepts oversized metadata so responses stay readable; senders
+    /// that want the documented limits enforced before a request call this
+    /// method or [`CreateBatchRequest::validate`].
+    pub fn validate(&self) -> Result<(), BatchValidationError> {
+        validate_metadata(&self.0)
     }
 
     /// Returns a metadata value.
@@ -253,8 +269,7 @@ impl<'de> Deserialize<'de> for BatchMetadata {
     where
         D: Deserializer<'de>,
     {
-        let value = BTreeMap::<String, String>::deserialize(deserializer)?;
-        Self::try_from(value).map_err(serde::de::Error::custom)
+        BTreeMap::<String, String>::deserialize(deserializer).map(Self)
     }
 }
 
@@ -397,6 +412,18 @@ impl CreateBatchRequest {
     pub fn with_output_expiration(mut self, expiration: BatchFileExpirationAfter) -> Self {
         self.output_expires_after = Omittable::Value(expiration);
         self
+    }
+
+    /// Checks the documented metadata limits without sending the request.
+    ///
+    /// Decoding stays lossless (see [`BatchMetadata`]), so oversized maps can
+    /// still be constructed or echoed; this opt-in hook enforces the pinned
+    /// 16/64/512 limits before the body is transmitted.
+    pub fn validate(&self) -> Result<(), BatchValidationError> {
+        if let Omittable::Value(Nullable::Value(metadata)) = &self.metadata {
+            metadata.validate()?;
+        }
+        Ok(())
     }
 
     /// Returns the input file identifier.
@@ -925,10 +952,11 @@ impl Batch {
     }
 }
 
-/// Default and maximum page size for batch listing.
+/// Default page size for batch listing.
+///
+/// The pinned schema and official SDKs document a default of 20 but impose no
+/// `maximum`, so no upper bound is invented here.
 pub const DEFAULT_BATCH_LIST_LIMIT: u32 = 20;
-/// Maximum page size for batch listing.
-pub const MAX_BATCH_LIST_LIMIT: u32 = 100;
 
 /// Validated batch list page size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -936,9 +964,9 @@ pub const MAX_BATCH_LIST_LIMIT: u32 = 100;
 pub struct BatchListLimit(u32);
 
 impl BatchListLimit {
-    /// Creates a page size in `1..=100`.
+    /// Creates a page size of at least 1.
     pub const fn new(value: u32) -> Result<Self, BatchListLimitError> {
-        if value == 0 || value > MAX_BATCH_LIST_LIMIT {
+        if value == 0 {
             Err(BatchListLimitError { value })
         } else {
             Ok(Self(value))
@@ -964,7 +992,7 @@ impl<'de> Deserialize<'de> for BatchListLimit {
 
 /// Invalid batch list page size.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-#[error("batch list limit must be between 1 and {MAX_BATCH_LIST_LIMIT}, got {value}")]
+#[error("batch list limit must be at least 1, got {value}")]
 pub struct BatchListLimitError {
     value: u32,
 }
@@ -1089,12 +1117,16 @@ impl ListBatchesResponse {
 }
 
 /// Validated caller-chosen identifier used to correlate batch results.
+///
+/// The official input format requires a non-empty identifier on request lines,
+/// which [`BatchLine::new`] enforces. Output files echo the caller's value, so
+/// deserialization is deliberately lossless and also accepts an empty echo.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct BatchCustomId(Box<str>);
 
 impl BatchCustomId {
-    /// Creates a non-empty custom identifier.
+    /// Creates a non-empty custom identifier for an input line.
     pub fn new(value: impl Into<Box<str>>) -> Result<Self, BatchValidationError> {
         let value = value.into();
         if value.is_empty() {
@@ -1115,19 +1147,22 @@ impl<'de> Deserialize<'de> for BatchCustomId {
     where
         D: Deserializer<'de>,
     {
-        let value = Box::<str>::deserialize(deserializer)?;
-        Self::new(value).map_err(serde::de::Error::custom)
+        Box::<str>::deserialize(deserializer).map(Self)
     }
 }
 
 /// One typed request line in a Batch API input JSONL file.
+///
+/// Unknown envelope properties are retained like the output-line types, so a
+/// future envelope field never makes an input file unreadable.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct BatchLine<O> {
     custom_id: BatchCustomId,
     method: BatchHttpMethod,
     url: BatchEndpoint,
     body: O,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl<O> BatchLine<O> {
@@ -1142,6 +1177,7 @@ impl<O> BatchLine<O> {
             method: BatchHttpMethod::Post,
             url: endpoint,
             body,
+            extra: ExtraFields::default(),
         })
     }
 
@@ -1167,6 +1203,12 @@ impl<O> BatchLine<O> {
     #[must_use]
     pub fn into_body(self) -> O {
         self.body
+    }
+
+    /// Unknown envelope properties retained from the wire.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -2007,6 +2049,158 @@ mod tests {
         metadata.insert("job", "nightly").expect("valid metadata");
         let value = serde_json::to_value(base.with_metadata(metadata)).expect("serialize metadata");
         assert_eq!(value["metadata"]["job"], "nightly");
+    }
+
+    #[test]
+    fn oversized_batch_metadata_decodes_and_request_validate_rejects() {
+        let oversized = (0..=MAX_BATCH_METADATA_PROPERTIES)
+            .map(|index| (format!("k{index}"), json!("v")))
+            .collect::<serde_json::Map<_, _>>();
+
+        // Response-side decoding is lossless: the service echo stays readable
+        // even when it exceeds the documented limits.
+        let mut response = minimal_batch();
+        response["metadata"] = serde_json::Value::Object(oversized.clone());
+        let batch: Batch = serde_json::from_value(response.clone()).expect("decode batch");
+        let Omittable::Value(Nullable::Value(metadata)) = batch.metadata() else {
+            panic!("oversized metadata must decode as a value");
+        };
+        assert_eq!(metadata.len(), MAX_BATCH_METADATA_PROPERTIES + 1);
+        assert_eq!(
+            metadata
+                .validate()
+                .expect_err("oversized map fails the opt-in check")
+                .to_string(),
+            BatchValidationError::TooManyMetadataProperties {
+                actual: MAX_BATCH_METADATA_PROPERTIES + 1,
+                maximum: MAX_BATCH_METADATA_PROPERTIES,
+            }
+            .to_string()
+        );
+        assert_eq!(serde_json::to_value(batch).expect("re-encode"), response);
+
+        let decoded: BatchMetadata =
+            serde_json::from_value(serde_json::Value::Object(oversized)).expect("lossless decode");
+        let request = CreateBatchRequest::new("file-input", BatchEndpoint::Responses)
+            .with_metadata(decoded)
+            .validate();
+        assert!(matches!(
+            request,
+            Err(BatchValidationError::TooManyMetadataProperties { .. })
+        ));
+
+        let long_key: BatchMetadata = serde_json::from_value(Value::Object(
+            [(
+                "k".repeat(MAX_BATCH_METADATA_KEY_CHARS + 1),
+                Value::from("v"),
+            )]
+            .into_iter()
+            .collect(),
+        ))
+        .expect("oversized key stays decodable");
+        assert!(matches!(
+            CreateBatchRequest::new("file-input", BatchEndpoint::Responses)
+                .with_metadata(long_key)
+                .validate(),
+            Err(BatchValidationError::MetadataKeyTooLong { .. })
+        ));
+
+        let long_value: BatchMetadata =
+            serde_json::from_value(json!({"k": "v".repeat(MAX_BATCH_METADATA_VALUE_CHARS + 1)}))
+                .expect("oversized value stays decodable");
+        assert!(matches!(
+            CreateBatchRequest::new("file-input", BatchEndpoint::Responses)
+                .with_metadata(long_value)
+                .validate(),
+            Err(BatchValidationError::MetadataValueTooLong { .. })
+        ));
+
+        // Omitted and explicit-null metadata never trip the opt-in check.
+        CreateBatchRequest::new("file-input", BatchEndpoint::Responses)
+            .validate()
+            .expect("omitted metadata validates");
+        CreateBatchRequest::new("file-input", BatchEndpoint::Responses)
+            .with_metadata_null()
+            .validate()
+            .expect("explicit null validates");
+    }
+
+    #[test]
+    fn batch_custom_id_decode_is_lossless_while_input_construction_rejects_empty() {
+        assert!(matches!(
+            BatchCustomId::new(""),
+            Err(BatchValidationError::EmptyCustomId)
+        ));
+        assert!(BatchLine::new("", BatchEndpoint::Responses, json!({})).is_err());
+
+        // Output files echo the caller's identifier; an empty echo must not
+        // make the whole result file unreadable.
+        let empty_id: BatchCustomId = serde_json::from_value(json!("")).expect("lossless decode");
+        assert_eq!(empty_id.as_str(), "");
+
+        let line: BatchResultLine<serde_json::Value> = serde_json::from_value(json!({
+            "id": "batch_req_1",
+            "custom_id": "",
+            "response": {"status_code": 200, "request_id": "req_1", "body": {"ok": true}},
+            "error": null
+        }))
+        .expect("decode result line with empty echo");
+        assert_eq!(line.custom_id().as_str(), "");
+    }
+
+    #[test]
+    fn batch_list_limit_requires_at_least_one() {
+        // The pinned schema documents "between 1 and 100" in prose but has no
+        // `maximum`, and the official Python SDK passes the value through
+        // unbounded, so only the lower bound is enforced.
+        assert!(BatchListLimit::new(0).is_err());
+        assert!(serde_json::from_str::<BatchListLimit>("0").is_err());
+        assert_eq!(
+            BatchListLimit::new(1).expect("minimum is valid").get(),
+            1_u32
+        );
+        assert_eq!(
+            BatchListLimit::new(u32::MAX)
+                .expect("no invented upper bound")
+                .get(),
+            u32::MAX
+        );
+        assert_eq!(
+            serde_json::from_str::<BatchListLimit>("101")
+                .expect("value above the documented prose ceiling stays valid")
+                .get(),
+            101_u32
+        );
+    }
+
+    #[test]
+    fn batch_line_retains_unknown_envelope_fields() {
+        let wire = json!({
+            "custom_id": "line-1",
+            "method": "POST",
+            "url": "/v1/responses",
+            "body": {"model": "gpt-test"},
+            "priority": "high",
+            "future_envelope": {"retained": true}
+        });
+        let line: BatchLine<serde_json::Value> =
+            serde_json::from_value(wire.clone()).expect("decode line with future envelope");
+        assert_eq!(line.extra_fields().get("priority"), Some(&json!("high")));
+        assert_eq!(
+            line.extra_fields().get("future_envelope"),
+            Some(&json!({"retained": true}))
+        );
+        assert_eq!(serde_json::to_value(line).expect("re-encode"), wire);
+
+        // A line built through the constructor carries no extra fields and
+        // still round-trips through the typed writer/reader pair.
+        let built = BatchLine::new("line-2", BatchEndpoint::Responses, json!({"ok": true}))
+            .expect("valid line");
+        assert!(built.extra_fields().is_empty());
+        let encoded = serde_json::to_vec(&built).expect("encode built line");
+        let decoded: BatchLine<serde_json::Value> =
+            serde_json::from_slice(&encoded).expect("decode built line");
+        assert_eq!(decoded, built);
     }
 
     #[test]

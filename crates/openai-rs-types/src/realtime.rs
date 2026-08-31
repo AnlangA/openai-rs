@@ -37,6 +37,9 @@ pub const MIN_REALTIME_IDLE_TIMEOUT_MS: i64 = 5_000;
 pub const MAX_REALTIME_IDLE_TIMEOUT_MS: i64 = 30_000;
 /// Inclusive maximum for official Realtime client `event_id` strings.
 pub const MAX_REALTIME_EVENT_ID_CHARS: usize = 512;
+/// The only sample rate pinned for Realtime PCM audio (`rate` allows exactly
+/// one integer, `24000`).
+pub const REALTIME_PCM_SAMPLE_RATE: i64 = 24_000;
 
 /// A Realtime create-request value that violates a pinned OpenAPI constraint.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -103,6 +106,14 @@ pub enum CreateRealtimeSessionConstraintError {
         /// Contract minimum.
         minimum: i64,
     },
+    /// A present `audio/pcm` `rate` is not the pinned 24kHz sample rate.
+    #[error("pcm audio rate must be {expected}, got {actual}")]
+    PcmRate {
+        /// Rejected value.
+        actual: i64,
+        /// The only pinned sample rate.
+        expected: i64,
+    },
 }
 
 fn validate_realtime_output_speed(speed: f64) -> Result<(), CreateRealtimeSessionConstraintError> {
@@ -147,9 +158,27 @@ fn validate_omittable_event_id(
     Ok(())
 }
 
+fn validate_realtime_audio_format(
+    format: &RealtimeAudioFormat,
+) -> Result<(), CreateRealtimeSessionConstraintError> {
+    if let RealtimeAudioFormat::Pcm(pcm) = format
+        && let Omittable::Value(rate) = &pcm.rate
+        && let Some(actual) = rate.unknown_value()
+    {
+        return Err(CreateRealtimeSessionConstraintError::PcmRate {
+            actual,
+            expected: REALTIME_PCM_SAMPLE_RATE,
+        });
+    }
+    Ok(())
+}
+
 fn validate_realtime_audio_input(
     input: &RealtimeAudioInputConfig,
 ) -> Result<(), CreateRealtimeSessionConstraintError> {
+    if let Omittable::Value(format) = &input.format {
+        validate_realtime_audio_format(format)?;
+    }
     if let Omittable::Value(Nullable::Value(transcription)) = &input.transcription
         && let Omittable::Value(languages) = &transcription.languages
         && languages.is_empty()
@@ -365,6 +394,21 @@ open_string_enum! {
 }
 
 open_string_enum! {
+    /// How long a transcription session waits before emitting text.
+    ///
+    /// The pinned `AudioTranscription.delay` enum happens to share its wire
+    /// values with [`RealtimeReasoningEffort`], but the two govern unrelated
+    /// behavior, so they are modeled as distinct types.
+    pub enum RealtimeTranscriptionDelay {
+        Minimal = "minimal",
+        Low = "low",
+        Medium = "medium",
+        High = "high",
+        XHigh = "xhigh"
+    }
+}
+
+open_string_enum! {
     /// Built-in Realtime voice name.
     pub enum RealtimeVoiceName {
         Alloy = "alloy",
@@ -448,13 +492,82 @@ literal_tag!(RealtimePcmTag, Pcm, "audio/pcm");
 literal_tag!(RealtimePcmuTag, Pcmu, "audio/pcmu");
 literal_tag!(RealtimePcmaTag, Pcma, "audio/pcma");
 
+/// Sample rate of `audio/pcm` audio.
+///
+/// The pinned OpenAPI schema allows exactly one rate, 24kHz, so the pinned
+/// value is a named variant and every other integer decodes into
+/// [`RealtimePcmRate::Unknown`] verbatim, keeping decoded sessions lossless.
+/// Sending a non-pinned rate stays possible only through this explicit
+/// escape hatch and is rejected by the request-side `validate()` checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RealtimePcmRate {
+    /// The pinned 24kHz sample rate.
+    Rate24000,
+    /// A sample rate added by the service after this crate was released.
+    Unknown(i64),
+}
+
+impl RealtimePcmRate {
+    /// Parses a wire value while retaining unknown integers verbatim.
+    #[must_use]
+    pub const fn from_raw(value: i64) -> Self {
+        match value {
+            REALTIME_PCM_SAMPLE_RATE => Self::Rate24000,
+            other => Self::Unknown(other),
+        }
+    }
+
+    /// Returns the exact integer used on the wire.
+    #[must_use]
+    pub const fn as_i64(&self) -> i64 {
+        match self {
+            Self::Rate24000 => REALTIME_PCM_SAMPLE_RATE,
+            Self::Unknown(value) => *value,
+        }
+    }
+
+    /// Returns whether this crate knows the wire value.
+    #[must_use]
+    pub const fn is_known(&self) -> bool {
+        !matches!(self, Self::Unknown(_))
+    }
+
+    /// Returns the raw value only when it is unknown to this crate.
+    #[must_use]
+    pub const fn unknown_value(&self) -> Option<i64> {
+        match self {
+            Self::Unknown(value) => Some(*value),
+            Self::Rate24000 => None,
+        }
+    }
+}
+
+impl Serialize for RealtimePcmRate {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_i64(self.as_i64())
+    }
+}
+
+impl<'de> Deserialize<'de> for RealtimePcmRate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        i64::deserialize(deserializer).map(Self::from_raw)
+    }
+}
+
 /// PCM audio format. GA Realtime currently uses 24kHz PCM.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimePcmAudioFormat {
     #[serde(rename = "type")]
     kind: RealtimePcmTag,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub rate: Omittable<i64>,
+    pub rate: Omittable<RealtimePcmRate>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -465,7 +578,7 @@ impl RealtimePcmAudioFormat {
     pub fn pcm24k() -> Self {
         Self {
             kind: RealtimePcmTag::Pcm,
-            rate: Omittable::Value(24_000),
+            rate: Omittable::Value(RealtimePcmRate::Rate24000),
             extra: ExtraFields::new(),
         }
     }
@@ -625,7 +738,7 @@ pub struct RealtimeAudioTranscription {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub prompt: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub delay: Omittable<RealtimeReasoningEffort>,
+    pub delay: Omittable<RealtimeTranscriptionDelay>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1284,10 +1397,13 @@ impl RealtimeSessionCreateRequest {
             if let Omittable::Value(input) = &audio.input {
                 validate_realtime_audio_input(input)?;
             }
-            if let Omittable::Value(output) = &audio.output
-                && let Omittable::Value(speed) = output.speed
-            {
-                validate_realtime_output_speed(speed)?;
+            if let Omittable::Value(output) = &audio.output {
+                if let Omittable::Value(format) = &output.format {
+                    validate_realtime_audio_format(format)?;
+                }
+                if let Omittable::Value(speed) = output.speed {
+                    validate_realtime_output_speed(speed)?;
+                }
             }
         }
         if let Omittable::Value(RealtimeTruncation::RetentionRatio(truncation)) = &self.truncation {
@@ -3079,7 +3195,11 @@ impl RealtimeCallRejectRequest {
 pub struct RealtimeCallHangupRequest;
 
 /// One SIP header delivered with an incoming-call webhook.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// SIP INVITE headers can carry `Authorization` and `Proxy-Authorization`
+/// credentials, so the redacted [`fmt::Debug`] implementation never prints the
+/// header name or value.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeSipHeader {
     pub name: String,
     pub value: String,
@@ -3087,13 +3207,35 @@ pub struct RealtimeSipHeader {
     extra: ExtraFields,
 }
 
+impl fmt::Debug for RealtimeSipHeader {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RealtimeSipHeader")
+            .field("extra_fields", &self.extra)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Data attached to `realtime.call.incoming`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// The SIP headers can carry credentials, so the redacted [`fmt::Debug`]
+/// implementation reports only their count.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeCallIncomingData {
     pub call_id: String,
     pub sip_headers: Vec<RealtimeSipHeader>,
     #[serde(flatten)]
     extra: ExtraFields,
+}
+
+impl fmt::Debug for RealtimeCallIncomingData {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RealtimeCallIncomingData")
+            .field("sip_header_count", &self.sip_headers.len())
+            .field("extra_fields", &self.extra)
+            .finish_non_exhaustive()
+    }
 }
 
 literal_tag!(RealtimeIncomingWebhookObjectTag, Event, "event");
@@ -3104,17 +3246,48 @@ literal_tag!(
 );
 
 /// Incoming SIP-call webhook event.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// The pinned schema leaves `object` optional, so the marker is decoded
+/// losslessly and reported through [`Self::object_marker_present`]. The
+/// redacted [`fmt::Debug`] implementation never prints the payload, which can
+/// carry SIP credentials.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct WebhookRealtimeCallIncoming {
     pub created_at: i64,
     pub id: String,
     pub data: RealtimeCallIncomingData,
-    #[serde(rename = "object")]
-    object: RealtimeIncomingWebhookObjectTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    object: Omittable<RealtimeIncomingWebhookObjectTag>,
     #[serde(rename = "type")]
     kind: RealtimeIncomingWebhookTypeTag,
     #[serde(flatten)]
     extra: ExtraFields,
+}
+
+impl WebhookRealtimeCallIncoming {
+    /// Returns the exact, known discriminator.
+    #[must_use]
+    pub const fn event_type(&self) -> &'static str {
+        "realtime.call.incoming"
+    }
+
+    /// Returns whether the optional `object = "event"` marker was present.
+    #[must_use]
+    pub fn object_marker_present(&self) -> bool {
+        self.object.is_value()
+    }
+}
+
+impl fmt::Debug for WebhookRealtimeCallIncoming {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WebhookRealtimeCallIncoming")
+            .field("event_type", &"realtime.call.incoming")
+            .field("created_at", &self.created_at)
+            .field("object_marker_present", &self.object_marker_present())
+            .field("extra_fields", &self.extra)
+            .finish_non_exhaustive()
+    }
 }
 
 macro_rules! client_event_struct {
@@ -5149,12 +5322,173 @@ mod tests {
                 "call_id": "rtc_1",
                 "sip_headers": [{"name": "From", "value": "sip:user@example.com"}]
             },
-            "object": "event",
             "type": "realtime.call.incoming"
         });
         let decoded: WebhookRealtimeCallIncoming =
             serde_json::from_value(webhook.clone()).expect("webhook decodes");
+        assert_eq!(decoded.event_type(), "realtime.call.incoming");
+        assert!(!decoded.object_marker_present());
         assert_eq!(serde_json::to_value(decoded).expect("encode"), webhook);
+    }
+
+    #[test]
+    fn realtime_incoming_webhook_decodes_without_optional_object_marker() {
+        let official = json!({
+            "created_at": 1_756_310_470_i64,
+            "id": "evt_273145",
+            "data": {
+                "call_id": "rtc_abc123",
+                "sip_headers": [
+                    {"name": "From", "value": "sip:caller@example.com"}
+                ]
+            },
+            "type": "realtime.call.incoming"
+        });
+        let decoded: WebhookRealtimeCallIncoming =
+            serde_json::from_value(official.clone()).expect("official payload omits object");
+        assert!(!decoded.object_marker_present());
+        assert_eq!(decoded.data.call_id, "rtc_abc123");
+        assert_eq!(decoded.data.sip_headers.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("encode"),
+            official,
+            "round trip stays lossless without the optional marker"
+        );
+
+        let with_marker = json!({
+            "created_at": 1,
+            "id": "evt_2",
+            "data": {"call_id": "rtc_2", "sip_headers": []},
+            "object": "event",
+            "type": "realtime.call.incoming"
+        });
+        let decoded: WebhookRealtimeCallIncoming =
+            serde_json::from_value(with_marker.clone()).expect("marker still accepted");
+        assert!(decoded.object_marker_present());
+        assert_eq!(serde_json::to_value(&decoded).expect("encode"), with_marker);
+    }
+
+    #[test]
+    fn realtime_incoming_webhook_debug_does_not_leak_sip_credentials() {
+        let decoded: WebhookRealtimeCallIncoming = serde_json::from_value(json!({
+            "created_at": 1,
+            "id": "evt_leak",
+            "data": {
+                "call_id": "rtc_leak",
+                "sip_headers": [
+                    {"name": "Authorization", "value": "Bearer sip-secret-token"},
+                    {"name": "Proxy-Authorization", "value": "Digest payload-secret"},
+                    {"name": "From", "value": "sip:caller@example.com"}
+                ]
+            },
+            "type": "realtime.call.incoming"
+        }))
+        .expect("webhook with credentials decodes");
+
+        for formatted in [
+            format!("{decoded:?}"),
+            format!("{decoded:#?}"),
+            format!("{:?}", decoded.data),
+            format!("{:#?}", decoded.data.sip_headers[0]),
+        ] {
+            assert!(
+                !formatted.contains("sip-secret-token"),
+                "leaked token: {formatted}"
+            );
+            assert!(
+                !formatted.contains("payload-secret"),
+                "leaked secret: {formatted}"
+            );
+            assert!(
+                !formatted.contains("Authorization"),
+                "leaked header name: {formatted}"
+            );
+            assert!(
+                !formatted.contains("caller@example.com"),
+                "leaked identity: {formatted}"
+            );
+        }
+
+        let debug = format!("{decoded:#?}");
+        assert!(debug.contains("realtime.call.incoming"));
+        assert!(debug.contains("created_at"));
+        assert!(format!("{:#?}", decoded.data).contains("sip_header_count"));
+    }
+
+    #[test]
+    fn realtime_incoming_webhook_extra_fields_are_readable() {
+        let wire = json!({
+            "created_at": 1_756_310_470_i64,
+            "id": "evt_extra",
+            "object": "event",
+            "future_top_level": {"nested": true},
+            "data": {
+                "call_id": "rtc_extra",
+                "sip_headers": [{"name": "From", "value": "sip:caller@example.com"}],
+                "future_data": "kept"
+            },
+            "type": "realtime.call.incoming"
+        });
+        let decoded: WebhookRealtimeCallIncoming =
+            serde_json::from_value(wire.clone()).expect("webhook with future fields decodes");
+
+        let top_level = decoded.extra_fields();
+        assert_eq!(
+            top_level.get("future_top_level"),
+            Some(&json!({"nested": true}))
+        );
+        assert!(top_level.contains_key("future_top_level"));
+        assert_eq!(top_level.len(), 1);
+
+        let data = decoded.data.extra_fields();
+        assert_eq!(data.get("future_data"), Some(&json!("kept")));
+        assert_eq!(data.keys().collect::<Vec<_>>(), vec!["future_data"]);
+
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode keeps unknown fields"),
+            wire,
+            "read-only accessors never disturb the lossless wire shape"
+        );
+    }
+
+    #[test]
+    fn transcription_delay_uses_dedicated_enum_domain() {
+        let transcription: RealtimeAudioTranscription = serde_json::from_value(json!({
+            "model": "gpt-realtime-whisper",
+            "delay": "xhigh"
+        }))
+        .expect("official delay value decodes");
+        assert_eq!(
+            transcription.delay,
+            Omittable::Value(RealtimeTranscriptionDelay::XHigh)
+        );
+        assert_eq!(
+            serde_json::to_value(&transcription).expect("encode")["delay"],
+            "xhigh"
+        );
+
+        let future: RealtimeAudioTranscription = serde_json::from_value(json!({
+            "model": "gpt-realtime-whisper",
+            "delay": "ultra"
+        }))
+        .expect("unknown delay values stay lossless");
+        assert_eq!(
+            future.delay,
+            Omittable::Value(RealtimeTranscriptionDelay::Unknown("ultra".into()))
+        );
+
+        let effort: RealtimeSessionCreateRequest = serde_json::from_value(json!({
+            "type": "realtime",
+            "reasoning": {"effort": "high"}
+        }))
+        .expect("reasoning effort keeps its own type");
+        let Omittable::Value(reasoning) = effort.reasoning else {
+            panic!("expected reasoning");
+        };
+        assert_eq!(
+            reasoning.effort,
+            Omittable::Value(RealtimeReasoningEffort::High)
+        );
     }
 
     #[test]
@@ -5432,24 +5766,28 @@ mod tests {
             Value::Null
         );
 
-        let mut ok = RealtimeSessionCreateRequest::default();
-        ok.audio = Omittable::Value(RealtimeSessionAudio {
-            output: Omittable::Value(RealtimeAudioOutputConfig {
-                speed: Omittable::Value(MIN_REALTIME_OUTPUT_SPEED),
-                ..RealtimeAudioOutputConfig::default()
+        let ok = RealtimeSessionCreateRequest {
+            audio: Omittable::Value(RealtimeSessionAudio {
+                output: Omittable::Value(RealtimeAudioOutputConfig {
+                    speed: Omittable::Value(MIN_REALTIME_OUTPUT_SPEED),
+                    ..RealtimeAudioOutputConfig::default()
+                }),
+                ..RealtimeSessionAudio::default()
             }),
-            ..RealtimeSessionAudio::default()
-        });
+            ..RealtimeSessionCreateRequest::default()
+        };
         ok.validate().expect("0.25 is accepted");
 
-        let mut over = RealtimeSessionCreateRequest::default();
-        over.audio = Omittable::Value(RealtimeSessionAudio {
-            output: Omittable::Value(RealtimeAudioOutputConfig {
-                speed: Omittable::Value(1.51),
-                ..RealtimeAudioOutputConfig::default()
+        let over = RealtimeSessionCreateRequest {
+            audio: Omittable::Value(RealtimeSessionAudio {
+                output: Omittable::Value(RealtimeAudioOutputConfig {
+                    speed: Omittable::Value(1.51),
+                    ..RealtimeAudioOutputConfig::default()
+                }),
+                ..RealtimeSessionAudio::default()
             }),
-            ..RealtimeSessionAudio::default()
-        });
+            ..RealtimeSessionCreateRequest::default()
+        };
         assert!(matches!(
             over.validate(),
             Err(CreateRealtimeSessionConstraintError::OutputSpeed { .. })
@@ -5461,10 +5799,12 @@ mod tests {
         .expect("serde remains lossless");
         assert!(decoded.validate().is_err());
 
-        let mut ratio = RealtimeSessionCreateRequest::default();
-        ratio.truncation = Omittable::Value(RealtimeTruncation::RetentionRatio(
-            RealtimeRetentionRatioTruncation::new(1.0),
-        ));
+        let mut ratio = RealtimeSessionCreateRequest {
+            truncation: Omittable::Value(RealtimeTruncation::RetentionRatio(
+                RealtimeRetentionRatioTruncation::new(1.0),
+            )),
+            ..RealtimeSessionCreateRequest::default()
+        };
         ratio.validate().expect("retention_ratio 1.0 is accepted");
         ratio.truncation = Omittable::Value(RealtimeTruncation::RetentionRatio(
             RealtimeRetentionRatioTruncation::new(1.1),
@@ -5479,9 +5819,10 @@ mod tests {
             post_instructions: Omittable::Value(MIN_REALTIME_POST_INSTRUCTIONS),
             extra: ExtraFields::new(),
         });
-        let mut session = RealtimeSessionCreateRequest::default();
-        session.truncation =
-            Omittable::Value(RealtimeTruncation::RetentionRatio(post_instructions));
+        let session = RealtimeSessionCreateRequest {
+            truncation: Omittable::Value(RealtimeTruncation::RetentionRatio(post_instructions)),
+            ..RealtimeSessionCreateRequest::default()
+        };
         session
             .validate()
             .expect("official post_instructions 0 is accepted");
@@ -5502,21 +5843,23 @@ mod tests {
             })
         ));
 
-        let mut idle = RealtimeSessionCreateRequest::default();
-        idle.audio = Omittable::Value(RealtimeSessionAudio {
-            input: Omittable::Value(RealtimeAudioInputConfig {
-                turn_detection: Omittable::Value(Nullable::Value(
-                    RealtimeTurnDetection::ServerVad(RealtimeServerVad {
-                        idle_timeout_ms: Omittable::Value(Nullable::Value(
-                            MIN_REALTIME_IDLE_TIMEOUT_MS,
-                        )),
-                        ..RealtimeServerVad::default()
-                    }),
-                )),
-                ..RealtimeAudioInputConfig::default()
+        let idle = RealtimeSessionCreateRequest {
+            audio: Omittable::Value(RealtimeSessionAudio {
+                input: Omittable::Value(RealtimeAudioInputConfig {
+                    turn_detection: Omittable::Value(Nullable::Value(
+                        RealtimeTurnDetection::ServerVad(RealtimeServerVad {
+                            idle_timeout_ms: Omittable::Value(Nullable::Value(
+                                MIN_REALTIME_IDLE_TIMEOUT_MS,
+                            )),
+                            ..RealtimeServerVad::default()
+                        }),
+                    )),
+                    ..RealtimeAudioInputConfig::default()
+                }),
+                ..RealtimeSessionAudio::default()
             }),
-            ..RealtimeSessionAudio::default()
-        });
+            ..RealtimeSessionCreateRequest::default()
+        };
         idle.validate().expect("idle_timeout_ms 5000 is accepted");
         let decoded_idle: RealtimeSessionCreateRequest = serde_json::from_value(json!({
             "type": "realtime",
@@ -5532,27 +5875,31 @@ mod tests {
             Err(CreateRealtimeSessionConstraintError::IdleTimeout { actual: 4999, .. })
         ));
 
-        let mut languages = RealtimeSessionCreateRequest::default();
-        languages.audio = Omittable::Value(RealtimeSessionAudio {
-            input: Omittable::Value(RealtimeAudioInputConfig {
-                transcription: Omittable::Value(Nullable::Value(RealtimeAudioTranscription {
-                    languages: Omittable::Value(Vec::new()),
-                    ..RealtimeAudioTranscription::default()
-                })),
-                ..RealtimeAudioInputConfig::default()
+        let languages = RealtimeSessionCreateRequest {
+            audio: Omittable::Value(RealtimeSessionAudio {
+                input: Omittable::Value(RealtimeAudioInputConfig {
+                    transcription: Omittable::Value(Nullable::Value(RealtimeAudioTranscription {
+                        languages: Omittable::Value(Vec::new()),
+                        ..RealtimeAudioTranscription::default()
+                    })),
+                    ..RealtimeAudioInputConfig::default()
+                }),
+                ..RealtimeSessionAudio::default()
             }),
-            ..RealtimeSessionAudio::default()
-        });
+            ..RealtimeSessionCreateRequest::default()
+        };
         assert!(matches!(
             languages.validate(),
             Err(CreateRealtimeSessionConstraintError::EmptyTranscriptionLanguages)
         ));
 
-        let mut secret = RealtimeCreateClientSecretRequest::default();
-        secret.expires_after = Omittable::Value(RealtimeClientSecretExpiration {
-            seconds: Omittable::Value(MIN_REALTIME_CLIENT_SECRET_SECONDS),
-            ..RealtimeClientSecretExpiration::default()
-        });
+        let mut secret = RealtimeCreateClientSecretRequest {
+            expires_after: Omittable::Value(RealtimeClientSecretExpiration {
+                seconds: Omittable::Value(MIN_REALTIME_CLIENT_SECRET_SECONDS),
+                ..RealtimeClientSecretExpiration::default()
+            }),
+            ..RealtimeCreateClientSecretRequest::default()
+        };
         secret.validate().expect("10-second secret is accepted");
         secret.expires_after = Omittable::Value(RealtimeClientSecretExpiration {
             seconds: Omittable::Value(7_201),
@@ -5611,6 +5958,105 @@ mod tests {
             .validate(),
             Err(CreateRealtimeSessionConstraintError::EventId { actual: 513, .. })
         ));
+    }
+
+    #[test]
+    fn realtime_pcm_rate_pins_24000_and_keeps_unknown_rates_lossless() {
+        assert_eq!(
+            RealtimePcmRate::from_raw(REALTIME_PCM_SAMPLE_RATE),
+            RealtimePcmRate::Rate24000
+        );
+        assert!(RealtimePcmRate::from_raw(24_000).is_known());
+        assert_eq!(RealtimePcmRate::Rate24000.unknown_value(), None);
+        let legacy = RealtimePcmRate::from_raw(16_000);
+        assert!(!legacy.is_known());
+        assert_eq!(legacy.unknown_value(), Some(16_000));
+        assert_eq!(legacy.as_i64(), 16_000);
+
+        assert_eq!(
+            serde_json::to_value(RealtimePcmAudioFormat::pcm24k()).expect("encode pinned rate"),
+            json!({"type": "audio/pcm", "rate": 24000})
+        );
+        let decoded: RealtimePcmAudioFormat =
+            serde_json::from_value(json!({"type": "audio/pcm", "rate": 16000}))
+                .expect("future rate decodes losslessly");
+        assert_eq!(
+            decoded.rate,
+            Omittable::Value(RealtimePcmRate::Unknown(16_000))
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode future rate"),
+            json!({"type": "audio/pcm", "rate": 16000})
+        );
+    }
+
+    #[test]
+    fn realtime_pcm_rate_validate_rejects_non_pinned_rates() {
+        let pinned = RealtimeSessionCreateRequest {
+            audio: Omittable::Value(RealtimeSessionAudio {
+                input: Omittable::Value(RealtimeAudioInputConfig {
+                    format: Omittable::Value(RealtimePcmAudioFormat::pcm24k().into()),
+                    ..RealtimeAudioInputConfig::default()
+                }),
+                output: Omittable::Value(RealtimeAudioOutputConfig {
+                    format: Omittable::Value(RealtimePcmAudioFormat::pcm24k().into()),
+                    ..RealtimeAudioOutputConfig::default()
+                }),
+                ..RealtimeSessionAudio::default()
+            }),
+            ..RealtimeSessionCreateRequest::default()
+        };
+        pinned
+            .validate()
+            .expect("pinned 24kHz PCM rate is accepted");
+
+        let decoded_input: RealtimeSessionCreateRequest = serde_json::from_value(json!({
+            "type": "realtime",
+            "audio": {"input": {"format": {"type": "audio/pcm", "rate": 16000}}}
+        }))
+        .expect("serde remains lossless");
+        assert!(matches!(
+            decoded_input.validate(),
+            Err(CreateRealtimeSessionConstraintError::PcmRate {
+                actual: 16000,
+                expected: 24000
+            })
+        ));
+
+        let decoded_output: RealtimeSessionCreateRequest = serde_json::from_value(json!({
+            "type": "realtime",
+            "audio": {"output": {"format": {"type": "audio/pcm", "rate": 8000}}}
+        }))
+        .expect("serde remains lossless");
+        assert!(matches!(
+            decoded_output.validate(),
+            Err(CreateRealtimeSessionConstraintError::PcmRate { actual: 8000, .. })
+        ));
+
+        let secret: RealtimeCreateClientSecretRequest = serde_json::from_value(json!({
+            "expires_after": {"anchor": "created_at", "seconds": 60},
+            "session": {
+                "type": "realtime",
+                "audio": {"input": {"format": {"type": "audio/pcm", "rate": 16000}}}
+            }
+        }))
+        .expect("client-secret body remains lossless");
+        assert!(matches!(
+            secret.validate(),
+            Err(CreateRealtimeSessionConstraintError::PcmRate { actual: 16000, .. })
+        ));
+
+        let pcmu = RealtimeSessionCreateRequest {
+            audio: Omittable::Value(RealtimeSessionAudio {
+                input: Omittable::Value(RealtimeAudioInputConfig {
+                    format: Omittable::Value(RealtimePcmuAudioFormat::default().into()),
+                    ..RealtimeAudioInputConfig::default()
+                }),
+                ..RealtimeSessionAudio::default()
+            }),
+            ..RealtimeSessionCreateRequest::default()
+        };
+        pcmu.validate().expect("G.711 formats carry no rate to pin");
     }
 
     #[test]

@@ -90,6 +90,7 @@ impl Batches {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     page.last_id().map(|id| id.as_str()),
+                    page.data().last().map(|batch| batch.id().as_str()),
                     &mut seen,
                     "batch",
                 )?;
@@ -116,6 +117,12 @@ impl Batches {
     }
 
     /// Polls until the batch reaches a terminal status (completed, failed, expired, or cancelled).
+    ///
+    /// Batches run inside the pinned `completion_window`, whose only supported
+    /// value is `24h`. The generic [`PollOptions::new`] deadline of ten minutes
+    /// therefore expires structurally before a batch can complete; start from
+    /// [`PollOptions::for_batches`] (5-second interval, 24-hour timeout)
+    /// instead.
     pub async fn poll(
         &self,
         batch_id: &BatchId,
@@ -710,6 +717,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_batches_accepts_limits_above_documented_prose_ceiling() {
+        let (client, captured) = serve_once(
+            r#"{"object":"list","data":[],"first_id":"batch_first","last_id":"batch_last","has_more":false}"#,
+        )
+        .await;
+        // The pinned schema has no `maximum` for this query parameter and the
+        // official Python SDK forwards it unbounded, so a value above the
+        // documented prose ceiling of 100 must still be sendable.
+        let params = BatchListParams::new()
+            .with_limit(BatchListLimit::new(500).expect("no invented upper bound"));
+
+        let response = client
+            .batches()
+            .list(params)
+            .await
+            .expect("batch list response");
+        assert!(response.data().is_empty());
+
+        let captured = captured.await.expect("captured large-limit list request");
+        let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
+            .expect("captured large-limit batch list URL");
+        let query = url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("limit".into(), "500".into())));
+    }
+
+    #[tokio::test]
     async fn cancel_batch_encodes_id_as_one_segment() {
         let body = Box::leak(batch_json("batch/a b", "cancelling").into_boxed_str());
         let (client, captured) = serve_once(body).await;
@@ -803,6 +836,32 @@ mod tests {
             )
             .await
             .expect("poll batch");
+        assert_eq!(response.status(), &BatchStatus::Completed);
+        assert!(captured.recv().await.is_some());
+        assert!(captured.recv().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn batch_poll_accepts_for_batches_preset_options() {
+        use std::time::Duration;
+        let (client, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, batch_json("batch_1", "in_progress")),
+            (StatusCode::OK, batch_json("batch_1", "completed")),
+        ])
+        .await;
+
+        // Start from the batches preset and only shorten the cadence so the
+        // smoke stays fast while proving the preset reaches a terminal state.
+        let response = client
+            .batches()
+            .poll(
+                &BatchId::new("batch_1"),
+                PollOptions::for_batches()
+                    .with_interval(Duration::from_millis(1))
+                    .with_timeout(Duration::from_secs(1)),
+            )
+            .await
+            .expect("poll batch with batches preset");
         assert_eq!(response.status(), &BatchStatus::Completed);
         assert!(captured.recv().await.is_some());
         assert!(captured.recv().await.is_some());

@@ -114,6 +114,7 @@ impl VectorStores {
                 let next = pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id().as_str()),
+                    page.data().last().map(|store| store.id().as_str()),
                     &mut seen,
                     "vector-store",
                 )?;
@@ -274,6 +275,7 @@ impl VectorStoreFiles {
                 let next = pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id().as_str()),
+                    page.data().last().map(|file| file.id().as_str()),
                     &mut seen,
                     "vector-store file",
                 )?;
@@ -470,6 +472,7 @@ impl VectorStoreFileBatches {
                 let next = pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id().as_str()),
+                    page.data().last().map(|file| file.id().as_str()),
                     &mut seen,
                     "vector-store file",
                 )?;

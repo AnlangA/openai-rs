@@ -1,6 +1,6 @@
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::BridgeError;
 
@@ -10,17 +10,34 @@ use crate::BridgeError;
 #[non_exhaustive]
 pub enum ResultEncoding {
     /// Emit a JSON envelope containing every MCP content block,
-    /// `structuredContent`, and `isError`.
+    /// `structuredContent`, `isError`, `resultType` (SEP-2322), and `_meta`.
     #[default]
     LosslessEnvelope,
     /// For successful results, prefer `structuredContent`, then a single text
-    /// block. Results containing rich content or any tool error still use the
-    /// lossless envelope.
+    /// block. `structuredContent` replaces the envelope only when the content
+    /// array is empty or entirely text blocks; results pairing it with rich
+    /// blocks (image, audio, resource, resource link), multi-block text
+    /// without `structuredContent`, and any tool error keep the lossless
+    /// envelope.
+    ///
+    /// The flattened forms carry no `resultType` discriminator or `_meta`
+    /// object: only the envelope (or the raw text block) survives. When a
+    /// later turn must distinguish SEP-2322 result kinds or read
+    /// protocol-level metadata, use [`ResultEncoding::LosslessEnvelope`]
+    /// instead.
     CompactWhenPossible,
 }
 
 /// The stable JSON envelope used to retain rich MCP result content inside a
 /// Responses function output string.
+///
+/// The envelope mirrors every field of an rmcp `CallToolResult`: `content`,
+/// `structuredContent`, `isError`, the SEP-2322 `resultType` discriminator,
+/// and the protocol-level `_meta` object. `resultType` is omitted when the
+/// server did not send one; per the MCP spec a missing key means
+/// `"complete"`, and the value is kept verbatim (including the
+/// non-`complete` discriminators such as `input_required`) so a later turn
+/// can distinguish them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolResultEnvelope {
@@ -28,16 +45,26 @@ pub struct ToolResultEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     structured_content: Option<Value>,
     is_error: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result_type: Option<String>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    meta: Option<Map<String, Value>>,
 }
 
 impl ToolResultEnvelope {
     /// Convert an RMCP call result without dropping text, image, audio,
-    /// embedded-resource, or resource-link blocks.
+    /// embedded-resource, resource-link blocks, the SEP-2322 `resultType`
+    /// discriminator, or the protocol-level `_meta` object.
     pub fn from_rmcp(result: &CallToolResult) -> Self {
         Self {
             content: result.content.clone(),
             structured_content: result.structured_content.clone(),
             is_error: result.is_error.unwrap_or(false),
+            result_type: result
+                .result_type
+                .as_ref()
+                .map(|result_type| result_type.as_str().to_owned()),
+            meta: result.meta.as_ref().map(|meta| meta.0.clone()),
         }
     }
 
@@ -54,6 +81,17 @@ impl ToolResultEnvelope {
     /// Return whether the remote tool reported an in-band failure.
     pub const fn is_error(&self) -> bool {
         self.is_error
+    }
+
+    /// Borrow the SEP-2322 result-type discriminator, if the server sent
+    /// one. Absence means `"complete"` per the MCP spec.
+    pub fn result_type(&self) -> Option<&str> {
+        self.result_type.as_deref()
+    }
+
+    /// Borrow the protocol-level `_meta` object, if present.
+    pub fn meta(&self) -> Option<&Map<String, Value>> {
+        self.meta.as_ref()
     }
 }
 
@@ -81,6 +119,24 @@ impl EncodedToolResult {
     }
 }
 
+/// Borrow the `structuredContent` that may safely replace the whole result.
+///
+/// The MCP spec pairs `structuredContent` with a redundant text
+/// serialization, so dropping an empty or text-only content array loses
+/// nothing. Any rich block alongside it must survive in the envelope.
+fn flattenable_structured_content(envelope: &ToolResultEnvelope) -> Option<&Value> {
+    let structured = envelope.structured_content()?;
+    if envelope
+        .content()
+        .iter()
+        .all(|block| matches!(block, ContentBlock::Text(_)))
+    {
+        Some(structured)
+    } else {
+        None
+    }
+}
+
 /// Encode one RMCP tool result according to `policy`.
 pub fn encode_tool_result(
     result: &CallToolResult,
@@ -91,7 +147,7 @@ pub fn encode_tool_result(
 
     let output = match policy {
         ResultEncoding::CompactWhenPossible if !is_error => {
-            if let Some(structured) = envelope.structured_content() {
+            if let Some(structured) = flattenable_structured_content(&envelope) {
                 serde_json::to_string(structured)
                     .map_err(|source| BridgeError::SerializeOutput { source })?
             } else if let [ContentBlock::Text(text)] = envelope.content() {
@@ -112,7 +168,7 @@ pub fn encode_tool_result(
 
 #[cfg(test)]
 mod tests {
-    use rmcp::model::{ContentBlock, Resource, ResourceContents};
+    use rmcp::model::{ContentBlock, MetaObject, Resource, ResourceContents, ResultType};
     use serde_json::json;
 
     use super::*;
@@ -143,6 +199,10 @@ mod tests {
         let value: Value =
             serde_json::from_str(encoded.output()).expect("encoded envelope must be JSON");
         assert_eq!(value["isError"], true);
+        // rmcp constructors default `resultType` to "complete"; the envelope
+        // copies the discriminator verbatim instead of assuming it.
+        assert_eq!(value["resultType"], "complete");
+        assert!(value.get("_meta").is_none());
         assert_eq!(value["structuredContent"]["answer"], 42);
         assert_eq!(value["content"][0]["type"], "text");
         assert_eq!(value["content"][1]["type"], "image");
@@ -174,5 +234,102 @@ mod tests {
             .expect("tool errors must encode");
         assert_ne!(encoded.output(), "failed");
         assert!(encoded.is_error());
+    }
+
+    #[test]
+    fn compact_policy_flattens_structured_content_only_when_content_is_text_only() {
+        let mut text_only = CallToolResult::success(vec![ContentBlock::text(r#"{"answer":42}"#)]);
+        text_only.structured_content = Some(json!({"answer": 42}));
+        let encoded = encode_tool_result(&text_only, ResultEncoding::CompactWhenPossible)
+            .expect("text-only structured result must encode");
+        assert_eq!(
+            serde_json::from_str::<Value>(encoded.output()).expect("flattened JSON"),
+            json!({"answer": 42})
+        );
+
+        let mut empty_content = CallToolResult::success(Vec::new());
+        empty_content.structured_content = Some(json!({"answer": 42}));
+        let encoded = encode_tool_result(&empty_content, ResultEncoding::CompactWhenPossible)
+            .expect("empty-content structured result must encode");
+        assert_eq!(
+            serde_json::from_str::<Value>(encoded.output()).expect("flattened JSON"),
+            json!({"answer": 42})
+        );
+    }
+
+    #[test]
+    fn compact_policy_keeps_envelope_when_structured_content_pairs_with_rich_blocks() {
+        let mut rich = CallToolResult::success(vec![
+            ContentBlock::text("see image"),
+            ContentBlock::image("aW1hZ2U=", "image/png"),
+        ]);
+        rich.structured_content = Some(json!({"answer": 42}));
+        let encoded = encode_tool_result(&rich, ResultEncoding::CompactWhenPossible)
+            .expect("rich structured result must encode");
+        assert!(!encoded.is_error());
+
+        let value: Value =
+            serde_json::from_str(encoded.output()).expect("encoded envelope must be JSON");
+        assert_eq!(value["isError"], false);
+        assert_eq!(value["structuredContent"]["answer"], 42);
+        assert_eq!(value["content"][0]["type"], "text");
+        assert_eq!(value["content"][1]["type"], "image");
+        assert_eq!(value["content"][1]["data"], "aW1hZ2U=");
+        assert_eq!(value["content"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn lossless_envelope_round_trips_result_type_and_meta() {
+        let mut result = CallToolResult::success(vec![ContentBlock::text("needs input")]);
+        result.result_type = Some(ResultType::INPUT_REQUIRED);
+        let mut meta = MetaObject::new();
+        meta.set_traceparent("00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01");
+        result.meta = Some(meta);
+
+        let envelope = ToolResultEnvelope::from_rmcp(&result);
+        assert_eq!(envelope.result_type(), Some("input_required"));
+        assert_eq!(
+            envelope.meta().and_then(|meta| meta.get("traceparent")),
+            Some(&json!(
+                "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01"
+            ))
+        );
+
+        let encoded = encode_tool_result(&result, ResultEncoding::LosslessEnvelope)
+            .expect("non-complete result must encode losslessly");
+        let value: Value =
+            serde_json::from_str(encoded.output()).expect("encoded envelope must be JSON");
+        assert_eq!(value["resultType"], "input_required");
+        assert_eq!(
+            value["_meta"]["traceparent"],
+            "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01"
+        );
+
+        let decoded: ToolResultEnvelope =
+            serde_json::from_str(encoded.output()).expect("envelope must round-trip");
+        assert_eq!(decoded, envelope);
+    }
+
+    #[test]
+    fn lossless_envelope_omits_result_type_and_meta_keys_when_absent() {
+        // Peers on protocol versions older than 2026-07-28 send no
+        // `resultType` at all (and `_meta` is always optional), so neither
+        // key may appear on the wire or after a decode round trip.
+        let mut result = CallToolResult::success(vec![ContentBlock::text("done")]);
+        result.result_type = None;
+        result.meta = None;
+
+        let encoded = encode_tool_result(&result, ResultEncoding::LosslessEnvelope)
+            .expect("complete result must encode");
+        let value: Value =
+            serde_json::from_str(encoded.output()).expect("encoded envelope must be JSON");
+        assert!(value.get("resultType").is_none());
+        assert!(value.get("_meta").is_none());
+
+        let decoded: ToolResultEnvelope =
+            serde_json::from_str(encoded.output()).expect("envelope must round-trip");
+        assert_eq!(decoded.result_type(), None);
+        assert_eq!(decoded.meta(), None);
+        assert_eq!(decoded, ToolResultEnvelope::from_rmcp(&result));
     }
 }

@@ -409,11 +409,10 @@ impl Transport {
                     self.retry_policy.max_server_delay,
                 ) {
                     ServerDelay::Valid(delay) => delay,
-                    ServerDelay::Absent => local_retry_delay(retries),
-                    ServerDelay::TooLong => {
-                        trace::record_http_outcome(retries, &response);
-                        return self.api_error(response).await;
-                    }
+                    // A missing, non-positive, or over-bound server delay all
+                    // fall back to local exponential backoff; the retry budget
+                    // above still caps the total number of attempts.
+                    ServerDelay::TooLong | ServerDelay::Absent => local_retry_delay(retries),
                 };
                 if can_wait(started, delay, self.overall_timeout) {
                     retries += 1;
@@ -747,9 +746,16 @@ fn server_retry_delay(headers: &http::HeaderMap, maximum: Duration) -> ServerDel
         .get("retry-after-ms")
         .and_then(|value| value.to_str().ok())
         && let Ok(milliseconds) = value.parse::<f64>()
-        && milliseconds.is_finite()
-        && milliseconds >= 0.0
     {
+        // A *parseable* `retry-after-ms` decides the delay on its own, exactly
+        // like openai-python's `_parse_retry_after_header` and the multipart
+        // copy (`multipart.rs::retry_delay`): a positive, in-bound value wins,
+        // while zero, negative, non-finite (`nan`/`inf`), and over-bound values
+        // all map to local exponential backoff without ever consulting
+        // `Retry-After`, so a stale coarse header cannot override the
+        // millisecond header the server actually emitted. Only an unparseable
+        // value falls through to `Retry-After`. The zero/negative guards live
+        // inside `bounded_delay`.
         return bounded_delay(milliseconds / 1000.0, maximum);
     }
 
@@ -767,11 +773,15 @@ fn server_retry_delay(headers: &http::HeaderMap, maximum: Duration) -> ServerDel
     }
     match httpdate::parse_http_date(value) {
         Ok(time) => {
-            let delay = match time.duration_since(SystemTime::now()) {
-                Ok(delay) => delay,
-                Err(_) => Duration::ZERO,
-            };
-            if delay <= maximum {
+            let delay = time
+                .duration_since(SystemTime::now())
+                .unwrap_or(Duration::ZERO);
+            if delay.is_zero() {
+                // A date already in the past carries a non-positive delay, so
+                // it falls back to local exponential backoff like the numeric
+                // forms above.
+                ServerDelay::Absent
+            } else if delay <= maximum {
                 ServerDelay::Valid(delay)
             } else {
                 ServerDelay::TooLong
@@ -782,11 +792,19 @@ fn server_retry_delay(headers: &http::HeaderMap, maximum: Duration) -> ServerDel
 }
 
 fn bounded_delay(seconds: f64, maximum: Duration) -> ServerDelay {
-    if seconds > maximum.as_secs_f64() {
+    if seconds <= 0.0 {
+        // Only strictly positive delays are honored, matching openai-python's
+        // `0 < retry_after` gate; zero or negative values fall back to local
+        // exponential backoff rather than triggering an immediate retry.
+        ServerDelay::Absent
+    } else if seconds > maximum.as_secs_f64() {
         ServerDelay::TooLong
     } else {
         match Duration::try_from_secs_f64(seconds) {
             Ok(delay) => ServerDelay::Valid(delay),
+            // The only in-bound value that fails to convert is `nan`, which
+            // carries no usable delay and lands on the same local-backoff
+            // fallback as the over-bound branch above.
             Err(_) => ServerDelay::TooLong,
         }
     }
@@ -841,6 +859,14 @@ fn validate_operation_route(route: &str, path: &[PathSegment<'_>]) -> Result<(),
     Ok(())
 }
 
+/// Appends the serialized query object to `url`.
+///
+/// Mirrors openai-python's `_qs.py::_stringify_item`: an explicit `null` and
+/// an empty string both serialize to nothing, so the query key is omitted
+/// entirely rather than sent as `key=`. Other falsy scalars (`0`, `false`)
+/// still encode, because only the serialized string being empty drops the key.
+/// When every field is dropped this leaves the URL untouched, without a
+/// dangling `?`.
 fn append_query<T>(url: &mut Url, query: &T) -> Result<(), Error>
 where
     T: Serialize + ?Sized,
@@ -855,43 +881,55 @@ where
     if fields.is_empty() {
         return Ok(());
     }
-    let mut serializer = url.query_pairs_mut();
-    for (name, value) in fields {
-        match value {
-            serde_json::Value::Null => {
-                serializer.append_pair(&name, "");
-            }
-            serde_json::Value::Bool(value) => {
-                serializer.append_pair(&name, if value { "true" } else { "false" });
-            }
-            serde_json::Value::Number(value) => {
-                serializer.append_pair(&name, &value.to_string());
-            }
-            serde_json::Value::String(value) => {
-                serializer.append_pair(&name, &value);
-            }
-            serde_json::Value::Array(values) => {
-                for value in values {
-                    let value = query_scalar(&name, value)?;
-                    serializer.append_pair(&name, &value);
+    let mut appended = false;
+    {
+        let mut serializer = url.query_pairs_mut();
+        for (name, value) in fields {
+            match value {
+                serde_json::Value::Null => {}
+                serde_json::Value::Bool(value) => {
+                    serializer.append_pair(&name, if value { "true" } else { "false" });
+                    appended = true;
+                }
+                serde_json::Value::Number(value) => {
+                    serializer.append_pair(&name, &value.to_string());
+                    appended = true;
+                }
+                serde_json::Value::String(value) => {
+                    if !value.is_empty() {
+                        serializer.append_pair(&name, &value);
+                        appended = true;
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        if let Some(value) = query_scalar(&name, value)? {
+                            serializer.append_pair(&name, &value);
+                            appended = true;
+                        }
+                    }
+                }
+                serde_json::Value::Object(_) => {
+                    return Err(Error::EncodeQuery(
+                        format!("query field `{name}` requires an unsupported object encoding")
+                            .into(),
+                    ));
                 }
             }
-            serde_json::Value::Object(_) => {
-                return Err(Error::EncodeQuery(
-                    format!("query field `{name}` requires an unsupported object encoding").into(),
-                ));
-            }
         }
+    }
+    if !appended {
+        url.set_query(None);
     }
     Ok(())
 }
 
-fn query_scalar(name: &str, value: serde_json::Value) -> Result<String, Error> {
+fn query_scalar(name: &str, value: serde_json::Value) -> Result<Option<String>, Error> {
     match value {
-        serde_json::Value::Null => Ok(String::new()),
-        serde_json::Value::Bool(value) => Ok(value.to_string()),
-        serde_json::Value::Number(value) => Ok(value.to_string()),
-        serde_json::Value::String(value) => Ok(value),
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Bool(value) => Ok(Some(value.to_string())),
+        serde_json::Value::Number(value) => Ok(Some(value.to_string())),
+        serde_json::Value::String(value) => Ok((!value.is_empty()).then_some(value)),
         serde_json::Value::Array(_) | serde_json::Value::Object(_) => Err(Error::EncodeQuery(
             format!("query array field `{name}` contains a non-scalar value").into(),
         )),
@@ -900,7 +938,23 @@ fn query_scalar(name: &str, value: serde_json::Value) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        convert::Infallible,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use bytes::Bytes;
+    use http_body_util::Full;
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use tokio::net::TcpListener;
+    use url::Url;
+
     use super::*;
+    use crate::{ApiKey, Client};
 
     #[test]
     fn path_parameters_are_single_percent_encoded_segments() {
@@ -945,6 +999,47 @@ mod tests {
     }
 
     #[test]
+    fn null_and_empty_string_query_values_are_omitted() {
+        // openai-python's `_stringify_item` drops a key whose serialized value
+        // is empty, so `None` and `""` both produce no query item while other
+        // falsy scalars still encode.
+        let mut url = Url::parse("https://api.openai.com/v1/files").expect("test query URL");
+        append_query(
+            &mut url,
+            &serde_json::json!({
+                "metadata": null,
+                "purpose": "",
+                "limit": 0,
+                "active": false,
+                "ids": [null, "", "file_1"],
+            }),
+        )
+        .expect("query encoding");
+        let pairs = url
+            .query_pairs()
+            .map(|(name, value)| (name.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            pairs,
+            vec![
+                ("limit".to_owned(), "0".to_owned()),
+                ("active".to_owned(), "false".to_owned()),
+                ("ids".to_owned(), "file_1".to_owned()),
+            ]
+        );
+
+        // Dropping every field must not leave a dangling `?` behind.
+        let mut url = Url::parse("https://api.openai.com/v1/files").expect("test query URL");
+        append_query(
+            &mut url,
+            &serde_json::json!({"purpose": "", "metadata": null}),
+        )
+        .expect("query encoding");
+        assert_eq!(url.as_str(), "https://api.openai.com/v1/files");
+        assert!(url.query().is_none());
+    }
+
+    #[test]
     fn operation_static_headers_cannot_override_security_or_codec_headers() {
         assert!(validate_static_operation_header(("OpenAI-Beta", "chatkit_beta=v1")).is_ok());
         for name in [
@@ -973,6 +1068,270 @@ mod tests {
         assert_eq!(
             server_retry_delay(&headers, Duration::from_secs(1)),
             ServerDelay::TooLong
+        );
+    }
+
+    #[test]
+    fn parseable_retry_after_ms_decides_alone_and_never_falls_back() {
+        // 4-31: once `retry-after-ms` parses as a float, it decides the delay
+        // by itself. A negative value beside a perfectly valid `Retry-After`
+        // must resolve to local backoff (`Absent`), not adopt the coarse
+        // header the server did not mean to win.
+        let maximum = RetryPolicy::openai_compatible().max_server_delay;
+        let mut headers = http::HeaderMap::new();
+        headers.insert("retry-after-ms", HeaderValue::from_static("-500"));
+        headers.insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+        assert_eq!(
+            server_retry_delay(&headers, maximum),
+            ServerDelay::Absent,
+            "a negative millisecond value must not fall back to `Retry-After`"
+        );
+
+        // Zero parses too, so it also short-circuits into local backoff.
+        headers.insert("retry-after-ms", HeaderValue::from_static("0"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::Absent);
+
+        // Non-finite values parse as floats, so they decide alone as well.
+        headers.insert("retry-after-ms", HeaderValue::from_static("nan"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+        headers.insert("retry-after-ms", HeaderValue::from_static("inf"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+
+        // An over-bound millisecond value beside an in-bound `Retry-After`
+        // still never adopts the coarse header.
+        headers.insert("retry-after-ms", HeaderValue::from_static("130000"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+
+        // Only an unparseable millisecond value falls through to the coarse
+        // header, matching the multipart copy of this parser.
+        headers.insert("retry-after-ms", HeaderValue::from_static("soon"));
+        assert_eq!(
+            server_retry_delay(&headers, maximum),
+            ServerDelay::Valid(Duration::from_secs(1))
+        );
+    }
+
+    #[test]
+    fn non_positive_retry_after_values_fall_back_to_local_backoff() {
+        let maximum = RetryPolicy::openai_compatible().max_server_delay;
+
+        let mut headers = http::HeaderMap::new();
+        headers.insert(header::RETRY_AFTER, HeaderValue::from_static("0"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::Absent);
+
+        let mut headers = http::HeaderMap::new();
+        headers.insert("retry-after-ms", HeaderValue::from_static("0"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::Absent);
+
+        let mut headers = http::HeaderMap::new();
+        headers.insert(header::RETRY_AFTER, HeaderValue::from_static("-1"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::Absent);
+
+        // A date already in the past carries a non-positive delay too.
+        let past = httpdate::fmt_http_date(SystemTime::now() - Duration::from_secs(60));
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            header::RETRY_AFTER,
+            HeaderValue::from_str(&past).expect("valid past-date header"),
+        );
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::Absent);
+    }
+
+    #[test]
+    fn server_retry_delays_within_the_default_bound_are_honored() {
+        let maximum = RetryPolicy::openai_compatible().max_server_delay;
+
+        // Values in the 60-120s window were rejected by the previous 60s
+        // default and must now be honored verbatim.
+        let mut headers = http::HeaderMap::new();
+        headers.insert(header::RETRY_AFTER, HeaderValue::from_static("90"));
+        assert_eq!(
+            server_retry_delay(&headers, maximum),
+            ServerDelay::Valid(Duration::from_secs(90))
+        );
+
+        // The bound itself is inclusive.
+        headers.insert(header::RETRY_AFTER, HeaderValue::from_static("120"));
+        assert_eq!(
+            server_retry_delay(&headers, maximum),
+            ServerDelay::Valid(Duration::from_secs(120))
+        );
+
+        headers.insert(header::RETRY_AFTER, HeaderValue::from_static("130"));
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+    }
+
+    #[derive(Clone)]
+    struct ScriptedResponse {
+        status: http::StatusCode,
+        retry_after: Option<HeaderValue>,
+        body: &'static str,
+    }
+
+    async fn serve_scripted_responses(script: Vec<ScriptedResponse>) -> (Client, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind scripted loopback server");
+        let address = listener.local_addr().expect("scripted loopback address");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let server_attempts = Arc::clone(&attempts);
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let attempts = Arc::clone(&server_attempts);
+                let script = script.clone();
+                tokio::spawn(async move {
+                    let service = service_fn(move |_request: Request<Incoming>| {
+                        let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                        let scripted = script
+                            .get(attempt.min(script.len().saturating_sub(1)))
+                            .expect("scripted response");
+                        let status = scripted.status;
+                        let retry_after = scripted.retry_after.clone();
+                        let body = scripted.body;
+                        async move {
+                            let mut builder = hyper::Response::builder()
+                                .status(status)
+                                .header(header::CONTENT_TYPE, "application/json");
+                            if let Some(retry_after) = retry_after {
+                                builder = builder.header(header::RETRY_AFTER, retry_after);
+                            }
+                            Ok::<_, Infallible>(
+                                builder
+                                    .body(Full::new(Bytes::from_static(body.as_bytes())))
+                                    .expect("build scripted response"),
+                            )
+                        }
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("parse scripted base URL");
+        let key = ApiKey::new("test-placeholder-key").expect("valid test key");
+        let client = Client::builder(key)
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("scripted loopback client");
+        (client, attempts)
+    }
+
+    #[tokio::test]
+    async fn retry_after_zero_uses_local_backoff_instead_of_retrying_immediately() {
+        let (client, attempts) = serve_scripted_responses(vec![
+            ScriptedResponse {
+                status: http::StatusCode::TOO_MANY_REQUESTS,
+                retry_after: Some(HeaderValue::from_static("0")),
+                body: r#"{"error":{"message":"rate limited","type":"rate_limit_error"}}"#,
+            },
+            ScriptedResponse {
+                status: http::StatusCode::OK,
+                retry_after: None,
+                body: r#"{"object":"list","data":[]}"#,
+            },
+        ])
+        .await;
+
+        let started = Instant::now();
+        let response = client
+            .models()
+            .list()
+            .await
+            .expect("retried model list after zero delay");
+        let elapsed = started.elapsed();
+
+        assert!(response.data.is_empty());
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        // The local backoff floor for the first retry is 0.5s * 0.75 = 375ms,
+        // so honoring a zero-valued `Retry-After` would violate this bound.
+        assert!(
+            elapsed >= Duration::from_millis(300),
+            "expected local backoff before the retry, waited only {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "zero-valued `Retry-After` must not be inflated to {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_server_retry_delays_are_obeyed_end_to_end() {
+        let (client, attempts) = serve_scripted_responses(vec![
+            ScriptedResponse {
+                status: http::StatusCode::TOO_MANY_REQUESTS,
+                retry_after: Some(HeaderValue::from_static("1")),
+                body: r#"{"error":{"message":"rate limited","type":"rate_limit_error"}}"#,
+            },
+            ScriptedResponse {
+                status: http::StatusCode::OK,
+                retry_after: None,
+                body: r#"{"object":"list","data":[]}"#,
+            },
+        ])
+        .await;
+
+        let started = Instant::now();
+        let response = client
+            .models()
+            .list()
+            .await
+            .expect("retried model list after server delay");
+        let elapsed = started.elapsed();
+
+        assert!(response.data.is_empty());
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        // A positive in-bound server delay is slept verbatim, without jitter.
+        assert!(
+            elapsed >= Duration::from_millis(950),
+            "expected the one-second server delay to be honored, waited only {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "one-second server delay must not be inflated to {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_after_above_the_bound_falls_back_to_local_backoff_and_keeps_retrying() {
+        let (client, attempts) = serve_scripted_responses(vec![ScriptedResponse {
+            status: http::StatusCode::INTERNAL_SERVER_ERROR,
+            retry_after: Some(HeaderValue::from_static("130")),
+            body: r#"{"error":{"message":"retry","type":"server_error","code":"temporary"}}"#,
+        }])
+        .await;
+
+        let started = Instant::now();
+        let error = client
+            .models()
+            .list()
+            .await
+            .expect_err("retry budget exhausted");
+        let elapsed = started.elapsed();
+
+        // The over-bound delay no longer aborts delivery, and the default
+        // policy still caps attempts at the initial request plus two retries.
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        let Error::Api(api) = &error else {
+            panic!("expected an API error, got {error:?}");
+        };
+        assert_eq!(api.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+        // Two local backoffs are bounded by 0.5s + 1.0s (plus jitter), so the
+        // 130-second server value must not have been slept.
+        assert!(
+            elapsed >= Duration::from_millis(1000),
+            "expected local backoff between retries, waited only {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(60),
+            "over-bound `Retry-After` must not be slept, waited {elapsed:?}"
         );
     }
 

@@ -131,12 +131,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tool = FunctionTool::for_type::<WeatherArgs>("get_weather", "Return current weather")?;
 
-    let request = CreateResponseRequest::new("gpt-5.6", "What is the weather in Shenzhen?")
+    let request = CreateResponseRequest::new("gpt-5.6-sol", "What is the weather in Shenzhen?")
         .with_tool(tool);
 
-    let response = client.responses().create(request).await?;
+    let response = client.responses().create(request.clone()).await?;
 
-    // Typed function call dispatch without raw JSON
     if let Some(call) = response.function_calls().next() {
         let args: WeatherArgs = call.arguments_as()?;
         let output = FunctionCallOutput::json(
@@ -147,11 +146,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         )?;
 
-        // previous_response_id does not carry top-level instructions or tools.
-        // Resend those with follow_up_from, or send only the tool output here.
+        // `previous_response_id` does not carry the previous request's tools, so
+        // every continuation turn must resend them (the official function-calling
+        // examples do the same). `follow_up_from` copies the tools — plus other
+        // stable prefix fields — from the original request onto the follow-up.
+        // (Alternatively, use response.to_input_items() for local stateless multi-turn replay)
         let follow_up = client
             .responses()
-            .create(CreateResponseRequest::follow_up(
+            .create(CreateResponseRequest::follow_up_from(
+                &request,
                 &response,
                 vec![output.into()],
             ))
@@ -169,8 +172,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 The shape follows the [official OpenAI Responses
 contract](https://developers.openai.com/api/reference/resources/responses/methods/create):
 `POST /responses` accepts typed input and returns an ordered array of output
-items. Multi-turn continuation uses `previous_response_id` (via `CreateResponseRequest::follow_up`),
-while `response.to_input_items()` is available when full local conversation history replay is needed.
+items. Multi-turn continuation uses `previous_response_id` (via
+`CreateResponseRequest::follow_up_from`, which also resends the original
+request's tools), while `response.to_input_items()` is available when full local
+conversation history replay is needed.
 Do not assume that the first output item is always an assistant text
 message. The same code is checked as the executable
 [`responses` example](crates/openai-rs/examples/responses.rs).

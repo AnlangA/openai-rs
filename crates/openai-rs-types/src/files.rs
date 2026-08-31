@@ -37,38 +37,6 @@ open_string_enum! {
     }
 }
 
-impl FilePurpose {
-    /// Returns whether the purpose is currently accepted when creating a file
-    /// through `POST /files`.
-    #[must_use]
-    pub const fn is_create_file_purpose(&self) -> bool {
-        matches!(
-            self,
-            Self::Assistants
-                | Self::Batch
-                | Self::FineTune
-                | Self::Vision
-                | Self::UserData
-                | Self::Evals
-        )
-    }
-
-    /// Returns whether the purpose is currently accepted when creating a
-    /// multipart Upload through `POST /uploads`.
-    #[must_use]
-    pub const fn is_create_upload_purpose(&self) -> bool {
-        matches!(
-            self,
-            Self::Assistants
-                | Self::Batch
-                | Self::FineTune
-                | Self::Vision
-                | Self::UserData
-                | Self::Evals
-        )
-    }
-}
-
 open_string_enum! {
     /// Purpose returned on a stored file object.
     ///
@@ -325,10 +293,10 @@ impl FileObject {
     }
 }
 
-/// Maximum collection size accepted by `GET /files`.
-pub const MAX_FILE_LIST_LIMIT: u32 = 10_000;
-
 /// Effective collection size when `limit` is omitted.
+///
+/// The pinned schema documents a default of 10,000 but imposes no `maximum`,
+/// so no upper bound is invented here.
 pub const DEFAULT_FILE_LIST_LIMIT: u32 = 10_000;
 
 /// A validated `GET /files` page size.
@@ -337,9 +305,9 @@ pub const DEFAULT_FILE_LIST_LIMIT: u32 = 10_000;
 pub struct FileListLimit(u32);
 
 impl FileListLimit {
-    /// Validates a page size in the inclusive range `1..=10_000`.
+    /// Validates a page size of at least 1.
     pub const fn new(value: u32) -> Result<Self, FileListLimitError> {
-        if value == 0 || value > MAX_FILE_LIST_LIMIT {
+        if value == 0 {
             Err(FileListLimitError { value })
         } else {
             Ok(Self(value))
@@ -386,9 +354,9 @@ impl<'de> Deserialize<'de> for FileListLimit {
     }
 }
 
-/// A file list page size falls outside `1..=10_000`.
+/// A file list page size below the documented minimum of 1.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-#[error("file list limit must be between 1 and {MAX_FILE_LIST_LIMIT}, got {value}")]
+#[error("file list limit must be at least 1, got {value}")]
 pub struct FileListLimitError {
     value: u32,
 }
@@ -1379,9 +1347,9 @@ mod tests {
         AddUploadPartRequest, CompleteUploadRequest, CreateFileRequest, CreateUploadRequest,
         DeleteFileResponse, FileContent, FileExpirationAfter, FileListLimit, FileListPage,
         FileListParams, FileObject, FileObjectPurpose, FilePurpose, FileSortOrder, FileStatus,
-        MAX_FILE_EXPIRATION_SECONDS, MAX_FILE_LIST_LIMIT, MIN_FILE_EXPIRATION_SECONDS,
-        MultipartFileName, MultipartMediaType, ReplayableMultipartSource, Upload, UploadPart,
-        UploadPartId, UploadStatus,
+        MAX_FILE_EXPIRATION_SECONDS, MIN_FILE_EXPIRATION_SECONDS, MultipartFileName,
+        MultipartMediaType, ReplayableMultipartSource, Upload, UploadPart, UploadPartId,
+        UploadStatus,
     };
     use crate::{Nullable, Omittable};
 
@@ -1512,15 +1480,27 @@ mod tests {
     }
 
     #[test]
-    fn file_list_limit_is_validated_on_construction_and_decode() {
+    fn file_list_limit_requires_at_least_one() {
+        // The pinned schema documents "between 1 and 10,000" in prose but has
+        // no `maximum`, and the official Python SDK passes the value through
+        // unbounded, so only the lower bound is enforced.
         assert!(FileListLimit::new(0).is_err());
-        assert!(FileListLimit::new(MAX_FILE_LIST_LIMIT + 1).is_err());
         assert!(serde_json::from_str::<FileListLimit>("0").is_err());
         assert_eq!(
-            serde_json::from_str::<FileListLimit>("10000")
-                .expect("maximum is valid")
+            FileListLimit::new(1).expect("minimum is valid").get(),
+            1_u32
+        );
+        assert_eq!(
+            FileListLimit::new(u32::MAX)
+                .expect("no invented upper bound")
                 .get(),
-            MAX_FILE_LIST_LIMIT
+            u32::MAX
+        );
+        assert_eq!(
+            serde_json::from_str::<FileListLimit>("10001")
+                .expect("value above the documented prose ceiling stays valid")
+                .get(),
+            10_001_u32
         );
     }
 
@@ -1804,7 +1784,7 @@ mod tests {
         #[test]
         fn list_params_round_trip(
             purpose in proptest::option::of(".{0,48}"),
-            limit in proptest::option::of(1_u32..=MAX_FILE_LIST_LIMIT),
+            limit in proptest::option::of(1_u32..=1_000_000),
             after in proptest::option::of(".{0,48}")
         ) {
             let mut params = FileListParams::new();

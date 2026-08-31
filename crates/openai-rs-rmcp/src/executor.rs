@@ -29,6 +29,19 @@ pub trait ResponsesToolExecutor: Send + Sync {
 ///
 /// The sink is supplied by the caller after transport setup and
 /// authentication. The bridge therefore never owns or inspects credentials.
+///
+/// # Cancellation propagation
+///
+/// MCP cancellation notifications (`notifications/cancelled`) are optional
+/// and best-effort: a peer may ignore them and complete the request anyway.
+/// During [`ResponsesToolExecutor::call_tool`] this executor always sends the
+/// notification when local cancellation or the deadline wins the race, but a
+/// failure to deliver it (for example because the transport already closed)
+/// is ignored so the caller still observes [`BridgeError::Cancelled`] or
+/// [`BridgeError::Timeout`]. During [`ResponsesToolExecutor::list_tools`]
+/// no cancellation notification is sent at all: discovery only freezes a
+/// catalog, so the local result is simply dropped and the outstanding
+/// `tools/list` request is left to complete on its own.
 #[cfg(feature = "client")]
 #[derive(Debug, Clone)]
 pub struct RmcpExecutor {
@@ -75,12 +88,12 @@ impl RmcpExecutor {
                     .map_err(BridgeError::from_service)?;
                 match response {
                     ServerResult::CallToolResult(result) => Ok(result),
-                    ServerResult::InputRequiredResult(_) => Err(BridgeError::executor(
-                        "MCP input_required results need an application input handler",
-                    )),
-                    ServerResult::CreateTaskResult(_) => Err(BridgeError::executor(
-                        "MCP task results need an application task driver",
-                    )),
+                    ServerResult::InputRequiredResult(_) => Err(BridgeError::UnsupportedResult {
+                        kind: "input_required",
+                    }),
+                    ServerResult::CreateTaskResult(_) => Err(BridgeError::UnsupportedResult {
+                        kind: "task",
+                    }),
                     _ => Err(BridgeError::from_service(
                         rmcp::service::ServiceError::UnexpectedResponse,
                     )),
@@ -88,10 +101,11 @@ impl RmcpExecutor {
             }
             () = wait_for_cancellation(control.cancellation()) => {
                 let reason = control.cancellation().and_then(crate::CancellationToken::reason);
-                handle
-                    .cancel(reason.clone())
-                    .await
-                    .map_err(BridgeError::from_service)?;
+                // Cancellation is already a fait accompli, so a failure to
+                // deliver `notifications/cancelled` (for example when the
+                // transport already closed) must not mask it. The timeout
+                // branch below follows the same rule.
+                let _ = handle.cancel(reason.clone()).await;
                 Err(BridgeError::Cancelled { reason })
             }
             () = wait_for_timeout(control.timeout()) => {
@@ -112,6 +126,10 @@ impl ResponsesToolExecutor for RmcpExecutor {
             biased;
 
             result = self.peer.list_all_tools() => result.map_err(BridgeError::from_service),
+            // Unlike call_tool, this branch deliberately sends no
+            // `notifications/cancelled`: discovery only freezes a catalog, so
+            // the local result is dropped and the outstanding `tools/list`
+            // request is left to complete on its own. See the struct docs.
             () = wait_for_cancellation(control.cancellation()) => {
                 Err(BridgeError::Cancelled {
                     reason: control.cancellation().and_then(crate::CancellationToken::reason),

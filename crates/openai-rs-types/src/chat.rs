@@ -1280,6 +1280,54 @@ impl ChatFunctionDefinition {
     }
 }
 
+/// Deprecated function entry for the legacy `functions` request field.
+///
+/// Mirrors pinned `ChatCompletionFunctions`: unlike
+/// [`ChatFunctionDefinition`] (the `tools[].function` shape), the legacy
+/// entry carries no `strict` schema-adherence field.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionFunction {
+    /// Function name.
+    pub name: String,
+    /// Description used for tool selection.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub description: Omittable<String>,
+    /// JSON Schema object for function arguments.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub parameters: Omittable<Map<String, Value>>,
+}
+
+impl ChatCompletionFunction {
+    /// Construct a legacy function entry without a parameter schema.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: Omittable::Omitted,
+            parameters: Omittable::Omitted,
+        }
+    }
+
+    /// Attach a human-readable description.
+    #[must_use]
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Omittable::Value(description.into());
+        self
+    }
+
+    /// Serialize a typed schema representation into the parameters object.
+    pub fn with_parameters<T: Serialize>(
+        mut self,
+        parameters: &T,
+    ) -> Result<Self, serde_json::Error> {
+        self.parameters = Omittable::Value(serialize_object(
+            parameters,
+            "function parameters must serialize as a JSON object",
+        )?);
+        Ok(self)
+    }
+}
+
 literal_tag!(FunctionToolTag, Function, "function");
 
 /// A function tool definition.
@@ -2312,9 +2360,10 @@ pub struct ChatCompletionRequestBody {
     /// Deprecated function selection.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub function_call: Omittable<ChatLegacyFunctionChoice>,
-    /// Deprecated function definitions.
+    /// Deprecated function definitions. Legacy entries carry no `strict`
+    /// field; use `tools[].function` for strict schema adherence.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub functions: Omittable<Vec<ChatFunctionDefinition>>,
+    pub functions: Omittable<Vec<ChatCompletionFunction>>,
     /// Per-token logit biases.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub logit_bias: Omittable<Nullable<BTreeMap<String, i32>>>,
@@ -3757,9 +3806,10 @@ mod tests {
             ChatAudioContentPart::from_bytes(b"RIFF", ChatInputAudioFormat::Wav).into(),
             ChatFileContentPart::new(ChatInputFile::from_bytes("notes.txt", b"hello")).into(),
         ];
-        let request = CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::parts(parts))
-            .with_message(ChatDeveloperMessage::new("Be concise"))
-            .with_temperature(0.2);
+        let request =
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::parts(parts))
+                .with_message(ChatDeveloperMessage::new("Be concise"))
+                .with_temperature(0.2);
 
         let value = ok(serde_json::to_value(&request));
         assert_eq!(value["messages"][0]["content"][0]["type"], "text");
@@ -3781,7 +3831,7 @@ mod tests {
             .with_parameters(&weather_schema()))
         .with_strict(true);
         let request = CreateChatCompletionRequest::new(
-            "gpt-5.6",
+            "gpt-5.6-sol",
             ChatUserMessage::text("Weather in Shanghai?"),
         )
         .with_tool(ChatFunctionTool::new(function))
@@ -3815,6 +3865,50 @@ mod tests {
         assert_eq!(
             ok(serde_json::from_str::<Value>(content))["temperature"],
             24
+        );
+    }
+
+    #[test]
+    fn legacy_functions_entries_omit_strict_while_tools_function_keeps_it() {
+        let mut legacy = CreateChatCompletionRequest::new(
+            "gpt-5.6-sol",
+            ChatUserMessage::text("Weather in Shanghai?"),
+        );
+        legacy.body.functions = Omittable::Value(vec![ok(ChatCompletionFunction::new("weather")
+            .with_description("Read weather")
+            .with_parameters(&weather_schema()))]);
+
+        let value = ok(serde_json::to_value(&legacy));
+        assert_eq!(value["functions"][0]["name"], "weather");
+        assert_eq!(value["functions"][0]["description"], "Read weather");
+        assert_eq!(value["functions"][0]["parameters"]["type"], "object");
+        assert!(value["functions"][0].get("strict").is_none());
+
+        let strict = ok(ChatFunctionDefinition::new("weather").with_parameters(&weather_schema()))
+            .with_strict(true);
+        let tools = CreateChatCompletionRequest::new(
+            "gpt-5.6-sol",
+            ChatUserMessage::text("Weather in Shanghai?"),
+        )
+        .with_tool(ChatFunctionTool::new(strict));
+        let value = ok(serde_json::to_value(tools));
+        assert_eq!(value["tools"][0]["function"]["strict"], true);
+        assert!(value.get("functions").is_none());
+
+        let decoded = ok(serde_json::from_value::<CreateChatCompletionRequest>(
+            json!({
+                "model": "gpt-5.6-sol",
+                "messages": [{"role": "user", "content": "hi"}],
+                "functions": [{
+                    "name": "weather",
+                    "description": "Read weather",
+                    "parameters": {"type": "object"}
+                }]
+            }),
+        ));
+        assert_eq!(
+            ok(serde_json::to_value(decoded))["functions"][0]["name"],
+            "weather"
         );
     }
 
@@ -3944,7 +4038,7 @@ mod tests {
     #[test]
     fn request_typestate_controls_stream_wire_fields() {
         let non_streaming =
-            CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"));
         let non_streaming_value = ok(serde_json::to_value(&non_streaming));
         assert!(non_streaming_value.get("stream").is_none());
 
@@ -3958,15 +4052,16 @@ mod tests {
         assert_eq!(streaming_value["stream"], true);
         assert_eq!(streaming_value["stream_options"]["include_usage"], true);
 
-        let null_options = CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hi"))
-            .into_streaming()
-            .with_stream_options_null();
+        let null_options =
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hi"))
+                .into_streaming()
+                .with_stream_options_null();
         let null_value = ok(serde_json::to_value(&null_options));
         assert_eq!(null_value["stream_options"], Value::Null);
         let decoded_null = ok(serde_json::from_value::<
             CreateChatCompletionRequest<ChatStreaming>,
         >(json!({
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "messages": [{"role": "user", "content": "hi"}],
             "stream": true,
             "stream_options": null
@@ -4048,7 +4143,7 @@ mod tests {
             "id": "chatcmpl_123",
             "object": "chat.completion.chunk",
             "created": 1700000000,
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "choices": [{
                 "index": 0,
                 "finish_reason": null,
@@ -4266,7 +4361,7 @@ mod tests {
             "id": "chatcmpl_1",
             "object": "chat.completion",
             "created": 1700000000,
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "choices": [],
             "completion_future": true
         });
@@ -4397,7 +4492,7 @@ mod tests {
             "id": "chatcmpl_1",
             "object": "chat.completion",
             "created": 1,
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "choices": [{
                 "index": 0,
                 "message": { "role": "assistant", "content": "ok" },
@@ -4439,26 +4534,28 @@ mod tests {
     #[test]
     fn chat_create_validate_enforces_pinned_limits() {
         let ok_request =
-            CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"))
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"))
                 .with_temperature(2.0)
                 .with_logprobs(Some(20));
         ok_request.validate().expect("boundary values are accepted");
 
-        let mut over = CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+        let mut over =
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"));
         over.body.frequency_penalty = Omittable::Value(Nullable::Value(2.1));
         assert!(matches!(
             over.validate(),
             Err(CreateChatCompletionConstraintError::FrequencyPenalty { .. })
         ));
 
-        let mut n = CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+        let mut n = CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"));
         n.body.n = Omittable::Value(Nullable::Value(129));
         assert!(matches!(
             n.validate(),
             Err(CreateChatCompletionConstraintError::Choices { actual: 129, .. })
         ));
 
-        let mut stops = CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+        let mut stops =
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"));
         stops.body.stop = Omittable::Value(Nullable::Value(ChatStop::Many(vec![
             "a".into(),
             "b".into(),
@@ -4471,7 +4568,8 @@ mod tests {
             Err(CreateChatCompletionConstraintError::StopSequences { actual: 5, .. })
         ));
 
-        let mut bias = CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+        let mut bias =
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"));
         bias.body.logit_bias =
             Omittable::Value(Nullable::Value(BTreeMap::from([("50256".into(), 101)])));
         assert!(matches!(
@@ -4480,17 +4578,17 @@ mod tests {
         ));
 
         let mut empty_functions =
-            CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"));
         empty_functions.body.functions = Omittable::Value(Vec::new());
         assert!(matches!(
             empty_functions.validate(),
             Err(CreateChatCompletionConstraintError::Functions { actual: 0, .. })
         ));
         let mut too_many =
-            CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"));
         too_many.body.functions = Omittable::Value(
             (0..=MAX_CHAT_FUNCTIONS)
-                .map(|index| ChatFunctionDefinition::new(format!("fn_{index}")))
+                .map(|index| ChatCompletionFunction::new(format!("fn_{index}")))
                 .collect(),
         );
         assert!(matches!(
@@ -4498,7 +4596,7 @@ mod tests {
             Err(CreateChatCompletionConstraintError::Functions { actual: 129, .. })
         ));
         let decoded = serde_json::from_value::<CreateChatCompletionRequest>(json!({
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "messages": [{"role": "user", "content": "hello"}],
             "functions": []
         }))
@@ -4506,13 +4604,13 @@ mod tests {
         assert!(decoded.validate().is_err());
 
         let empty_user =
-            CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::parts(Vec::new()));
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::parts(Vec::new()));
         assert!(matches!(
             empty_user.validate(),
             Err(CreateChatCompletionConstraintError::EmptyMessageContent)
         ));
         let empty_developer = CreateChatCompletionRequest::new(
-            "gpt-5.6",
+            "gpt-5.6-sol",
             ChatDeveloperMessage::new(ChatInstructionContent::Parts(Vec::new())),
         );
         assert!(matches!(
@@ -4520,7 +4618,7 @@ mod tests {
             Err(CreateChatCompletionConstraintError::EmptyMessageContent)
         ));
         let mut empty_prediction =
-            CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"));
         empty_prediction.body.prediction =
             Omittable::Value(Nullable::Value(ChatPredictionContent::parts(Vec::new())));
         assert!(matches!(
@@ -4528,7 +4626,7 @@ mod tests {
             Err(CreateChatCompletionConstraintError::EmptyPredictionParts)
         ));
         let unofficial = serde_json::from_value::<CreateChatCompletionRequest>(json!({
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "messages": [{"role": "user", "content": []}],
             "prediction": { "type": "content", "content": [] }
         }))
