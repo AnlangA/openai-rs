@@ -382,7 +382,7 @@ impl InputItems {
                 let page = items.list(&response_id, params.clone()).await?;
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
-                    page.last_id(),
+                    Some(page.last_id()),
                     &mut seen,
                     "response input item",
                 )?;
@@ -815,7 +815,7 @@ mod tests {
     async fn compact_conversation_uses_fixed_post_and_typed_body() {
         let (base_url, captured) = serve_once(
             StatusCode::OK,
-            r#"{"id":"resp_compact","created_at":1,"object":"response.compaction","output":[],"usage":null}"#,
+            r#"{"id":"resp_compact","created_at":1,"object":"response.compaction","output":[],"usage":{"input_tokens":139,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"output_tokens":438,"output_tokens_details":{"reasoning_tokens":64},"total_tokens":577}}"#,
         )
         .await;
         let response = client(base_url)
@@ -890,7 +890,7 @@ mod tests {
     async fn list_input_items_uses_fixed_path_and_typed_cursor_query() {
         let (base_url, captured) = serve_once(
             StatusCode::OK,
-            r#"{"object":"list","data":[],"first_id":null,"last_id":null,"has_more":false}"#,
+            r#"{"object":"list","data":[],"first_id":"","last_id":"","has_more":false}"#,
         )
         .await;
         let response_id = ResponseId::new("resp_query");
@@ -1152,9 +1152,9 @@ mod tests {
             ListResponseInputItemsParams::new(),
         );
         let first = stream.next().await.expect("page 1").expect("ok");
-        assert_eq!(first.last_id(), Some("item_1"));
+        assert_eq!(first.last_id(), "item_1");
         let second = stream.next().await.expect("page 2").expect("ok");
-        assert_eq!(second.last_id(), Some("item_2"));
+        assert_eq!(second.last_id(), "item_2");
         assert!(stream.next().await.is_none());
 
         assert!(captured.recv().await.is_some());

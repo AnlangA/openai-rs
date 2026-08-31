@@ -13,6 +13,7 @@ use openai_rs_types::{
     VectorStoreFileStatus, VectorStoreId, VectorStoreListParams, VectorStoreSearchRequest,
     VectorStoreSearchResultsPage, VectorStoreStatus,
 };
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
@@ -27,6 +28,24 @@ use crate::{
 };
 
 const OK: &[StatusCode] = &[StatusCode::OK];
+const BETA_HEADER: &str = "OpenAI-Beta";
+const BETA_VALUE: &str = "assistants=v2";
+
+async fn execute_vector_store_json<O, Q>(
+    client: &Client,
+    path: &[PathSegment<'_>],
+    query: Option<&Q>,
+    body: Option<&O::Request>,
+) -> Result<ApiResponse<O::Response>, Error>
+where
+    O: Operation,
+    Q: Serialize + ?Sized,
+{
+    client
+        .transport()
+        .execute_json_with_static_header::<O, Q>(path, query, body, BETA_HEADER, BETA_VALUE)
+        .await
+}
 
 /// Pages returned by `GET /vector_stores`.
 pub type VectorStorePageStream = Pin<
@@ -59,10 +78,13 @@ impl VectorStores {
         request: CreateVectorStoreRequest,
     ) -> Result<ApiResponse<VectorStore>, Error> {
         let path = [PathSegment::literal("vector_stores")];
-        self.client
-            .transport()
-            .execute_json::<CreateVectorStore, ()>(&path, None, Some(&request))
-            .await
+        execute_vector_store_json::<CreateVectorStore, ()>(
+            &self.client,
+            &path,
+            None,
+            Some(&request),
+        )
+        .await
     }
 
     /// Lists vector stores.
@@ -71,9 +93,7 @@ impl VectorStores {
         params: VectorStoreListParams,
     ) -> Result<ApiResponse<ListVectorStoresResponse>, Error> {
         let path = [PathSegment::literal("vector_stores")];
-        self.client
-            .transport()
-            .execute_json::<ListVectorStores, _>(&path, Some(&params), None)
+        execute_vector_store_json::<ListVectorStores, _>(&self.client, &path, Some(&params), None)
             .await
     }
 
@@ -112,10 +132,7 @@ impl VectorStores {
         vector_store_id: &VectorStoreId,
     ) -> Result<ApiResponse<VectorStore>, Error> {
         let path = vector_store_path(vector_store_id)?;
-        self.client
-            .transport()
-            .execute_json::<RetrieveVectorStore, ()>(&path, None, None)
-            .await
+        execute_vector_store_json::<RetrieveVectorStore, ()>(&self.client, &path, None, None).await
     }
 
     /// Updates one vector store.
@@ -125,10 +142,13 @@ impl VectorStores {
         request: UpdateVectorStoreRequest,
     ) -> Result<ApiResponse<VectorStore>, Error> {
         let path = vector_store_path(vector_store_id)?;
-        self.client
-            .transport()
-            .execute_json::<UpdateVectorStore, ()>(&path, None, Some(&request))
-            .await
+        execute_vector_store_json::<UpdateVectorStore, ()>(
+            &self.client,
+            &path,
+            None,
+            Some(&request),
+        )
+        .await
     }
 
     /// Deletes one vector store.
@@ -137,10 +157,7 @@ impl VectorStores {
         vector_store_id: &VectorStoreId,
     ) -> Result<ApiResponse<DeletedVectorStore>, Error> {
         let path = vector_store_path(vector_store_id)?;
-        self.client
-            .transport()
-            .execute_json::<DeleteVectorStore, ()>(&path, None, None)
-            .await
+        execute_vector_store_json::<DeleteVectorStore, ()>(&self.client, &path, None, None).await
     }
 
     /// Searches one vector store with typed ranking and attribute filters.
@@ -154,10 +171,13 @@ impl VectorStores {
             vector_store_id_segment(vector_store_id)?,
             PathSegment::literal("search"),
         ];
-        self.client
-            .transport()
-            .execute_json::<SearchVectorStore, ()>(&path, None, Some(&request))
-            .await
+        execute_vector_store_json::<SearchVectorStore, ()>(
+            &self.client,
+            &path,
+            None,
+            Some(&request),
+        )
+        .await
     }
 
     /// Returns attached-file operations.
@@ -212,10 +232,13 @@ impl VectorStoreFiles {
         request: CreateVectorStoreFileRequest,
     ) -> Result<ApiResponse<VectorStoreFile>, Error> {
         let path = vector_store_files_path(vector_store_id)?;
-        self.client
-            .transport()
-            .execute_json::<CreateVectorStoreFile, ()>(&path, None, Some(&request))
-            .await
+        execute_vector_store_json::<CreateVectorStoreFile, ()>(
+            &self.client,
+            &path,
+            None,
+            Some(&request),
+        )
+        .await
     }
 
     /// Lists attached files.
@@ -225,10 +248,13 @@ impl VectorStoreFiles {
         params: VectorStoreFileListParams,
     ) -> Result<ApiResponse<ListVectorStoreFilesResponse>, Error> {
         let path = vector_store_files_path(vector_store_id)?;
-        self.client
-            .transport()
-            .execute_json::<ListVectorStoreFiles, _>(&path, Some(&params), None)
-            .await
+        execute_vector_store_json::<ListVectorStoreFiles, _>(
+            &self.client,
+            &path,
+            Some(&params),
+            None,
+        )
+        .await
     }
 
     /// Streams forward attached-file pages.
@@ -267,9 +293,7 @@ impl VectorStoreFiles {
         file_id: &FileId,
     ) -> Result<ApiResponse<VectorStoreFile>, Error> {
         let path = vector_store_file_path(vector_store_id, file_id)?;
-        self.client
-            .transport()
-            .execute_json::<RetrieveVectorStoreFile, ()>(&path, None, None)
+        execute_vector_store_json::<RetrieveVectorStoreFile, ()>(&self.client, &path, None, None)
             .await
     }
 
@@ -281,10 +305,13 @@ impl VectorStoreFiles {
         request: UpdateVectorStoreFileAttributesRequest,
     ) -> Result<ApiResponse<VectorStoreFile>, Error> {
         let path = vector_store_file_path(vector_store_id, file_id)?;
-        self.client
-            .transport()
-            .execute_json::<UpdateVectorStoreFileAttributes, ()>(&path, None, Some(&request))
-            .await
+        execute_vector_store_json::<UpdateVectorStoreFileAttributes, ()>(
+            &self.client,
+            &path,
+            None,
+            Some(&request),
+        )
+        .await
     }
 
     /// Detaches one file from a vector store without deleting the Platform
@@ -295,9 +322,7 @@ impl VectorStoreFiles {
         file_id: &FileId,
     ) -> Result<ApiResponse<DeletedVectorStoreFile>, Error> {
         let path = vector_store_file_path(vector_store_id, file_id)?;
-        self.client
-            .transport()
-            .execute_json::<DeleteVectorStoreFile, ()>(&path, None, None)
+        execute_vector_store_json::<DeleteVectorStoreFile, ()>(&self.client, &path, None, None)
             .await
     }
 
@@ -314,10 +339,13 @@ impl VectorStoreFiles {
             file_id_segment(file_id)?,
             PathSegment::literal("content"),
         ];
-        self.client
-            .transport()
-            .execute_json::<RetrieveVectorStoreFileContent, ()>(&path, None, None)
-            .await
+        execute_vector_store_json::<RetrieveVectorStoreFileContent, ()>(
+            &self.client,
+            &path,
+            None,
+            None,
+        )
+        .await
     }
 
     /// Polls one attached file until it completes, fails, or is cancelled.
@@ -359,10 +387,13 @@ impl VectorStoreFileBatches {
             vector_store_id_segment(vector_store_id)?,
             PathSegment::literal("file_batches"),
         ];
-        self.client
-            .transport()
-            .execute_json::<CreateVectorStoreFileBatch, ()>(&path, None, Some(&request))
-            .await
+        execute_vector_store_json::<CreateVectorStoreFileBatch, ()>(
+            &self.client,
+            &path,
+            None,
+            Some(&request),
+        )
+        .await
     }
 
     /// Retrieves one file batch.
@@ -372,10 +403,13 @@ impl VectorStoreFileBatches {
         batch_id: &VectorStoreFileBatchId,
     ) -> Result<ApiResponse<VectorStoreFileBatch>, Error> {
         let path = vector_store_file_batch_path(vector_store_id, batch_id)?;
-        self.client
-            .transport()
-            .execute_json::<RetrieveVectorStoreFileBatch, ()>(&path, None, None)
-            .await
+        execute_vector_store_json::<RetrieveVectorStoreFileBatch, ()>(
+            &self.client,
+            &path,
+            None,
+            None,
+        )
+        .await
     }
 
     /// Cancels in-progress work for one file batch.
@@ -391,9 +425,7 @@ impl VectorStoreFileBatches {
             vector_store_file_batch_id_segment(batch_id)?,
             PathSegment::literal("cancel"),
         ];
-        self.client
-            .transport()
-            .execute_json::<CancelVectorStoreFileBatch, ()>(&path, None, None)
+        execute_vector_store_json::<CancelVectorStoreFileBatch, ()>(&self.client, &path, None, None)
             .await
     }
 
@@ -411,10 +443,13 @@ impl VectorStoreFileBatches {
             vector_store_file_batch_id_segment(batch_id)?,
             PathSegment::literal("files"),
         ];
-        self.client
-            .transport()
-            .execute_json::<ListVectorStoreFileBatchFiles, _>(&path, Some(&params), None)
-            .await
+        execute_vector_store_json::<ListVectorStoreFileBatchFiles, _>(
+            &self.client,
+            &path,
+            Some(&params),
+            None,
+        )
+        .await
     }
 
     /// Streams forward pages of files in one file batch.
@@ -749,6 +784,7 @@ mod tests {
         method: Method,
         path_and_query: String,
         authorization: Option<String>,
+        beta: Option<String>,
         body: Vec<u8>,
     }
 
@@ -786,6 +822,11 @@ mod tests {
                                 .get(http::header::AUTHORIZATION)
                                 .and_then(|value| value.to_str().ok())
                                 .map(ToOwned::to_owned);
+                            let beta = request
+                                .headers()
+                                .get("OpenAI-Beta")
+                                .and_then(|value| value.to_str().ok())
+                                .map(ToOwned::to_owned);
                             let body = request
                                 .into_body()
                                 .collect()
@@ -798,6 +839,7 @@ mod tests {
                                     method,
                                     path_and_query,
                                     authorization,
+                                    beta,
                                     body,
                                 },
                             );
@@ -984,6 +1026,7 @@ mod tests {
         );
         assert!(captures.iter().all(|request| {
             request.authorization.as_deref() == Some("Bearer test-placeholder-key")
+                && request.beta.as_deref() == Some("assistants=v2")
         }));
     }
 
@@ -1088,6 +1131,11 @@ mod tests {
             captures[5].path_and_query,
             "/v1/vector_stores/vs%2Fa%20b/files/file%2Fx%20y/content"
         );
+        assert!(
+            captures
+                .iter()
+                .all(|request| request.beta.as_deref() == Some("assistants=v2"))
+        );
     }
 
     #[tokio::test]
@@ -1147,6 +1195,11 @@ mod tests {
         assert_eq!(
             captures[3].path_and_query,
             "/v1/vector_stores/vs%2Fa%20b/file_batches/batch%2Fx%20y/files"
+        );
+        assert!(
+            captures
+                .iter()
+                .all(|request| request.beta.as_deref() == Some("assistants=v2"))
         );
     }
 

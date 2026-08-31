@@ -306,6 +306,90 @@ macro_rules! common_builders {
                 self
             }
 
+            /// Sends official `echo: null`.
+            #[must_use]
+            pub fn echo_null(mut self) -> Self {
+                self.body.echo = Omittable::Value(Nullable::Null);
+                self
+            }
+
+            /// Sends official `suffix: null`.
+            #[must_use]
+            pub fn suffix_null(mut self) -> Self {
+                self.body.suffix = Omittable::Value(Nullable::Null);
+                self
+            }
+
+            /// Sends official `max_tokens: null`.
+            #[must_use]
+            pub fn max_tokens_null(mut self) -> Self {
+                self.body.max_tokens = Omittable::Value(Nullable::Null);
+                self
+            }
+
+            /// Sends official `n: null`.
+            #[must_use]
+            pub fn n_null(mut self) -> Self {
+                self.body.n = Omittable::Value(Nullable::Null);
+                self
+            }
+
+            /// Sends official `logprobs: null`.
+            #[must_use]
+            pub fn logprobs_null(mut self) -> Self {
+                self.body.logprobs = Omittable::Value(Nullable::Null);
+                self
+            }
+
+            /// Sends official `logit_bias: null`.
+            #[must_use]
+            pub fn logit_bias_null(mut self) -> Self {
+                self.body.logit_bias = Omittable::Value(Nullable::Null);
+                self
+            }
+
+            /// Sends official `stop: null`.
+            #[must_use]
+            pub fn stop_null(mut self) -> Self {
+                self.body.stop = Omittable::Value(Nullable::Null);
+                self
+            }
+
+            /// Sends official `temperature: null`.
+            #[must_use]
+            pub fn temperature_null(mut self) -> Self {
+                self.body.temperature = Omittable::Value(Nullable::Null);
+                self
+            }
+
+            /// Sends official `top_p: null`.
+            #[must_use]
+            pub fn top_p_null(mut self) -> Self {
+                self.body.top_p = Omittable::Value(Nullable::Null);
+                self
+            }
+
+            /// Sends official `frequency_penalty: null`.
+            #[must_use]
+            pub fn frequency_penalty_null(mut self) -> Self {
+                self.body.frequency_penalty = Omittable::Value(Nullable::Null);
+                self
+            }
+
+            /// Sends official `presence_penalty: null`.
+            #[must_use]
+            pub fn presence_penalty_null(mut self) -> Self {
+                self.body.presence_penalty = Omittable::Value(Nullable::Null);
+                self
+            }
+
+            /// Sends official `seed: null`.
+            #[must_use]
+            pub fn seed_null(mut self) -> Self {
+                self.body.seed = Omittable::Value(Nullable::Null);
+                self
+            }
+
             /// Sets the deprecated end-user identifier.
             #[must_use]
             pub fn user(mut self, user: impl Into<String>) -> Self {
@@ -357,6 +441,13 @@ impl CreateCompletionRequest {
         self
     }
 
+    /// Sends official `best_of: null`.
+    #[must_use]
+    pub fn best_of_null(mut self) -> Self {
+        self.best_of = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Converts to streaming mode unless a non-null `best_of` was supplied.
     pub fn into_streaming(
         self,
@@ -369,6 +460,21 @@ impl CreateCompletionRequest {
             stream: true,
             stream_options: Omittable::Omitted,
         })
+    }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateCompletionConstraintError> {
+        self.body.validate()?;
+        if let Omittable::Value(Nullable::Value(best_of)) = self.best_of
+            && best_of > MAX_COMPLETION_BEST_OF
+        {
+            return Err(CreateCompletionConstraintError::BestOf {
+                actual: best_of,
+                minimum: MIN_COMPLETION_BEST_OF,
+                maximum: MAX_COMPLETION_BEST_OF,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -392,6 +498,13 @@ impl CreateStreamingCompletionRequest {
         self
     }
 
+    /// Sends `stream_options: null`.
+    #[must_use]
+    pub fn stream_options_null(mut self) -> Self {
+        self.stream_options = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Converts back to non-streaming mode with `best_of` omitted.
     #[must_use]
     pub fn into_non_streaming(self) -> CreateCompletionRequest {
@@ -400,6 +513,11 @@ impl CreateStreamingCompletionRequest {
             best_of: Omittable::Omitted,
             stream: Omittable::Omitted,
         }
+    }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateCompletionConstraintError> {
+        self.body.validate()
     }
 }
 
@@ -412,6 +530,194 @@ pub enum CompletionRequestError {
     /// `best_of` is server-side only and cannot be streamed.
     #[error("legacy completion best_of cannot be used with streaming")]
     BestOfCannotStream,
+}
+
+/// Official token / token-batch `prompt` array `minItems`.
+pub const MIN_COMPLETION_PROMPT_TOKENS: usize = 1;
+/// Inclusive minimum for `best_of`.
+pub const MIN_COMPLETION_BEST_OF: u8 = 0;
+/// Inclusive maximum for `best_of`.
+pub const MAX_COMPLETION_BEST_OF: u8 = 20;
+/// Inclusive maximum for `logprobs`.
+pub const MAX_COMPLETION_LOGPROBS: u8 = 5;
+/// Inclusive minimum for `n`.
+pub const MIN_COMPLETION_CHOICES: u32 = 1;
+/// Inclusive maximum for `n`.
+pub const MAX_COMPLETION_CHOICES: u32 = 128;
+/// Inclusive minimum stop-sequence array length.
+pub const MIN_COMPLETION_STOP_SEQUENCES: usize = 1;
+/// Inclusive maximum stop-sequence array length.
+pub const MAX_COMPLETION_STOP_SEQUENCES: usize = 4;
+/// Inclusive minimum logit-bias value.
+pub const MIN_COMPLETION_LOGIT_BIAS: i32 = -100;
+/// Inclusive maximum logit-bias value.
+pub const MAX_COMPLETION_LOGIT_BIAS: i32 = 100;
+
+/// A create-request value that violates a pinned Completions constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CreateCompletionConstraintError {
+    /// `temperature` is non-finite or outside `0..=2`.
+    #[error("temperature must be finite and within 0..=2, got {value}")]
+    Temperature { value: String },
+    /// `top_p` is non-finite or outside `0..=1`.
+    #[error("top_p must be finite and within 0..=1, got {value}")]
+    TopP { value: String },
+    /// `frequency_penalty` is non-finite or outside `-2..=2`.
+    #[error("frequency_penalty must be finite and within -2..=2, got {value}")]
+    FrequencyPenalty { value: String },
+    /// `presence_penalty` is non-finite or outside `-2..=2`.
+    #[error("presence_penalty must be finite and within -2..=2, got {value}")]
+    PresencePenalty { value: String },
+    /// `logprobs` is outside `0..=5`.
+    #[error("logprobs must be 0..={maximum}, got {actual}")]
+    Logprobs { actual: u8, maximum: u8 },
+    /// `n` is outside `1..=128`.
+    #[error("n must be {minimum}..={maximum}, got {actual}")]
+    Choices {
+        actual: u32,
+        minimum: u32,
+        maximum: u32,
+    },
+    /// `best_of` is outside `0..=20`.
+    #[error("best_of must be {minimum}..={maximum}, got {actual}")]
+    BestOf {
+        actual: u8,
+        minimum: u8,
+        maximum: u8,
+    },
+    /// `stop` array length is outside `1..=4`.
+    #[error("stop must contain {minimum}..={maximum} sequences, got {actual}")]
+    StopSequences {
+        actual: usize,
+        minimum: usize,
+        maximum: usize,
+    },
+    /// A `logit_bias` value is outside `-100..=100`.
+    #[error("logit_bias[{token}] must be {minimum}..={maximum}, got {actual}")]
+    LogitBias {
+        token: String,
+        actual: i32,
+        minimum: i32,
+        maximum: i32,
+    },
+    /// Token `prompt` array is empty (`minItems: 1`).
+    #[error("token prompt must contain at least {minimum} tokens, got {actual}")]
+    EmptyPromptTokens { actual: usize, minimum: usize },
+    /// Nested token-batch `prompt` array is empty (`minItems: 1`).
+    #[error("token-batch prompt must contain at least {minimum} tokens, got {actual}")]
+    EmptyPromptTokenBatch { actual: usize, minimum: usize },
+}
+
+impl CompletionRequestBody {
+    fn validate(&self) -> Result<(), CreateCompletionConstraintError> {
+        if let Nullable::Value(prompt) = &self.prompt {
+            validate_completion_prompt(prompt)?;
+        }
+        if let Omittable::Value(Nullable::Value(temperature)) = self.temperature
+            && !(temperature.is_finite() && (0.0..=2.0).contains(&temperature))
+        {
+            return Err(CreateCompletionConstraintError::Temperature {
+                value: temperature.to_string(),
+            });
+        }
+        if let Omittable::Value(Nullable::Value(top_p)) = self.top_p
+            && !(top_p.is_finite() && (0.0..=1.0).contains(&top_p))
+        {
+            return Err(CreateCompletionConstraintError::TopP {
+                value: top_p.to_string(),
+            });
+        }
+        if let Omittable::Value(Nullable::Value(penalty)) = self.frequency_penalty
+            && !(penalty.is_finite() && (-2.0..=2.0).contains(&penalty))
+        {
+            return Err(CreateCompletionConstraintError::FrequencyPenalty {
+                value: penalty.to_string(),
+            });
+        }
+        if let Omittable::Value(Nullable::Value(penalty)) = self.presence_penalty
+            && !(penalty.is_finite() && (-2.0..=2.0).contains(&penalty))
+        {
+            return Err(CreateCompletionConstraintError::PresencePenalty {
+                value: penalty.to_string(),
+            });
+        }
+        if let Omittable::Value(Nullable::Value(logprobs)) = self.logprobs
+            && logprobs > MAX_COMPLETION_LOGPROBS
+        {
+            return Err(CreateCompletionConstraintError::Logprobs {
+                actual: logprobs,
+                maximum: MAX_COMPLETION_LOGPROBS,
+            });
+        }
+        if let Omittable::Value(Nullable::Value(n)) = self.n
+            && !(MIN_COMPLETION_CHOICES..=MAX_COMPLETION_CHOICES).contains(&n)
+        {
+            return Err(CreateCompletionConstraintError::Choices {
+                actual: n,
+                minimum: MIN_COMPLETION_CHOICES,
+                maximum: MAX_COMPLETION_CHOICES,
+            });
+        }
+        if let Omittable::Value(Nullable::Value(CompletionStop::Many(stops))) = &self.stop
+            && !(MIN_COMPLETION_STOP_SEQUENCES..=MAX_COMPLETION_STOP_SEQUENCES)
+                .contains(&stops.len())
+        {
+            return Err(CreateCompletionConstraintError::StopSequences {
+                actual: stops.len(),
+                minimum: MIN_COMPLETION_STOP_SEQUENCES,
+                maximum: MAX_COMPLETION_STOP_SEQUENCES,
+            });
+        }
+        if let Omittable::Value(Nullable::Value(bias)) = &self.logit_bias {
+            for (token, value) in bias {
+                if !(MIN_COMPLETION_LOGIT_BIAS..=MAX_COMPLETION_LOGIT_BIAS).contains(value) {
+                    return Err(CreateCompletionConstraintError::LogitBias {
+                        token: token.clone(),
+                        actual: *value,
+                        minimum: MIN_COMPLETION_LOGIT_BIAS,
+                        maximum: MAX_COMPLETION_LOGIT_BIAS,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_completion_prompt(
+    prompt: &CompletionPrompt,
+) -> Result<(), CreateCompletionConstraintError> {
+    match prompt {
+        CompletionPrompt::Text(_) | CompletionPrompt::Texts(_) => Ok(()),
+        CompletionPrompt::Tokens(tokens) => {
+            if tokens.len() < MIN_COMPLETION_PROMPT_TOKENS {
+                Err(CreateCompletionConstraintError::EmptyPromptTokens {
+                    actual: tokens.len(),
+                    minimum: MIN_COMPLETION_PROMPT_TOKENS,
+                })
+            } else {
+                Ok(())
+            }
+        }
+        CompletionPrompt::TokenBatches(batches) => {
+            if batches.len() < MIN_COMPLETION_PROMPT_TOKENS {
+                return Err(CreateCompletionConstraintError::EmptyPromptTokens {
+                    actual: batches.len(),
+                    minimum: MIN_COMPLETION_PROMPT_TOKENS,
+                });
+            }
+            for batch in batches {
+                if batch.len() < MIN_COMPLETION_PROMPT_TOKENS {
+                    return Err(CreateCompletionConstraintError::EmptyPromptTokenBatch {
+                        actual: batch.len(),
+                        minimum: MIN_COMPLETION_PROMPT_TOKENS,
+                    });
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 open_string_enum! {
@@ -653,11 +959,61 @@ mod tests {
             Err(CompletionRequestError::BestOfCannotStream)
         );
 
+        let nulls = CreateCompletionRequest::new("model", "prompt")
+            .echo_null()
+            .suffix_null()
+            .max_tokens_null()
+            .n_null()
+            .logprobs_null()
+            .logit_bias_null()
+            .stop_null()
+            .temperature_null()
+            .top_p_null()
+            .frequency_penalty_null()
+            .presence_penalty_null()
+            .seed_null()
+            .best_of_null();
+        let null_value = serde_json::to_value(&nulls).expect("encode official completion nulls");
+        for key in [
+            "echo",
+            "suffix",
+            "max_tokens",
+            "n",
+            "logprobs",
+            "logit_bias",
+            "stop",
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
+            "best_of",
+        ] {
+            assert_eq!(null_value[key], Value::Null, "{key}");
+        }
+
         let streaming = CreateStreamingCompletionRequest::new("model", vec![1_i64, 2, 3])
             .stream_options(CompletionStreamOptions::new().include_usage(true));
         let value = serde_json::to_value(streaming).expect("encode streaming request");
         assert_eq!(value["stream"], true);
         assert_eq!(value["stream_options"]["include_usage"], true);
+        let null_options =
+            CreateStreamingCompletionRequest::new("model", "prompt").stream_options_null();
+        assert_eq!(
+            serde_json::to_value(&null_options).expect("encode stream_options null")["stream_options"],
+            Value::Null
+        );
+        let decoded_null = serde_json::from_value::<CreateStreamingCompletionRequest>(json!({
+            "model": "model",
+            "prompt": "prompt",
+            "stream": true,
+            "stream_options": null
+        }))
+        .expect("official stream_options anyOf includes null");
+        assert_eq!(
+            serde_json::to_value(decoded_null).expect("re-encode")["stream_options"],
+            Value::Null
+        );
         assert!(serde_json::from_value::<CreateCompletionRequest>(value.clone()).is_err());
         serde_json::from_value::<CreateStreamingCompletionRequest>(value)
             .expect("decode streaming request");
@@ -758,5 +1114,127 @@ mod tests {
             serde_json::to_value(chunk).expect("round-trip chunk"),
             fixture
         );
+    }
+
+    #[test]
+    fn completion_create_fields_match_python_and_openapi_inventory() {
+        let request = CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "Say hello")
+            .echo(true)
+            .best_of(1)
+            .suffix("!")
+            .max_tokens(16)
+            .n(1)
+            .logprobs(5)
+            .stop(vec!["\n".to_owned()])
+            .temperature(0.0)
+            .top_p(1.0)
+            .frequency_penalty(0.0)
+            .presence_penalty(0.0)
+            .seed(1)
+            .user("user-1");
+        let value = serde_json::to_value(&request).expect("serialize");
+        let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "best_of",
+                "echo",
+                "frequency_penalty",
+                "logprobs",
+                "max_tokens",
+                "model",
+                "n",
+                "presence_penalty",
+                "prompt",
+                "seed",
+                "stop",
+                "suffix",
+                "temperature",
+                "top_p",
+                "user"
+            ]
+        );
+        request.validate().expect("documented fields stay in range");
+    }
+
+    #[test]
+    fn completion_create_validate_enforces_pinned_limits() {
+        CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
+            .temperature(2.0)
+            .top_p(1.0)
+            .n(128)
+            .logprobs(5)
+            .best_of(20)
+            .validate()
+            .expect("boundary values are accepted");
+
+        assert!(matches!(
+            CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
+                .temperature(2.1)
+                .validate(),
+            Err(CreateCompletionConstraintError::Temperature { .. })
+        ));
+        assert!(matches!(
+            CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
+                .best_of(21)
+                .validate(),
+            Err(CreateCompletionConstraintError::BestOf { actual: 21, .. })
+        ));
+        assert!(matches!(
+            CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
+                .stop(vec![
+                    "a".into(),
+                    "b".into(),
+                    "c".into(),
+                    "d".into(),
+                    "e".into()
+                ])
+                .validate(),
+            Err(CreateCompletionConstraintError::StopSequences { actual: 5, .. })
+        ));
+        assert!(matches!(
+            CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
+                .logit_bias(BTreeMap::from([("50256".into(), -101)]))
+                .validate(),
+            Err(CreateCompletionConstraintError::LogitBias { actual: -101, .. })
+        ));
+        CreateCompletionRequest::new(
+            "gpt-3.5-turbo-instruct",
+            CompletionPrompt::Texts(Vec::new()),
+        )
+        .validate()
+        .expect("string-array prompt has no official minItems");
+        assert!(matches!(
+            CreateCompletionRequest::new(
+                "gpt-3.5-turbo-instruct",
+                CompletionPrompt::Tokens(Vec::new()),
+            )
+            .validate(),
+            Err(CreateCompletionConstraintError::EmptyPromptTokens {
+                actual: 0,
+                minimum: 1
+            })
+        ));
+        assert!(matches!(
+            CreateCompletionRequest::new(
+                "gpt-3.5-turbo-instruct",
+                CompletionPrompt::TokenBatches(vec![Vec::new()]),
+            )
+            .validate(),
+            Err(CreateCompletionConstraintError::EmptyPromptTokenBatch {
+                actual: 0,
+                minimum: 1
+            })
+        ));
+        let unofficial = serde_json::from_value::<CreateCompletionRequest>(json!({
+            "model": "gpt-3.5-turbo-instruct",
+            "prompt": [[]]
+        }))
+        .expect("serde remains lossless");
+        assert!(matches!(
+            unofficial.validate(),
+            Err(CreateCompletionConstraintError::EmptyPromptTokenBatch { .. })
+        ));
     }
 }

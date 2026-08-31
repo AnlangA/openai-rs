@@ -110,7 +110,7 @@ impl Evals {
                 let page = evals.list(params.clone()).await?;
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
-                    page.last_id().map(EvalId::as_str),
+                    Some(page.last_id().as_str()),
                     &mut seen,
                     "Eval",
                 )?;
@@ -195,7 +195,7 @@ impl EvalRuns {
                 let page = runs.list(&eval_id, params.clone()).await?;
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
-                    page.last_id().map(EvalRunId::as_str),
+                    Some(page.last_id().as_str()),
                     &mut seen,
                     "Eval run",
                 )?;
@@ -316,7 +316,7 @@ impl EvalRunOutputItems {
                 let page = items.list(&eval_id, &run_id, params.clone()).await?;
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
-                    page.last_id().map(EvalRunOutputItemId::as_str),
+                    Some(page.last_id().as_str()),
                     &mut seen,
                     "Eval output-item",
                 )?;
@@ -1129,15 +1129,15 @@ mod tests {
         let first = json!({
             "object": "list",
             "data": [],
-            "first_id": null,
+            "first_id": "",
             "last_id": "eval_1",
             "has_more": true
         });
         let second = json!({
             "object": "list",
             "data": [],
-            "first_id": null,
-            "last_id": null,
+            "first_id": "",
+            "last_id": "",
             "has_more": false
         });
         let (client, mut captured) = serve_sequence(vec![

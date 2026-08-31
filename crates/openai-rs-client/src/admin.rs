@@ -147,6 +147,8 @@ admin_query!(
     AuditLogListParams,
     UsageQueryParams,
     ListFineTuningCheckpointPermissionsParams,
+    CertificateGetParams,
+    ProjectGroupGetParams,
 );
 
 macro_rules! admin_operation {
@@ -2536,9 +2538,20 @@ impl AdminCertificates {
     }
 
     pub async fn retrieve(&self, certificate_id: &str) -> Result<ApiResponse<Certificate>, Error> {
+        self.retrieve_with(certificate_id, &CertificateGetParams::default())
+            .await
+    }
+
+    /// Retrieve a certificate, optionally including PEM `content`.
+    pub async fn retrieve_with(
+        &self,
+        certificate_id: &str,
+        params: &CertificateGetParams,
+    ) -> Result<ApiResponse<Certificate>, Error> {
         self.0
             .request::<operations::OpGetCertificate>()
             .path_parameter(certificate_id)?
+            .query(params)?
             .send()
             .await
     }
@@ -2920,6 +2933,36 @@ impl AdminProjects {
         self.0
             .request::<operations::OpListProjectRateLimits>()
             .path_parameter(project_id)?
+            .query(params)?
+            .send()
+            .await
+    }
+
+    /// List project API keys, including the official `owner_project_access` filter.
+    pub async fn api_keys(
+        &self,
+        project_id: &str,
+        params: &AdminListParams,
+    ) -> Result<ApiResponse<ProjectApiKeyListResponse>, Error> {
+        self.0
+            .request::<operations::OpListProjectApiKeys>()
+            .path_parameter(project_id)?
+            .query(params)?
+            .send()
+            .await
+    }
+
+    /// Retrieve a project group, optionally selecting `group_type`.
+    pub async fn group(
+        &self,
+        project_id: &str,
+        group_id: &str,
+        params: &ProjectGroupGetParams,
+    ) -> Result<ApiResponse<ProjectGroup>, Error> {
+        self.0
+            .request::<operations::OpRetrieveProjectGroup>()
+            .path_parameter(project_id)?
+            .path_parameter(group_id)?
             .query(params)?
             .send()
             .await

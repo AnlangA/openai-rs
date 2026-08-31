@@ -232,3 +232,2543 @@ until a decision is recorded here and its fixtures pass.
 - Overrides: none.
 - Tests: Responses/Chat wire fixtures, xtask schema-IR enum-subset test, and
   `cargo run --locked -p xtask -- check`.
+
+## D0015 — Responses fields and limits match pinned OpenAPI and Python SDK
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `CreateResponse` / `Response` request-response field inventory, numeric
+  and metadata limits, Structured Outputs strict-subset keywords
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`CreateResponse`,
+  `CreateModelResponseProperties`, `ModelResponseProperties`,
+  `ResponseProperties`, `Response`, `ServiceTierResponses`, `Metadata`);
+  official Python SDK `response_create_params.py` and `response.py` on
+  `openai/openai-python` main as reviewed on the stated date; official
+  Structured Outputs supported-schema guidance (strict subset accepts `anyOf`,
+  not `allOf`/`oneOf`/`not`/`if`/`then`/`else`).
+- Decision:
+  1. Keep every Python `ResponseCreateParamsBase` field on the handwritten
+     create body. `stream` remains typestate-split; `stream_options` remains
+     streaming-only.
+  2. Type the stored `Response` echo fields that the Python SDK already
+     exposes: `moderation`, `prompt_cache_key`, `prompt_cache_options`,
+     `prompt_cache_retention`, and `top_logprobs`. Unknown future fields stay
+     in `ExtraFields`.
+  3. Model `service_tier` as `Omittable<Nullable<ServiceTier>>` on both the
+     create body and `Response`, matching `ServiceTierResponses` (`null` plus
+     `auto|default|flex|scale|priority|fast|ultrafast`). Chat keeps the
+     narrower pinned `ServiceTier` enum (`ultrafast` is Responses-only).
+  4. Enforce pinned limits through explicit `CreateResponseRequest::validate`
+     rather than rejecting them during Serde decode: `temperature` 0..=2,
+     `top_p` 0..=1, `top_logprobs` 0..=20, `max_output_tokens` >= 16,
+     metadata 16 pairs / 64-char keys / 512-char values, `safety_identifier`
+     64 characters, non-empty `context_management` when present.
+  5. Reject the official unsupported Structured Outputs composition and
+     advanced object/array keywords (`allOf`, `oneOf`, `not`, `if`/`then`/`else`,
+     `prefixItems`, `contains`, `uniqueItems`, and the previously rejected
+     `patternProperties` family). Keep `anyOf`, `items`, `minItems`/`maxItems`,
+     and numeric/string constraint keywords.
+- Reason: the previous GA `Response` DTO dropped several echoed fields into
+  `ExtraFields`, could not send `service_tier: null`, and the structured-output
+  normalizer advertised a stricter subset than it enforced. Python TypedDicts
+  collapse omit/null; this crate keeps the three-state wire model and adds an
+  opt-in validator for the documented limits.
+- Impact: Responses request/response JSON; Structured Outputs schema
+  normalization; public accessors and `CreateResponseConstraintError`.
+- Overrides: none
+- Tests: `response_decodes_python_sdk_echo_fields`,
+  `create_request_service_tier_null_matches_openapi`,
+  `create_request_validate_enforces_pinned_limits`,
+  `create_response_fields_match_python_and_openapi_inventory`,
+  `rejects_unsupported_keywords`.
+
+## D0016 — Chat Completions moderation echo and request limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `CreateChatCompletionRequest` / `CreateChatCompletionResponse.moderation`
+- Sources: pinned OpenAPI `ChatCompletionModeration` (list-shaped
+  `moderation_results` + `error`); official Python
+  `src/openai/types/chat/chat_completion.py` and
+  `completion_create_params.py` as reviewed on the stated date.
+- Decision:
+  1. Decode Chat `moderation` as the pinned list-shaped union, not as
+     unstructured `Value` and not as the Responses single-result shape.
+  2. Enforce Chat create limits through explicit
+     `CreateChatCompletionRequest::validate`: `messages` minItems 1,
+     `temperature` 0..=2, `top_p` 0..=1, `frequency_penalty`/`presence_penalty`
+     -2..=2, `top_logprobs` 0..=20, `n` 1..=128, metadata 16×64/512, and
+     `safety_identifier` 64 characters.
+- Reason: Python types Chat moderation as `moderation_results` with a
+  `results` array; collapsing that to `Value` hid a directional contract that
+  differs from GA Responses.
+- Impact: Chat completion/chunk decode; public `ChatCompletionModeration`
+  accessors; `CreateChatCompletionConstraintError`.
+- Overrides: none
+- Tests: `chat_completion_decodes_python_moderation_results_list`,
+  `chat_create_validate_enforces_pinned_limits`.
+
+## D0017 — Embeddings, Speech, Images, Transcription, and Fine-tuning limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `CreateEmbeddingRequest`, `CreateSpeechRequest`,
+  `CreateTranscriptionRequest`, `CreateTranslationRequest`,
+  `CreateImageRequest`, `CreateImageEditJsonRequest`,
+  `CreateImageEditMultipartRequest`, `CreateFineTuningJobRequest`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`CreateEmbeddingRequest`,
+  `CreateSpeechRequest`, `CreateTranscriptionRequest`,
+  `CreateTranslationRequest`, `CreateImageRequest`,
+  `CreateImageEditRequest`, `CreateFineTuningJobRequest`, `Metadata`);
+  official Python SDK `embedding_create_params.py`,
+  `audio/speech_create_params.py`, `image_generate_params.py`,
+  `image_edit_params.py`, and `fine_tuning/job_create_params.py` as
+  reviewed on the stated date.
+- Decision:
+  1. Request field inventories already match the Python TypedDicts and the
+     pin. Keep lossless Serde decode for out-of-range values.
+  2. Enforce Embeddings limits through explicit
+     `CreateEmbeddingRequest::validate`: reject empty scalar/string items,
+     empty token batches, array lengths outside `1..=2048`, and
+     `dimensions < 1`.
+  3. Enforce Speech `input`/`instructions` `maxLength: 4096` through
+     `CreateSpeechRequest::validate`. `speed` remains the existing
+     `SpeechSpeed` constructor/Serde bound (`0.25..=4.0`).
+  4. Enforce transcription `languages` minItems 1, `known_speaker_*`
+     maxItems 4 with matching lengths, and `temperature` `0..=1`.
+     Translation reuses the temperature check.
+  5. Enforce image prompt ceilings by model: `dall-e-2` 1000,
+     `dall-e-3` generation 4000, GPT image models 32000. Image `n`,
+     `output_compression`, and `partial_images` remain constructor-bounded
+     types. Image-edit `moderation` stays generate-only on the official
+     pin and Python `ImageEditParams`; the JSON edit DTO may still carry
+     it as an extra optional.
+  6. Enforce Fine-tuning `suffix` `1..=64`, `seed` `0..=2147483647`, and
+     shared metadata 16×64/512 through `CreateFineTuningJobRequest::validate`.
+- Reason: these families already exposed every official request field, but
+  callers could construct values the pin documents as illegal. Opt-in
+  validators match D0015/D0016 and keep three-state wire decode intact.
+- Impact: public constraint-error types and `validate` methods on the
+  listed create requests.
+- Overrides: none
+- Tests: `embedding_create_validate_enforces_pinned_limits`,
+  `embedding_create_fields_match_python_and_openapi_inventory`,
+  `speech_create_validate_enforces_pinned_limits`,
+  `speech_create_fields_match_python_and_openapi_inventory`,
+  `transcription_create_validate_enforces_pinned_limits`,
+  `image_create_validate_enforces_model_prompt_limits`,
+  `fine_tuning_create_validate_enforces_pinned_limits`,
+  `fine_tuning_create_fields_match_python_and_openapi_inventory`.
+
+## D0018 — Remaining-family field inventory and Completions/Chat stop limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: Batches, Files/Uploads, Vector Stores, Containers, Skills, Content
+  Provenance, Conversations, Moderations, Voices, legacy Completions, Chat
+  `stop`/`logit_bias`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python SDK create
+  TypedDicts reviewed on the stated date.
+- Decision:
+  1. Remaining supported create-request inventories already match the pin:
+     Batch (`input_file_id`, `endpoint` including `/v1/videos`,
+     `completion_window`, `metadata`, `output_expires_after`), Upload
+     (filename/purpose/bytes/mime_type/expires_after; six-value purpose
+     remains D0005), Vector Store create/file/file-batch, Container body
+     (name/file_ids/expires_after/skills/memory_limit/network_policy),
+     Conversation (`items`, `metadata`), Moderation (`input`, `model`),
+     Voice/consent, Skills and Content Provenance multipart-only bodies.
+     Assistants/Videos stay omitted (D0013). Realtime GA request DTOs
+     follow the response-shaped session (`audio`, `output_modalities`)
+     rather than the stale flat `RealtimeSessionCreateRequest` component
+     (D0012).
+  2. Chat and Completions `stop` arrays are `1..=4`. `logit_bias` values
+     are `-100..=100`. Completions additionally validate `best_of` `0..=20`,
+     `logprobs` `0..=5`, `n` `1..=128`, `temperature` `0..=2`, `top_p`
+     `0..=1`, and penalties `-2..=2` through opt-in `validate()`.
+- Reason: the remaining families had no missing official request fields;
+  the leftover defect was undocumented stop/bias/completions numeric
+  limits that callers could construct.
+- Impact: `CreateChatCompletionConstraintError` stop/bias variants;
+  `CreateCompletionConstraintError` and `validate` on legacy Completions.
+- Overrides: none
+- Tests: `chat_create_validate_enforces_pinned_limits`,
+  `completion_create_validate_enforces_pinned_limits`,
+  `completion_create_fields_match_python_and_openapi_inventory`.
+
+## D0019 — Compact request prompt-cache and service_tier fields
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `POST /responses/compact` body
+  (`CompactResponseMethodPublicBody` / `CompactResponseRequest`)
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python SDK
+  `src/openai/types/responses/response_compact_params.py` as reviewed on
+  the stated date.
+- Decision:
+  1. Type every Python `ResponseCompactParams` / pin field on the GA
+     compact body: `model`, `input` (nullable), `instructions`,
+     `previous_response_id`, `prompt_cache_key`, `prompt_cache_options`,
+     `prompt_cache_retention`, and `service_tier`.
+  2. Reuse the GA Responses prompt-cache and `ServiceTier` types. Compact
+     `ServiceTierEnum` omits `scale`/`ultrafast`; those remain sendable
+     through the open enum.
+  3. Enforce compact `prompt_cache_key` `maxLength: 64` through opt-in
+     `validate()`. Serde decode stays lossless.
+  4. Beta compact already exposed this inventory; do not change it.
+- Reason: the previous GA compact DTO dropped the cache and tier fields
+  that both the pin and the Python SDK already accept.
+- Impact: `CompactResponseRequest` JSON; `CompactResponseConstraintError`.
+- Overrides: none
+- Tests: `compact_request_fields_match_python_and_openapi_inventory`,
+  `compact_request_validate_enforces_prompt_cache_key_limit`.
+
+## D0020 — Remaining response-field inventory and Models/File Search gaps
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: Models, Responses usage, file-search/code-interpreter tools,
+  EasyInputMessage/OutputMessage phase, ChatKit session, Images response,
+  stored Chat update/list, Conversation create/update/resource
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`Model`, `ResponseUsage`,
+  `FileSearchTool`, `RankingOptions`, `CodeInterpreterTool`,
+  `EasyInputMessage`, `OutputMessage`, `ChatSessionResource`,
+  `CreateChatSessionBody`, `ImagesResponse`, `Image`, `ChatCompletionList`,
+  `ConversationResource`, `CreateConversationBody`,
+  `UpdateConversationBody`); official Python `src/openai/types/model.py`
+  as reviewed on the stated date.
+- Decision:
+  1. Type `Model.shutdown_date` as `Omittable<Nullable<String>>` so official
+     list examples can send explicit `null` and retrieve examples can send a
+     `YYYY-MM-DD` date. Do not leave the field in `ExtraFields`.
+  2. Type Responses `usage.compute_units` as `Omittable<Nullable<u64>>`,
+     matching Chat Completions and the pin (`null` when the service reports
+     it).
+  3. Type every official `FileSearchTool` option on the handwritten tool:
+     `max_num_results` (`1..=50` via opt-in `validate()`), `ranking_options`
+     (`ranker`, `score_threshold` `0..=1`, `hybrid_search`), and nullable
+     `filters` reused from the shared Vector Store `Filters` union. Serde
+     decode stays lossless.
+  4. Type Code Interpreter `allowed_callers` the same way as Function tools.
+  5. Type Easy Input / Output message `phase` as
+     `Omittable<Nullable<MessagePhase>>` (`commentary` | `final_answer`) so
+     Codex-class follow-ups can resend the official field.
+  6. ChatKit session create/response, Images response/image, stored Chat
+     update/list, and Conversation create/update/resource inventories already
+     match the pin; lock them with field-inventory tests. Assistants/Videos
+     remain omitted (D0013).
+- Reason: a full OpenAPI-to-Rust property diff showed these response and
+  tool fields still dropped into `ExtraFields`, so callers could not send
+  file-search options or read announced model shutdown dates. ChatKit,
+  Images, stored Chat, and Conversation request/response keys were already
+  aligned.
+- Impact: Models decode; Responses usage/tool/message JSON; public
+  accessors and `CreateResponseConstraintError` file-search variants.
+- Overrides: none
+- Tests: `model_decodes_python_and_openapi_shutdown_date`,
+  `model_list_preserves_mixed_shutdown_dates`,
+  `response_usage_decodes_compute_units`,
+  `message_phase_roundtrips_on_input_and_output`,
+  `file_search_tool_fields_match_python_and_openapi_inventory`,
+  `file_search_tool_validate_enforces_pinned_limits`,
+  `code_interpreter_tool_sends_allowed_callers`,
+  `create_session_fields_match_python_and_openapi_inventory`,
+  `images_response_fields_match_python_and_openapi_inventory`,
+  `stored_chat_update_and_list_match_openapi_inventory`,
+  `conversation_request_and_resource_match_openapi_inventory`.
+
+## D0021 — Responses hosted-tool request fields are sendable
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `WebSearchTool`, `WebSearchPreviewTool`, `ImageGenTool`,
+  `CustomToolParam`, `FunctionShellToolParam`, `ToolSearchToolParam`,
+  `ApplyPatchToolParam`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python Responses
+  tool TypedDicts reviewed on the stated date.
+- Decision:
+  1. Type official Web Search options: `external_web_access`, nullable
+     `filters.allowed_domains`, nullable `user_location`, and
+     `search_context_size`. Preview also types `search_content_types`.
+  2. Type every `ImageGenTool` option (`model`, `quality`, `size`,
+     `output_format`, `output_compression` `0..=100`, `moderation`,
+     `background`, nullable `input_fidelity`, `input_image_mask`,
+     `partial_images` `0..=3`, `action`). Limits are opt-in `validate()`.
+  3. Type Custom tool `description`, flat Responses `format`
+     (`text` | `{type,syntax,definition}`), `defer_loading`, and
+     `allowed_callers`. This format is not the nested Chat Completions
+     `{type:"grammar",grammar:{...}}` shape.
+  4. Type Shell `environment` as the pinned
+     `container_auto` / `local` / `container_reference` union plus
+     `allowed_callers`. Type Tool Search `execution` / `description` /
+     `parameters`. Type Apply Patch `allowed_callers`.
+  5. Computer, programmatic, and local-shell tools remain tag-only
+     because the pin exposes only `type`.
+- Reason: those tools were implemented as tag-only DTOs, so official
+  options could only land in private `ExtraFields` and could not be sent.
+- Impact: Responses create-tool JSON; `CreateResponseConstraintError`
+  image-generation variants.
+- Overrides: none
+- Tests: `web_search_and_image_tools_match_python_and_openapi_inventory`,
+  `image_generation_tool_validate_enforces_pinned_limits`,
+  `remaining_response_tools_send_official_fields`.
+
+## D0022 — Computer-use and apply_patch item fields are sendable
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `ComputerToolCall`, `ComputerToolCallOutput`,
+  `ComputerCallOutputItemParam`, `ComputerAction`, `ComputerScreenshotImage`,
+  `ComputerCallSafetyCheckParam`, `ApplyPatchToolCall`,
+  `ApplyPatchToolCallOutput`, `ApplyPatchCreateFileOperation`,
+  `ApplyPatchUpdateFileOperation`, `ApplyPatchDeleteFileOperation`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python Responses
+  computer-use and apply_patch item TypedDicts reviewed on the stated date.
+- Decision:
+  1. Type computer-use `action` as the pinned 9-variant `ComputerAction`
+     union (`click` / `double_click` / `drag` / `keypress` / `move` /
+     `screenshot` / `scroll` / `type` / `wait`) plus `actions` for batched
+     `computer_use`. Type `pending_safety_checks` as
+     `ComputerSafetyCheck` (`id`, nullable `code` / `message`).
+  2. Type computer-use output `output` as `ComputerScreenshot`
+     (`type:computer_screenshot`, `image_url`, `file_id`) and type
+     nullable `acknowledged_safety_checks`. Follow-up conversion copies
+     resource `id` / `status` / acknowledgements onto the input item.
+  3. Type apply_patch `operation` as the pinned
+     `create_file` / `delete_file` / `update_file` union, including the
+     required `diff` on create/update. Type apply_patch output `output`
+     as nullable log text so callers can send patch results.
+  4. Future action/operation tags stay in `UnknownTaggedObject`. Serde
+     decode stays lossless for known tags; malformed known tags are not
+     downgraded.
+- Reason: those official item fields lived only in `ExtraFields` or an
+  untyped `Value`, so callers could not construct computer-use
+  acknowledgements, batched `actions`, or apply_patch diffs.
+- Impact: Responses input/output item JSON for computer-use and
+  apply_patch.
+- Overrides: none
+- Tests: `computer_call_fields_match_python_and_openapi_inventory`,
+  `apply_patch_operation_fields_match_python_and_openapi_inventory`.
+
+## D0023 — Realtime translation WebSocket events are typed
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `RealtimeTranslationClientEvent`, `RealtimeTranslationServerEvent`,
+  `RealtimeTranslationSessionUpdateRequest`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python Realtime
+  translation event TypedDicts reviewed on the stated date.
+- Decision:
+  1. Type the pinned 3-branch translation client union:
+     `session.update`, `session.input_audio_buffer.append`, and
+     `session.close`. Session update reuses translation audio input/output
+     configuration; append uses typed `RealtimeAudio`.
+  2. Type the pinned 7-branch translation server union, including reused
+     `RealtimeServerEventError` plus `session.created` / `updated` /
+     `closed` and the transcript/audio deltas.
+  3. Type official delta metadata: nullable `elapsed_ms` on transcript
+     and audio deltas, plus `sample_rate`, `channels`, and `format`
+     (`pcm16`) on `session.output_audio.delta`. These must not remain in
+     `ExtraFields`.
+  4. Future translation event tags stay in `UnknownRealtimeObject`.
+     Malformed known tags are not downgraded.
+- Reason: translation REST secrets were typed, but the WebSocket event
+  family was missing, so official alignment metadata could not be read
+  or sent.
+- Impact: `realtime` feature event unions; no change to the GA 11/46
+  conversation Realtime unions.
+- Overrides: none
+- Tests: `event_unions_match_the_pinned_discriminator_manifest`,
+  `translation_events_match_python_and_openapi_inventory`,
+  `translation_event_unions_decode_every_pinned_tag`.
+
+## D0024 — Web-search and shell call actions are typed
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `WebSearchToolCall.action`, `LocalShellExecAction`,
+  `FunctionShellAction`, `FunctionShellCall.environment`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python Responses
+  web-search and shell item TypedDicts reviewed on the stated date.
+- Decision:
+  1. Type web-search `action` as the pinned
+     `search` / `open_page` / `find_in_page` union, including deprecated
+     `query`, `queries`, and URL `sources`.
+  2. Type local-shell `action` as `exec` with required `command` / `env`
+     and optional nullable `timeout_ms` / `working_directory` / `user`.
+  3. Type function-shell `action` as `{commands, timeout_ms,
+     max_output_length}` (no `type` discriminator in the pin). Type
+     call `environment` as the existing
+     `container_auto` / `local` / `container_reference` union.
+  4. Future action tags stay in `UnknownTaggedObject`. Serde decode
+     stays lossless for known tags.
+- Reason: those official item actions were untyped `Value`, so callers
+  could not read search queries or execute shell argv without
+  hand-indexing JSON.
+- Impact: Responses web-search, local-shell, and function-shell item
+  JSON.
+- Overrides: none
+- Tests: `web_search_and_shell_actions_match_python_and_openapi_inventory`.
+
+## D0025 — Reasoning, Code Interpreter, and tool-call payload fields are typed
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `ReasoningItem`, `SummaryTextContent`, `ReasoningTextContent`,
+  `CodeInterpreterTool.container`, `CodeInterpreterCall.outputs`,
+  `FunctionShellCallOutput.output`, `ToolSearchOutput.tools`,
+  `ToolCallCaller`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python Responses
+  reasoning, code-interpreter, shell-output, and tool-search TypedDicts
+  reviewed on the stated date.
+- Decision:
+  1. Type reasoning `summary` as `SummaryTextContent[]` and expose official
+     optional `encrypted_content`, `content` (`ReasoningTextContent[]`),
+     and `status`. `encrypted_content` is constructible so ZDR /
+     `store:false` follow-ups do not depend on private `ExtraFields`.
+  2. Type code-interpreter `container` as `string | {type:auto,...}`
+     including `file_ids` (`<=50`, opt-in `validate()`), nullable
+     `memory_limit`, and `network_policy` (`disabled` | `allowlist`).
+     Type call `outputs` as `logs` | `image`. Add `interpreting` to
+     `ResponseItemStatus`.
+  3. Type function-shell output chunks as `{stdout, stderr, outcome}`
+     with `timeout` / `exit` outcomes, plus sendable `caller` and
+     `max_output_length`. Type tool-search `tools` as `ResponseTool[]`.
+     Type function/custom tool-call `output` as the pinned
+     `string | InputContent[]` union (`FunctionCallOutputValue`).
+  4. Type `ToolCallCaller` as `direct` | `program`+`caller_id` and wire
+     it onto function, custom, shell, and apply_patch call/output items.
+     Future tags stay in `UnknownTaggedObject`. Serde decode stays
+     lossless; `validate()` is not invoked by the HTTP client.
+     JSON Schema `parameters` / `arguments` and free-form allowed-tool
+     selectors remain `Value`.
+- Reason: those official structured payloads were `Value` or ExtraFields
+  only, so callers could not send encrypted reasoning, automatic CI
+  containers, shell outcomes, or programmatic callers.
+- Impact: Responses input/output item JSON; `CreateResponseConstraintError`
+  code-interpreter `file_ids` variant.
+- Overrides: none
+- Tests: `reasoning_and_code_interpreter_fields_match_python_and_openapi_inventory`,
+  `shell_output_and_tool_search_fields_match_python_and_openapi_inventory`.
+
+## D0026 — File-search results and typed stream payload parts
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `FileSearchCall.results`, `FileSearchResult`,
+  `ResponseItemStatus` (`searching` / `generating`),
+  `ReasoningSummaryPartAddedEvent.part`,
+  `ReasoningSummaryPartDoneEvent.part`,
+  `OutputTextAnnotationAddedEvent.annotation`,
+  `LocalShellCallOutput.status`, `McpListedTool.annotations`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python Responses
+  file-search and stream-event TypedDicts reviewed on the stated date.
+- Decision:
+  1. Type file-search `results` as nullable
+     `{file_id, text, filename, attributes, score}[]`. Attributes are the
+     pinned string/number/boolean map (Responses-local; `vector_stores`
+     cannot be imported from `responses`).
+  2. Add official item statuses `searching` (file search) and
+     `generating` (image generation) to `ResponseItemStatus`.
+  3. Type reasoning-summary stream `part` as `SummaryTextContent` and
+     output-text `annotation` as the existing `Annotation` union.
+  4. Type local-shell output `status` and MCP listed-tool `annotations`.
+     Serde decode stays lossless; `validate()` is not invoked by the HTTP
+     client.
+- Reason: file-search hits and those stream payloads were ExtraFields or
+  `Value`, so callers could not read retrieved filenames/scores or typed
+  summary parts.
+- Impact: Responses file-search items and stream events.
+- Overrides: none
+- Tests: `file_search_results_and_typed_stream_parts_match_openapi_inventory`.
+
+## D0027 — Shell environment memory, network, and skills are sendable
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `FunctionShellContainerAuto`, `FunctionShellLocalEnvironment`,
+  `ContainerSkill`, `LocalSkill`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python Responses
+  shell environment TypedDicts reviewed on the stated date.
+- Decision:
+  1. Type automatic-container official options: `file_ids` (`<=50`),
+     nullable `memory_limit`, `network_policy` (`disabled` | `allowlist`),
+     and `skills` (`skill_reference` | `inline`, `<=200`). Reuse the
+     Responses-local code-interpreter memory/network types.
+  2. Type local-environment `skills` as `{name, description, path}[]`
+     (`<=200`). Inline zip `data` stays redacted in Debug.
+  3. Skill id length `1..=64` and the count/file-id limits are opt-in
+     `validate()`. Serde decode stays lossless; `validate()` is not
+     invoked by the HTTP client.
+- Reason: those official environment fields lived only in private
+  `ExtraFields`, so callers could not send container memory, network
+  policy, or skills.
+- Impact: Responses shell-tool create JSON;
+  `CreateResponseConstraintError` shell-environment variants.
+- Overrides: none
+- Tests: `shell_environment_fields_match_python_and_openapi_inventory`.
+
+## D0028 — MCP tool-call errors are the pinned tagged union
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `McpCall.error`, `McpCallError`, `ResponseItemStatus::Calling`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python Responses
+  MCP tool-call TypedDicts reviewed on the stated date.
+- Decision:
+  1. Type `mcp_call.error` as nullable
+     `mcp_protocol_error` | `mcp_tool_execution_error` | `http_error`.
+     Protocol/HTTP carry `code` + `message`; execution `content` stays
+     `Value` because the pin leaves that schema empty.
+  2. Add official MCP status `calling` to `ResponseItemStatus`.
+  3. Future error tags stay in `UnknownTaggedObject`. Serde decode of
+     known tags is strict; a string `error` is not invented by the pin.
+- Reason: the field was typed as `String`, so official structured MCP
+  errors could not decode on the known `mcp_call` branch.
+- Impact: Responses MCP call item JSON.
+- Overrides: none
+- Tests: `mcp_call_error_union_matches_python_and_openapi_inventory`.
+
+## D0029 — Remaining official item fields leave ExtraFields
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `McpApprovalResponse`, `McpApprovalResponseResource`,
+  `ApplyPatchToolCallOutput` / `ApplyPatchToolCallOutputItemParam`,
+  `ToolSearchCallItemParam`, `AdditionalToolsItemParam`,
+  `CompactionSummaryItemParam`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python Responses
+  item TypedDicts reviewed on the stated date.
+- Decision:
+  1. Type MCP approval-response input `id` and `reason` as
+     `Omittable<Nullable<String>>`. Official `reason: null` must decode;
+     callers can send a stored item `id`. Resource `reason` is the same
+     nullable string. Ghost `request_id` stays required on the resource
+     only (D0008).
+  2. Type apply-patch output `caller` on both the sendable input item and
+     the API resource. Resource also types official `created_by`.
+  3. Type tool-search call input `id`, `call_id`, `execution`, and
+     `status`. Type additional-tools and compaction input `id`. Those
+     were ExtraFields-only, so callers could not send them.
+  4. Serde decode stays lossless; `validate()` is not invoked by the HTTP
+     client. Output-to-input conversion copies the newly typed fields.
+- Reason: a follow-up OpenAPI-to-Rust property diff found official
+  sendable item fields still trapped in private ExtraFields, plus one
+  nullability offset that rejected official MCP approval JSON.
+- Impact: Responses input/output item JSON.
+- Overrides: none
+- Tests: `remaining_item_fields_match_python_and_openapi_inventory`.
+
+## D0030 — Resource item fields are readable and round-trip
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `FunctionToolCallOutputResource`, `FunctionToolCallResource`,
+  `CustomToolCall` / `CustomToolCallResource`,
+  `CustomToolCallOutputResource`, `ComputerToolCallOutputResource`,
+  `ToolSearchCall`, `ToolSearchOutput`, `FunctionShellCall`,
+  `FunctionShellCallOutput`, `ApplyPatchToolCall`, `CompactionItem`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python Responses
+  resource item TypedDicts reviewed on the stated date.
+- Decision:
+  1. Type official `FunctionToolCallOutputResource` fields that lived only
+     in ExtraFields: `call_id`, `name`, `namespace`, `caller`, and
+     `created_by`. `Response::to_input_items` copies the overlapping
+     input fields instead of dropping them to ExtraFields.
+  2. Type resource `created_by` on function/custom/computer/tool-search/
+     shell/apply-patch/compaction items. Custom-tool calls also type
+     resource `status`.
+  3. `created_by` stays resource-side; input params that omit it are not
+     given a sendable copy. Serde decode stays lossless.
+- Reason: official output resources could not expose `call_id` or
+  `created_by` as named fields, and converting a function-call output
+  back to input dropped those properties from the typed DTO.
+- Impact: Responses output-item JSON and `to_input_items`.
+- Overrides: none
+- Tests: `resource_item_fields_match_python_and_openapi_inventory`.
+
+## D0031 — Function-tool parameters and pinned tool-name limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `FunctionTool` / `FunctionToolParam`, `CustomToolParam`,
+  `NamespaceToolParam`, `allowed_callers` on hosted tools
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; official Python Responses
+  function-tool TypedDicts reviewed on the stated date.
+- Decision:
+  1. Type function-tool `parameters` as `Omittable<Nullable<Value>>`. The
+     sendable `FunctionToolParam` requires only `type`+`name`; official
+     omit/`null` must decode. `FunctionTool::new` still sends an empty
+     object schema.
+  2. Enforce FunctionToolParam `name` `1..=128` and `[A-Za-z0-9_-]` through
+     opt-in `validate()`. Namespace `name` must be non-empty and `tools`
+     `minItems: 1`. Present non-null `allowed_callers` must be non-empty
+     (`minItems: 1`) on function, custom, MCP, code-interpreter, shell, and
+     apply-patch tools.
+  3. Serde decode stays lossless; `validate()` is not invoked by the HTTP
+     client.
+- Reason: official function tools without `parameters` could not decode on
+  the known `function` branch, and callers could construct names/empty
+  caller lists that the pin rejects.
+- Impact: Responses tool JSON; `CreateResponseConstraintError` function/
+  namespace/`allowed_callers` variants.
+- Overrides: none
+- Tests: `function_tool_parameters_and_name_match_python_and_openapi_inventory`.
+
+## D0032 — Remaining official nullability and opt-in create limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: Realtime `Prompt`, Realtime output `speed`, Fine-tuning
+  hyperparameters, Chat deprecated `functions`, MCP `tunnel_id`, Container
+  `skill_id`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`Prompt`,
+  `RealtimeSessionCreateRequestGA.audio.output.speed`,
+  `FineTuneSupervisedHyperparameters`, `FineTuneDPOHyperparameters`,
+  `FineTuneReinforcementHyperparameters`, `CreateChatCompletionRequest.functions`,
+  `MCPTool.tunnel_id`, `SkillReferenceParam.skill_id`); official Python SDK
+  types reviewed on the stated date.
+- Decision:
+  1. Type Realtime session/response `prompt` as
+     `Omittable<Nullable<PromptReference>>` so official `prompt: null` decodes
+     and can be sent. GA `audio.output.speed` is checked by opt-in
+     `RealtimeSessionCreateRequest::validate()` as `0.25..=1.5`.
+  2. Walk Fine-tuning legacy and method hyperparameters in
+     `CreateFineTuningJobRequest::validate()`: `batch_size` `1..=256`,
+     `n_epochs` `1..=50`, `learning_rate_multiplier` `> 0`, DPO `beta` `(0, 2]`,
+     `compute_multiplier` `(0.00001, 10]`, `eval_interval`/`eval_samples` `>= 1`.
+  3. Enforce deprecated Chat `functions` `minItems: 1` / `maxItems: 128`, MCP
+     `tunnel_id` `^tunnel_[a-z0-9]{32}$`, and Container referenced `skill_id`
+     `1..=64` through opt-in `validate()`.
+  4. Serde decode stays lossless; `validate()` is not invoked by the HTTP
+     client.
+- Reason: official Realtime session fixtures send `prompt: null`, and callers
+  could construct hyperparameter, function-list, tunnel, and skill-id values
+  the pin rejects.
+- Impact: Realtime session/response JSON; Fine-tuning/Chat/Responses/Container
+  constraint errors.
+- Overrides: none
+- Tests: `realtime_prompt_null_and_output_speed_match_python_and_openapi_inventory`,
+  `fine_tuning_create_validate_enforces_hyperparameter_limits`,
+  `chat_create_validate_enforces_pinned_limits`,
+  `function_tool_parameters_and_name_match_python_and_openapi_inventory`,
+  `create_container_validate_enforces_skill_id_length`.
+
+## D0033 — Compact/count-tokens sendability and Admin official nulls
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `CompactResponseRequest` / `BetaCompactResponseRequest` `model`,
+  `CountInputTokensRequest` public setters, Admin update/create nullability,
+  `EvalSamplingParams.response_format`/`text`, Admin opt-in create limits
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`ModelIdsCompaction`,
+  `TokenCountsBody`, `ProjectUpdateRequest`, `UserRoleUpdateRequest`,
+  `ProjectUserUpdateRequest`, `ProjectServiceAccountCreateRequest`,
+  `PublicCreateOrganizationRoleBody`, `PublicUpdateOrganizationRoleBody`,
+  `AdminApiKeyCreateRequest.expires_in_seconds`, `CreateGroupBody.name`,
+  `ToggleCertificatesRequest.certificate_ids`,
+  `UpdateOrganizationSpendLimitBody.threshold_amount`); official Python SDK
+  types reviewed on the stated date.
+- Decision:
+  1. Type compact `model` as `Omittable<Nullable<String>>` on GA and beta so
+     official `model: null` decodes and can be sent. Compact `validate()` also
+     checks string `input` `maxLength` 10485760.
+  2. Expose public CountTokens setters for official `previous_response_id`,
+     `parallel_tool_calls`, `reasoning`, `text`, `truncation`, and matching
+     `*_null` helpers already typed on the DTO.
+  3. Wrap remaining official Admin anyOf-null request fields in
+     `Omittable<Nullable<_>>`. Add `response_format`/`text` setters on
+     `EvalSamplingParams`.
+  4. Enforce Admin create/update pin bounds through opt-in `validate()`:
+     API-key expiry `1..=31536000`, group name `1..=255`, certificate ids
+     `1..=10`, spend-limit threshold `>= 1`. Serde stays lossless.
+- Reason: official compact/session fixtures send `model: null`; callers could
+  not construct official count-token or eval sampling fields; Admin update
+  bodies rejected official nulls.
+- Impact: Compact/count-token/Admin/Eval request JSON and constraint errors.
+- Overrides: none
+- Tests: `compact_request_fields_match_python_and_openapi_inventory`,
+  `count_input_tokens_request_sends_official_fields`,
+  `admin_request_nulls_and_limits_match_python_and_openapi_inventory`,
+  `run_data_sources_enforce_nested_tag_sets_and_build_typed_requests`.
+
+## D0034 — Input content official nulls and Eval run/source setters
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `InputText` / `InputImage` / `InputFile` optional fields,
+  `PromptReference.version`, `CreateEvalRunRequest.metadata`,
+  Eval stored-completions / responses source filters
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`InputTextContentParam`,
+  `InputImageContentParamAutoParam`, `InputFileContentParam`, `Prompt.version`,
+  `CreateEvalRunRequest`, `CreateEvalResponsesRunDataSource.source`,
+  `CreateEvalJSONLRunDataSource.stored_completions`); official Python SDK
+  types reviewed on the stated date.
+- Decision:
+  1. Type official anyOf-null input-part fields as `Omittable<Nullable<_>>`
+     (`file_id`/`filename`/`file_data`/`file_url`/`image_url`/`detail` on
+     image, `prompt_cache_breakpoint` on text/image/file). File `detail`
+     stays `Omittable<ImageDetail>` because the pin is a non-null `$ref`.
+  2. Type `PromptReference.version` as `Omittable<Nullable<String>>` and add
+     `version_null()`.
+  3. Expose public setters for `CreateEvalRunRequest.metadata` and the
+     official stored-completions / responses source filters already typed on
+     the DTOs. Serde decode stays lossless.
+- Reason: official input fixtures send explicit `null` on file/image/text
+  optionals and prompt version; Eval run/source metadata and filters could
+  not be constructed through the public builder.
+- Impact: Responses input-content JSON; Eval run/source request JSON.
+- Overrides: none
+- Tests: `input_content_and_prompt_version_accept_official_nulls`,
+  `run_data_sources_enforce_nested_tag_sets_and_build_typed_requests`.
+
+## D0035 — Realtime Metadata nulls and compact send/validate parity
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `RealtimeResponse` / `RealtimeResponseCreateParams` `metadata`,
+  GA and beta compact request `*_null` setters, beta compact `validate()`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`Metadata`,
+  `RealtimeResponse.metadata`, `RealtimeResponseCreateParams.metadata`,
+  `CompactResponseMethodPublicBody`, `BetaCompactResponseMethodPublicBody`);
+  official Python SDK types reviewed on the stated date.
+- Decision:
+  1. Type Realtime response and `response.create` `metadata` as
+     `Omittable<Nullable<BTreeMap<String, String>>>` so official
+     `metadata: null` decodes and can be sent.
+  2. Expose the remaining official compact anyOf-null setters on GA
+     (`instructions` / `previous_response_id` / `prompt_cache_options` /
+     `prompt_cache_retention`) and the matching beta compact setters
+     (`input` / `instructions` / `previous_response_id` / `prompt_cache_key`
+     / `prompt_cache_options` / `prompt_cache_retention` / `service_tier`).
+  3. Mirror GA compact opt-in `validate()` on `BetaCompactResponseRequest`
+     for `prompt_cache_key` `maxLength` 64 and string `input`
+     `maxLength` 10485760. Serde decode stays lossless.
+- Reason: official Realtime response fixtures send `metadata: null`;
+  compact request fields are private, so missing `*_null` helpers blocked
+  sending official nulls; beta compact lacked the D0033 pin checks.
+- Impact: Realtime response JSON; compact request JSON and constraint
+  errors.
+- Overrides: none
+- Tests: `realtime_prompt_null_and_output_speed_match_python_and_openapi_inventory`,
+  `compact_request_fields_match_python_and_openapi_inventory`,
+  `compact_request_sends_official_nulls_and_enforces_pin_limits`.
+
+## D0036 — Count-tokens official nulls and remaining Realtime create limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `CountInputTokensRequest` / `BetaCountInputTokensRequest`
+  conversation and remaining `*_null` setters, count-tokens string
+  `input` `validate()`, Realtime session/client-secret pin bounds
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`TokenCountsBody`,
+  `BetaTokenCountsBody`, `RealtimeCreateClientSecretRequest.expires_after`,
+  `RealtimeTruncation.retention_ratio`, `RealtimeTurnDetection` Server VAD
+  `idle_timeout_ms`, `AudioTranscription.languages`); official Python SDK
+  types reviewed on the stated date.
+- Decision:
+  1. Expose `conversation_null()` on GA count-tokens and the remaining
+     official anyOf-null setters on beta count-tokens (`model` / `input` /
+     `instructions` / `conversation` / `parallel_tool_calls` /
+     `previous_response_id` / `reasoning` / `text` / `tool_choice` /
+     `tools`).
+  2. Add opt-in `validate()` on GA and beta count-tokens for string `input`
+     `maxLength` 10485760. Serde decode stays lossless; tests do not
+     allocate a 10 MiB fixture.
+  3. Extend Realtime opt-in `validate()` for client-secret
+     `expires_after.seconds` `10..=7200`, `retention_ratio` `0..=1`,
+     Server VAD `idle_timeout_ms` `5000..=30000`, and present
+     `transcription.languages` `minItems: 1`. Nested session configs on
+     client-secret create are walked.
+- Reason: count-tokens fields are private, so missing `*_null` helpers
+  blocked official nulls; Realtime create already validated output speed
+  but left the other pin keywords unchecked.
+- Impact: Count-tokens request JSON; Realtime session/client-secret
+  constraint errors.
+- Overrides: none
+- Tests: `count_input_tokens_request_sends_official_fields`,
+  `create_and_count_requests_keep_beta_only_fields_typed`,
+  `realtime_prompt_null_and_output_speed_match_python_and_openapi_inventory`.
+
+## D0037 — CreateResponse remaining official null setters
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `CreateResponseRequest` / `CreateStreamingResponseRequest`
+  remaining anyOf-null setters; matching beta create wrappers
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`CreateResponse`); official
+  Python SDK types reviewed on the stated date.
+- Decision:
+  1. Expose public `*_null` setters for every remaining official
+     anyOf-null create field already typed as `Omittable<Nullable<_>>`
+     (`background`, `conversation`, `context_management`, `include`,
+     `max_output_tokens`, `max_tool_calls`, `metadata`, `moderation`,
+     `parallel_tool_calls`, `previous_response_id`, `prompt`,
+     `prompt_cache_key`, `prompt_cache_options`,
+     `prompt_cache_retention`, `reasoning`, `store`, `temperature`,
+     `top_p`, `truncation`).
+  2. Forward the same official nulls on `BetaCreateResponseRequest`,
+     including beta-local `context_management` / `moderation` /
+     `multi_agent` / `reasoning`. Serde decode stays lossless.
+- Reason: create-body fields are private; missing `*_null` helpers
+  blocked sending official nulls that the pin already types.
+- Impact: Responses create request JSON (GA and beta).
+- Overrides: none
+- Tests: `create_request_sends_typed_context_moderation_and_explicit_nulls`.
+
+## D0038 — Beta create forwards, stream_options null, image partial_images null
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `BetaCreateResponseRequest` remaining official forwards,
+  GA/beta streaming `stream_options`, streaming image `partial_images`,
+  `BetaReasoningConfig` official nulls
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`BetaCreateResponse`,
+  `ResponseStreamOptions`, `PartialImages`, `BetaReasoning`); official
+  Python SDK types reviewed on the stated date.
+- Decision:
+  1. Forward remaining official create fields through the private beta
+     `base` (`conversation`, `instructions_null`, `prompt`,
+     `prompt_cache_retention`, `safety_identifier`, `service_tier`,
+     `top_logprobs`, `user`) and expose opt-in `validate()`.
+  2. Type streaming `stream_options` as
+     `Omittable<Nullable<ResponseStreamOptions>>` so official
+     `stream_options: null` decodes and can be sent.
+  3. Expose `with_partial_images_null()` on streaming image create/edit
+     builders, and `generate_summary` / `*_null` on
+     `BetaReasoningConfig`. Serde decode stays lossless.
+- Reason: beta create hid official fields behind a private wrapper;
+  `Omittable<ResponseStreamOptions>` rejected official null; streaming
+  image `partial_images` could not send null.
+- Impact: Beta/GA streaming create JSON; image streaming JSON; beta
+  reasoning JSON.
+- Overrides: none
+- Tests: `create_and_count_requests_keep_beta_only_fields_typed`,
+  `request_builders_emit_typed_multimodal_and_tool_json`,
+  `image_generation_typestate_preserves_null_and_open_values`.
+
+## D0039 — Nested official nulls, compact_threshold, and Eval sampling validate
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: nested Responses/Chat/Completions/Evals official `anyOf [T, null]`
+  sendability, context-management `compact_threshold` `minimum: 1000`,
+  Eval sampling `max_completions_tokens` `minimum: 1`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`Reasoning`, `ModerationPolicy`,
+  `ContextManagement`, `MCPTool`, `WebSearchFilters`, `WebSearchTool`,
+  `ImageGenTool`, `EvalSamplingParams`, Chat/Completions `stream_options`);
+  official Python SDK types reviewed on the stated date.
+- Decision:
+  1. Expose `*_null` setters on `ReasoningConfig`, `ModerationPolicy`,
+     `ModerationConfig`, `ContextManagement`, `McpTool`, `WebSearchFilters`,
+     `WebSearchTool`, `WebSearchPreviewTool`, and `ImageGenerationTool`
+     for official anyOf-null fields already typed as
+     `Omittable<Nullable<_>>`.
+  2. Create-body `validate()` enforces pin `compact_threshold` `minimum: 1000`
+     (`MIN_COMPACT_THRESHOLD`) when a numeric value is present. Official
+     `null` and omitted values skip the bound.
+  3. Chat streaming `with_stream_options_null` and legacy Completions
+     `stream_options_null` send official `stream_options: null`.
+  4. `EvalSamplingParams` gains `*_null` for `seed` / `top_p` /
+     `temperature` / `max_completion_tokens` / `max_completions_tokens`
+     and opt-in `validate()` for pin `max_completions_tokens` `minimum: 1`.
+     Serde decode stays lossless.
+- Reason: nested official nulls were decodable but not sendable; two
+  remaining schema-keyword minima were not opt-in validated.
+- Impact: Responses create/tool JSON; Chat and Completions streaming JSON;
+  Eval sampling JSON. Decode remains lossless.
+- Overrides: none
+- Tests: `create_request_sends_typed_context_moderation_and_explicit_nulls`,
+  `create_request_validate_enforces_pinned_limits`,
+  `eval_sampling_params_sends_official_nulls_and_enforces_pin_limits`,
+  `request_typestate_controls_stream_wire_fields`,
+  `request_builders_cover_echo_best_of_suffix_and_stream_typestate`.
+
+## D0040 — Remaining sendable official nulls on tools, input parts, evals, completions
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: remaining private-field sendable `anyOf [T, null]` setters on
+  `FunctionTool`, `InputImage` / `InputFile`, Eval run sources, and
+  legacy Completions create
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`FunctionTool`,
+  `ResponseInputImage` / `ResponseInputFile`, `EvalStoredCompletionsSource`,
+  `EvalResponsesSource`, `CreateCompletionRequest`); official Python SDK
+  types reviewed on the stated date.
+- Decision:
+  1. `FunctionTool` sends official `description` / `output_schema` /
+     `strict` / `allowed_callers` nulls in addition to `parameters`.
+  2. `InputImage` sends `image_url` / `file_id` nulls; `InputFile` sends
+     `file_id` / `file_url` / `file_data` / `filename` nulls. Decode of
+     official nulls was already lossless.
+  3. `EvalStoredCompletionsSource` and `EvalResponsesSource` expose
+     `*_null` for every official nullable filter.
+  4. Legacy Completions builders send official nulls for `echo` /
+     `suffix` / `max_tokens` / `n` / `logprobs` / `logit_bias` / `stop` /
+     `temperature` / `top_p` / `frequency_penalty` / `presence_penalty` /
+     `seed` / `best_of`. Receive-side ExtraFields and tag-only tools stay
+     without setters.
+- Reason: those official nulls decoded but could not be constructed on
+  private-field request types.
+- Impact: Responses tool/input JSON; Eval run-source JSON; Completions
+  create JSON. Decode remains lossless.
+- Overrides: none
+- Tests: `function_tool_parameters_and_name_match_python_and_openapi_inventory`,
+  `input_content_and_prompt_version_accept_official_nulls`,
+  `eval_run_sources_send_official_filter_nulls`,
+  `request_builders_cover_echo_best_of_suffix_and_stream_typestate`.
+
+## D0041 — Remaining hosted-tool official nulls and MCP tool-choice name
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: remaining sendable official `anyOf [T, null]` on hosted tools and
+  MCP tool choice
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`CustomToolParam`,
+  `ApplyPatchToolParam`, shell tool, `ToolSearchToolParam`,
+  `ToolChoiceMCP`); official Python SDK types reviewed on the stated date.
+- Decision:
+  1. Expose `allowed_callers_null` on `CustomTool`, `FunctionShellTool`,
+     and `ApplyPatchTool`.
+  2. Expose `description_null` / `parameters_null` on `ToolSearchTool`.
+  3. Type `McpToolChoice.name` as `Omittable<Nullable<String>>` so official
+     `name: null` decodes and can be sent. Serde stays lossless.
+- Reason: hosted-tool official nulls were not sendable; MCP tool-choice
+  `name` rejected official null.
+- Impact: Responses tool and tool_choice JSON. Decode remains lossless.
+- Overrides: none
+- Tests: `remaining_response_tools_send_official_fields`.
+
+## D0042 — Response resource official background and truncation nulls
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: GA `Response` resource `background` and `truncation`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`ResponseProperties.background`,
+  `Response.truncation`); official Python SDK response types reviewed on
+  the stated date.
+- Decision: type `Response.background` as
+  `Omittable<Nullable<bool>>` and `Response.truncation` as
+  `Omittable<Nullable<TruncationStrategy>>` so official resource JSON
+  with `background: null` / `truncation: null` decodes and round-trips.
+  Beta `Response` already used these three-state types. Count-tokens
+  `truncation` stays non-null (`TokenCountsBody.truncation` is a
+  non-null `$ref`). `output_text` remains an SDK-only convenience
+  getter. Serde decode stays lossless.
+- Reason: GA response decode rejected official nulls that the pin and
+  Python SDK emit.
+- Impact: Responses GET/create resource JSON. Create-request builders
+  were already three-state.
+- Overrides: none
+- Tests: `response_decodes_python_sdk_echo_fields`.
+
+## D0043 — ComputerScreenshot and ResponseText verbosity official nulls
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `ComputerScreenshotContent.image_url` / `file_id`;
+  `ResponseTextParam.verbosity` (`Verbosity`)
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`ComputerScreenshotContent.image_url` / `file_id` are
+  `anyOf [string, null]`; `Verbosity` is `anyOf [enum, null]`);
+  official Python SDK types reviewed on the stated date.
+- Decision:
+  1. Type `ComputerScreenshot.image_url` and `file_id` as
+     `Omittable<Nullable<String>>` with `image_url_null` /
+     `file_id_null` so official screenshot JSON nulls decode and
+     can be sent.
+  2. Type `ResponseTextConfig.verbosity` as
+     `Omittable<Nullable<ResponseTextVerbosity>>` with
+     `verbosity_null` so official `verbosity: null` decodes and
+     can be sent. Serde stays lossless.
+- Reason: official resource/request JSON `"image_url": null`,
+  `"file_id": null`, and `"verbosity": null` failed on
+  `Omittable<T>` without `Nullable`.
+- Impact: Responses computer-use output and text config JSON.
+- Overrides: none
+- Tests: `computer_call_fields_match_python_and_openapi_inventory`,
+  `create_request_sends_typed_context_moderation_and_explicit_nulls`.
+
+## D0044 — Remaining computer, location, and container official nulls
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: sendable official `anyOf [T, null]` on computer-use actions,
+  `ApproximateLocation`, container `memory_limit`, and function-shell
+  timeouts/output caps
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`ClickParam.keys`,
+  `DoubleClickAction.keys`, `DragParam.keys`, `MoveParam.keys`,
+  scroll `keys`, `ComputerCallSafetyCheckParam.code` / `message`,
+  `ApproximateLocation` city/country/region/timezone,
+  `AutoCodeInterpreterToolParam.memory_limit`,
+  function-shell `timeout_ms` / `max_output_length`); official
+  Python SDK types reviewed on the stated date.
+- Decision:
+  1. Expose `keys` / `keys_null` on computer click, double-click,
+     drag, move, and scroll actions so official modifier-key nulls
+     can be sent.
+  2. Expose `code_null` / `message_null` on `ComputerSafetyCheck`.
+  3. Expose `country_null` / `region_null` / `city_null` /
+     `timezone_null` on `WebSearchUserLocation`.
+  4. Expose `memory_limit_null` on automatic code-interpreter and
+     function-shell containers.
+  5. Expose `timeout_ms_null` / `max_output_length_null` on
+     `FunctionShellAction` and `max_output_length_null` on
+     `FunctionShellCallOutputInput`. Serde stays lossless.
+- Reason: these request/param fields already decoded official nulls
+  but could not send them through the public builder API.
+- Impact: Responses computer-use, web-search location, container,
+  and shell JSON. Decode remains lossless.
+- Overrides: none
+- Tests: `computer_call_fields_match_python_and_openapi_inventory`,
+  `web_search_and_image_tools_match_python_and_openapi_inventory`,
+  `web_search_and_shell_actions_match_python_and_openapi_inventory`,
+  `reasoning_and_code_interpreter_fields_match_python_and_openapi_inventory`,
+  `shell_output_and_tool_search_fields_match_python_and_openapi_inventory`.
+
+## D0045 — ComputerScreenshotContent fields and input-content branch
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `ComputerScreenshotContent` / `ComputerScreenshotImage` and
+  Responses `InputContent`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`;
+  `ComputerScreenshotContent` requires nullable locators plus `detail`
+  and optional `prompt_cache_breakpoint`;
+  `ComputerScreenshotImage` (computer-call output) has optional
+  non-null locators and no detail; official input-content `oneOf`
+  includes `ComputerScreenshotContent`. Official Python SDK types
+  reviewed on the stated date.
+- Decision:
+  1. Keep screenshot locators as `Omittable<Nullable<String>>` so both
+     official shapes decode.
+  2. Add omittable `detail` and `prompt_cache_breakpoint` so content
+     payloads can send and decode those official fields.
+  3. Route `computer_screenshot` through typed
+     `InputContent::ComputerScreenshot` instead of `Unknown`.
+     Serde stays lossless.
+- Reason: official screenshot content fields were dropped and the known
+  tag fell through to the future-variant branch.
+- Impact: Responses input content and computer-call output JSON.
+- Overrides: none
+- Tests: `input_content_and_prompt_version_accept_official_nulls`,
+  `computer_call_fields_match_python_and_openapi_inventory`.
+
+## D0046 — Conversation content official prompt-cache breakpoints
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: persisted conversation `input_image`, `input_file`, and
+  `computer_screenshot` content
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`InputImageContent`, `InputFileContent`,
+  `ComputerScreenshotContent` each expose optional
+  `prompt_cache_breakpoint`); official Python SDK
+  `conversations.InputImageContent` /
+  `InputFileContent` /
+  `ComputerScreenshotContent` reviewed on the stated date.
+- Decision:
+  1. Type `prompt_cache_breakpoint` as
+     `Omittable<PromptCacheBreakpoint>` on
+     `ConversationInputImage`, `ConversationInputFile`, and
+     `ConversationComputerScreenshot` so official content JSON
+     decodes and can be sent.
+  2. Convert persisted screenshots to typed
+     `InputContent::ComputerScreenshot` instead of a role-mismatch
+     error. Resource locators stay required `Nullable` because the
+     pin requires `image_url` / `file_id` on screenshot content.
+     Serde stays lossless.
+- Reason: conversation content dropped the official breakpoint
+  field that both the pin and Python SDK persist.
+- Impact: Conversations message content JSON and
+  conversation-to-Responses conversion.
+- Overrides: none
+- Tests: `conversation_request_and_resource_match_openapi_inventory`.
+
+## D0047 — Message phase nulls and function-shell send/validate
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: official `Message.phase` nullability; function-shell call
+  and output item request fields
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`Message.phase` / `MessagePhase-2` are `anyOf` null;
+  `FunctionShellCallItemParam` exposes nullable `id` /
+  `caller` / `status` / `environment` and `call_id`
+  `minLength` 1 / `maxLength` 64;
+  `FunctionShellCallOutputItemParam` exposes nullable `id` /
+  `caller` / `status` and the same `call_id` bounds;
+  `FunctionShellCallOutputContentParam.stdout` /
+  `stderr` have `maxLength` 10485760)
+- Decision:
+  1. Keep `OutputMessage.phase` as
+     `Omittable<Nullable<MessagePhase>>` and add `phase_null`.
+  2. Type persisted `ConversationMessage.phase` as
+     `Omittable<Nullable<MessagePhase>>` (not a bare string)
+     and add `phase_null` so official conversation JSON
+     decodes and can be resent.
+  3. Add sendable official-null setters on
+     `FunctionShellCallInput` (`id` / `caller` / `status` /
+     `environment`) and `FunctionShellCallOutputInput`
+     (`id` / `caller` / `status`).
+  4. Add opt-in `validate()` for the pinned `call_id` and
+     stdout/stderr limits. Serde stays lossless; `validate()`
+     is not invoked by the HTTP client. Tests do not allocate
+     a 10,485,760-character string.
+- Reason: follow-up assistant messages must be able to send
+  official `phase: null`, and function-shell input items
+  dropped sendable official nulls plus the pinned call/output
+  limits.
+- Impact: Responses and Conversations message JSON; function-shell
+  input-item builders and opt-in validation.
+- Overrides: none
+- Tests: `message_phase_roundtrips_on_input_and_output`,
+  `conversation_request_and_resource_match_openapi_inventory`,
+  `shell_output_and_tool_search_fields_match_python_and_openapi_inventory`.
+
+## D0048 — Remaining item-param official nulls and call-id limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: remaining Responses input-item request params with official
+  `anyOf` nulls and pinned `call_id` / name / namespace / output
+  limits
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`FunctionCallOutputItemParam`, `ToolSearchCallItemParam`,
+  `ToolSearchOutputItemParam`, `ComputerCallOutputItemParam`,
+  `ApplyPatchToolCallItemParam`, `ApplyPatchToolCallOutputItemParam`,
+  `AdditionalToolsItemParam`, `CompactionSummaryItemParam`,
+  `CustomToolCallOutput`)
+- Decision:
+  1. Add sendable official-null setters on function-call output
+     (`id` / `call_id` / `name` / `namespace` / `caller` /
+     `status`), tool-search call/output (`id` / `call_id` /
+     `status`), computer-call output (`id` / `status`),
+     apply-patch call/output (`id` / `caller`), additional
+     tools (`id`), compaction (`id`), and custom-tool output
+     (`caller`).
+  2. Add opt-in `validate()` for pinned `call_id` `1..=64`,
+     function-call output `name` `1..=128`, namespace
+     `1..=64` plus `[A-Za-z0-9_-]`, and the documented
+     10,485,760 / 20,971,520 character caps. Serde stays
+     lossless; tests do not allocate those large strings.
+- Reason: these item params still dropped official nulls and
+  the same call-id limits already applied to function-shell
+  items.
+- Impact: Responses input-item builders and opt-in validation.
+- Overrides: none
+- Tests: `item_param_official_nulls_and_call_id_limits_match_openapi`.
+
+## D0049 — Function/custom caller nulls, program limits, remaining item nulls
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: remaining Responses/Conversations item constructors whose official
+  pin still allowed JSON null or documented `call_id` / program text
+  limits after D0048
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`FunctionToolCall`, `CustomToolCall`, `CompactionTriggerItemParam`,
+  `ProgramItemParam`, `ProgramOutputItemParam`, `MCPApprovalResponse`,
+  `LocalShellToolCallOutput`, `LocalShellExecAction`,
+  `WebSearchActionOpenPage`, `InputFileContent`)
+- Decision:
+  1. Add sendable official-null setters for function/custom-tool
+     `caller`, compaction-trigger `id`, MCP approval `id`, local-shell
+     output `status`, open-page `url`, local-shell exec
+     `timeout_ms` / `working_directory` / `user`, and conversation
+     input-file `file_id`.
+  2. Type compaction-trigger `id` as `Omittable<Nullable<String>>`
+     instead of dropping it into `ExtraFields`.
+  3. Add opt-in `validate()` for program `call_id` `1..=64` and
+     `code` / `fingerprint` / `result` maxLength 10,485,760. Serde
+     stays lossless; tests do not allocate those large strings.
+- Reason: these remaining item constructors still dropped official
+  nulls or skipped the same call-id / output-length limits already
+  applied to other tool items.
+- Impact: Responses/Conversations item builders and opt-in validation.
+- Overrides: none
+- Tests: `function_call_program_and_remaining_official_nulls_match_openapi`.
+
+## D0050 — Beta item official-null setters
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: preview Responses multi-agent item constructors whose official
+  `Beta*ItemParam` / content schemas still allowed JSON null after D0049
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`Beta*ItemParam.agent` / `id` / `caller` / `phase` / `status`,
+  `BetaInputTextContentParam`, `BetaInputImageContentParamAutoParam`,
+  `BetaAgentMessageItemParam`, `BetaMultiAgentCallItemParam`,
+  `BetaMultiAgentCallOutputItemParam`)
+- Decision:
+  1. Add sendable official-null setters on stable beta item metadata
+     (`agent` / `caller` / `phase`), prompt-cached messages
+     (`id` / `agent` / `phase` / `status` / breakpoint), inter-agent
+     text/image locators and breakpoints, agent messages, and
+     multi-agent call/output (`id` / `agent`).
+  2. Decode of official nulls was already lossless; this only exposes
+     constructors that can send the same three-state values.
+- Reason: beta wrappers reused GA codecs but still dropped official
+  preview-only nulls on the flattened metadata and beta-only items.
+- Impact: beta Responses item builders. Serde remains lossless.
+- Overrides: none
+- Tests: `beta_item_official_nulls_match_openapi`.
+
+## D0051 — Conversation input-image official locator nulls
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: persisted conversation `InputImageContent` locators whose official
+  pin allows JSON null
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`InputImageContent.image_url`, `InputImageContent.file_id`)
+- Decision: add sendable official-null setters for conversation input-image
+  `image_url` and `file_id`. Resource `detail` and
+  `prompt_cache_breakpoint` stay non-null, matching the pin.
+- Reason: Responses input-image already sent these official nulls; the
+  conversation resource constructor did not.
+- Impact: Conversations input-image builders.
+- Overrides: none
+- Tests: `conversation_request_and_resource_match_openapi_inventory`.
+
+## D0052 — Program-caller `caller_id` opt-in limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `ProgramToolCallCallerParam.caller_id` `1..=64` when a program
+  caller is sent on Responses tool items
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`ProgramToolCallCallerParam`)
+- Decision: add opt-in `validate()` for program `caller_id` and walk it
+  from function/custom/shell/apply-patch input items. Serde stays
+  lossless.
+- Reason: program items already enforced `call_id` `1..=64`; the nested
+  caller that references those programs still dropped the same pin.
+- Impact: Responses item opt-in validation.
+- Overrides: none
+- Tests: `function_call_program_and_remaining_official_nulls_match_openapi`.
+
+## D0053 — Function/custom/MCP call constructors match official requiredness
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: Responses function, custom-tool, and MCP call input
+  constructors versus pinned required/optional properties and the
+  Python SDK Stainless types
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`FunctionToolCall`, `CustomToolCall`, `CustomToolCallOutput`,
+  `MCPToolCall`); Python
+  `openai.types.responses.response_function_tool_call` /
+  `response_input_item`
+- Decision:
+  1. Add `FunctionCall::call` for the official required
+     `call_id` / `name` / `arguments` shape, plus `with_id` /
+     `with_status` for stored echoes.
+  2. Add custom-tool `id` / `namespace` and custom-tool-output `id`
+     setters for official optional non-null fields.
+  3. Add `McpCall::new` and official-null setters for
+     `approval_request_id` / `output` / `error`.
+- Reason: constructors still required stored-only fields or dropped
+  sendable official optionals that the pin and Python SDK expose.
+- Impact: Responses item builders. Serde remains lossless.
+- Overrides: none
+- Tests: `function_custom_and_mcp_call_constructors_match_openapi`.
+
+## D0054 — MCP list-tools constructors and official error nulls
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `MCPListTools` / `MCPListToolsTool` request constructors
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`; Python
+  `response_input_item.McpListTools`
+- Decision: add `McpListTools::new` / `McpListedTool::new` and official-null
+  setters for list-tools `error` and listed-tool `description` /
+  `annotations`.
+- Reason: these input items still had no send path for official nulls
+  after D0053 added MCP call constructors.
+- Impact: Responses MCP item builders.
+- Overrides: none
+- Tests: `function_custom_and_mcp_call_constructors_match_openapi`.
+
+## D0055 — Hosted-call constructors match official required fields
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: Responses hosted-call input constructors versus pinned
+  required properties and official required-nulls
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`MCPApprovalRequest`, `ComputerToolCall`, `WebSearchToolCall`,
+  `ImageGenToolCall`, `CodeInterpreterToolCall`, `LocalShellToolCall`)
+- Decision:
+  1. Add `McpApprovalRequest::new` for required
+     `id` / `server_label` / `name` / `arguments`.
+  2. Add `ComputerCall::new` plus `with_action` / `with_actions` /
+     `with_pending_safety_checks` for official optional action fields.
+  3. Add `WebSearchCall::new` and `LocalShellCall::new` from required
+     action unions.
+  4. Add `ImageGenerationCall::new` with official required
+     `result: null`, and `CodeInterpreterCall::new` with official
+     required `code` / `outputs` nulls.
+- Reason: these input-union hosted calls still only had getters after
+  D0054, so callers could not construct the official required send
+  shape including required-null result/code/outputs.
+- Impact: Responses hosted-call builders. Serde remains lossless.
+- Overrides: none
+- Tests: `hosted_call_constructors_match_openapi_required_fields`.
+
+## D0056 — Function-output constructor and official non-null optionals
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `FunctionCallOutputItemParam` requiredness and official
+  non-null `namespace` / custom-tool `id` fields
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`FunctionCallOutputItemParam`, `FunctionToolCall.namespace`,
+  `CustomToolCall.namespace`, `CustomToolCallOutput.id`)
+- Decision:
+  1. Add `FunctionCallOutput::from_output` for the official required
+     `output` shape, plus `with_call_id` for the official optional
+     nullable `call_id`.
+  2. Type function/custom-tool `namespace` and custom-tool-output `id`
+     as `Omittable<String>` so unofficial `"field": null` fails decode.
+- Reason: `FunctionCallOutput::new` still required `call_id` after
+  D0053 even though the pin only requires `type` / `output`. Function
+  and custom-tool namespace, and custom-tool-output `id`, are official
+  optional non-null strings, not anyOf-null.
+- Impact: Responses item builders and decode of unofficial nulls.
+  Constraint validation remains opt-in.
+- Overrides: none
+- Tests: `function_custom_and_mcp_call_constructors_match_openapi`.
+
+## D0057 — CreateResponse `prompt_cache_options` is official non-null
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `CreateResponse.prompt_cache_options` versus
+  `CompactResponseMethodPublicBody.prompt_cache_options`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`CreateResponse` / `ResponseProperties` `$ref`
+  `PromptCacheOptionsParam`; compact body `anyOf` `[ref, null]`)
+- Decision: type create-response `prompt_cache_options` as
+  `Omittable<PromptCacheOptions>` and remove the unofficial
+  `prompt_cache_options_null` send path. Compact keeps official-null
+  setters because the compact body is anyOf-null.
+- Reason: create-response only `$ref`s `PromptCacheOptionsParam`;
+  unofficial `"prompt_cache_options": null` is not in the pin.
+- Impact: Responses create builders and decode of unofficial nulls.
+  Compact and stored Response resources are unchanged.
+- Overrides: none
+- Tests: `create_request_sends_typed_context_moderation_and_explicit_nulls`.
+
+## D0058 — Responses stream events expose official optional fields
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: remaining official optional properties on
+  `ResponseStreamEvent` members
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`ResponseShellCallCommandDeltaStreamingEvent.obfuscation`,
+  `ResponseReasoningSummaryPartDoneEvent.status`,
+  `ResponseImageGenCallPartialImageEvent` `size` / `quality` /
+  `background` / `output_format`)
+- Decision:
+  1. Type shell-command delta `obfuscation` as `Omittable<String>`.
+  2. Type reasoning summary-part done `status` as
+     `Omittable<ReasoningSummaryPartStatus>` (`incomplete`).
+  3. Type image-generation partial-image `size` as `Omittable<String>`
+     and `quality` / `background` / `output_format` as the existing
+     image-generation open enums.
+  4. These optionals are official non-null; unofficial `"field": null`
+     fails decode.
+- Reason: a remaining-family pin hunt found these official optional
+  properties falling through ExtraFields after D0057.
+- Impact: Responses SSE event structs. Serde remains lossless.
+- Overrides: none
+- Tests: `stream_event_optional_fields_match_openapi`.
+
+## D0059 — Official Administration and Usage query filters
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: remaining official GET query parameters on Administration
+  and Usage operations
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`list-audit-logs` `actor_emails[]` / `resource_ids[]` /
+  `tenant_only` / `before`; `list-users` `emails`; `list-projects`
+  `include_archived`; `list-project-api-keys` `owner_project_access`;
+  `list-project-rate-limits` / spend-alert lists `before`;
+  `usage-images` `sources` / `sizes`; `usage-file-search-calls`
+  `vector_store_ids`; `usage-web-search-calls` `context_levels`;
+  `getCertificate` `include`; `retrieve-project-group` `group_type`)
+- Decision:
+  1. Type audit-log `actor_emails`, `resource_ids`, and `tenant_only`
+     on `AuditLogListParams` as official non-null optionals.
+  2. Extend the shared `AdminListParams` bag with official non-null
+     `before`, `emails`, `include_archived`, and
+     `owner_project_access` (`ProjectAccessFilter`: `active` /
+     `inactive` / `any`). Resource `ProjectAccessState` stays
+     `active` / `inactive` only.
+  3. Extend `UsageQueryParams` with official non-null `sources`,
+     `sizes`, `vector_store_ids`, and `context_levels`.
+  4. Add `CertificateGetParams.include` and
+     `ProjectGroupGetParams.group_type`.
+  5. Unofficial `"field": null` fails decode. Array query names keep
+     the existing encoder style (`project_ids`, not `project_ids[]`).
+- Reason: a remaining-family pin hunt of GET query parameters found
+  these official filters missing after D0058.
+- Impact: Administration/Usage query DTOs and Admin client helpers.
+  Serde remains lossless. `validate()` is not called on decode.
+- Overrides: none
+- Tests: `admin_query_filters_match_openapi`.
+
+## D0060 — Type official Administration objects previously stored as JSON bags
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: Administration response/request objects that the pin types
+  structurally but Rust stored as `AdminJsonObject` / non-null scalars
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`ProjectApiKey.owner` / `ProjectApiKeyOwnerUser` /
+  `ProjectApiKeyOwnerServiceAccount`; `AuditLogActorServiceAccount`;
+  `Invite.projects` / `InviteRequest.projects`; `Group` embedded in
+  `GroupRoleAssignment`; `UserRoleAssignment.user`; `User.user`;
+  `User.projects`; `AssignedRoleDetails` required anyOf-nulls;
+  official assignment `object` enums `group.role` / `user.role` /
+  `group.user` / `*.deleted`)
+- Decision:
+  1. Type `ProjectApiKey.owner` as `ProjectApiKeyOwner` with official
+     `type` / `user` / `service_account` members.
+  2. Type audit-actor `service_account` as
+     `AuditActorServiceAccount`.
+  3. Type invite project memberships as
+     `InviteProjectMembership` (`id` + `member`/`owner`).
+  4. Type `GroupRoleAssignment.group` as official `Group`
+     (`GroupSummary` with `scim_managed`) and
+     `UserRoleAssignment.user` as `User`.
+  5. Type `User.user` as `NestedUserDetails` and `User.projects` as
+     `UserProjectList` (official anyOf-null envelope).
+  6. Type `AssignedRoleDetails.created_at` / `updated_at` /
+     `created_by` / `created_by_user_obj` / `metadata` /
+     `assignment_sources` as official required `Nullable` values.
+  7. Recognize official assignment discriminators on
+     `AssignmentObject`. Unofficial historical strings remain known
+     variants so decode stays lossless.
+- Reason: a remaining-family pin hunt found these official structured
+  objects compressed into `AdminJsonObject` or rejected official
+  nulls after D0059 closed query-parameter gaps.
+- Impact: Administration DTOs. Serde remains lossless.
+  `validate()` is not called on decode. `AdminJsonObject` remains
+  for official `additionalProperties` bags
+  (`created_by_user_obj`, `metadata`, error envelopes).
+- Overrides: none
+- Tests: `admin_typed_objects_match_openapi`.
+
+## D0061 — Official Usage result discriminators and required-null cursors
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: Usage result `object` constants and Administration required
+  cursor pages
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`UsageFileSearchCallsResult.object` =
+  `organization.usage.file_searches.result`;
+  `UsageWebSearchCallsResult.object` =
+  `organization.usage.web_searches.result`;
+  `ListCertificatesResponse` /
+  `ListProjectCertificatesResponse` /
+  `OrganizationSpendAlertListResource` /
+  `ProjectSpendAlertListResource` required `first_id`/`last_id`
+  anyOf string|null;
+  `GroupUserDeletedResource.object` = `group.user.deleted`)
+- Decision:
+  1. Route file-search and web-search usage results with the official
+     `file_searches` / `web_searches` discriminators, not the
+     endpoint-path `*_calls` strings.
+  2. Type `AdminRequiredCursorPage.first_id` / `last_id` as required
+     `Nullable<String>` so official `"first_id": null` decodes.
+  3. Recognize official `group.user.deleted` on `AssignmentObject`.
+- Reason: a remaining-family pin hunt found official payloads decoding
+  as `UsageResult::Unknown` and official empty certificate/spend-alert
+  pages failing decode after D0060.
+- Impact: Administration Usage union routing and certificate/spend-alert
+  list pages. Serde remains lossless.
+- Overrides: none
+- Tests: `usage_bucket_routes_known_results_strictly_and_future_results_losslessly`,
+  `admin_required_cursor_page_accepts_official_null_ids`.
+
+## D0062 — Official AuditLog event types and event-specific payloads
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `AuditLog`, `AuditLogEventType`, and official event-specific
+  payload objects
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`#/components/schemas/AuditLog` names 55 event-specific properties;
+  `#/components/schemas/AuditLogEventType` enumerates 147 strings;
+  payload properties have no `required` and no official nulls;
+  `certificate.deleted.certificate` is PEM text;
+  `AuditLogActorApiKey.type` is `user` | `service_account`;
+  `role.bound_to_resource.source` /
+  `role.unbound_from_resource.source` are the five official
+  connector-mutation paths)
+- Decision:
+  1. Recognize every official `AuditLogEventType` string as a known
+     `AuditEventType` variant. Future unofficial values remain
+     `Unknown`.
+  2. Type the 55 official dotted event keys on `AuditLog` as
+     `Omittable` payload structs (empty official objects stay
+     `AdminJsonObject`). Tenant events that exist only on the enum
+     keep their payloads in `extra`.
+  3. Type `AuditActorApiKey.kind` as the official user/service-account
+     enum and `certificate.deleted.certificate` as `WireSecret`.
+- Reason: official `api_key.created` / `project.archived` objects were
+  stored only in `ExtraFields`, and 123 official event-type strings
+  decoded as `Unknown`.
+- Impact: Administration audit-log responses. Serde remains lossless
+  for future keys and unofficial event types. `validate()` remains
+  opt-in.
+- Overrides: none
+- Tests: `admin_audit_event_payloads_match_openapi`,
+  `audit_common_envelope_and_event_specific_payload_are_lossless`.
+
+## D0063 — Official Responses stream/WebSocket error envelopes
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `ResponseErrorEvent.code` and `ResponseWsError`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`ResponseErrorEvent.code` / `param` are required anyOf string|null;
+  `ResponseWsError.error` is `#/components/schemas/ErrorPayload` with
+  required `code`/`param` anyOf string|null and optional `headers`)
+- Decision:
+  1. Type SSE `StreamErrorEvent.code` as required `Nullable<String>`
+     so official `"code": null` decodes.
+  2. Route GA WebSocket `type=error` objects that nest `error` to
+     `ResponsesServerEvent::WebSocketError`, matching the official
+     `ResponseWsError` / `ErrorPayload` shape already used on beta.
+  3. Name official `ErrorPayload.headers` on Realtime error details.
+- Reason: official SSE `"code": null` failed decode, and official
+  `ResponseWsError` could not be parsed as the flat SSE error event.
+- Impact: Responses SSE/WebSocket error events. Serde remains lossless.
+- Overrides: none
+- Tests: `stream_events_distinguish_terminal_and_unknown_events`,
+  `websocket_events_reuse_create_and_stream_codecs_losslessly`.
+
+## D0064 — Official Realtime documented nulls on transcription and response envelopes
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: Realtime transcription-failed error, response lifecycle
+  fields, and returned session `include`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`RealtimeServerEventConversationItemInputAudioTranscriptionFailed`
+  / `RealtimeBetaServerEventConversationItemInputAudioTranscriptionFailed`
+  x-oaiMeta examples send `error.param: null`;
+  `RealtimeServerEventResponseCreated` /
+  `RealtimeServerEventResponseDone` examples send
+  `status_details: null` and `usage: null`;
+  `RealtimeCreateClientSecretResponse` example sends
+  `session.include: null`;
+  official Python `ConversationItemInputAudioTranscriptionFailedEvent.Error`
+  types `code`/`param` as `Optional[str]`;
+  live `conversation.item.input_audio_transcription.failed` and
+  `response.done` payloads send `code: null`)
+- Decision:
+  1. Type `RealtimeTranscriptionError.code` / `param` as
+     `Omittable<Nullable<String>>` so official `"param": null` and
+     live `"code": null` decode. `type` / `message` stay non-null
+     strings; unofficial `"message": null` still fails.
+  2. Type `RealtimeResponse.status_details` / `usage` as
+     `Omittable<Nullable<_>>` so official lifecycle examples decode.
+  3. Type `RealtimeResponseFailure.code` as
+     `Omittable<Nullable<String>>`.
+  4. Type returned `RealtimeSession.include` /
+     `RealtimeTranscriptionSession.include` as
+     `Omittable<Nullable<Vec<String>>>`. Create-request `include`
+     stays a non-null array.
+- Reason: the pin's documented examples and live Realtime envelopes
+  send these nulls, but the property schemas omit `anyOf`/`nullable`.
+  `Omittable<T>` rejected the official wire.
+- Impact: Realtime receive DTOs. Serde remains lossless.
+  `validate()` is not called on decode. Request-side include stays
+  omitted-or-array.
+- Overrides: none
+- Tests: `official_realtime_documented_nulls_decode`.
+
+## D0065 — Official Realtime transcription `language` null
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `AudioTranscriptionResponse.language` /
+  `RealtimeAudioTranscription.language`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`RealtimeTranscriptionSessionCreateResponse` and
+  `RealtimeTranscriptionSessionCreateResponseGA` x-oaiMeta examples
+  send `language: null` inside the transcription object;
+  `POST /realtime/transcription_sessions` response example does the
+  same; property schema is `type: string` without `anyOf`/`nullable`)
+- Decision: type `RealtimeAudioTranscription.language` as
+  `Omittable<Nullable<String>>` so official `"language": null`
+  decodes on both the shared transcription object and nested GA
+  `audio.input.transcription`. `prompt` stays a non-null string;
+  unofficial `"prompt": null` still fails. The GA example's
+  `"format": "pcm16"` string is a stale shape against official
+  `RealtimeAudioFormats` objects and is not accepted.
+- Reason: the pin's documented transcription-session examples send
+  `language: null`, but `Omittable<String>` rejected the official
+  wire.
+- Impact: Realtime transcription receive/request config. Serde
+  remains lossless. `validate()` is not called on decode.
+- Overrides: none
+- Tests: `official_realtime_transcription_language_null_decodes`,
+  `official_legacy_transcription_session_language_null_decodes`.
+
+## D0066 — Official Chat completion `tool_calls` / `function_call` nulls
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `ChatCompletionResponseMessage.tool_calls` /
+  `function_call` on stored and create-list responses
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`ChatCompletionList` x-oaiMeta example sends
+  `choices[].message.tool_calls: null` and
+  `function_call: null`; property schemas are a non-null array /
+  object without `anyOf`/`nullable`; official Python
+  `ChatCompletionMessage` types both as `Optional`)
+- Decision: type `ChatResponseMessage` and
+  `ChatCompletionStoreMessage` `tool_calls` /
+  `function_call` as `Omittable<Nullable<_>>` so the official
+  stored-completion list example decodes. Request
+  `ChatAssistantMessage.tool_calls` stays a non-null array.
+  Stream deltas are unchanged. Unofficial `"annotations": null`
+  still fails. Echo-only list fields (`tools`, `tool_choice`,
+  `input_user`, `response_format`) remain in `ExtraFields`.
+- Reason: the pin's documented Chat completion list example
+  sends these nulls, but `Omittable<T>` rejected the official
+  wire.
+- Impact: Chat completion receive DTOs. Serde remains lossless.
+  `validate()` is not called on decode.
+- Overrides: none
+- Tests: `official_chat_completion_list_message_nulls_decode`.
+
+## D0067 — Official Eval run `sampling_params` and Fine-tuning event `data` nulls
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `CreateEvalCompletionsRunDataSource.sampling_params` /
+  `CreateEvalResponsesRunDataSource.sampling_params` and
+  `FineTuningJobEvent.data`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`GET /evals/{eval_id}/runs` x-oaiMeta list example sends
+  `data_source.sampling_params: null` on a `completions` source;
+  `GET /fine_tuning/jobs/{fine_tuning_job_id}/events` x-oaiMeta
+  example sends `data: null` on message events; property schemas
+  are non-null objects without `anyOf`/`nullable`)
+- Decision:
+  1. Type model-backed Eval run `sampling_params` as
+     `Omittable<Nullable<EvalSamplingParams>>` so the official
+     list-run example decodes. Create-request objects still
+     serialize as objects when set. Unofficial `"model": null`
+     still fails.
+  2. Type `FineTuningJobEvent.data` as
+     `Omittable<Nullable<Map<String, Value>>>` so official
+     `"data": null` decodes. Unofficial `"message": null` still
+     fails.
+  3. Label-model `sampling_params` remains ExtraFields: the
+     official grader schema does not name that property.
+- Reason: the pin's documented list examples send these nulls,
+  but `Omittable<T>` rejected the official wire.
+- Impact: Eval run data-source and Fine-tuning event receive
+  DTOs. Serde remains lossless. `validate()` is not called on
+  decode.
+- Overrides: none
+- Tests: `official_eval_run_list_sampling_params_null_decodes`,
+  `events_checkpoints_and_pages_preserve_fields_and_cursors`.
+
+## D0068 — Official beta Response `usage` and `user` nulls
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `BetaResponse.usage` / `BetaResponse.user`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`BetaResponseCreatedEvent` / `BetaResponseInProgressEvent`
+  x-oaiMeta examples send `response.usage: null` and
+  `response.user: null`; `BetaResponseCompletedEvent` also sends
+  `user: null`; property schemas are a non-null
+  `BetaResponseUsage` ref and a deprecated string without
+  `anyOf`/`nullable`. GA `Response` already uses
+  `Omittable<Nullable<_>>` for both.)
+- Decision: type beta receive `usage` and `user` as
+  `Omittable<Nullable<_>>` so official lifecycle envelopes
+  decode. Create-request `user` stays a non-null string.
+  Unofficial `"status": null` still fails. Example-only
+  `reasoning_effort` remains ExtraFields.
+- Reason: the pin's documented beta stream examples send these
+  nulls, but `Omittable<T>` rejected the official wire.
+- Impact: beta Responses receive DTOs. Serde remains lossless.
+  `validate()` is not called on decode.
+- Overrides: none
+- Tests: `official_beta_response_usage_and_user_nulls_decode`.
+
+## D0069 — Official Responses input-item list user message resources
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `ResponseInputItem` message routing used by
+  `ResponseInputItemList` and `BetaResponseItemList`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`ResponseItemList` / `BetaResponseItemList` x-oaiMeta examples and
+  `GET /responses/{response_id}/input_items` documented envelopes send
+  `{type: message, id, role: user, content: [input_text]}`; official
+  `ItemResource` / `BetaItemResource` include
+  `InputMessageResource` / `BetaInputMessageResource`, which are
+  input messages plus a required `id`. `OutputMessage` role is the
+  const `assistant`.)
+- Decision: route `type=message` to `OutputMessage` only when the
+  object has `id` **and** `role=assistant`. User / system / developer
+  resources with an `id` take the existing stored-input branch.
+  Unofficial `"status": null` on a stored input message still fails.
+- Reason: presence of `id` is not an assistant discriminator;
+  official list-input-item envelopes are input-message resources and
+  rejected `unknown variant user, expected assistant`.
+- Impact: Responses and beta Responses input-item list decode.
+  Serde remains lossless. `validate()` is not called on decode.
+- Overrides: none
+- Tests: `official_response_item_list_user_message_resource_decodes`,
+  `official_beta_response_item_list_user_message_resource_decodes`.
+
+## D0070 — Official send-side `file_data` / inline skill / inject limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `InputFileContentParam.file_data`, `InlineSkillSourceParam.data`,
+  `BetaResponseInjectEvent.input`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`InputFileContentParam.file_data` string `maxLength` 73400320;
+  `InlineSkillSourceParam.data` / `BetaInlineSkillSourceParam.data`
+  `minLength` 1 and `maxLength` 70254592; `BetaResponseInjectEvent.input`
+  `maxItems` 16384)
+- Decision: expose the three official send-side limits as named constants
+  and enforce them from opt-in `validate()`:
+  1. `InputFile.file_data` has no official `minLength`; present
+     non-null strings must be at most 73,400,320 characters.
+     Create-response message and function/custom-tool output content
+     walks the same helper. Official `"file_data": null` still decodes
+     and skips the bound.
+  2. Inline skill zip `data` must be `1..=70,254,592` characters on
+     Responses shell-container skills and Container create skills.
+  3. `BetaResponseInjectEvent.input` must contain at most 16,384 items.
+  Serde decode stays lossless. `validate()` is not called on decode.
+- Reason: these request `maxLength` / `minLength` / `maxItems` values
+  were already in the pin but not hooked into the existing opt-in
+  constraint walk used by other official send-side limits.
+- Impact: create-response, container create, and beta inject
+  `validate()` only.
+- Overrides: none
+- Tests: `create_request_validate_enforces_official_file_and_skill_payload_limits`,
+  `create_container_validate_enforces_inline_skill_source_length`,
+  `inject_event_validate_enforces_official_max_items`.
+
+## D0071 — Official Responses WebSocket `stream_id` limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `ResponsesClientEventResponseCreate.stream_id` /
+  `BetaResponsesClientEventResponseCreate.stream_id`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (both create-event envelopes declare `stream_id` as a string with
+  `minLength` 1, `maxLength` 256, and
+  `pattern` `^[A-Za-z0-9_.-]+$`)
+- Decision: expose `MIN_STREAM_ID_CHARS` / `MAX_STREAM_ID_CHARS` and
+  enforce the official length plus `[A-Za-z0-9_.-]` charset from
+  opt-in `ResponsesCreateEvent::validate()` and
+  `BetaResponsesCreateEvent::validate()`. Omitted `stream_id` skips
+  the bound. Unofficial values such as `"agent 1"` still decode.
+- Reason: the pin already documented the WebSocket lane id contract,
+  but create-event `validate()` did not check it.
+- Impact: Responses and beta Responses WebSocket create events.
+  `validate()` is not called on decode.
+- Overrides: none
+- Tests: `websocket_create_validate_enforces_official_stream_id`,
+  `create_event_validate_enforces_official_stream_id`.
+
+## D0072 — Official web search `web_search_2025_08_26` type
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `WebSearchTool.type` / `BetaWebSearchTool.type` /
+  hosted `ToolChoice`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`WebSearchTool` / `BetaWebSearchTool` `type` enum is
+  `web_search` | `web_search_2025_08_26`; default remains
+  `web_search`)
+- Decision: accept both official discriminators as
+  `ResponseTool::WebSearch`. `WebSearchTool::new()` still emits
+  `web_search`. `WebSearchTool::web_search_2025_08_26()` emits the
+  dated tag. Hosted `tool_choice` `{type: web_search_2025_08_26}`
+  decodes as `ToolChoice::Hosted`. Unofficial future tags still
+  take the Unknown branch.
+- Reason: the dated official tool type was routed to
+  `UnknownTaggedObject` because the union only matched
+  `web_search`.
+- Impact: Responses and beta Responses tool and tool-choice
+  decode/send. Serde remains lossless.
+- Overrides: none
+- Tests: `web_search_and_image_tools_match_python_and_openapi_inventory`,
+  `frozen_union_manifests_route_every_known_discriminator_strictly`.
+
+## D0073 — Official web search preview `web_search_preview_2025_03_11` type
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `WebSearchPreviewTool.type` / `BetaWebSearchPreviewTool.type` /
+  hosted `ToolChoice`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`WebSearchPreviewTool` / `BetaWebSearchPreviewTool` `type` enum is
+  `web_search_preview` | `web_search_preview_2025_03_11`; default remains
+  `web_search_preview`)
+- Decision: accept both official discriminators as
+  `ResponseTool::WebSearchPreview`. `WebSearchPreviewTool::new()` still
+  emits `web_search_preview`.
+  `WebSearchPreviewTool::web_search_preview_2025_03_11()` emits the dated
+  tag. Hosted `tool_choice` `{type: web_search_preview_2025_03_11}`
+  already decoded as `ToolChoice::Hosted`. Unofficial future tags still
+  take the Unknown branch.
+- Reason: the dated official preview tool type was routed to
+  `UnknownTaggedObject` because the union only matched
+  `web_search_preview`.
+- Impact: Responses and beta Responses tool decode/send. Serde remains
+  lossless.
+- Overrides: none
+- Tests: `web_search_and_image_tools_match_python_and_openapi_inventory`,
+  `frozen_union_manifests_route_every_known_discriminator_strictly`.
+
+## D0074 — Official input-image and image-reference `image_url` limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `InputImageContentParamAutoParam.image_url` /
+  `BetaInputImageContentParamAutoParam.image_url` /
+  `ImageRefParam.image_url` / conversation input-image `image_url`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (param `image_url` `maxLength` 20,971,520; official `"image_url": null`
+  skips the bound)
+- Decision: hook the official send-side `maxLength` into opt-in
+  `validate()`. `InputImage::validate()`, create-response input walking,
+  `ConversationInputImage::validate()`, and Images JSON
+  `ImageReference` / edit-body `validate()` enforce the bound.
+  Serde decode remains lossless. Resource `InputImageContent.image_url`
+  has no official `maxLength` and is unchanged.
+- Reason: this official request `maxLength` was unenforced because the
+  same number already existed as compaction `encrypted_content`.
+- Impact: Responses, Conversations, and Images JSON edit validate paths.
+  Overlong unofficial URLs still decode.
+- Overrides: none
+- Tests: `create_request_validate_enforces_official_file_and_skill_payload_limits`,
+  conversation input-image validate, JSON image-edit `image_url` validate.
+
+## D0075 — Official `input_text` / apply_patch `diff` 10,485,760 limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `InputTextContentParam.text` / `BetaInputTextContentParam.text` /
+  `ApplyPatchCreateFileOperationParam.diff` /
+  `ApplyPatchUpdateFileOperationParam.diff` /
+  `BetaEncryptedContentParam.encrypted_content` / beta create input walking
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (those request strings have `maxLength` 10,485,760)
+- Decision: hook the official send-side `maxLength` into opt-in
+  `validate()`. `InputText::validate()` and create-response input walking
+  enforce input-text. `ApplyPatchCallInput::validate()` enforces create/update
+  diffs. Beta create now walks its own `input` items (stable, prompt-cached,
+  and inter-agent text/image/encrypted). Serde decode remains lossless.
+- Reason: the same 10,485,760 literal already existed for compact input,
+  function-call output, and shell stdout/stderr, so a number-only hunt
+  treated input-text and apply_patch diffs as covered.
+- Impact: Responses and beta Responses validate paths. Overlong unofficial
+  payloads still decode.
+- Overrides: none
+- Tests: `create_request_validate_enforces_official_file_and_skill_payload_limits`,
+  `create_request_validate_walks_official_input_text_and_agent_payloads`.
+
+## D0076 — Official domain-secret and apply_patch `path` limits
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `ContainerNetworkPolicyDomainSecretParam` /
+  `BetaContainerNetworkPolicyDomainSecretParam` /
+  apply_patch operation `path`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`domain`/`name` `minLength` 1; `value` `1..=10485760`; apply_patch
+  `path` `minLength` 1)
+- Decision: hook the official send-side lengths into opt-in `validate()`.
+  Container create walks allowlist `domain_secrets`. Apply-patch create,
+  update, and delete operations enforce non-empty `path`. ChatKit session
+  `user` `minLength` 1 remains constructor/decode-enforced
+  (`ChatKitUserId`). Serde decode of unofficial empty/overlong container
+  secrets and apply_patch paths remains lossless.
+- Reason: a post-D0075 request-string inventory found these remaining
+  official length keywords; ChatKit `user` was already enforced.
+- Impact: Containers create and Responses apply_patch validate paths.
+- Overrides: none
+- Tests: `create_container_validate_enforces_official_domain_secret_limits`,
+  `create_request_validate_enforces_official_file_and_skill_payload_limits`.
+
+## D0077 — Official Chat content-array `minItems: 1`
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `ChatCompletionRequestDeveloperMessage.content` /
+  `ChatCompletionRequestSystemMessage.content` /
+  `ChatCompletionRequestUserMessage.content` /
+  `ChatCompletionRequestAssistantMessage.content` /
+  `ChatCompletionRequestToolMessage.content` /
+  `PredictionContent.content`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (those request oneOf array branches have `minItems: 1`)
+- Decision: hook the official send-side array floor into opt-in `validate()`.
+  Chat create walks developer/system/user/tool content parts and present
+  assistant content parts. Predicted-output `content` parts use a distinct
+  error. Empty string content remains official. Serde decode of unofficial
+  empty arrays remains lossless.
+- Reason: Chat `validate()` already rejected empty `messages` and empty
+  `functions`, but did not walk nested content-array branches.
+- Impact: Chat create validate path.
+- Overrides: none
+- Tests: `chat_create_validate_enforces_pinned_limits`.
+
+## D0078 — Official Completions token-prompt and Eval timestamp floors
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `CreateCompletionRequest.prompt` token / token-batch arrays /
+  `EvalResponsesSource.created_after` / `created_before`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (token and token-batch prompt arrays `minItems: 1`, including nested
+  batches; Eval Responses timestamps `minimum: 0`)
+- Decision: hook those official send-side floors into opt-in `validate()`.
+  Completions string and string-array prompts have no official `minItems`
+  and stay unchecked. `prompt: null` skips the token walk.
+  `EvalStoredCompletionsSource` timestamps have no official `minimum` and
+  stay unchecked. Serde decode remains lossless.
+- Reason: a post-D0076 request-constraint inventory found these remaining
+  official `minItems` / `minimum` keywords that `validate()` did not walk.
+- Impact: Completions and Evals validate paths.
+- Overrides: none
+- Tests: `completion_create_validate_enforces_pinned_limits`,
+  `eval_responses_source_validate_enforces_official_created_timestamp_minimum`.
+
+## D0079 — Official output-text annotation-added `annotation` null
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `ResponseOutputTextAnnotationAddedEvent.annotation` /
+  `Beta` twin (`BetaAnnotation` anyOf-null)
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`annotation` is required `anyOf` `[Annotation, null]` /
+  `[BetaAnnotation, null]`)
+- Decision: type the required field as `Nullable<Annotation>` so official
+  `"annotation": null` decodes on the stable event. Beta stream events
+  reuse the stable codec, so the same envelope decodes there. Serde
+  remains lossless.
+- Reason: a post-D0078 official-null response inventory found this
+  remaining required anyOf-null that Rust stored as a non-null
+  `Annotation`.
+- Impact: Responses / beta Responses stream event decode.
+- Overrides: none
+- Tests: `file_search_results_and_typed_stream_parts_match_openapi_inventory`,
+  `official_beta_output_text_annotation_null_decodes`.
+
+## D0080 — Official JSON image-edit `prompt` `minLength: 1`
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `EditImageBodyJsonParam.prompt`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`EditImageBodyJsonParam.prompt` is a string with `minLength` 1 and
+  `maxLength` 32000)
+- Decision: hook the official send-side floor into opt-in `validate()`.
+  JSON image-edit bodies reject an empty `prompt`. Image generation and
+  multipart image-edit `prompt` have no official `minLength` and stay
+  unchecked. Serde decode of unofficial empty JSON-edit prompts remains
+  lossless.
+- Reason: a post-D0079 request-constraint inventory found this remaining
+  official `minLength` that `validate()` did not walk. Generation prompt
+  limits stay model-specific maxima only.
+- Impact: JSON image-edit validate path.
+- Overrides: none
+- Tests: `image_json_edit_references_are_exact_and_stream_typed`.
+
+## D0081 — Official `max_concurrent_subagents` minimum
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `BetaMultiAgentParam.max_concurrent_subagents`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`BetaMultiAgentParam.max_concurrent_subagents` is an integer with
+  `minimum: 1` and no official upper bound)
+- Decision: expose `MIN_CONCURRENT_SUBAGENTS` and enforce the official
+  floor from opt-in beta create `validate()`. Omitted
+  `max_concurrent_subagents` and `multi_agent: null` skip the bound.
+  Serde decode of unofficial `0` remains lossless.
+- Reason: beta create `validate()` already walked input payloads but not
+  this official multi-agent floor.
+- Impact: beta Responses create validate path.
+- Overrides: none
+- Tests: `create_and_count_requests_keep_beta_only_fields_typed`.
+
+## D0082 — Official Realtime client `event_id` `maxLength` 512
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: GA `RealtimeClientEvent*` / translation client events `event_id`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (those client-event schemas declare `event_id` as a string with
+  `maxLength` 512; `RealtimeClientEventOutputAudioBufferClear.event_id`
+  has no official `maxLength`)
+- Decision: expose `MAX_REALTIME_EVENT_ID_CHARS` and enforce the official
+  ceiling from opt-in `RealtimeClientEvent::validate()` and
+  `RealtimeTranslationClientEvent::validate()`. Omitted `event_id` skips
+  the bound. `output_audio_buffer.clear` is not checked. Nested
+  `session.update` bodies reuse session `validate()`. Serde decode of
+  unofficial overlong ids remains lossless.
+- Reason: session create already enforced speed, retention, idle-timeout,
+  languages, and client-secret lifetime, but client-event `event_id`
+  `maxLength` was unhooked.
+- Impact: Realtime and translation client-event validate paths.
+- Overrides: none
+- Tests: `realtime_client_event_validate_enforces_official_event_id`.
+
+## D0083 — Official `UserListResource` items are `GroupUser`
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `UserListResource`, `GroupUser`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`UserListResource.data.items` `$ref` `GroupUser`; `GroupUser` requires
+  `id`/`name`/`email` with `email` anyOf-null; `list-group-users` returns
+  `UserListResource`; `retrieve-group-user` returns `GroupMemberUser`)
+- Decision: decode list-group-users pages as `AdminNextPage<GroupUser>`.
+  Keep `GroupMemberUser` for retrieve-group-user. Extra retrieve-only
+  fields on a list item stay in `ExtraFields`.
+- Reason: official `UserListResource` examples send `{id, name, email}`
+  and failed decode when the list alias pointed at `GroupMemberUser`
+  (`picture` / `is_service_account` / `user_type` are retrieve-required).
+- Impact: Admin group-user list JSON.
+- Overrides: none
+- Tests: `admin_typed_objects_match_openapi`.
+
+## D0084 — Official `RoleListResource` items are `AssignedRoleDetails`
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `RoleListResource`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`RoleListResource.data.items` `$ref` `AssignedRoleDetails`;
+  `PublicRoleListResource.data.items` `$ref` `Role`; list-*-role-assignment
+  operations return `RoleListResource`; list-roles / list-project-roles
+  return `PublicRoleListResource`)
+- Decision: decode role-assignment lists as
+  `AdminNextPage<AssignedRoleDetails>`. Keep
+  `PublicRoleListResource = AdminNextPage<Role>`.
+- Reason: official assignment-list examples omit `Role.object` and include
+  AssignedRoleDetails timestamps / metadata / assignment_sources. Decoding
+  those pages as `Role` rejected official wire.
+- Impact: Admin role-assignment list JSON.
+- Overrides: none
+- Tests: `admin_typed_objects_match_openapi`.
+
+## D0085 — Compact/count and nested tool `validate()` walk official Tool/InputItem bounds
+
+- Status: accepted
+- Reviewed: 2026-08-30
+- Scope: `CompactResponseRequest`, `BetaCompactResponseRequest`,
+  `CountInputTokensRequest`, `BetaCountInputTokensRequest`,
+  `AdditionalToolsInput`, `ToolSearchOutputInput`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`CompactResponseMethodPublicBody.input` / `TokenCountsBody.input` are
+  string-or-`InputItem` array; `TokenCountsBody.tools` items `$ref` `Tool`;
+  `AdditionalToolsItemParam.tools` and `ToolSearchOutputItemParam.tools`
+  items `$ref` `Tool`)
+- Decision: opt-in `validate()` on compact and count-tokens bodies walks
+  item-array `input` with the same helpers as create. Count-tokens also
+  walks top-level `tools`. `additional_tools` and `tool_search_output`
+  input items walk nested `tools`. Serde decode of unofficial values
+  remains lossless. Compact official `instructions` stays string-or-null
+  and is not treated as an item array.
+- Reason: create `validate()` already enforced official Tool/InputItem
+  bounds, but compact/count and nested tool-bearing input items skipped
+  those walks.
+- Impact: Responses compact/count and create input-item validate paths.
+- Overrides: none
+- Tests: `compact_and_count_validate_walk_official_input_items_and_tools`,
+  `create_and_count_requests_keep_beta_only_fields_typed`.
+
+## D0086 — Fine-tune grader, container allowlist, and image-edit count floors
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CreateFineTuningJobRequest` reinforcement grader
+  `sampling_params.max_completions_tokens`, `CreateContainerBody`
+  allowlist `allowed_domains` / `domain_secrets`,
+  `ImageEditJsonRequestBody.images`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`GraderScoreModel.sampling_params.max_completions_tokens` `minimum: 1`;
+  `ContainerNetworkPolicyAllowlistParam.allowed_domains` /
+  `domain_secrets` `minItems: 1`; JSON image-edit `images`
+  `minItems: 1` / `maxItems: 16`)
+- Decision: opt-in parent `validate()` walks those official bounds.
+  Nested `multi` graders are walked. Serde decode of unofficial `0`
+  tokens remains lossless. Empty allowlist arrays remain decode-rejected
+  and are now also validate-rejected for programmatic construction.
+- Reason: create `validate()` already walked fine-tune hyperparameters,
+  container skill/secret contents, and JSON edit prompts, but skipped
+  these official collection/token floors.
+- Impact: Fine-tuning create, Container create, JSON image-edit validate
+  paths.
+- Overrides: none
+- Tests: `fine_tuning_create_validate_enforces_score_model_token_floor`,
+  `create_container_validate_enforces_official_domain_secret_limits`,
+  `image_json_edit_references_are_exact_and_stream_typed`.
+
+## D0087 — Vector Store operations send official `OpenAI-Beta: assistants=v2`
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: all Vector Store client operations
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`x-oaiMeta.curl` on
+  list/create/get/modify/delete/file/file-batch operations) and the
+  current Python SDK (`src/openai/resources/vector_stores/vector_stores.py`
+  always injects `OpenAI-Beta: assistants=v2`, including search / file
+  attribute / content)
+- Decision: every Vector Store JSON call sends
+  `OpenAI-Beta: assistants=v2` via the existing static-header transport.
+  The header is not an OpenAPI `parameters` entry; official curl and the
+  Python SDK are the send-side authority.
+- Reason: ChatKit and legacy Realtime already sent their documented
+  `OpenAI-Beta` values; Vector Stores omitted the official Assistants
+  beta header, so live calls diverged from the pin examples and Python
+  SDK.
+- Impact: `openai-rs-client` Vector Store transport.
+- Overrides: none
+- Tests: `store_crud_list_and_search_match_pinned_routes`,
+  `attached_file_routes_preserve_ids_query_and_bodies`,
+  `file_batch_routes_match_pinned_contract`.
+
+## D0088 — Official Realtime `post_instructions` `minimum: 0`
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `RealtimeTruncationTokenLimits.post_instructions`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`RealtimeTruncation` retention-ratio `token_limits.post_instructions`
+  is an integer with `minimum: 0`)
+- Decision: expose `MIN_REALTIME_POST_INSTRUCTIONS` and enforce the
+  official floor from opt-in session `validate()` (including nested
+  `session.update` / client-secret session bodies). Omitted
+  `post_instructions` skips the bound. Serde decode of unofficial
+  negatives remains lossless.
+- Reason: session create already enforced `retention_ratio` but not this
+  nested official floor. The field is `i64`, so `minimum: 0` is not
+  vacuous.
+- Impact: Realtime session create / update validate paths.
+- Overrides: none
+- Tests: `realtime_prompt_null_and_output_speed_match_python_and_openapi_inventory`.
+
+## D0089 — Official moderation result `category_applied_input_types` is required
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CreateModerationResponse.results[].category_applied_input_types`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`CreateModerationResponse` result items `required` includes
+  `category_applied_input_types`; Responses/Chat moderation outcome
+  objects already require the same field)
+- Decision: store the field as a required
+  `BTreeMap<String, Vec<ModerationAppliedInputType>>`. Category names
+  stay an open map for forward-compatible extra keys. Do not weaken
+  requiredness because the legacy `text-moderation-007` path example
+  omits the property.
+- Reason: `POST /moderations` results treated the official required
+  property as `Omittable`, so re-encoded official omni envelopes could
+  drop a schema-required key and incomplete mocks could decode.
+- Impact: `openai-rs-types` moderation response DTO and client mock.
+- Overrides: none
+- Tests: `moderation_response_preserves_unknown_categories_and_fields`,
+  `moderations_create_sends_typed_body`.
+
+## D0090 — Official beta Responses `include` names `web_search_call.results`
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BetaIncludeEnum` / `BetaResponseIncludable`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`BetaIncludeEnum` and
+  GA `IncludeEnum` both enumerate `web_search_call.results`; GA
+  `ResponseIncludable` and `ConversationItemInclude` already name it)
+- Decision: add the official `web_search_call.results` member as
+  `BetaResponseIncludable::WebSearchResults`. Unknown future include
+  strings remain lossless via `Unknown`.
+- Reason: beta retrieve / list / create `include` helpers only accepted
+  the official value through `Unknown`, so the pinned beta include
+  inventory was incomplete relative to the official enum and the GA
+  sibling.
+- Impact: `openai-rs-types` beta Responses include enum.
+- Overrides: none
+- Tests: `official_beta_include_enum_names_web_search_results`.
+
+## D0091 — Official Responses `MessageRole` names critic, tool, and unknown
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `MessageRole` / `BetaMessageRole`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`MessageRole` and
+  `BetaMessageRole` both enumerate `unknown`, `user`, `assistant`,
+  `system`, `critic`, `discriminator`, `developer`, and `tool`;
+  conversation sibling `ConversationMessageRole` already names them)
+- Decision: add the official members as `UnknownRole`, `Critic`,
+  `Discriminator`, and `Tool`. Unknown future role strings remain
+  lossless via the catch-all `Unknown`. Official item-form
+  `InputMessage` stays `user` / `system` / `developer`
+  (`StoredInputMessageRole`); official `OutputMessage` stays
+  assistant-only.
+- Reason: Responses `InputMessage` / `AdditionalTools` only accepted
+  the extra official roles through `Unknown`, so the pinned
+  `MessageRole` inventory was incomplete relative to the official
+  enum and the conversation sibling.
+- Impact: `openai-rs-types` Responses message role enum (shared with
+  beta Responses).
+- Overrides: none
+- Tests: `official_message_role_names_all_pin_members`.
+
+## D0092 — Official Response usage requires `cache_write_tokens`
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ResponseUsage.input_tokens_details.cache_write_tokens`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`ResponseUsage`
+  `input_tokens_details.required` is `cached_tokens` and
+  `cache_write_tokens`); official Python SDK
+  `InputTokensDetails.cache_write_tokens: int` (not `Optional`);
+  official compact `x-oaiMeta.example` sends `"cache_write_tokens": 0`
+- Decision: model `cache_write_tokens` as a required `u64` on
+  `InputTokensDetails`. Chat/Completions `prompt_tokens_details` stays
+  `Omittable` because the official `CompletionUsage` nested object does
+  not list that property as required.
+- Reason: callers could not rely on the official required cache-write
+  count; omitting it was a field-requiredness offset of the same class
+  as D0089. Incomplete fixtures that drop the property are not
+  authority to weaken the pin.
+- Impact: `openai-rs-types` Responses usage DTO (shared with beta
+  Responses and compact).
+- Overrides: none
+- Tests: `official_response_usage_requires_cache_write_tokens`.
+
+## D0093 — Official prompt-cache request and response schemas are distinct
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: Responses / beta Responses `prompt_cache_options`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`CreateResponse` /
+  compact bodies `$ref` `PromptCacheOptionsParam` with no required
+  properties; `Response` / `BetaResponse` `$ref` `PromptCacheOptions` /
+  `BetaPromptCacheOptions` whose `required` is `ttl` and `mode`);
+  official Python SDK `Response.PromptCacheOptions.mode` and `ttl` are
+  non-`Optional` literals
+- Decision: keep request builders on `PromptCacheOptionsParam` /
+  `BetaPromptCacheOptionsParam` with independently omittable `ttl` and
+  `mode`. Model the response echo as `PromptCacheOptions` /
+  `BetaPromptCacheOptions` with both fields required. Chat create stays
+  on the request-param shape because `CreateChatCompletionRequest`
+  `$ref`s `PromptCacheOptionsParam` and the Chat completion resource
+  does not echo the official options object.
+- Reason: a single `Omittable` type for both schemas hid the official
+  requiredness of the response echo, the same class of field offset as
+  D0092. Incomplete request objects are not authority to weaken the
+  resource schema.
+- Impact: `openai-rs-types` Responses and beta Responses prompt-cache
+  DTOs. Create/compact request constructors take the Param type.
+- Overrides: none
+- Tests: `official_response_prompt_cache_options_requires_ttl_and_mode`.
+
+## D0094 — Official compact resource requires `usage`
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CompactResource.usage` / Rust `CompactedResponse.usage`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9` (`CompactResource.required`
+  is `id`, `object`, `output`, `created_at`, `usage`; `usage` `$ref`s
+  `ResponseUsage` without anyOf-null); official schema example and
+  compact `x-oaiMeta` response example send `usage` including
+  `cache_write_tokens`; official Python SDK
+  `CompactedResponse.usage: ResponseUsage` (not `Optional`)
+- Decision: model compact `usage` as required `ResponseUsage`. Unofficial
+  omit and `"usage": null` fail decode. Beta compact already required
+  `ResponseUsage`. Stored `Response.usage` stays optional because the
+  official `Response` schema does not list `usage` in `required`.
+- Reason: callers could not rely on official compaction token
+  accounting; treating it as omittable/nullable was a field-requiredness
+  offset of the same class as D0092. Incomplete fixtures that send
+  `"usage": null` are not authority to weaken the pin.
+- Impact: `openai-rs-types` compact response DTO and compact client
+  loopback fixtures.
+- Overrides: none
+- Tests: `official_compact_resource_requires_usage`.
+
+## D0095 — Official certificate activate/deactivate `object` names
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CertificateScopeResponse.object`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`OrganizationCertificateActivationResponse`,
+  `OrganizationCertificateDeactivationResponse`,
+  `OrganizationProjectCertificateActivationResponse`, and
+  `OrganizationProjectCertificateDeactivationResponse` each require
+  `object` with a closed enum:
+  `organization.certificate.activation`,
+  `organization.certificate.deactivation`,
+  `organization.project.certificate.activation`,
+  `organization.project.certificate.deactivation`)
+- Decision: type the shared activate/deactivate envelope on
+  `CertificateScopeObject` and name all four official members. List-page
+  `AdminListObject` stays `list` / `page` only.
+- Reason: the shared envelope reused `AdminListObject`, so official
+  activate/deactivate discriminators decoded only as `Unknown`. That is
+  the same named-member gap as D0090 / D0091.
+- Impact: `openai-rs-types` admin certificate activate/deactivate
+  response DTO.
+- Overrides: none
+- Tests: `official_certificate_scope_object_names_all_pin_members`.
+
+## D0096 — Official compact request requires `model`
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CompactResponseRequest.model` / `BetaCompactResponseRequest.model`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`CompactResponseMethodPublicBody` and
+  `BetaCompactResponseMethodPublicBody` list `model` in `required`;
+  `ModelIdsCompaction` / `BetaModelIdsCompaction` are `anyOf` including
+  `null`); official Python SDK `ResponseCompactParams.model` is
+  `Required[Union[Literal[...], str, None]]`
+- Decision: model compact request `model` as required `Nullable<String>`.
+  Unofficial omit fails decode. Official `"model": null` still decodes
+  and is always serialized, preserving D0033's official-null send path.
+  Token-count request `model` stays `Omittable` because official
+  `TokenCountsBody` does not list it in `required`.
+- Reason: callers could omit the official compaction model, the same
+  class of requiredness offset as D0092 / D0094. Official `required`
+  plus the Python `Required[...]` annotation supersede D0033's
+  `Omittable` wrapping; incomplete fixtures that omit `model` are not
+  authority to weaken the pin.
+- Impact: `openai-rs-types` GA and beta compact request DTOs.
+- Overrides: none
+- Tests: `official_compact_request_requires_model`.
+
+## D0097 — Official list pages require non-null cursor ids
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ResponseInputItemList`, `ConversationItemList`, `EvalList`,
+  `EvalRunList`, `EvalRunOutputItemList` `first_id` / `last_id`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`ResponseItemList`, `BetaResponseItemList`, `ConversationItemList`,
+  `EvalList`, `EvalRunList`, and `EvalRunOutputItemList` each require
+  `first_id` and `last_id` as `string` with no `anyOf`/`nullable`);
+  official `ResponseItemList` / `EvalRunList` examples send string ids;
+  official Python SDK `ResponseItemList.first_id` / `last_id` and
+  `ConversationItemList.first_id` / `last_id` are `str` (not
+  `Optional`)
+- Decision: type those cursor ids as required non-null strings / opaque
+  ids. Unofficial `"first_id": null` fails decode. Empty pages may send
+  `""`, matching D0007 File lists. ChatKit / Skills / Admin required
+  cursor pages stay `Nullable` because those official schemas include
+  `anyOf` null. Fine-tuning and voice consent lists stay omittable
+  because official schemas do not require the fields.
+- Reason: GA `ResponseInputItemList` reused required-null list cursors
+  while the official pin, official examples, Python SDK, and the beta
+  sibling already require strings. Incomplete fixtures that send null
+  are not authority to weaken the pin, the same class as D0007 / D0094.
+- Impact: `openai-rs-types` list-page DTOs and client loopback fixtures
+  / pagination getters.
+- Overrides: none
+- Tests: `official_response_item_list_requires_cursor_ids`.
+
+## D0098 — Official function-shell action request and resource schemas are distinct
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: Responses `FunctionShellCallInput.action` /
+  `FunctionShellCall.action`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`FunctionShellActionParam` / `BetaFunctionShellActionParam`
+  `required` is `["commands"]`; `FunctionShellAction` /
+  `BetaFunctionShellAction` `required` is `commands` +
+  `timeout_ms` + `max_output_length`, both `anyOf` integer|null);
+  official Python SDK `ShellCallAction` is `total=False` with
+  `commands: Required[...]` and `timeout_ms` /
+  `max_output_length: Optional[int]`
+- Decision: keep input-item builders on `FunctionShellActionParam`
+  with independently omittable nullable limits. Model the resource
+  echo as `FunctionShellAction` with both limits required-null.
+  Beta reuses the GA types. Official `"timeout_ms": null` still
+  decodes on both shapes. Unofficial resource objects that omit
+  the limits fail decode.
+- Reason: a single required-null type rejected official Param
+  payloads that omit the limits, the same class of request/resource
+  split as D0093. Incomplete resource fixtures that omit the
+  limits are not authority to weaken the resource schema.
+- Impact: `openai-rs-types` Responses function-shell action DTOs.
+  `FunctionShellCallInput::new` accepts the Param type (and
+  `From<FunctionShellAction>`).
+- Overrides: none
+- Tests: `official_function_shell_action_param_omits_limits`.
+
+## D0099 — Official output content names `reasoning_text`
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: Responses `OutputContent` / stream `response.content_part.*`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`OutputContent` / `BetaOutputContent` `oneOf` is
+  `OutputTextContent` + `RefusalContent` + `ReasoningTextContent`;
+  `ResponseContentPartAddedEvent.part` and
+  `ResponseContentPartDoneEvent.part` `$ref` `OutputContent`;
+  `ReasoningTextContent.required` is `type` + `text`); official
+  Python SDK `ResponseContentPartAddedEvent.part` is
+  `Union[ResponseOutputText, ResponseOutputRefusal, PartReasoningText]`
+  with `PartReasoningText.type: Literal["reasoning_text"]` and
+  `text: str`
+- Decision: name `reasoning_text` as `OutputContent::ReasoningText`
+  using the existing `ReasoningTextContent` record. Official
+  `OutputMessageContent` stays `output_text` + `refusal` only; the
+  shared union is the wider stream `OutputContent` schema. Future
+  tags still decode as `Unknown`. Conversation message content
+  already named this member.
+- Reason: official stream `content_part` payloads decoded only as
+  `Unknown`, the same named-member gap as D0090 / D0091 / D0095.
+  Incomplete message-content fixtures that omit `reasoning_text`
+  are not authority to drop the official `OutputContent` member.
+- Impact: `openai-rs-types` Responses output-content union and
+  content-part stream events. Beta reuses the GA union.
+- Overrides: none
+- Tests: `official_output_content_names_reasoning_text`.
+
+## D0100 — Official input-image content requires `detail`
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: Responses `InputImage.detail` / `BetaAgentInputImage.detail`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`InputImageContent` / `BetaInputImageContent` `required` is
+  `type` + `detail`; `detail` `$ref`s `ImageDetail` /
+  `BetaImageDetail` with no `anyOf` null;
+  `InputContent` / `InputMessageContentList` / `EasyInputMessage`
+  and `BetaAgentMessage.content` `$ref` those resource schemas;
+  official Python SDK `ResponseInputImage.detail: ImageDetail`
+  is not `Optional`); conversation sibling
+  `ConversationInputImage.detail` is already required `ImageDetail`
+- Decision: model message/input-content `detail` as required
+  `ImageDetail`. Constructors send the documented default `auto`.
+  Unofficial omit and `"detail": null` fail decode. Official
+  `InputImageContentParamAutoParam` (function-call output request
+  arrays only) still allows omit/null; that Param schema is not
+  the `InputContent` resource. Locator `image_url` / `file_id`
+  stay required-null. File `detail` stays omittable because
+  official `InputFileContent` does not require it.
+- Reason: a single Param-shaped `Omittable<Nullable<ImageDetail>>`
+  hid the official resource requiredness of `InputImageContent`,
+  the same class of request/resource offset as D0093 / D0098.
+  Incomplete create-response path examples that omit `detail`
+  are not authority to weaken the pin (D0010 / D0096). D0034's
+  Param `anyOf` null applies to `InputImageContentParamAutoParam`,
+  not to `InputContent`.
+- Impact: `openai-rs-types` Responses and beta agent input-image
+  DTOs. `detail_null()` is removed from those resource types.
+- Overrides: none
+- Tests: `official_input_image_content_requires_detail`.

@@ -9,13 +9,83 @@ use std::fmt;
 use base64::Engine as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::Value;
+use thiserror::Error;
 
 use crate::{
     ExtraFields, FileId, Omittable, WireSecret,
     files::{FileContent, ReplayableMultipartSource},
-    responses::UnknownTaggedObject,
+    responses::{
+        MAX_INLINE_SKILL_SOURCE_DATA_CHARS, MIN_INLINE_SKILL_SOURCE_DATA_CHARS, UnknownTaggedObject,
+    },
     skills::{SkillId, SkillVersionNumber},
 };
+
+/// Inclusive minimum for `SkillReferenceParam.skill_id`.
+pub const MIN_CONTAINER_SKILL_ID_CHARS: usize = 1;
+/// Inclusive maximum for `SkillReferenceParam.skill_id`.
+pub const MAX_CONTAINER_SKILL_ID_CHARS: usize = 64;
+/// Inclusive minimum for domain-secret `domain` / `name` / `value`.
+pub const MIN_DOMAIN_SECRET_CHARS: usize = 1;
+/// Inclusive maximum for domain-secret `value` characters.
+pub const MAX_DOMAIN_SECRET_VALUE_CHARS: usize = 10_485_760;
+
+/// A Container create-request value that violates a pinned OpenAPI constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CreateContainerConstraintError {
+    /// Referenced `skill_id` is empty or longer than 64 characters.
+    #[error("container skill_id has {actual} characters; must be {minimum}..={maximum}")]
+    SkillIdLength {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// Inline skill source `data` is empty or longer than 70,254,592 characters.
+    #[error("inline skill source data has {actual} characters; must be {minimum}..={maximum}")]
+    InlineSkillSourceData {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// Domain-secret `domain` is empty.
+    #[error("container domain_secret domain has {actual} characters; minimum is {minimum}")]
+    DomainSecretDomain {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+    },
+    /// Domain-secret `name` is empty.
+    #[error("container domain_secret name has {actual} characters; minimum is {minimum}")]
+    DomainSecretName {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+    },
+    /// Domain-secret `value` is empty or longer than 10,485,760 characters.
+    #[error("container domain_secret value has {actual} characters; must be {minimum}..={maximum}")]
+    DomainSecretValue {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// Allowlist `allowed_domains` is present and empty (`minItems: 1`).
+    #[error("container allowlist allowed_domains must contain at least one domain")]
+    EmptyAllowedDomains,
+    /// Allowlist `domain_secrets` is present and empty (`minItems: 1`).
+    #[error("container allowlist domain_secrets must contain at least one secret when present")]
+    EmptyDomainSecrets,
+}
 
 macro_rules! strict_tagged_union {
     (
@@ -261,6 +331,37 @@ impl ContainerDomainSecret {
             value: value.into(),
         }
     }
+
+    /// Checks pinned OpenAPI domain-secret length limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateContainerConstraintError> {
+        let domain = self.domain.chars().count();
+        if domain < MIN_DOMAIN_SECRET_CHARS {
+            return Err(CreateContainerConstraintError::DomainSecretDomain {
+                actual: domain,
+                minimum: MIN_DOMAIN_SECRET_CHARS,
+            });
+        }
+        let name = self.name.chars().count();
+        if name < MIN_DOMAIN_SECRET_CHARS {
+            return Err(CreateContainerConstraintError::DomainSecretName {
+                actual: name,
+                minimum: MIN_DOMAIN_SECRET_CHARS,
+            });
+        }
+        self.value
+            .with_exposed(|value| validate_domain_secret_value_chars(value.chars().count()))
+    }
+}
+
+fn validate_domain_secret_value_chars(actual: usize) -> Result<(), CreateContainerConstraintError> {
+    if !(MIN_DOMAIN_SECRET_CHARS..=MAX_DOMAIN_SECRET_VALUE_CHARS).contains(&actual) {
+        return Err(CreateContainerConstraintError::DomainSecretValue {
+            actual,
+            minimum: MIN_DOMAIN_SECRET_CHARS,
+            maximum: MAX_DOMAIN_SECRET_VALUE_CHARS,
+        });
+    }
+    Ok(())
 }
 
 literal_tag!(NetworkAllowlistTag, Allowlist, "allowlist");
@@ -544,6 +645,58 @@ impl CreateContainerBody {
     pub fn with_network_policy(mut self, policy: impl Into<CreateContainerNetworkPolicy>) -> Self {
         self.network_policy = Omittable::Value(policy.into());
         self
+    }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateContainerConstraintError> {
+        if let Omittable::Value(skills) = &self.skills {
+            for skill in skills {
+                match skill {
+                    CreateContainerSkill::Reference(reference) => {
+                        let actual = reference.skill_id.as_str().chars().count();
+                        if !(MIN_CONTAINER_SKILL_ID_CHARS..=MAX_CONTAINER_SKILL_ID_CHARS)
+                            .contains(&actual)
+                        {
+                            return Err(CreateContainerConstraintError::SkillIdLength {
+                                actual,
+                                minimum: MIN_CONTAINER_SKILL_ID_CHARS,
+                                maximum: MAX_CONTAINER_SKILL_ID_CHARS,
+                            });
+                        }
+                    }
+                    CreateContainerSkill::Inline(inline) => {
+                        let actual = inline.source.data.chars().count();
+                        if !(MIN_INLINE_SKILL_SOURCE_DATA_CHARS
+                            ..=MAX_INLINE_SKILL_SOURCE_DATA_CHARS)
+                            .contains(&actual)
+                        {
+                            return Err(CreateContainerConstraintError::InlineSkillSourceData {
+                                actual,
+                                minimum: MIN_INLINE_SKILL_SOURCE_DATA_CHARS,
+                                maximum: MAX_INLINE_SKILL_SOURCE_DATA_CHARS,
+                            });
+                        }
+                    }
+                    CreateContainerSkill::Unknown(_) => {}
+                }
+            }
+        }
+        if let Omittable::Value(CreateContainerNetworkPolicy::Allowlist(policy)) =
+            &self.network_policy
+        {
+            if policy.allowed_domains.is_empty() {
+                return Err(CreateContainerConstraintError::EmptyAllowedDomains);
+            }
+            if let Omittable::Value(secrets) = &policy.domain_secrets {
+                if secrets.is_empty() {
+                    return Err(CreateContainerConstraintError::EmptyDomainSecrets);
+                }
+                for secret in secrets {
+                    secret.validate()?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -972,5 +1125,145 @@ mod tests {
         let debug = format!("{content:?}");
         assert!(debug.contains("len"));
         assert!(!debug.contains("raw-secret"));
+    }
+
+    #[test]
+    fn create_container_validate_enforces_skill_id_length() {
+        CreateContainerBody::new("workspace")
+            .with_skill(ContainerSkillReference::new("skill_1"))
+            .validate()
+            .expect("documented skill ids stay in range");
+
+        let empty =
+            CreateContainerBody::new("workspace").with_skill(ContainerSkillReference::new(""));
+        assert!(matches!(
+            empty.validate(),
+            Err(CreateContainerConstraintError::SkillIdLength { actual: 0, .. })
+        ));
+        let too_long = CreateContainerBody::new("workspace").with_skill(
+            ContainerSkillReference::new("s".repeat(MAX_CONTAINER_SKILL_ID_CHARS + 1)),
+        );
+        assert!(matches!(
+            too_long.validate(),
+            Err(CreateContainerConstraintError::SkillIdLength { actual: 65, .. })
+        ));
+        let decoded = ok(serde_json::from_value::<CreateContainerBody>(json!({
+            "name": "workspace",
+            "skills": [{"type": "skill_reference", "skill_id": ""}]
+        })));
+        assert!(decoded.validate().is_err());
+    }
+
+    #[test]
+    fn create_container_validate_enforces_inline_skill_source_length() {
+        assert_eq!(MIN_INLINE_SKILL_SOURCE_DATA_CHARS, 1);
+        assert_eq!(MAX_INLINE_SKILL_SOURCE_DATA_CHARS, 70_254_592);
+        CreateContainerBody::new("workspace")
+            .with_skill(InlineContainerSkill::from_zip_bytes(
+                "analysis",
+                "Analyze data",
+                b"PK",
+            ))
+            .validate()
+            .expect("documented inline zip data stays in range");
+
+        let empty = CreateContainerBody::new("workspace").with_skill(
+            InlineContainerSkill::from_zip_bytes("analysis", "Analyze data", b""),
+        );
+        assert!(matches!(
+            empty.validate(),
+            Err(CreateContainerConstraintError::InlineSkillSourceData { actual: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn create_container_validate_enforces_official_domain_secret_limits() {
+        assert_eq!(MIN_DOMAIN_SECRET_CHARS, 1);
+        assert_eq!(MAX_DOMAIN_SECRET_VALUE_CHARS, 10_485_760);
+        validate_domain_secret_value_chars(MIN_DOMAIN_SECRET_CHARS)
+            .expect("one-character domain secret value is accepted");
+        validate_domain_secret_value_chars(MAX_DOMAIN_SECRET_VALUE_CHARS)
+            .expect("domain secret value at the official maxLength is accepted");
+        assert!(matches!(
+            validate_domain_secret_value_chars(0),
+            Err(CreateContainerConstraintError::DomainSecretValue {
+                actual: 0,
+                minimum: 1,
+                maximum: 10_485_760
+            })
+        ));
+        assert!(matches!(
+            validate_domain_secret_value_chars(MAX_DOMAIN_SECRET_VALUE_CHARS + 1),
+            Err(CreateContainerConstraintError::DomainSecretValue {
+                actual: 10_485_761,
+                ..
+            })
+        ));
+
+        let allowlist = ContainerNetworkAllowlist::new(["api.example.test".to_owned()])
+            .expect("non-empty allowlist")
+            .with_secret(ContainerDomainSecret::new(
+                "api.example.test",
+                "API_TOKEN",
+                "token",
+            ));
+        CreateContainerBody::new("workspace")
+            .with_network_policy(allowlist)
+            .validate()
+            .expect("documented domain secrets stay in range");
+
+        let empty_domain = ContainerNetworkAllowlist::new(["api.example.test".to_owned()])
+            .expect("non-empty allowlist")
+            .with_secret(ContainerDomainSecret::new("", "API_TOKEN", "token"));
+        assert!(matches!(
+            CreateContainerBody::new("workspace")
+                .with_network_policy(empty_domain)
+                .validate(),
+            Err(CreateContainerConstraintError::DomainSecretDomain { actual: 0, .. })
+        ));
+        let empty_name = ContainerNetworkAllowlist::new(["api.example.test".to_owned()])
+            .expect("non-empty allowlist")
+            .with_secret(ContainerDomainSecret::new("api.example.test", "", "token"));
+        assert!(matches!(
+            CreateContainerBody::new("workspace")
+                .with_network_policy(empty_name)
+                .validate(),
+            Err(CreateContainerConstraintError::DomainSecretName { actual: 0, .. })
+        ));
+        let decoded = ok(serde_json::from_value::<CreateContainerBody>(json!({
+            "name": "workspace",
+            "network_policy": {
+                "type": "allowlist",
+                "allowed_domains": ["api.example.test"],
+                "domain_secrets": [{
+                    "domain": "",
+                    "name": "API_TOKEN",
+                    "value": "token"
+                }]
+            }
+        })));
+        assert!(
+            decoded.validate().is_err(),
+            "empty domain still decodes but fails opt-in validate"
+        );
+
+        let mut empty_domains = ContainerNetworkAllowlist::new(["api.example.test".to_owned()])
+            .expect("non-empty allowlist");
+        empty_domains.allowed_domains.clear();
+        assert!(matches!(
+            CreateContainerBody::new("workspace")
+                .with_network_policy(empty_domains)
+                .validate(),
+            Err(CreateContainerConstraintError::EmptyAllowedDomains)
+        ));
+        let mut empty_secrets = ContainerNetworkAllowlist::new(["api.example.test".to_owned()])
+            .expect("non-empty allowlist");
+        empty_secrets.domain_secrets = Omittable::Value(Vec::new());
+        assert!(matches!(
+            CreateContainerBody::new("workspace")
+                .with_network_policy(empty_secrets)
+                .validate(),
+            Err(CreateContainerConstraintError::EmptyDomainSecrets)
+        ));
     }
 }

@@ -175,7 +175,7 @@ impl ConversationItems {
                 let page = items.list(&conversation_id, params.clone()).await?;
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
-                    page.last_id().map(|id| id.as_str()),
+                    Some(page.last_id().as_str()),
                     &mut seen,
                     "conversation item",
                 )?;
@@ -800,14 +800,8 @@ mod tests {
             .expect("list conversation items response");
         assert_eq!(response.data().len(), 1);
         assert!(!response.has_more());
-        assert_eq!(
-            response.first_id().map(ConversationItemId::as_str),
-            Some("msg_listed")
-        );
-        assert_eq!(
-            response.last_id().map(ConversationItemId::as_str),
-            Some("msg_listed")
-        );
+        assert_eq!(response.first_id().as_str(), "msg_listed");
+        assert_eq!(response.last_id().as_str(), "msg_listed");
         let ConversationItem::Message(message) = &response.data()[0] else {
             panic!("expected typed conversation message");
         };

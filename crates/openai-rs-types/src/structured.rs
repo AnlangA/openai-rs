@@ -437,11 +437,26 @@ fn normalize(value: &mut Value, path: &str) -> Result<(), StructuredError> {
     };
 
     for keyword in [
-        "patternProperties",
-        "unevaluatedProperties",
-        "propertyNames",
-        "minProperties",
+        "additionalItems",
+        "allOf",
+        "contains",
+        "dependentRequired",
+        "dependentSchemas",
+        "else",
+        "if",
+        "maxContains",
         "maxProperties",
+        "minContains",
+        "minProperties",
+        "not",
+        "oneOf",
+        "patternProperties",
+        "prefixItems",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+        "uniqueItems",
     ] {
         if object.contains_key(keyword) {
             return Err(StructuredError::UnsupportedKeyword {
@@ -474,19 +489,12 @@ fn normalize(value: &mut Value, path: &str) -> Result<(), StructuredError> {
                     )?;
                 }
             }
-            Value::Array(children)
-                if matches!(key.as_str(), "allOf" | "anyOf" | "oneOf" | "prefixItems") =>
-            {
+            Value::Array(children) if key == "anyOf" => {
                 for (index, schema) in children.iter_mut().enumerate() {
                     normalize(schema, &format!("{path}/{key}/{index}"))?;
                 }
             }
-            Value::Object(_) | Value::Bool(_)
-                if matches!(
-                    key.as_str(),
-                    "items" | "contains" | "not" | "if" | "then" | "else"
-                ) =>
-            {
+            Value::Object(_) | Value::Bool(_) if key == "items" => {
                 normalize(child, &format!("{path}/{key}"))?;
             }
             _ => {}
@@ -619,12 +627,28 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_keywords() {
-        let mut schema = json!({
-            "type": "object",
-            "patternProperties": { ".*": { "type": "string" } }
-        });
-        let error = normalize_strict_schema(&mut schema).expect_err("keyword must fail");
-        assert!(matches!(error, StructuredError::UnsupportedKeyword { .. }));
+        for (keyword, payload) in [
+            ("patternProperties", json!({ ".*": { "type": "string" } })),
+            ("allOf", json!([])),
+            ("oneOf", json!([])),
+            ("not", json!({ "type": "string" })),
+            ("prefixItems", json!([])),
+        ] {
+            let mut schema = json!({ "type": "object" });
+            schema
+                .as_object_mut()
+                .expect("object")
+                .insert(keyword.to_owned(), payload);
+            let error = normalize_strict_schema(&mut schema).expect_err("keyword must fail");
+            assert!(
+                matches!(
+                    error,
+                    StructuredError::UnsupportedKeyword { keyword: rejected, .. }
+                    if rejected == keyword
+                ),
+                "{keyword} must be rejected"
+            );
+        }
     }
 
     #[test]

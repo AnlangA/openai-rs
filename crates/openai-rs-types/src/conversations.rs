@@ -516,6 +516,8 @@ pub struct ConversationInputImage {
     image_url: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     file_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_breakpoint: Omittable<responses::PromptCacheBreakpoint>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -529,6 +531,7 @@ impl ConversationInputImage {
             detail,
             image_url: Omittable::Value(Nullable::Value(url.into())),
             file_id: Omittable::Omitted,
+            prompt_cache_breakpoint: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -541,8 +544,39 @@ impl ConversationInputImage {
             detail,
             image_url: Omittable::Omitted,
             file_id: Omittable::Value(Nullable::Value(file_id.into())),
+            prompt_cache_breakpoint: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
+    }
+
+    /// Marks an explicit prompt-cache boundary after this image.
+    #[must_use]
+    pub fn prompt_cache_breakpoint(mut self) -> Self {
+        self.prompt_cache_breakpoint =
+            Omittable::Value(responses::PromptCacheBreakpoint::explicit());
+        self
+    }
+
+    /// Sends official `image_url: null`.
+    #[must_use]
+    pub fn image_url_null(mut self) -> Self {
+        self.image_url = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `file_id: null`.
+    #[must_use]
+    pub fn file_id_null(mut self) -> Self {
+        self.file_id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Checks pinned OpenAPI `image_url` `maxLength` without sending the request.
+    pub fn validate(&self) -> Result<(), responses::CreateResponseConstraintError> {
+        if let Omittable::Value(Nullable::Value(image_url)) = &self.image_url {
+            responses::validate_input_image_url_chars(image_url.chars().count())?;
+        }
+        Ok(())
     }
 
     fn to_response_content(
@@ -556,6 +590,10 @@ impl ConversationInputImage {
                 responses::InputImage::from_file_id(file_id.clone()).detail(self.detail.clone())
             }
             _ => return Err(ConversationItemConversionError::ImageHasNoSource),
+        };
+        let value = match self.prompt_cache_breakpoint {
+            Omittable::Value(_) => value.prompt_cache_breakpoint(),
+            Omittable::Omitted => value,
         };
         Ok(value.into())
     }
@@ -581,6 +619,8 @@ pub struct ConversationComputerScreenshot {
     image_url: Nullable<String>,
     file_id: Nullable<String>,
     detail: responses::ImageDetail,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_breakpoint: Omittable<responses::PromptCacheBreakpoint>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -594,6 +634,7 @@ impl ConversationComputerScreenshot {
             image_url: Nullable::Value(url.into()),
             file_id: Nullable::Null,
             detail,
+            prompt_cache_breakpoint: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -606,8 +647,39 @@ impl ConversationComputerScreenshot {
             image_url: Nullable::Null,
             file_id: Nullable::Value(file_id.into()),
             detail,
+            prompt_cache_breakpoint: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
+    }
+
+    /// Marks an explicit prompt-cache boundary after this screenshot.
+    #[must_use]
+    pub fn prompt_cache_breakpoint(mut self) -> Self {
+        self.prompt_cache_breakpoint =
+            Omittable::Value(responses::PromptCacheBreakpoint::explicit());
+        self
+    }
+
+    fn to_response_content(&self) -> responses::InputContent {
+        let mut screenshot = responses::ComputerScreenshot::new().detail(self.detail.clone());
+        screenshot = match &self.image_url {
+            Nullable::Value(url) => screenshot.image_url(url.clone()),
+            Nullable::Null => screenshot.image_url_null(),
+        };
+        screenshot = match &self.file_id {
+            Nullable::Value(file_id) => screenshot.file_id(file_id.clone()),
+            Nullable::Null => screenshot.file_id_null(),
+        };
+        if let Omittable::Value(breakpoint) = &self.prompt_cache_breakpoint {
+            screenshot = screenshot.prompt_cache_breakpoint(breakpoint.clone());
+        }
+        screenshot.into()
+    }
+
+    /// Returns future properties retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -628,6 +700,8 @@ pub struct ConversationInputFile {
     file_url: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     detail: Omittable<responses::ImageDetail>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_breakpoint: Omittable<responses::PromptCacheBreakpoint>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -641,6 +715,7 @@ impl ConversationInputFile {
             file_data: Omittable::Omitted,
             file_url: Omittable::Omitted,
             detail: Omittable::Omitted,
+            prompt_cache_breakpoint: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -651,6 +726,13 @@ impl ConversationInputFile {
         let mut value = Self::empty();
         value.file_id = Omittable::Value(Nullable::Value(file_id.into()));
         value
+    }
+
+    /// Sends official `file_id: null`.
+    #[must_use]
+    pub fn file_id_null(mut self) -> Self {
+        self.file_id = Omittable::Value(Nullable::Null);
+        self
     }
 
     /// Creates a file resource from a remote URL.
@@ -677,6 +759,14 @@ impl ConversationInputFile {
         self
     }
 
+    /// Marks an explicit prompt-cache boundary after this file.
+    #[must_use]
+    pub fn prompt_cache_breakpoint(mut self) -> Self {
+        self.prompt_cache_breakpoint =
+            Omittable::Value(responses::PromptCacheBreakpoint::explicit());
+        self
+    }
+
     fn to_response_content(
         &self,
     ) -> Result<responses::InputContent, ConversationItemConversionError> {
@@ -699,6 +789,10 @@ impl ConversationInputFile {
         };
         let value = match &self.detail {
             Omittable::Value(detail) => value.detail(detail.clone()),
+            Omittable::Omitted => value,
+        };
+        let value = match self.prompt_cache_breakpoint {
+            Omittable::Value(_) => value.prompt_cache_breakpoint(),
             Omittable::Omitted => value,
         };
         Ok(value.into())
@@ -854,7 +948,7 @@ pub struct ConversationMessage {
     role: ConversationMessageRole,
     content: Vec<ConversationMessageContent>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    phase: Omittable<Nullable<String>>,
+    phase: Omittable<Nullable<responses::MessagePhase>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -881,9 +975,25 @@ impl ConversationMessage {
 
     /// Sets an assistant message phase.
     #[must_use]
-    pub fn phase(mut self, phase: impl Into<String>) -> Self {
+    pub fn phase(mut self, phase: impl Into<responses::MessagePhase>) -> Self {
         self.phase = Omittable::Value(Nullable::Value(phase.into()));
         self
+    }
+
+    /// Explicitly sends official `phase: null`.
+    #[must_use]
+    pub fn phase_null(mut self) -> Self {
+        self.phase = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Returns the assistant message phase when present and non-null.
+    #[must_use]
+    pub fn phase_ref(&self) -> Option<&responses::MessagePhase> {
+        match &self.phase {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
     }
 
     /// Returns the item id.
@@ -958,6 +1068,9 @@ impl ConversationMessage {
                             value.to_response_content()
                         }
                         ConversationMessageContent::InputFile(value) => value.to_response_content(),
+                        ConversationMessageContent::ComputerScreenshot(value) => {
+                            Ok(value.to_response_content())
+                        }
                         _ => Err(ConversationItemConversionError::ContentRoleMismatch {
                             role: self.role.as_str().to_owned(),
                             content_type: content_discriminator(part).to_owned(),
@@ -1630,8 +1743,8 @@ pub struct ConversationItemList {
     object: ConversationItemListObjectTag,
     data: Vec<ConversationItem>,
     has_more: bool,
-    first_id: Nullable<ConversationItemId>,
-    last_id: Nullable<ConversationItemId>,
+    first_id: ConversationItemId,
+    last_id: ConversationItemId,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1649,22 +1762,16 @@ impl ConversationItemList {
         self.has_more
     }
 
-    /// Returns the first id when the page is non-empty.
+    /// Returns the first item id on this page.
     #[must_use]
-    pub fn first_id(&self) -> Option<&ConversationItemId> {
-        match &self.first_id {
-            Nullable::Value(id) => Some(id),
-            Nullable::Null => None,
-        }
+    pub fn first_id(&self) -> &ConversationItemId {
+        &self.first_id
     }
 
     /// Returns the last id for cursor pagination.
     #[must_use]
-    pub fn last_id(&self) -> Option<&ConversationItemId> {
-        match &self.last_id {
-            Nullable::Value(id) => Some(id),
-            Nullable::Null => None,
-        }
+    pub fn last_id(&self) -> &ConversationItemId {
+        &self.last_id
     }
 
     /// Returns future response properties retained while decoding.
@@ -1756,6 +1863,150 @@ mod tests {
                 "items": [{"role": "user", "content": "Hello!"}]
             })
         );
+    }
+
+    #[test]
+    fn conversation_request_and_resource_match_openapi_inventory() {
+        let create = CreateConversationRequest::new()
+            .metadata_entry("topic", "demo")
+            .expect("valid metadata")
+            .item(responses::InputMessage::user("Hello!"))
+            .expect("one item");
+        let value = serde_json::to_value(&create).expect("serialize create");
+        let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["items", "metadata"]);
+
+        let update = UpdateConversationRequest::new(ConversationMetadata::from([(
+            "topic".into(),
+            "demo".into(),
+        )]))
+        .expect("valid metadata");
+        let value = serde_json::to_value(&update).expect("serialize update");
+        let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["metadata"]);
+
+        let resource: Conversation = serde_json::from_value(json!({
+            "id": "conv_1",
+            "object": "conversation",
+            "metadata": {"topic": "demo"},
+            "created_at": 1
+        }))
+        .expect("decode conversation");
+        assert_eq!(resource.created_at(), 1);
+        assert!(!resource.extra_fields().contains_key("created_at"));
+
+        let screenshot = ConversationComputerScreenshot::from_url(
+            "https://example.com/screen.png",
+            responses::ImageDetail::Auto,
+        )
+        .prompt_cache_breakpoint();
+        assert_eq!(
+            serde_json::to_value(&screenshot).expect("serialize screenshot"),
+            json!({
+                "type": "computer_screenshot",
+                "image_url": "https://example.com/screen.png",
+                "file_id": null,
+                "detail": "auto",
+                "prompt_cache_breakpoint": { "mode": "explicit" }
+            })
+        );
+        let decoded_screenshot = serde_json::from_value::<ConversationComputerScreenshot>(json!({
+            "type": "computer_screenshot",
+            "image_url": null,
+            "file_id": "file_1",
+            "detail": "high",
+            "prompt_cache_breakpoint": { "mode": "explicit" }
+        }))
+        .expect("official ComputerScreenshotContent breakpoint");
+        assert!(matches!(
+            decoded_screenshot.to_response_content(),
+            responses::InputContent::ComputerScreenshot(_)
+        ));
+
+        let image = ConversationInputImage::from_url(
+            "https://example.com/a.png",
+            responses::ImageDetail::Low,
+        )
+        .prompt_cache_breakpoint();
+        assert_eq!(
+            serde_json::to_value(&image).expect("serialize image")["prompt_cache_breakpoint"],
+            json!({ "mode": "explicit" })
+        );
+        let file = ConversationInputFile::from_file_id("file_2").prompt_cache_breakpoint();
+        assert_eq!(
+            serde_json::to_value(&file).expect("serialize file")["prompt_cache_breakpoint"],
+            json!({ "mode": "explicit" })
+        );
+        assert_eq!(
+            serde_json::to_value(&ConversationInputFile::from_file_id("file_2").file_id_null())
+                .expect("serialize conversation file_id null")["file_id"],
+            Value::Null
+        );
+        assert_eq!(
+            serde_json::to_value(
+                &ConversationInputImage::from_url(
+                    "https://example.com/a.png",
+                    responses::ImageDetail::Low,
+                )
+                .image_url_null()
+                .file_id_null()
+            )
+            .expect("serialize conversation image locator nulls")["image_url"],
+            Value::Null
+        );
+        ConversationInputImage::from_url("https://example.com/a.png", responses::ImageDetail::Low)
+            .validate()
+            .expect("short conversation image_url is accepted");
+        ConversationInputImage::from_file_id("file_1", responses::ImageDetail::Auto)
+            .image_url_null()
+            .validate()
+            .expect("official conversation image_url null skips the length bound");
+
+        let phased = ConversationMessage::new(
+            "msg_1",
+            responses::ResponseItemStatus::Completed,
+            ConversationMessageRole::Assistant,
+            [responses::OutputText::new("done")],
+        )
+        .phase(responses::MessagePhase::FinalAnswer);
+        assert_eq!(
+            phased.phase_ref(),
+            Some(&responses::MessagePhase::FinalAnswer)
+        );
+        assert_eq!(
+            serde_json::to_value(&phased).expect("serialize conversation phase")["phase"],
+            "final_answer"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                &ConversationMessage::new(
+                    "msg_2",
+                    responses::ResponseItemStatus::Completed,
+                    ConversationMessageRole::Assistant,
+                    [responses::OutputText::new("done")],
+                )
+                .phase_null()
+            )
+            .expect("serialize conversation phase null")["phase"],
+            Value::Null
+        );
+        let official_null = serde_json::from_value::<ConversationMessage>(json!({
+            "type": "message",
+            "id": "msg_3",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": "done",
+                "annotations": [],
+                "logprobs": []
+            }],
+            "phase": null
+        }))
+        .expect("official Message.phase null");
+        assert_eq!(official_null.phase_ref(), None);
     }
 
     #[test]
@@ -1987,15 +2238,26 @@ mod tests {
             "object": "list",
             "data": [user_message_fixture()],
             "has_more": false,
-            "first_id": null,
-            "last_id": null,
+            "first_id": "msg_user",
+            "last_id": "msg_user",
             "future_page": "kept"
         });
         let page: ConversationItemList =
-            serde_json::from_value(fixture.clone()).expect("decode empty-cursor page");
+            serde_json::from_value(fixture.clone()).expect("decode official cursor page");
         assert_eq!(page.data().len(), 1);
-        assert!(page.first_id().is_none());
-        assert!(page.last_id().is_none());
+        assert_eq!(page.first_id().as_str(), "msg_user");
+        assert_eq!(page.last_id().as_str(), "msg_user");
+        assert!(
+            serde_json::from_value::<ConversationItemList>(json!({
+                "object": "list",
+                "data": [],
+                "first_id": null,
+                "last_id": null,
+                "has_more": false
+            }))
+            .is_err(),
+            "official ConversationItemList cursors are required non-null strings"
+        );
         assert_eq!(
             serde_json::to_value(page).expect("round-trip page"),
             fixture

@@ -8,9 +8,11 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Value};
+use thiserror::Error;
 
 use crate::{
-    ExtraFields, FileId, FineTuningJobId, ModelId, Nullable, Omittable,
+    ExtraFields, FileId, FineTuningJobId, MAX_RESPONSE_METADATA_KEY_CHARS,
+    MAX_RESPONSE_METADATA_PAIRS, MAX_RESPONSE_METADATA_VALUE_CHARS, ModelId, Nullable, Omittable,
     responses::UnknownTaggedObject,
 };
 
@@ -1266,6 +1268,356 @@ impl CreateFineTuningJobRequest {
         self.metadata = Omittable::Value(Nullable::Value(metadata));
         self
     }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateFineTuningJobConstraintError> {
+        if let Omittable::Value(Nullable::Value(suffix)) = &self.suffix {
+            if suffix.is_empty() {
+                return Err(CreateFineTuningJobConstraintError::EmptySuffix);
+            }
+            let actual = suffix.chars().count();
+            if actual > MAX_FINE_TUNING_SUFFIX_CHARS {
+                return Err(CreateFineTuningJobConstraintError::Suffix {
+                    actual,
+                    maximum: MAX_FINE_TUNING_SUFFIX_CHARS,
+                });
+            }
+        }
+        if let Omittable::Value(Nullable::Value(seed)) = self.seed
+            && seed > MAX_FINE_TUNING_SEED
+        {
+            return Err(CreateFineTuningJobConstraintError::Seed {
+                actual: seed,
+                maximum: MAX_FINE_TUNING_SEED,
+            });
+        }
+        if let Omittable::Value(Nullable::Value(metadata)) = &self.metadata {
+            if metadata.len() > MAX_RESPONSE_METADATA_PAIRS {
+                return Err(CreateFineTuningJobConstraintError::MetadataPairCount {
+                    actual: metadata.len(),
+                    maximum: MAX_RESPONSE_METADATA_PAIRS,
+                });
+            }
+            for (key, value) in metadata {
+                let key_chars = key.chars().count();
+                if key_chars > MAX_RESPONSE_METADATA_KEY_CHARS {
+                    return Err(CreateFineTuningJobConstraintError::MetadataKey {
+                        actual: key_chars,
+                        maximum: MAX_RESPONSE_METADATA_KEY_CHARS,
+                    });
+                }
+                let value_chars = value.chars().count();
+                if value_chars > MAX_RESPONSE_METADATA_VALUE_CHARS {
+                    return Err(CreateFineTuningJobConstraintError::MetadataValue {
+                        actual: value_chars,
+                        maximum: MAX_RESPONSE_METADATA_VALUE_CHARS,
+                    });
+                }
+            }
+        }
+        if let Omittable::Value(legacy) = &self.hyperparameters {
+            validate_supervised_like_hyperparameters(
+                &legacy.batch_size,
+                &legacy.n_epochs,
+                &legacy.learning_rate_multiplier,
+            )?;
+        }
+        if let Omittable::Value(method) = &self.method {
+            match method {
+                FineTuneMethod::Supervised(method) => {
+                    if let Omittable::Value(config) = &method.supervised
+                        && let Omittable::Value(hyperparameters) = &config.hyperparameters
+                    {
+                        validate_supervised_like_hyperparameters(
+                            &hyperparameters.batch_size,
+                            &hyperparameters.n_epochs,
+                            &hyperparameters.learning_rate_multiplier,
+                        )?;
+                    }
+                }
+                FineTuneMethod::Dpo(method) => {
+                    if let Omittable::Value(config) = &method.dpo
+                        && let Omittable::Value(hyperparameters) = &config.hyperparameters
+                    {
+                        validate_supervised_like_hyperparameters(
+                            &hyperparameters.batch_size,
+                            &hyperparameters.n_epochs,
+                            &hyperparameters.learning_rate_multiplier,
+                        )?;
+                        validate_exclusive_range(
+                            &hyperparameters.beta,
+                            0.0,
+                            Some(MAX_FINE_TUNE_DPO_BETA),
+                            |value| CreateFineTuningJobConstraintError::DpoBeta {
+                                value: value.to_string(),
+                            },
+                        )?;
+                    }
+                }
+                FineTuneMethod::Reinforcement(method) => {
+                    if let Omittable::Value(config) = &method.reinforcement {
+                        validate_reinforcement_grader(&config.grader)?;
+                        if let Omittable::Value(hyperparameters) = &config.hyperparameters {
+                            validate_supervised_like_hyperparameters(
+                                &hyperparameters.batch_size,
+                                &hyperparameters.n_epochs,
+                                &hyperparameters.learning_rate_multiplier,
+                            )?;
+                            validate_exclusive_range(
+                                &hyperparameters.compute_multiplier,
+                                MIN_FINE_TUNE_COMPUTE_MULTIPLIER,
+                                Some(MAX_FINE_TUNE_COMPUTE_MULTIPLIER),
+                                |value| CreateFineTuningJobConstraintError::ComputeMultiplier {
+                                    value: value.to_string(),
+                                },
+                            )?;
+                            validate_positive_auto_integer(
+                                &hyperparameters.eval_interval,
+                                CreateFineTuningJobConstraintError::EvalInterval,
+                            )?;
+                            validate_positive_auto_integer(
+                                &hyperparameters.eval_samples,
+                                CreateFineTuningJobConstraintError::EvalSamples,
+                            )?;
+                        }
+                    }
+                }
+                FineTuneMethod::Unknown(_) => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_supervised_like_hyperparameters(
+    batch_size: &Omittable<AutoOrInteger>,
+    n_epochs: &Omittable<AutoOrInteger>,
+    learning_rate_multiplier: &Omittable<AutoOrNumber>,
+) -> Result<(), CreateFineTuningJobConstraintError> {
+    validate_bounded_auto_integer(
+        batch_size,
+        MIN_FINE_TUNE_BATCH_SIZE,
+        MAX_FINE_TUNE_BATCH_SIZE,
+        |actual, minimum, maximum| CreateFineTuningJobConstraintError::BatchSize {
+            actual,
+            minimum,
+            maximum,
+        },
+    )?;
+    validate_bounded_auto_integer(
+        n_epochs,
+        MIN_FINE_TUNE_EPOCHS,
+        MAX_FINE_TUNE_EPOCHS,
+        |actual, minimum, maximum| CreateFineTuningJobConstraintError::Epochs {
+            actual,
+            minimum,
+            maximum,
+        },
+    )?;
+    validate_exclusive_range(learning_rate_multiplier, 0.0, None, |value| {
+        CreateFineTuningJobConstraintError::LearningRateMultiplier {
+            value: value.to_string(),
+        }
+    })
+}
+
+fn validate_bounded_auto_integer(
+    value: &Omittable<AutoOrInteger>,
+    minimum: u64,
+    maximum: u64,
+    error: impl FnOnce(u64, u64, u64) -> CreateFineTuningJobConstraintError,
+) -> Result<(), CreateFineTuningJobConstraintError> {
+    if let Omittable::Value(AutoOrInteger::Value(actual)) = *value
+        && !(minimum..=maximum).contains(&actual)
+    {
+        return Err(error(actual, minimum, maximum));
+    }
+    Ok(())
+}
+
+fn validate_positive_auto_integer(
+    value: &Omittable<AutoOrInteger>,
+    error: fn(u64) -> CreateFineTuningJobConstraintError,
+) -> Result<(), CreateFineTuningJobConstraintError> {
+    if let Omittable::Value(AutoOrInteger::Value(actual)) = *value
+        && actual < 1
+    {
+        return Err(error(actual));
+    }
+    Ok(())
+}
+
+fn validate_exclusive_range(
+    value: &Omittable<AutoOrNumber>,
+    exclusive_minimum: f64,
+    inclusive_maximum: Option<f64>,
+    error: impl FnOnce(f64) -> CreateFineTuningJobConstraintError,
+) -> Result<(), CreateFineTuningJobConstraintError> {
+    if let Omittable::Value(AutoOrNumber::Value(actual)) = *value {
+        let below_max = inclusive_maximum.is_none_or(|maximum| actual <= maximum);
+        if !(actual.is_finite() && actual > exclusive_minimum && below_max) {
+            return Err(error(actual));
+        }
+    }
+    Ok(())
+}
+
+fn validate_reinforcement_grader(
+    grader: &experimental_graders::Grader,
+) -> Result<(), CreateFineTuningJobConstraintError> {
+    match grader {
+        experimental_graders::Grader::ScoreModel(grader) => {
+            if let Omittable::Value(params) = &grader.sampling_params
+                && let Omittable::Value(Nullable::Value(tokens)) = params.max_completions_tokens
+                && tokens < MIN_FINE_TUNE_MAX_COMPLETIONS_TOKENS
+            {
+                return Err(CreateFineTuningJobConstraintError::MaxCompletionsTokens {
+                    actual: tokens,
+                    minimum: MIN_FINE_TUNE_MAX_COMPLETIONS_TOKENS,
+                });
+            }
+        }
+        experimental_graders::Grader::Multi(grader) => match &grader.graders {
+            experimental_graders::GraderCollection::One(inner) => {
+                validate_reinforcement_grader(inner)?;
+            }
+            experimental_graders::GraderCollection::Many(inners) => {
+                for inner in inners {
+                    validate_reinforcement_grader(inner)?;
+                }
+            }
+        },
+        experimental_graders::Grader::StringCheck(_)
+        | experimental_graders::Grader::TextSimilarity(_)
+        | experimental_graders::Grader::Python(_)
+        | experimental_graders::Grader::LabelModel(_)
+        | experimental_graders::Grader::Unknown(_) => {}
+    }
+    Ok(())
+}
+
+/// Inclusive maximum Unicode scalar count for a fine-tuning model-name suffix.
+pub const MAX_FINE_TUNING_SUFFIX_CHARS: usize = 64;
+/// Inclusive maximum for `CreateFineTuningJobRequest.seed`.
+pub const MAX_FINE_TUNING_SEED: u32 = 2_147_483_647;
+/// Inclusive minimum for numeric `batch_size`.
+pub const MIN_FINE_TUNE_BATCH_SIZE: u64 = 1;
+/// Inclusive maximum for numeric `batch_size`.
+pub const MAX_FINE_TUNE_BATCH_SIZE: u64 = 256;
+/// Inclusive minimum for numeric `n_epochs`.
+pub const MIN_FINE_TUNE_EPOCHS: u64 = 1;
+/// Inclusive maximum for numeric `n_epochs`.
+pub const MAX_FINE_TUNE_EPOCHS: u64 = 50;
+/// Inclusive maximum for numeric DPO `beta`.
+pub const MAX_FINE_TUNE_DPO_BETA: f64 = 2.0;
+/// Exclusive minimum for numeric reinforcement `compute_multiplier`.
+pub const MIN_FINE_TUNE_COMPUTE_MULTIPLIER: f64 = 0.00001;
+/// Inclusive minimum for score-model `sampling_params.max_completions_tokens`.
+pub const MIN_FINE_TUNE_MAX_COMPLETIONS_TOKENS: u64 = 1;
+/// Inclusive maximum for numeric reinforcement `compute_multiplier`.
+pub const MAX_FINE_TUNE_COMPUTE_MULTIPLIER: f64 = 10.0;
+
+/// A create-request value that violates a pinned Fine-tuning constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CreateFineTuningJobConstraintError {
+    /// `suffix` is present but empty.
+    #[error("fine-tuning suffix must contain at least one character when set")]
+    EmptySuffix,
+    /// `suffix` exceeds 64 characters.
+    #[error("fine-tuning suffix has {actual} characters; maximum is {maximum}")]
+    Suffix {
+        /// Observed character count.
+        actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// `seed` exceeds the pinned signed 32-bit maximum.
+    #[error("fine-tuning seed must be 0..={maximum}, got {actual}")]
+    Seed {
+        /// Rejected value.
+        actual: u32,
+        /// Contract maximum.
+        maximum: u32,
+    },
+    /// Metadata contains more than 16 pairs.
+    #[error("metadata contains {actual} pairs; maximum is {maximum}")]
+    MetadataPairCount {
+        /// Observed pair count.
+        actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// A metadata key exceeds 64 characters.
+    #[error("metadata key has {actual} characters; maximum is {maximum}")]
+    MetadataKey {
+        /// Observed character count.
+        actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// A metadata value exceeds 512 characters.
+    #[error("metadata value has {actual} characters; maximum is {maximum}")]
+    MetadataValue {
+        /// Observed character count.
+        actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// Numeric `batch_size` is outside `1..=256`.
+    #[error("fine-tuning batch_size must be {minimum}..={maximum}, got {actual}")]
+    BatchSize {
+        /// Rejected value.
+        actual: u64,
+        /// Contract minimum.
+        minimum: u64,
+        /// Contract maximum.
+        maximum: u64,
+    },
+    /// Numeric `n_epochs` is outside `1..=50`.
+    #[error("fine-tuning n_epochs must be {minimum}..={maximum}, got {actual}")]
+    Epochs {
+        /// Rejected value.
+        actual: u64,
+        /// Contract minimum.
+        minimum: u64,
+        /// Contract maximum.
+        maximum: u64,
+    },
+    /// Numeric `learning_rate_multiplier` is not greater than 0.
+    #[error("fine-tuning learning_rate_multiplier must be finite and greater than 0, got {value}")]
+    LearningRateMultiplier {
+        /// Observed value.
+        value: String,
+    },
+    /// Numeric DPO `beta` is outside `(0, 2]`.
+    #[error("fine-tuning DPO beta must be finite and within (0, 2], got {value}")]
+    DpoBeta {
+        /// Observed value.
+        value: String,
+    },
+    /// Numeric `compute_multiplier` is outside `(0.00001, 10]`.
+    #[error("fine-tuning compute_multiplier must be finite and within (0.00001, 10], got {value}")]
+    ComputeMultiplier {
+        /// Observed value.
+        value: String,
+    },
+    /// Numeric `eval_interval` is less than 1.
+    #[error("fine-tuning eval_interval must be at least 1, got {0}")]
+    EvalInterval(u64),
+    /// Numeric `eval_samples` is less than 1.
+    #[error("fine-tuning eval_samples must be at least 1, got {0}")]
+    EvalSamples(u64),
+    /// Score-model `max_completions_tokens` is below the pinned minimum of 1.
+    #[error(
+        "fine-tuning score-model max_completions_tokens must be at least {minimum}, got {actual}"
+    )]
+    MaxCompletionsTokens {
+        /// Rejected value.
+        actual: u64,
+        /// Contract minimum.
+        minimum: u64,
+    },
 }
 
 crate::open_string_enum! {
@@ -1387,8 +1739,9 @@ pub struct FineTuningJobEvent {
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub kind: Omittable<FineTuningEventKind>,
+    /// Event payload object, or official `"data": null` on message events.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub data: Omittable<Map<String, Value>>,
+    pub data: Omittable<Nullable<Map<String, Value>>>,
     /// Future response fields.
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -1928,6 +2281,38 @@ mod tests {
         assert!(events.extra().contains_key("page_future"));
         assert_eq!(ok(serde_json::to_value(events)), events_fixture);
 
+        let official_nulls = ok(serde_json::from_value::<ListFineTuningJobEventsResponse>(
+            json!({
+                "object": "list",
+                "data": [{
+                    "object": "fine_tuning.job.event",
+                    "id": "ft-event-ddTJfwuMVpfLXseO0Am0Gqjm",
+                    "created_at": 1_721_764_800_u64,
+                    "level": "info",
+                    "message": "Fine tuning job successfully completed",
+                    "data": null,
+                    "type": "message"
+                }],
+                "has_more": true
+            }),
+        ));
+        assert_eq!(
+            official_nulls.data[0].data,
+            Omittable::Value(Nullable::Null)
+        );
+        assert!(
+            serde_json::from_value::<FineTuningJobEvent>(json!({
+                "object": "fine_tuning.job.event",
+                "id": "evt_1",
+                "created_at": 1,
+                "level": "info",
+                "message": null,
+                "data": null
+            }))
+            .is_err(),
+            "unofficial message null still fails"
+        );
+
         let checkpoints_fixture = json!({
             "object": "list",
             "data": [{
@@ -2108,5 +2493,193 @@ mod tests {
                 .contains_key("errors_future")
         );
         assert_eq!(ok(serde_json::to_value(response)), fixture);
+    }
+
+    #[test]
+    fn fine_tuning_create_fields_match_python_and_openapi_inventory() {
+        let request = CreateFineTuningJobRequest::new("gpt-4o-mini", "file_train")
+            .with_suffix("weather")
+            .with_validation_file("file_valid")
+            .with_metadata(BTreeMap::from([("team".to_owned(), "search".to_owned())]));
+        let value = ok(serde_json::to_value(&request));
+        let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "metadata",
+                "model",
+                "suffix",
+                "training_file",
+                "validation_file"
+            ]
+        );
+        request.validate().expect("documented fields stay in range");
+    }
+
+    #[test]
+    fn fine_tuning_create_validate_enforces_pinned_limits() {
+        CreateFineTuningJobRequest::new("gpt-4o-mini", "file_train")
+            .with_suffix("a".repeat(MAX_FINE_TUNING_SUFFIX_CHARS))
+            .validate()
+            .expect("64-character suffix is accepted");
+
+        assert!(matches!(
+            CreateFineTuningJobRequest::new("gpt-4o-mini", "file_train")
+                .with_suffix("")
+                .validate(),
+            Err(CreateFineTuningJobConstraintError::EmptySuffix)
+        ));
+        assert!(matches!(
+            CreateFineTuningJobRequest::new("gpt-4o-mini", "file_train")
+                .with_suffix("a".repeat(MAX_FINE_TUNING_SUFFIX_CHARS + 1))
+                .validate(),
+            Err(CreateFineTuningJobConstraintError::Suffix { actual: 65, .. })
+        ));
+
+        let mut over_seed = CreateFineTuningJobRequest::new("gpt-4o-mini", "file_train");
+        over_seed.seed = Omittable::Value(Nullable::Value(MAX_FINE_TUNING_SEED + 1));
+        assert!(matches!(
+            over_seed.validate(),
+            Err(CreateFineTuningJobConstraintError::Seed { actual, .. })
+                if actual == MAX_FINE_TUNING_SEED + 1
+        ));
+
+        let decoded = ok(serde_json::from_value::<CreateFineTuningJobRequest>(
+            json!({
+                "model": "gpt-4o-mini",
+                "training_file": "file_train",
+                "suffix": ""
+            }),
+        ));
+        assert!(decoded.validate().is_err());
+    }
+
+    #[test]
+    fn fine_tuning_create_validate_enforces_hyperparameter_limits() {
+        let mut in_range = CreateFineTuningJobRequest::new("gpt-4o-mini", "file_train");
+        in_range.hyperparameters = Omittable::Value(LegacyFineTuningHyperparameters {
+            batch_size: Omittable::Value(AutoOrInteger::Value(MAX_FINE_TUNE_BATCH_SIZE)),
+            n_epochs: Omittable::Value(AutoOrInteger::Value(MAX_FINE_TUNE_EPOCHS)),
+            learning_rate_multiplier: Omittable::Value(AutoOrNumber::Value(0.1)),
+        });
+        in_range
+            .validate()
+            .expect("boundary hyperparameters are accepted");
+
+        let mut over_batch = CreateFineTuningJobRequest::new("gpt-4o-mini", "file_train");
+        over_batch.hyperparameters = Omittable::Value(LegacyFineTuningHyperparameters {
+            batch_size: Omittable::Value(AutoOrInteger::Value(MAX_FINE_TUNE_BATCH_SIZE + 1)),
+            ..LegacyFineTuningHyperparameters::default()
+        });
+        assert!(matches!(
+            over_batch.validate(),
+            Err(CreateFineTuningJobConstraintError::BatchSize { actual: 257, .. })
+        ));
+
+        let over_epochs = CreateFineTuningJobRequest::new("gpt-4o-mini", "file_train").with_method(
+            SupervisedFineTuneMethod::new().with_config(FineTuneSupervisedMethodConfig {
+                hyperparameters: Omittable::Value(FineTuneSupervisedHyperparameters {
+                    n_epochs: Omittable::Value(AutoOrInteger::Value(51)),
+                    ..FineTuneSupervisedHyperparameters::default()
+                }),
+                extra: ExtraFields::new(),
+            }),
+        );
+        assert!(matches!(
+            over_epochs.validate(),
+            Err(CreateFineTuningJobConstraintError::Epochs { actual: 51, .. })
+        ));
+
+        let mut zero_lr = CreateFineTuningJobRequest::new("gpt-4o-mini", "file_train");
+        zero_lr.hyperparameters = Omittable::Value(LegacyFineTuningHyperparameters {
+            learning_rate_multiplier: Omittable::Value(AutoOrNumber::Value(0.0)),
+            ..LegacyFineTuningHyperparameters::default()
+        });
+        assert!(matches!(
+            zero_lr.validate(),
+            Err(CreateFineTuningJobConstraintError::LearningRateMultiplier { .. })
+        ));
+
+        let over_beta = CreateFineTuningJobRequest::new("gpt-4o-mini", "file_train").with_method(
+            DpoFineTuneMethod::new().with_config(FineTuneDpoMethodConfig {
+                hyperparameters: Omittable::Value(FineTuneDpoHyperparameters {
+                    beta: Omittable::Value(AutoOrNumber::Value(2.1)),
+                    ..FineTuneDpoHyperparameters::default()
+                }),
+                extra: ExtraFields::new(),
+            }),
+        );
+        assert!(matches!(
+            over_beta.validate(),
+            Err(CreateFineTuningJobConstraintError::DpoBeta { .. })
+        ));
+
+        let decoded = ok(serde_json::from_value::<CreateFineTuningJobRequest>(
+            json!({
+                "model": "gpt-4o-mini",
+                "training_file": "file_train",
+                "hyperparameters": {"batch_size": 0}
+            }),
+        ));
+        assert!(decoded.validate().is_err());
+    }
+
+    #[test]
+    fn fine_tuning_create_validate_enforces_score_model_token_floor() {
+        assert_eq!(MIN_FINE_TUNE_MAX_COMPLETIONS_TOKENS, 1);
+        let score: ScoreModelGrader = ok(serde_json::from_value(json!({
+            "type": "score_model",
+            "name": "judge",
+            "model": "gpt-5-mini",
+            "input": [{"role": "user", "content": "x"}]
+        })));
+        let mut unofficial = score.clone();
+        let mut unofficial_params = ScoreModelSamplingParams::default();
+        unofficial_params.max_completions_tokens = Omittable::Value(Nullable::Value(0));
+        unofficial.sampling_params = Omittable::Value(unofficial_params);
+        assert!(matches!(
+            CreateFineTuningJobRequest::new("gpt-5-mini", "file_train")
+                .with_method(ReinforcementFineTuneMethod::new(
+                    FineTuneReinforcementMethodConfig::new(unofficial.into()),
+                ))
+                .validate(),
+            Err(CreateFineTuningJobConstraintError::MaxCompletionsTokens {
+                actual: 0,
+                minimum: 1
+            })
+        ));
+
+        let mut in_range = score;
+        let mut in_range_params = ScoreModelSamplingParams::default();
+        in_range_params.max_completions_tokens =
+            Omittable::Value(Nullable::Value(MIN_FINE_TUNE_MAX_COMPLETIONS_TOKENS));
+        in_range.sampling_params = Omittable::Value(in_range_params);
+        CreateFineTuningJobRequest::new("gpt-5-mini", "file_train")
+            .with_method(ReinforcementFineTuneMethod::new(
+                FineTuneReinforcementMethodConfig::new(in_range.into()),
+            ))
+            .validate()
+            .expect("official minimum is accepted");
+
+        let decoded = ok(serde_json::from_value::<CreateFineTuningJobRequest>(
+            json!({
+                "model": "gpt-5-mini",
+                "training_file": "file_train",
+                "method": {
+                    "type": "reinforcement",
+                    "reinforcement": {
+                        "grader": {
+                            "type": "score_model",
+                            "name": "judge",
+                            "model": "gpt-5-mini",
+                            "input": [{"role": "user", "content": "x"}],
+                            "sampling_params": {"max_completions_tokens": 0}
+                        }
+                    }
+                }
+            }),
+        ));
+        assert!(decoded.validate().is_err());
     }
 }

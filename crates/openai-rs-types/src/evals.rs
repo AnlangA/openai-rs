@@ -7,11 +7,39 @@ use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::Value;
+use thiserror::Error;
 
 use crate::{ExtraFields, Nullable, Omittable, open_string_enum, responses};
 
 /// String-to-string metadata accepted by Evals resources.
 pub type EvalMetadata = BTreeMap<String, String>;
+
+/// Pinned `EvalSamplingParams.max_completions_tokens` `minimum: 1`.
+pub const MIN_EVAL_MAX_COMPLETIONS_TOKENS: u64 = 1;
+/// Official `EvalResponsesSource.created_after` / `created_before` `minimum`.
+pub const MIN_EVAL_CREATED_TIMESTAMP: i64 = 0;
+
+/// Opt-in pin violations for [`EvalSamplingParams`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum EvalSamplingConstraintError {
+    /// `max_completions_tokens` is below the pinned `minimum: 1`.
+    #[error("max_completions_tokens must be at least {MIN_EVAL_MAX_COMPLETIONS_TOKENS}")]
+    MaxCompletionsTokens,
+}
+
+/// Opt-in pin violations for [`EvalResponsesSource`] timestamps.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum EvalSourceConstraintError {
+    /// `created_after` or `created_before` is below the pinned `minimum: 0`.
+    #[error("{field} must be at least {minimum}, got {actual}")]
+    CreatedTimestamp {
+        field: &'static str,
+        actual: i64,
+        minimum: i64,
+    },
+}
 
 macro_rules! opaque_id {
     ($name:ident) => {
@@ -591,6 +619,54 @@ impl EvalSamplingParams {
         self
     }
 
+    /// Sends official `seed: null` on the Eval sampling-params object.
+    #[must_use]
+    pub fn seed_null(mut self) -> Self {
+        self.seed = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `top_p: null` on the Eval sampling-params object.
+    #[must_use]
+    pub fn top_p_null(mut self) -> Self {
+        self.top_p = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `temperature: null` on the Eval sampling-params object.
+    #[must_use]
+    pub fn temperature_null(mut self) -> Self {
+        self.temperature = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `max_completion_tokens: null` on the Eval sampling-params object.
+    #[must_use]
+    pub fn max_completion_tokens_null(mut self) -> Self {
+        self.max_completion_tokens = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `max_completions_tokens: null` on the Eval sampling-params object.
+    #[must_use]
+    pub fn max_completions_tokens_null(mut self) -> Self {
+        self.max_completions_tokens = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Opt-in pin check for `max_completions_tokens` `minimum: 1`.
+    ///
+    /// Official `null` and omitted values skip the numeric bound. Serde decode
+    /// stays lossless for out-of-range values.
+    pub fn validate(&self) -> Result<(), EvalSamplingConstraintError> {
+        if let Omittable::Value(Nullable::Value(tokens)) = self.max_completions_tokens
+            && tokens < MIN_EVAL_MAX_COMPLETIONS_TOKENS
+        {
+            return Err(EvalSamplingConstraintError::MaxCompletionsTokens);
+        }
+        Ok(())
+    }
+
     /// Sets reasoning effort.
     #[must_use]
     pub fn reasoning_effort(mut self, value: responses::ReasoningEffort) -> Self {
@@ -606,6 +682,21 @@ impl EvalSamplingParams {
         };
         tools.push(serde_json::to_value(tool)?);
         self.tools = Omittable::Value(tools);
+        Ok(self)
+    }
+
+    /// Serializes Chat-style `response_format` without requiring JSON text.
+    pub fn response_format<T: Serialize>(
+        mut self,
+        response_format: &T,
+    ) -> Result<Self, serde_json::Error> {
+        self.response_format = Omittable::Value(serde_json::to_value(response_format)?);
+        Ok(self)
+    }
+
+    /// Serializes Responses-style `text` configuration without requiring JSON text.
+    pub fn text<T: Serialize>(mut self, text: &T) -> Result<Self, serde_json::Error> {
+        self.text = Omittable::Value(serde_json::to_value(text)?);
         Ok(self)
     }
 }
@@ -963,6 +1054,13 @@ impl CreateStoredCompletionsDataSourceConfig {
             extra: ExtraFields::new(),
         }
     }
+
+    /// Sets the metadata filter.
+    #[must_use]
+    pub fn metadata(mut self, metadata: Value) -> Self {
+        self.metadata = Omittable::Value(metadata);
+        self
+    }
 }
 
 impl Default for CreateStoredCompletionsDataSourceConfig {
@@ -1274,8 +1372,8 @@ pub struct EvalList {
     #[serde(rename = "object")]
     object: EvalListObjectTag,
     data: Vec<Eval>,
-    first_id: Nullable<EvalId>,
-    last_id: Nullable<EvalId>,
+    first_id: EvalId,
+    last_id: EvalId,
     has_more: bool,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -1294,22 +1392,16 @@ impl EvalList {
         self.has_more
     }
 
-    /// Returns the first cursor when the page is non-empty.
+    /// Returns the first cursor on this page.
     #[must_use]
-    pub const fn first_id(&self) -> Option<&EvalId> {
-        match &self.first_id {
-            Nullable::Value(id) => Some(id),
-            Nullable::Null => None,
-        }
+    pub const fn first_id(&self) -> &EvalId {
+        &self.first_id
     }
 
     /// Returns the last cursor used for forward pagination.
     #[must_use]
-    pub const fn last_id(&self) -> Option<&EvalId> {
-        match &self.last_id {
-            Nullable::Value(id) => Some(id),
-            Nullable::Null => None,
-        }
+    pub const fn last_id(&self) -> &EvalId {
+        &self.last_id
     }
 
     /// Returns future response fields retained during decoding.
@@ -1439,6 +1531,69 @@ impl EvalStoredCompletionsSource {
         self.model = Omittable::Value(Nullable::Value(model.into()));
         self
     }
+
+    /// Filters by metadata.
+    #[must_use]
+    pub fn metadata(mut self, metadata: EvalMetadata) -> Self {
+        self.metadata = Omittable::Value(Nullable::Value(metadata));
+        self
+    }
+
+    /// Restricts to completions created after `created_after`.
+    #[must_use]
+    pub fn created_after(mut self, created_after: i64) -> Self {
+        self.created_after = Omittable::Value(Nullable::Value(created_after));
+        self
+    }
+
+    /// Restricts to completions created before `created_before`.
+    #[must_use]
+    pub fn created_before(mut self, created_before: i64) -> Self {
+        self.created_before = Omittable::Value(Nullable::Value(created_before));
+        self
+    }
+
+    /// Caps the number of stored completions.
+    #[must_use]
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.limit = Omittable::Value(Nullable::Value(limit));
+        self
+    }
+
+    /// Sends official `metadata: null`.
+    #[must_use]
+    pub fn metadata_null(mut self) -> Self {
+        self.metadata = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `model: null`.
+    #[must_use]
+    pub fn model_null(mut self) -> Self {
+        self.model = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `created_after: null`.
+    #[must_use]
+    pub fn created_after_null(mut self) -> Self {
+        self.created_after = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `created_before: null`.
+    #[must_use]
+    pub fn created_before_null(mut self) -> Self {
+        self.created_before = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `limit: null`.
+    #[must_use]
+    pub fn limit_null(mut self) -> Self {
+        self.limit = Omittable::Value(Nullable::Null);
+        self
+    }
 }
 
 impl Default for EvalStoredCompletionsSource {
@@ -1502,6 +1657,165 @@ impl EvalResponsesSource {
         self.model = Omittable::Value(Nullable::Value(model.into()));
         self
     }
+
+    /// Filters by metadata.
+    #[must_use]
+    pub fn metadata(mut self, metadata: Value) -> Self {
+        self.metadata = Omittable::Value(Nullable::Value(metadata));
+        self
+    }
+
+    /// Filters by instruction text.
+    #[must_use]
+    pub fn instructions_search(mut self, query: impl Into<String>) -> Self {
+        self.instructions_search = Omittable::Value(Nullable::Value(query.into()));
+        self
+    }
+
+    /// Restricts to responses created after `created_after`.
+    #[must_use]
+    pub fn created_after(mut self, created_after: i64) -> Self {
+        self.created_after = Omittable::Value(Nullable::Value(created_after));
+        self
+    }
+
+    /// Restricts to responses created before `created_before`.
+    #[must_use]
+    pub fn created_before(mut self, created_before: i64) -> Self {
+        self.created_before = Omittable::Value(Nullable::Value(created_before));
+        self
+    }
+
+    /// Filters by reasoning effort.
+    #[must_use]
+    pub fn reasoning_effort(mut self, effort: responses::ReasoningEffort) -> Self {
+        self.reasoning_effort = Omittable::Value(Nullable::Value(effort));
+        self
+    }
+
+    /// Filters by temperature.
+    #[must_use]
+    pub fn temperature(mut self, temperature: f64) -> Self {
+        self.temperature = Omittable::Value(Nullable::Value(temperature));
+        self
+    }
+
+    /// Filters by nucleus sampling.
+    #[must_use]
+    pub fn top_p(mut self, top_p: f64) -> Self {
+        self.top_p = Omittable::Value(Nullable::Value(top_p));
+        self
+    }
+
+    /// Filters by user identifiers.
+    #[must_use]
+    pub fn users(mut self, users: impl Into<Vec<String>>) -> Self {
+        self.users = Omittable::Value(Nullable::Value(users.into()));
+        self
+    }
+
+    /// Filters by tool names.
+    #[must_use]
+    pub fn tools(mut self, tools: impl Into<Vec<String>>) -> Self {
+        self.tools = Omittable::Value(Nullable::Value(tools.into()));
+        self
+    }
+
+    /// Sends official `metadata: null`.
+    #[must_use]
+    pub fn metadata_null(mut self) -> Self {
+        self.metadata = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `model: null`.
+    #[must_use]
+    pub fn model_null(mut self) -> Self {
+        self.model = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `instructions_search: null`.
+    #[must_use]
+    pub fn instructions_search_null(mut self) -> Self {
+        self.instructions_search = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `created_after: null`.
+    #[must_use]
+    pub fn created_after_null(mut self) -> Self {
+        self.created_after = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `created_before: null`.
+    #[must_use]
+    pub fn created_before_null(mut self) -> Self {
+        self.created_before = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `reasoning_effort: null`.
+    #[must_use]
+    pub fn reasoning_effort_null(mut self) -> Self {
+        self.reasoning_effort = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `temperature: null`.
+    #[must_use]
+    pub fn temperature_null(mut self) -> Self {
+        self.temperature = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `top_p: null`.
+    #[must_use]
+    pub fn top_p_null(mut self) -> Self {
+        self.top_p = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `users: null`.
+    #[must_use]
+    pub fn users_null(mut self) -> Self {
+        self.users = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `tools: null`.
+    #[must_use]
+    pub fn tools_null(mut self) -> Self {
+        self.tools = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Opt-in pin check for official `created_after` / `created_before`
+    /// `minimum: 0`.
+    ///
+    /// Official `null` and omitted values skip the bound. Stored-completions
+    /// timestamps have no official minimum. Serde decode stays lossless.
+    pub fn validate(&self) -> Result<(), EvalSourceConstraintError> {
+        validate_eval_created_timestamp("created_after", &self.created_after)?;
+        validate_eval_created_timestamp("created_before", &self.created_before)
+    }
+}
+
+fn validate_eval_created_timestamp(
+    field: &'static str,
+    value: &Omittable<Nullable<i64>>,
+) -> Result<(), EvalSourceConstraintError> {
+    if let Omittable::Value(Nullable::Value(timestamp)) = value
+        && *timestamp < MIN_EVAL_CREATED_TIMESTAMP
+    {
+        return Err(EvalSourceConstraintError::CreatedTimestamp {
+            field,
+            actual: *timestamp,
+            minimum: MIN_EVAL_CREATED_TIMESTAMP,
+        });
+    }
+    Ok(())
 }
 
 impl Default for EvalResponsesSource {
@@ -1625,7 +1939,7 @@ macro_rules! model_run_data_source {
             #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
             input_messages: Omittable<EvalInputMessages>,
             #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-            sampling_params: Omittable<EvalSamplingParams>,
+            sampling_params: Omittable<Nullable<EvalSamplingParams>>,
             #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
             model: Omittable<String>,
             #[serde(flatten)]
@@ -1663,7 +1977,14 @@ macro_rules! model_run_data_source {
             /// Sets sampling controls.
             #[must_use]
             pub fn sampling_params(mut self, params: EvalSamplingParams) -> Self {
-                self.sampling_params = Omittable::Value(params);
+                self.sampling_params = Omittable::Value(Nullable::Value(params));
+                self
+            }
+
+            /// Accepts official list/retrieve `"sampling_params": null`.
+            #[must_use]
+            pub fn sampling_params_null(mut self) -> Self {
+                self.sampling_params = Omittable::Value(Nullable::Null);
                 self
             }
         }
@@ -1745,6 +2066,20 @@ impl CreateEvalRunRequest {
     #[must_use]
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Omittable::Value(name.into());
+        self
+    }
+
+    /// Sets run metadata.
+    #[must_use]
+    pub fn metadata(mut self, metadata: EvalMetadata) -> Self {
+        self.metadata = Omittable::Value(Nullable::Value(metadata));
+        self
+    }
+
+    /// Sends `metadata: null`.
+    #[must_use]
+    pub fn metadata_null(mut self) -> Self {
+        self.metadata = Omittable::Value(Nullable::Null);
         self
     }
 }
@@ -1872,8 +2207,8 @@ pub struct EvalRunList {
     #[serde(rename = "object")]
     object: EvalPageObjectTag,
     data: Vec<EvalRun>,
-    first_id: Nullable<EvalRunId>,
-    last_id: Nullable<EvalRunId>,
+    first_id: EvalRunId,
+    last_id: EvalRunId,
     has_more: bool,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -1886,22 +2221,16 @@ impl EvalRunList {
         &self.data
     }
 
-    /// Returns the first cursor when the page is non-empty.
+    /// Returns the first cursor on this page.
     #[must_use]
-    pub const fn first_id(&self) -> Option<&EvalRunId> {
-        match &self.first_id {
-            Nullable::Value(id) => Some(id),
-            Nullable::Null => None,
-        }
+    pub const fn first_id(&self) -> &EvalRunId {
+        &self.first_id
     }
 
     /// Returns the last cursor used for forward pagination.
     #[must_use]
-    pub const fn last_id(&self) -> Option<&EvalRunId> {
-        match &self.last_id {
-            Nullable::Value(id) => Some(id),
-            Nullable::Null => None,
-        }
+    pub const fn last_id(&self) -> &EvalRunId {
+        &self.last_id
     }
 
     /// Returns whether another page exists.
@@ -2120,8 +2449,8 @@ pub struct EvalRunOutputItemList {
     #[serde(rename = "object")]
     object: EvalPageObjectTag,
     data: Vec<EvalRunOutputItem>,
-    first_id: Nullable<EvalRunOutputItemId>,
-    last_id: Nullable<EvalRunOutputItemId>,
+    first_id: EvalRunOutputItemId,
+    last_id: EvalRunOutputItemId,
     has_more: bool,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -2134,22 +2463,16 @@ impl EvalRunOutputItemList {
         &self.data
     }
 
-    /// Returns the first cursor when the page is non-empty.
+    /// Returns the first cursor on this page.
     #[must_use]
-    pub const fn first_id(&self) -> Option<&EvalRunOutputItemId> {
-        match &self.first_id {
-            Nullable::Value(id) => Some(id),
-            Nullable::Null => None,
-        }
+    pub const fn first_id(&self) -> &EvalRunOutputItemId {
+        &self.first_id
     }
 
     /// Returns the last cursor used for forward pagination.
     #[must_use]
-    pub const fn last_id(&self) -> Option<&EvalRunOutputItemId> {
-        match &self.last_id {
-            Nullable::Value(id) => Some(id),
-            Nullable::Null => None,
-        }
+    pub const fn last_id(&self) -> &EvalRunOutputItemId {
+        &self.last_id
     }
 
     /// Returns whether another page exists.
@@ -2667,16 +2990,45 @@ mod tests {
                 .sampling_params(
                     EvalSamplingParams::new()
                         .temperature(0.2)
-                        .max_completion_tokens(128),
+                        .max_completion_tokens(128)
+                        .response_format(&json!({"type": "json_object"}))
+                        .expect("serialize response_format")
+                        .text(&json!({"format": {"type": "text"}}))
+                        .expect("serialize text"),
                 ),
         );
-        let request = CreateEvalRunRequest::new(data_source).name("run-1");
+        let request = CreateEvalRunRequest::new(data_source)
+            .name("run-1")
+            .metadata(EvalMetadata::from([(
+                "suite".to_owned(),
+                "nightly".to_owned(),
+            )]));
         let value = serde_json::to_value(request).expect("encode run request");
+        assert_eq!(value["metadata"]["suite"], "nightly");
+        let responses = serde_json::to_value(
+            EvalResponsesSource::new()
+                .model("gpt-test")
+                .instructions_search("weather")
+                .created_after(1)
+                .temperature(0.2)
+                .users(vec!["user_1".into()]),
+        )
+        .expect("encode responses source");
+        assert_eq!(responses["instructions_search"], "weather");
+        assert_eq!(responses["created_after"], 1);
         assert_eq!(value["data_source"]["type"], "completions");
         assert_eq!(value["data_source"]["source"]["type"], "file_content");
         assert_eq!(
             value["data_source"]["sampling_params"]["max_completion_tokens"],
             128
+        );
+        assert_eq!(
+            value["data_source"]["sampling_params"]["response_format"]["type"],
+            "json_object"
+        );
+        assert_eq!(
+            value["data_source"]["sampling_params"]["text"]["format"]["type"],
+            "text"
         );
 
         assert!(
@@ -2707,6 +3059,152 @@ mod tests {
                 fixture
             );
         }
+    }
+
+    #[test]
+    fn eval_run_sources_send_official_filter_nulls() {
+        let stored = EvalStoredCompletionsSource::new()
+            .metadata_null()
+            .model_null()
+            .created_after_null()
+            .created_before_null()
+            .limit_null();
+        let stored_value = serde_json::to_value(&stored).expect("serialize stored nulls");
+        for key in [
+            "metadata",
+            "model",
+            "created_after",
+            "created_before",
+            "limit",
+        ] {
+            assert_eq!(stored_value[key], Value::Null, "{key}");
+        }
+        assert_eq!(
+            serde_json::from_value::<EvalStoredCompletionsSource>(stored_value.clone())
+                .expect("decode stored official nulls"),
+            stored
+        );
+
+        let responses = EvalResponsesSource::new()
+            .metadata_null()
+            .model_null()
+            .instructions_search_null()
+            .created_after_null()
+            .created_before_null()
+            .reasoning_effort_null()
+            .temperature_null()
+            .top_p_null()
+            .users_null()
+            .tools_null();
+        let responses_value = serde_json::to_value(&responses).expect("serialize responses nulls");
+        for key in [
+            "metadata",
+            "model",
+            "instructions_search",
+            "created_after",
+            "created_before",
+            "reasoning_effort",
+            "temperature",
+            "top_p",
+            "users",
+            "tools",
+        ] {
+            assert_eq!(responses_value[key], Value::Null, "{key}");
+        }
+        assert_eq!(
+            serde_json::from_value::<EvalResponsesSource>(responses_value.clone())
+                .expect("decode responses official nulls"),
+            responses
+        );
+    }
+
+    #[test]
+    fn eval_sampling_params_sends_official_nulls_and_enforces_pin_limits() {
+        let params = EvalSamplingParams::new()
+            .seed_null()
+            .top_p_null()
+            .temperature_null()
+            .max_completion_tokens_null()
+            .max_completions_tokens_null();
+        let value = serde_json::to_value(&params).expect("serialize official nulls");
+        assert_eq!(
+            value,
+            json!({
+                "seed": null,
+                "top_p": null,
+                "temperature": null,
+                "max_completion_tokens": null,
+                "max_completions_tokens": null
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<EvalSamplingParams>(value.clone()).expect("decode"),
+            params
+        );
+        params
+            .validate()
+            .expect("null tokens skip the numeric bound");
+
+        EvalSamplingParams::new()
+            .max_completions_tokens(MIN_EVAL_MAX_COMPLETIONS_TOKENS)
+            .validate()
+            .expect("minimum 1 is accepted");
+        assert_eq!(
+            EvalSamplingParams::new()
+                .max_completions_tokens(0)
+                .validate(),
+            Err(EvalSamplingConstraintError::MaxCompletionsTokens)
+        );
+
+        let illegal =
+            serde_json::from_value::<EvalSamplingParams>(json!({"max_completions_tokens": 0}))
+                .expect("serde remains lossless");
+        assert_eq!(
+            illegal.validate(),
+            Err(EvalSamplingConstraintError::MaxCompletionsTokens)
+        );
+        assert_eq!(
+            serde_json::to_value(&illegal).expect("round-trip illegal value"),
+            json!({"max_completions_tokens": 0})
+        );
+    }
+
+    #[test]
+    fn eval_responses_source_validate_enforces_official_created_timestamp_minimum() {
+        EvalResponsesSource::new()
+            .created_after(0)
+            .created_before_null()
+            .validate()
+            .expect("minimum 0 and official null skip or pass the bound");
+        assert_eq!(
+            EvalResponsesSource::new().created_after(-1).validate(),
+            Err(EvalSourceConstraintError::CreatedTimestamp {
+                field: "created_after",
+                actual: -1,
+                minimum: MIN_EVAL_CREATED_TIMESTAMP,
+            })
+        );
+        assert_eq!(
+            EvalResponsesSource::new().created_before(-1).validate(),
+            Err(EvalSourceConstraintError::CreatedTimestamp {
+                field: "created_before",
+                actual: -1,
+                minimum: MIN_EVAL_CREATED_TIMESTAMP,
+            })
+        );
+        let unofficial = serde_json::from_value::<EvalResponsesSource>(json!({
+            "type": "responses",
+            "created_after": -1
+        }))
+        .expect("serde remains lossless");
+        assert_eq!(
+            unofficial.validate(),
+            Err(EvalSourceConstraintError::CreatedTimestamp {
+                field: "created_after",
+                actual: -1,
+                minimum: MIN_EVAL_CREATED_TIMESTAMP,
+            })
+        );
     }
 
     fn run_fixture() -> Value {
@@ -2824,13 +3322,15 @@ mod tests {
         let page: EvalRunOutputItemList = serde_json::from_value(json!({
             "object": "list",
             "data": [output_item_fixture()],
-            "first_id": null,
-            "last_id": null,
+            "first_id": "outputitem_1",
+            "last_id": "outputitem_1",
             "has_more": false,
             "future_page": 1
         }))
         .expect("decode output page");
         assert_eq!(page.data().len(), 1);
+        assert_eq!(page.first_id().as_str(), "outputitem_1");
+        assert_eq!(page.last_id().as_str(), "outputitem_1");
     }
 
     #[test]
@@ -2892,5 +3392,70 @@ mod tests {
             serde_json::to_value(validation).expect("encode validation"),
             json!({})
         );
+    }
+
+    #[test]
+    fn official_eval_run_list_sampling_params_null_decodes() {
+        let completions = serde_json::from_value::<EvalCompletionsRunDataSource>(json!({
+            "type": "completions",
+            "source": {"type": "file_id", "id": "file_abc"},
+            "model": "o3-mini",
+            "sampling_params": null
+        }))
+        .expect("official list-run sampling_params null");
+        assert_eq!(
+            serde_json::to_value(&completions).expect("re-encode")["sampling_params"],
+            Value::Null
+        );
+        assert_eq!(
+            serde_json::to_value(
+                EvalCompletionsRunDataSource::new(EvalCompletionsSource::FileId(
+                    EvalFileIdSource::new("file_abc")
+                ))
+                .sampling_params_null()
+            )
+            .expect("send official null")["sampling_params"],
+            Value::Null
+        );
+        assert!(
+            serde_json::from_value::<EvalCompletionsRunDataSource>(json!({
+                "type": "completions",
+                "source": {"type": "file_id", "id": "file_abc"},
+                "model": null,
+                "sampling_params": null
+            }))
+            .is_err(),
+            "unofficial model null still fails"
+        );
+
+        let list = serde_json::from_value::<EvalRunList>(json!({
+            "object": "list",
+            "data": [{
+                "object": "eval.run",
+                "id": "evalrun_1",
+                "eval_id": "eval_1",
+                "status": "completed",
+                "model": "o3-mini",
+                "name": "run-1",
+                "created_at": 1_740_110_812_i64,
+                "report_url": "https://platform.openai.com/evaluations/eval_1",
+                "result_counts": {"total": 0, "errored": 0, "failed": 0, "passed": 0},
+                "per_model_usage": null,
+                "per_testing_criteria_results": null,
+                "data_source": {
+                    "type": "completions",
+                    "source": {"type": "file_id", "id": "file_abc"},
+                    "model": "o3-mini",
+                    "sampling_params": null
+                },
+                "metadata": null,
+                "error": null
+            }],
+            "first_id": "evalrun_1",
+            "last_id": "evalrun_1",
+            "has_more": false
+        }))
+        .expect("official GET /evals/{eval_id}/runs list null");
+        assert_eq!(list.data().len(), 1);
     }
 }
