@@ -699,7 +699,7 @@ pub struct ConversationInputFile {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     file_url: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    detail: Omittable<responses::ImageDetail>,
+    detail: Omittable<responses::FileDetail>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     prompt_cache_breakpoint: Omittable<responses::PromptCacheBreakpoint>,
     #[serde(flatten)]
@@ -752,9 +752,9 @@ impl ConversationInputFile {
         value
     }
 
-    /// Sets the file rendering detail.
+    /// Sets the official file rendering detail.
     #[must_use]
-    pub fn detail(mut self, detail: responses::ImageDetail) -> Self {
+    pub fn detail(mut self, detail: responses::FileDetail) -> Self {
         self.detail = Omittable::Value(detail);
         self
     }

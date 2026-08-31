@@ -2772,3 +2772,201 @@ until a decision is recorded here and its fixtures pass.
   DTOs. `detail_null()` is removed from those resource types.
 - Overrides: none
 - Tests: `official_input_image_content_requires_detail`.
+
+## D0101 — Official function-call output request image is Param-shaped
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `FunctionCallOutput.output` image parts
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`FunctionCallOutputItemParam.output` array items `$ref`
+  `InputImageContentParamAutoParam`, `required` is only `type`,
+  `detail` is `anyOf` including null;
+  `FunctionAndCustomToolCallOutput` / `FunctionToolCallOutput`
+  `$ref` `InputImageContent` whose `required` includes
+  `detail`); official Python SDK
+  `ResponseInputImageContentParam.detail` is `Optional`
+- Decision: keep message/input-content images on `InputImage`
+  (D0100). Model function-call output *request* images as
+  `InputImageParam` inside `FunctionCallOutputParamValue`.
+  Official Param omit and `"detail": null` decode. Resource
+  `FunctionCallOutputResource` / `CustomToolCallOutput` stay on
+  `FunctionCallOutputValue` with `InputContent` / required
+  `detail`. `to_input_items` converts resource images into the
+  Param type.
+- Reason: D0100's resource requiredness rejected official
+  `FunctionCallOutputItemParam` payloads that omit `detail`,
+  the same request/resource split as D0098. Incomplete message
+  fixtures are not authority to weaken `InputImageContent`.
+- Impact: `openai-rs-types` function-call output input-item DTO.
+- Overrides: none
+- Tests: `official_function_call_output_param_omits_image_detail`.
+
+## D0102 — Official beta agent-message request image is Param-shaped
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BetaAgentMessage.content` image parts
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`BetaAgentMessageItemParam.content` array items `$ref`
+  `BetaInputImageContentParamAutoParam`, `required` is only `type`,
+  `detail` is `anyOf` including null;
+  `BetaAgentMessage` resource content `$ref` `BetaInputImageContent`
+  whose `required` includes `detail`)
+- Decision: keep resource `BetaAgentInputImage.detail` required
+  (D0100). Model inter-agent *request* images as
+  `BetaAgentInputImageParam` inside `BetaAgentMessageContent`.
+  Official Param omit and `"detail": null` decode. Resource
+  `BetaInputImageContent` still rejects omit/null. Converting a
+  resource image into a message part preserves required `detail`.
+- Reason: D0100's resource requiredness rejected official
+  `BetaAgentMessageItemParam` payloads that omit `detail`,
+  the same request/resource split as D0101. Incomplete message
+  fixtures are not authority to weaken `BetaInputImageContent`.
+- Impact: `openai-rs-types` beta agent-message input-item DTO.
+- Overrides: none
+- Tests: `official_beta_agent_message_param_omits_image_detail`,
+  `official_beta_input_image_content_requires_detail`.
+
+## D0103 — Official beta agent-message resource content is fully named
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BetaAgentMessage.content` resource union
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`BetaAgentMessage.content` items `$ref` `BetaInputTextContent`,
+  `BetaOutputTextContent`, `BetaTextContent`,
+  `BetaSummaryTextContent`, `BetaReasoningTextContent`,
+  `BetaRefusalContent`, `BetaInputImageContent`,
+  `BetaComputerScreenshotContent`, `BetaInputFileContent`,
+  `BetaEncryptedContent`)
+- Decision: name every official resource content tag on
+  `BetaAgentMessageContent`. Request Param images stay
+  `BetaAgentInputImageParam` (D0102). Reuse GA `OutputText`,
+  `Refusal`, `SummaryTextContent`, `ReasoningTextContent`,
+  `ComputerScreenshot`, and `InputFile` for identical wire
+  shapes; add `BetaAgentText` for official `type: "text"`.
+- Reason: resource `output_text` / `reasoning_text` / `refusal` /
+  `summary_text` / `text` / `computer_screenshot` / `input_file`
+  decoded only as `Unknown`, the same named-member gap as D0099.
+  Incomplete request Param fixtures that omit those members are
+  not authority to drop the official resource union.
+- Impact: `openai-rs-types` beta agent-message content union.
+- Overrides: none
+- Tests: `official_beta_agent_message_names_resource_content`.
+
+## D0104 — Official file-input detail is not image `original`
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `InputFile.detail` / `ConversationInputFile.detail`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`InputFileContent.detail` `$ref` `FileInputDetail`;
+  `InputFileContentParam.detail` `$ref` `FileDetailEnum`;
+  `BetaInputFileContent.detail` `$ref` `BetaFileInputDetail`;
+  all three enums are `auto` / `low` / `high`.
+  `InputImageContent.detail` `$ref` `ImageDetail` which also
+  names `original`)
+- Decision: model file `detail` as `FileDetail` (`auto` / `low` /
+  `high`). Image and screenshot `detail` stay `ImageDetail`
+  (includes `original`). Unofficial `"original"` on a file still
+  decodes losslessly as `FileDetail::Unknown`.
+- Reason: sharing `ImageDetail` made official-only image
+  `original` a named file-detail member, the same class of
+  official domain offset as D0091 / D0095. Incomplete fixtures
+  that omit file `detail` are not authority to keep the wider
+  image enum.
+- Impact: `openai-rs-types` Responses and Conversations file
+  content DTOs.
+- Overrides: none
+- Tests: `official_input_file_content_uses_file_detail_domain`.
+
+## D0105 — Official Responses file-search ranker is `RankerVersionType`
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `FileSearchRanker` / `FileSearchRankingOptions.ranker`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`RankingOptions.ranker` / `BetaRankerVersionType` are
+  `auto` / `default-2024-11-15`. Official schema named
+  `FileSearchRanker` is Assistants-only
+  `auto` / `default_2024_08_21` and is not the Responses
+  ranking enum. Vector Store search already uses a separate
+  `none` / `auto` / `default-2024-11-15` domain)
+- Decision: name only official `RankerVersionType` members on
+  Responses `FileSearchRanker`. Assistants
+  `default_2024_08_21` decodes losslessly as `Unknown`.
+- Reason: sharing the Assistants ranker name hid the official
+  Responses domain, the same class of official enum-domain
+  offset as D0104. Assistants remain omitted (D0013).
+- Impact: `openai-rs-types` Responses file-search ranking DTO.
+- Overrides: none
+- Tests: `official_file_search_ranker_matches_ranker_version_type`.
+
+## D0106 — Official Response error code is `ResponseErrorCode`
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ResponseError.code`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`ResponseError.code` `$ref`s `ResponseErrorCode` with
+  twenty named values including `data_residency_mismatch`.
+  Official `ResponseErrorEvent.code` / stream `ErrorPayload`
+  remain `anyOf [string, null]` and are not this enum.
+  Python SDK `ResponseError.code` is the same
+  `Literal[...]` set)
+- Decision: model `ResponseError.code` as
+  `ResponseErrorCode`. Unofficial codes decode losslessly as
+  `Unknown`. Stream error codes stay open strings.
+- Reason: storing the official named domain as `String` hid
+  the pin, the same class of official enum-domain offset as
+  D0104 / D0105.
+- Impact: `openai-rs-types` Responses `ResponseError` DTO.
+- Overrides: none
+- Tests: `official_response_error_code_matches_response_error_code`.
+
+## D0107 — Official tool `allowed_callers` is `CallableToolAllowedCaller`
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: hosted-tool `allowed_callers`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`CallableToolAllowedCaller` / `BetaCallableToolAllowedCaller`
+  are `direct` / `programmatic`. Python SDK types the same
+  field as `List[Literal["direct", "programmatic"]]`)
+- Decision: model `allowed_callers` as
+  `Vec<AllowedCaller>`. Unofficial callers decode losslessly
+  as `Unknown`. Empty present arrays remain unofficial
+  (`validate()` opt-in).
+- Reason: storing the official two-value domain as
+  `Vec<String>` hid the pin, the same class as D0106.
+- Impact: `openai-rs-types` Responses tool DTOs that carry
+  `allowed_callers`.
+- Overrides: none
+- Tests: `official_allowed_caller_matches_callable_tool_allowed_caller`.
+
+## D0108 — Official MCP `connector_id` is the connector enum
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `McpTool.connector_id`
+- Sources: pinned OpenAPI commit
+  `690521b1753dce0c6d6b275f583d22537679cff9`
+  (`MCPTool.connector_id` / `BetaMCPTool.connector_id` enumerate
+  the eight `connector_*` service ids. Python SDK types the
+  same field as `Literal["connector_dropbox", ...]`)
+- Decision: model MCP `connector_id` as `McpConnectorId`.
+  Unofficial connector ids decode losslessly as `Unknown`.
+  Admin audit-log `connector_id` stays an opaque string.
+- Reason: storing the official connector domain as `String`
+  hid the pin, the same class as D0106 / D0107.
+- Impact: `openai-rs-types` Responses MCP tool DTO.
+- Overrides: none
+- Tests: `official_mcp_connector_id_matches_connector_enum`.

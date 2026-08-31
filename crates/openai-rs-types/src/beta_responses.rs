@@ -14,13 +14,14 @@ use thiserror::Error;
 use crate::{
     ExtraFields, JsonText, Nullable, Omittable,
     responses::{
-        CompactResponseConstraintError, ConversationObjectReference, ConversationReference,
-        CountInputTokensConstraintError, CreateResponseConstraintError, IncompleteDetails,
-        InputContent, MAX_COMPACT_INPUT_CHARS, MAX_INPUT_TEXT_CHARS, MAX_PROMPT_CACHE_KEY_CHARS,
-        MessageRole, PromptCacheRetention, PromptReference, ResponseError, ResponseInputItem,
-        ResponseInstructions, ResponseItemStatus, ResponseOutputItem, ResponseStatus,
-        ResponseStreamEvent, ResponseStreamOptions, ResponseTextConfig, ResponseTool,
-        ResponseUsage, ServiceTier, ToolChoice, TruncationStrategy, UnknownTaggedObject,
+        CompactResponseConstraintError, ComputerScreenshot, ConversationObjectReference,
+        ConversationReference, CountInputTokensConstraintError, CreateResponseConstraintError,
+        IncompleteDetails, InputContent, InputFile, MAX_COMPACT_INPUT_CHARS, MAX_INPUT_TEXT_CHARS,
+        MAX_PROMPT_CACHE_KEY_CHARS, MessageRole, OutputText, PromptCacheRetention, PromptReference,
+        ReasoningTextContent, Refusal, ResponseError, ResponseInputItem, ResponseInstructions,
+        ResponseItemStatus, ResponseOutputItem, ResponseStatus, ResponseStreamEvent,
+        ResponseStreamOptions, ResponseTextConfig, ResponseTool, ResponseUsage, ServiceTier,
+        SummaryTextContent, ToolChoice, TruncationStrategy, UnknownTaggedObject,
         validate_input_content, validate_input_image_url_chars, validate_input_text_chars,
         validate_response_input_item, validate_response_tools, validate_websocket_stream_id,
     },
@@ -560,6 +561,7 @@ impl BetaPromptCachedInputMessage {
 literal_tag!(InputTextTag, InputText, "input_text");
 literal_tag!(InputImageTag, InputImage, "input_image");
 literal_tag!(EncryptedContentTag, EncryptedContent, "encrypted_content");
+literal_tag!(AgentTextTag, Text, "text");
 
 /// Text sent inside an inter-agent message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -705,6 +707,132 @@ impl BetaAgentInputImage {
     }
 }
 
+/// Official `BetaInputImageContentParamAutoParam` used by
+/// `BetaAgentMessageItemParam` request content.
+///
+/// Official Param `required` is only `type`; `detail` is `anyOf` including
+/// null. Resource `BetaAgentMessage` images use [`BetaAgentInputImage`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaAgentInputImageParam {
+    #[serde(rename = "type")]
+    kind: InputImageTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    detail: Omittable<Nullable<crate::responses::ImageDetail>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    file_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    image_url: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_breakpoint: Omittable<Nullable<BetaPromptCacheBreakpoint>>,
+}
+
+impl BetaAgentInputImageParam {
+    /// Creates a Param image from a URL without sending `detail`.
+    #[must_use]
+    pub fn from_url(image_url: impl Into<String>) -> Self {
+        Self {
+            kind: InputImageTag::InputImage,
+            detail: Omittable::Omitted,
+            file_id: Omittable::Omitted,
+            image_url: Omittable::Value(Nullable::Value(image_url.into())),
+            prompt_cache_breakpoint: Omittable::Omitted,
+        }
+    }
+
+    /// Creates a Param image from an uploaded file id without sending `detail`.
+    #[must_use]
+    pub fn from_file_id(file_id: impl Into<String>) -> Self {
+        Self {
+            kind: InputImageTag::InputImage,
+            detail: Omittable::Omitted,
+            file_id: Omittable::Value(Nullable::Value(file_id.into())),
+            image_url: Omittable::Omitted,
+            prompt_cache_breakpoint: Omittable::Omitted,
+        }
+    }
+
+    /// Sets the requested fidelity.
+    #[must_use]
+    pub fn detail(mut self, detail: crate::responses::ImageDetail) -> Self {
+        self.detail = Omittable::Value(Nullable::Value(detail));
+        self
+    }
+
+    /// Sends official Param `detail: null`.
+    #[must_use]
+    pub fn detail_null(mut self) -> Self {
+        self.detail = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Marks the end of an explicitly reusable prefix.
+    #[must_use]
+    pub fn prompt_cache_breakpoint(mut self) -> Self {
+        self.prompt_cache_breakpoint =
+            Omittable::Value(Nullable::Value(BetaPromptCacheBreakpoint::explicit()));
+        self
+    }
+
+    /// Sends official `file_id: null`.
+    #[must_use]
+    pub fn file_id_null(mut self) -> Self {
+        self.file_id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `image_url: null`.
+    #[must_use]
+    pub fn image_url_null(mut self) -> Self {
+        self.image_url = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `prompt_cache_breakpoint: null`.
+    #[must_use]
+    pub fn prompt_cache_breakpoint_null(mut self) -> Self {
+        self.prompt_cache_breakpoint = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Returns the image URL when present.
+    #[must_use]
+    pub fn image_url(&self) -> Option<&str> {
+        match &self.image_url {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
+    /// Returns the uploaded file id when present.
+    #[must_use]
+    pub fn file_id(&self) -> Option<&str> {
+        match &self.file_id {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
+    /// Checks pinned OpenAPI `image_url` `maxLength` without sending the request.
+    pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        if let Omittable::Value(Nullable::Value(image_url)) = &self.image_url {
+            validate_input_image_url_chars(image_url.chars().count())?;
+        }
+        Ok(())
+    }
+}
+
+impl From<BetaAgentInputImage> for BetaAgentInputImageParam {
+    fn from(value: BetaAgentInputImage) -> Self {
+        Self {
+            kind: value.kind,
+            detail: Omittable::Value(Nullable::Value(value.detail)),
+            file_id: value.file_id,
+            image_url: value.image_url,
+            prompt_cache_breakpoint: value.prompt_cache_breakpoint,
+        }
+    }
+}
+
 /// Opaque encrypted content sent between agents.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BetaAgentEncryptedContent {
@@ -736,20 +864,65 @@ impl BetaAgentEncryptedContent {
     }
 }
 
+/// Official `BetaTextContent` (`type: "text"`) on resource agent messages.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaAgentText {
+    #[serde(rename = "type")]
+    kind: AgentTextTag,
+    text: String,
+}
+
+impl BetaAgentText {
+    /// Creates generic resource text content.
+    #[must_use]
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            kind: AgentTextTag::Text,
+            text: text.into(),
+        }
+    }
+
+    /// Returns the text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
 /// One typed content part sent between agents.
+///
+/// Request `BetaAgentMessageItemParam` images are Param-shaped
+/// ([`BetaAgentInputImageParam`]). Resource `BetaInputImageContent` stays on
+/// [`BetaAgentInputImage`]. Official `BetaAgentMessage` resource content also
+/// names output/reasoning/file/screenshot members so they do not decode only
+/// as [`UnknownTaggedObject`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum BetaAgentMessageContent {
     Text(BetaAgentInputText),
-    Image(BetaAgentInputImage),
+    Image(BetaAgentInputImageParam),
     Encrypted(BetaAgentEncryptedContent),
+    OutputText(OutputText),
+    PlainText(BetaAgentText),
+    SummaryText(SummaryTextContent),
+    ReasoningText(ReasoningTextContent),
+    Refusal(Refusal),
+    ComputerScreenshot(ComputerScreenshot),
+    File(InputFile),
     Unknown(UnknownTaggedObject),
 }
 
 impl_tagged_content!(BetaAgentMessageContent {
     Text(BetaAgentInputText) => "input_text",
-    Image(BetaAgentInputImage) => "input_image",
+    Image(BetaAgentInputImageParam) => "input_image",
     Encrypted(BetaAgentEncryptedContent) => "encrypted_content",
+    OutputText(OutputText) => "output_text",
+    PlainText(BetaAgentText) => "text",
+    SummaryText(SummaryTextContent) => "summary_text",
+    ReasoningText(ReasoningTextContent) => "reasoning_text",
+    Refusal(Refusal) => "refusal",
+    ComputerScreenshot(ComputerScreenshot) => "computer_screenshot",
+    File(InputFile) => "input_file",
 });
 
 impl From<BetaAgentInputText> for BetaAgentMessageContent {
@@ -758,15 +931,63 @@ impl From<BetaAgentInputText> for BetaAgentMessageContent {
     }
 }
 
+impl From<BetaAgentInputImageParam> for BetaAgentMessageContent {
+    fn from(value: BetaAgentInputImageParam) -> Self {
+        Self::Image(value)
+    }
+}
+
 impl From<BetaAgentInputImage> for BetaAgentMessageContent {
     fn from(value: BetaAgentInputImage) -> Self {
-        Self::Image(value)
+        Self::Image(value.into())
     }
 }
 
 impl From<BetaAgentEncryptedContent> for BetaAgentMessageContent {
     fn from(value: BetaAgentEncryptedContent) -> Self {
         Self::Encrypted(value)
+    }
+}
+
+impl From<OutputText> for BetaAgentMessageContent {
+    fn from(value: OutputText) -> Self {
+        Self::OutputText(value)
+    }
+}
+
+impl From<BetaAgentText> for BetaAgentMessageContent {
+    fn from(value: BetaAgentText) -> Self {
+        Self::PlainText(value)
+    }
+}
+
+impl From<SummaryTextContent> for BetaAgentMessageContent {
+    fn from(value: SummaryTextContent) -> Self {
+        Self::SummaryText(value)
+    }
+}
+
+impl From<ReasoningTextContent> for BetaAgentMessageContent {
+    fn from(value: ReasoningTextContent) -> Self {
+        Self::ReasoningText(value)
+    }
+}
+
+impl From<Refusal> for BetaAgentMessageContent {
+    fn from(value: Refusal) -> Self {
+        Self::Refusal(value)
+    }
+}
+
+impl From<ComputerScreenshot> for BetaAgentMessageContent {
+    fn from(value: ComputerScreenshot) -> Self {
+        Self::ComputerScreenshot(value)
+    }
+}
+
+impl From<InputFile> for BetaAgentMessageContent {
+    fn from(value: InputFile) -> Self {
+        Self::File(value)
     }
 }
 
@@ -863,7 +1084,14 @@ impl BetaAgentMessage {
                 BetaAgentMessageContent::Text(text) => text.validate()?,
                 BetaAgentMessageContent::Image(image) => image.validate()?,
                 BetaAgentMessageContent::Encrypted(encrypted) => encrypted.validate()?,
-                BetaAgentMessageContent::Unknown(_) => {}
+                BetaAgentMessageContent::File(file) => file.validate()?,
+                BetaAgentMessageContent::OutputText(_)
+                | BetaAgentMessageContent::PlainText(_)
+                | BetaAgentMessageContent::SummaryText(_)
+                | BetaAgentMessageContent::ReasoningText(_)
+                | BetaAgentMessageContent::Refusal(_)
+                | BetaAgentMessageContent::ComputerScreenshot(_)
+                | BetaAgentMessageContent::Unknown(_) => {}
             }
         }
         Ok(())
@@ -4481,6 +4709,13 @@ mod tests {
             .image_url_null()
             .validate()
             .expect("official inter-agent image_url null skips the length bound");
+        BetaAgentInputImageParam::from_url("https://example.test/a.png")
+            .validate()
+            .expect("short Param inter-agent image_url is accepted");
+        BetaAgentInputImageParam::from_file_id("file_1")
+            .image_url_null()
+            .validate()
+            .expect("official Param image_url null skips the length bound");
         BetaAgentEncryptedContent::new("enc")
             .validate()
             .expect("short inter-agent encrypted_content is accepted");
@@ -4530,5 +4765,157 @@ mod tests {
             serde_json::to_value(&listed).expect("serialize list include"),
             json!({"include": ["web_search_call.results"]})
         );
+    }
+
+    #[test]
+    fn official_beta_input_image_content_requires_detail() {
+        let official = json!({
+            "type": "input_image",
+            "image_url": "https://example.test/a.png",
+            "detail": "high"
+        });
+        let decoded: BetaAgentInputImage =
+            serde_json::from_value(official).expect("official BetaInputImageContent");
+        assert_eq!(decoded.detail_ref(), &crate::responses::ImageDetail::High);
+        assert!(
+            serde_json::from_value::<BetaAgentInputImage>(json!({
+                "type": "input_image",
+                "image_url": "https://example.test/a.png"
+            }))
+            .is_err(),
+            "official BetaInputImageContent requires detail"
+        );
+        assert!(
+            serde_json::from_value::<BetaAgentInputImage>(json!({
+                "type": "input_image",
+                "image_url": "https://example.test/a.png",
+                "detail": null
+            }))
+            .is_err(),
+            "official BetaInputImageContent detail is not nullable"
+        );
+        assert_eq!(
+            serde_json::to_value(&BetaAgentInputImage::from_url("https://example.test/a.png"))
+                .expect("constructor sends documented default")["detail"],
+            "auto"
+        );
+    }
+
+    #[test]
+    fn official_beta_agent_message_param_omits_image_detail() {
+        let official = json!({
+            "type": "agent_message",
+            "author": "root",
+            "recipient": "child",
+            "content": [{
+                "type": "input_image",
+                "image_url": "https://example.test/a.png"
+            }]
+        });
+        let decoded: BetaAgentMessage = serde_json::from_value(official)
+            .expect("official BetaAgentMessageItemParam image omits detail");
+        match &decoded.content()[0] {
+            BetaAgentMessageContent::Image(image) => {
+                assert_eq!(image.image_url(), Some("https://example.test/a.png"));
+                assert_eq!(
+                    serde_json::to_value(image)
+                        .expect("re-encode param image")
+                        .get("detail"),
+                    None
+                );
+            }
+            other => panic!("expected BetaAgentInputImageParam, got {other:?}"),
+        }
+        assert_eq!(
+            serde_json::to_value(&BetaAgentInputImageParam::from_url(
+                "https://example.test/a.png"
+            ))
+            .expect("param constructor omits detail")
+            .get("detail"),
+            None
+        );
+        let with_null = serde_json::from_value::<BetaAgentMessage>(json!({
+            "type": "agent_message",
+            "author": "root",
+            "recipient": "child",
+            "content": [{
+                "type": "input_image",
+                "image_url": "https://example.test/a.png",
+                "detail": null
+            }]
+        }))
+        .expect("official Param detail null");
+        assert!(matches!(
+            &with_null.content()[0],
+            BetaAgentMessageContent::Image(_)
+        ));
+        assert!(
+            serde_json::from_value::<BetaAgentInputImage>(json!({
+                "type": "input_image",
+                "image_url": "https://example.test/a.png"
+            }))
+            .is_err(),
+            "resource BetaInputImageContent still requires detail"
+        );
+    }
+
+    #[test]
+    fn official_beta_agent_message_names_resource_content() {
+        const OFFICIAL_RESOURCE_TAGS: [&str; 10] = [
+            "input_text",
+            "output_text",
+            "text",
+            "summary_text",
+            "reasoning_text",
+            "refusal",
+            "input_image",
+            "computer_screenshot",
+            "input_file",
+            "encrypted_content",
+        ];
+        for tag in OFFICIAL_RESOURCE_TAGS {
+            let part = match tag {
+                "input_text" => json!({"type": "input_text", "text": "hi"}),
+                "output_text" => json!({
+                    "type": "output_text",
+                    "text": "done",
+                    "annotations": [],
+                    "logprobs": []
+                }),
+                "text" => json!({"type": "text", "text": "plain"}),
+                "summary_text" => json!({"type": "summary_text", "text": "sum"}),
+                "reasoning_text" => json!({"type": "reasoning_text", "text": "think"}),
+                "refusal" => json!({"type": "refusal", "refusal": "no"}),
+                "input_image" => json!({
+                    "type": "input_image",
+                    "image_url": "https://example.test/a.png",
+                    "detail": "high"
+                }),
+                "computer_screenshot" => json!({
+                    "type": "computer_screenshot",
+                    "image_url": "https://example.test/s.png",
+                    "file_id": null,
+                    "detail": "auto"
+                }),
+                "input_file" => json!({"type": "input_file", "file_id": "file_1"}),
+                "encrypted_content" => json!({
+                    "type": "encrypted_content",
+                    "encrypted_content": "enc"
+                }),
+                other => panic!("unhandled official tag {other}"),
+            };
+            let decoded: BetaAgentMessage = serde_json::from_value(json!({
+                "type": "agent_message",
+                "id": "amsg_1",
+                "author": "root",
+                "recipient": "child",
+                "content": [part]
+            }))
+            .unwrap_or_else(|error| panic!("official {tag} must decode: {error}"));
+            assert!(
+                !matches!(decoded.content()[0], BetaAgentMessageContent::Unknown(_)),
+                "official BetaAgentMessage {tag} must be a named member"
+            );
+        }
     }
 }

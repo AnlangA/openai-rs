@@ -84,6 +84,68 @@ open_string_enum! {
 }
 
 open_string_enum! {
+    /// Official `FileInputDetail` / `FileDetailEnum` file rendering fidelity.
+    ///
+    /// Unlike [`ImageDetail`], this domain does not include `original`.
+    pub enum FileDetail {
+        Auto = "auto",
+        Low = "low",
+        High = "high"
+    }
+}
+
+open_string_enum! {
+    /// Official `ResponseErrorCode` machine-readable failure reason.
+    ///
+    /// Stream `ErrorPayload.code` stays an open string: that schema is
+    /// `anyOf [string, null]`, not this enum.
+    pub enum ResponseErrorCode {
+        ServerError = "server_error",
+        RateLimitExceeded = "rate_limit_exceeded",
+        InvalidPrompt = "invalid_prompt",
+        DataResidencyMismatch = "data_residency_mismatch",
+        BioPolicy = "bio_policy",
+        VectorStoreTimeout = "vector_store_timeout",
+        InvalidImage = "invalid_image",
+        InvalidImageFormat = "invalid_image_format",
+        InvalidBase64Image = "invalid_base64_image",
+        InvalidImageUrl = "invalid_image_url",
+        ImageTooLarge = "image_too_large",
+        ImageTooSmall = "image_too_small",
+        ImageParseError = "image_parse_error",
+        ImageContentPolicyViolation = "image_content_policy_violation",
+        InvalidImageMode = "invalid_image_mode",
+        ImageFileTooLarge = "image_file_too_large",
+        UnsupportedImageMediaType = "unsupported_image_media_type",
+        EmptyImageFile = "empty_image_file",
+        FailedToDownloadImage = "failed_to_download_image",
+        ImageFileNotFound = "image_file_not_found"
+    }
+}
+
+open_string_enum! {
+    /// Official `CallableToolAllowedCaller` invocation context.
+    pub enum AllowedCaller {
+        Direct = "direct",
+        Programmatic = "programmatic"
+    }
+}
+
+open_string_enum! {
+    /// Official MCP `connector_id` service-connector identifiers.
+    pub enum McpConnectorId {
+        Dropbox = "connector_dropbox",
+        Gmail = "connector_gmail",
+        GoogleCalendar = "connector_googlecalendar",
+        GoogleDrive = "connector_googledrive",
+        MicrosoftTeams = "connector_microsoftteams",
+        OutlookCalendar = "connector_outlookcalendar",
+        OutlookEmail = "connector_outlookemail",
+        SharePoint = "connector_sharepoint"
+    }
+}
+
+open_string_enum! {
     /// Context truncation policy.
     pub enum TruncationStrategy {
         Auto = "auto",
@@ -986,6 +1048,142 @@ impl InputImage {
     }
 }
 
+/// Function-call output image part (`InputImageContentParamAutoParam`).
+///
+/// Official Param `required` is only `type`; `detail` is `anyOf` including
+/// null. Message `InputContent` uses [`InputImage`] instead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InputImageParam {
+    #[serde(rename = "type")]
+    kind: InputImageTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    detail: Omittable<Nullable<ImageDetail>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    image_url: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    file_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_breakpoint: Omittable<Nullable<PromptCacheBreakpoint>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl InputImageParam {
+    /// Creates a Param image from a URL without sending `detail`.
+    #[must_use]
+    pub fn from_url(url: impl Into<String>) -> Self {
+        Self {
+            kind: InputImageTag::InputImage,
+            detail: Omittable::Omitted,
+            image_url: Omittable::Value(Nullable::Value(url.into())),
+            file_id: Omittable::Omitted,
+            prompt_cache_breakpoint: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Creates a Param image from an uploaded file id without sending `detail`.
+    #[must_use]
+    pub fn from_file_id(file_id: impl Into<String>) -> Self {
+        Self {
+            kind: InputImageTag::InputImage,
+            detail: Omittable::Omitted,
+            image_url: Omittable::Omitted,
+            file_id: Omittable::Value(Nullable::Value(file_id.into())),
+            prompt_cache_breakpoint: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Sets the requested fidelity.
+    #[must_use]
+    pub fn detail(mut self, detail: ImageDetail) -> Self {
+        self.detail = Omittable::Value(Nullable::Value(detail));
+        self
+    }
+
+    /// Sends official Param `detail: null`.
+    #[must_use]
+    pub fn detail_null(mut self) -> Self {
+        self.detail = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Marks an explicit prompt-cache boundary after this part.
+    #[must_use]
+    pub fn prompt_cache_breakpoint(mut self) -> Self {
+        self.prompt_cache_breakpoint =
+            Omittable::Value(Nullable::Value(PromptCacheBreakpoint::explicit()));
+        self
+    }
+
+    /// Sends official `prompt_cache_breakpoint: null`.
+    #[must_use]
+    pub fn prompt_cache_breakpoint_null(mut self) -> Self {
+        self.prompt_cache_breakpoint = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `image_url: null`.
+    #[must_use]
+    pub fn image_url_null(mut self) -> Self {
+        self.image_url = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `file_id: null`.
+    #[must_use]
+    pub fn file_id_null(mut self) -> Self {
+        self.file_id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Returns the image URL when present.
+    #[must_use]
+    pub fn image_url(&self) -> Option<&str> {
+        match &self.image_url {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
+    /// Returns the uploaded file id when present.
+    #[must_use]
+    pub fn file_id(&self) -> Option<&str> {
+        match &self.file_id {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+
+    /// Checks pinned OpenAPI `image_url` `maxLength` without sending the request.
+    pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        if let Omittable::Value(Nullable::Value(image_url)) = &self.image_url {
+            validate_input_image_url_chars(image_url.chars().count())?;
+        }
+        Ok(())
+    }
+}
+
+impl From<InputImage> for InputImageParam {
+    fn from(value: InputImage) -> Self {
+        Self {
+            kind: value.kind,
+            detail: Omittable::Value(Nullable::Value(value.detail)),
+            image_url: value.image_url,
+            file_id: value.file_id,
+            prompt_cache_breakpoint: value.prompt_cache_breakpoint,
+            extra: value.extra,
+        }
+    }
+}
+
 /// A file input addressed by URL, uploaded id, or base64 file data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InputFile {
@@ -1000,7 +1198,7 @@ pub struct InputFile {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     filename: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    detail: Omittable<ImageDetail>,
+    detail: Omittable<FileDetail>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     prompt_cache_breakpoint: Omittable<Nullable<PromptCacheBreakpoint>>,
     #[serde(flatten)]
@@ -1070,9 +1268,9 @@ impl InputFile {
         value
     }
 
-    /// Sets the file/image detail preference.
+    /// Sets the official file rendering detail.
     #[must_use]
-    pub fn detail(mut self, detail: ImageDetail) -> Self {
+    pub fn detail(mut self, detail: FileDetail) -> Self {
         self.detail = Omittable::Value(detail);
         self
     }
@@ -1452,7 +1650,7 @@ pub struct FunctionTool {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     defer_loading: Omittable<bool>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    allowed_callers: Omittable<Nullable<Vec<String>>>,
+    allowed_callers: Omittable<Nullable<Vec<AllowedCaller>>>,
 }
 
 impl FunctionTool {
@@ -1547,7 +1745,10 @@ impl FunctionTool {
 
     /// Restricts which invocation contexts may call this function.
     #[must_use]
-    pub fn allowed_callers(mut self, callers: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<AllowedCaller>>,
+    ) -> Self {
         self.allowed_callers = Omittable::Value(Nullable::Value(
             callers.into_iter().map(Into::into).collect(),
         ));
@@ -1802,6 +2003,34 @@ fn validate_function_call_output_value(
     Ok(())
 }
 
+fn validate_function_call_output_param_value(
+    output: &FunctionCallOutputParamValue,
+) -> Result<(), CreateResponseConstraintError> {
+    match output {
+        FunctionCallOutputParamValue::Text(output) => {
+            let actual = output.chars().count();
+            if actual > MAX_FUNCTION_CALL_OUTPUT_CHARS {
+                return Err(CreateResponseConstraintError::FunctionCallOutputChars {
+                    actual,
+                    maximum: MAX_FUNCTION_CALL_OUTPUT_CHARS,
+                });
+            }
+        }
+        FunctionCallOutputParamValue::Content(parts) => {
+            for part in parts {
+                match part {
+                    FunctionCallOutputContent::Text(text) => text.validate()?,
+                    FunctionCallOutputContent::Image(image) => image.validate()?,
+                    FunctionCallOutputContent::File(file) => file.validate()?,
+                    FunctionCallOutputContent::ComputerScreenshot(_)
+                    | FunctionCallOutputContent::Unknown(_) => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_function_shell_call_id(call_id: &str) -> Result<(), CreateResponseConstraintError> {
     let actual = call_id.chars().count();
     if !(MIN_FUNCTION_SHELL_CALL_ID_CHARS..=MAX_FUNCTION_SHELL_CALL_ID_CHARS).contains(&actual) {
@@ -1862,7 +2091,7 @@ fn validate_function_tool_name(name: &str) -> Result<(), CreateResponseConstrain
 }
 
 fn validate_allowed_callers(
-    allowed_callers: &Omittable<Nullable<Vec<String>>>,
+    allowed_callers: &Omittable<Nullable<Vec<AllowedCaller>>>,
 ) -> Result<(), CreateResponseConstraintError> {
     if let Omittable::Value(Nullable::Value(callers)) = allowed_callers
         && callers.is_empty()
@@ -2015,7 +2244,7 @@ pub struct McpTool {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     server_url: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    connector_id: Omittable<String>,
+    connector_id: Omittable<McpConnectorId>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     tunnel_id: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2025,7 +2254,7 @@ pub struct McpTool {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     allowed_tools: Omittable<Nullable<McpAllowedTools>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    allowed_callers: Omittable<Nullable<Vec<String>>>,
+    allowed_callers: Omittable<Nullable<Vec<AllowedCaller>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     require_approval: Omittable<Nullable<McpRequireApproval>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2060,7 +2289,10 @@ impl McpTool {
 
     /// Creates an MCP tool backed by an OpenAI connector id.
     #[must_use]
-    pub fn connector(server_label: impl Into<String>, connector_id: impl Into<String>) -> Self {
+    pub fn connector(
+        server_label: impl Into<String>,
+        connector_id: impl Into<McpConnectorId>,
+    ) -> Self {
         let mut value = Self::empty(server_label);
         value.connector_id = Omittable::Value(connector_id.into());
         value
@@ -2109,7 +2341,10 @@ impl McpTool {
 
     /// Restricts which invocation contexts may call this MCP tool.
     #[must_use]
-    pub fn allowed_callers(mut self, callers: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<AllowedCaller>>,
+    ) -> Self {
         self.allowed_callers = Omittable::Value(Nullable::Value(
             callers.into_iter().map(Into::into).collect(),
         ));
@@ -2594,6 +2829,94 @@ impl From<Vec<InputContent>> for FunctionCallOutputValue {
     }
 }
 
+tagged_union! {
+    /// One official `FunctionCallOutputItemParam` output content part.
+    pub enum FunctionCallOutputContent {
+        Text(InputText) => "input_text",
+        Image(InputImageParam) => "input_image",
+        File(InputFile) => "input_file",
+        ComputerScreenshot(ComputerScreenshot) => "computer_screenshot"
+    }
+}
+
+impl From<InputText> for FunctionCallOutputContent {
+    fn from(value: InputText) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<InputImageParam> for FunctionCallOutputContent {
+    fn from(value: InputImageParam) -> Self {
+        Self::Image(value)
+    }
+}
+
+impl From<InputFile> for FunctionCallOutputContent {
+    fn from(value: InputFile) -> Self {
+        Self::File(value)
+    }
+}
+
+impl From<InputContent> for FunctionCallOutputContent {
+    fn from(value: InputContent) -> Self {
+        match value {
+            InputContent::Text(text) => Self::Text(text),
+            InputContent::Image(image) => Self::Image(image.into()),
+            InputContent::File(file) => Self::File(file),
+            InputContent::ComputerScreenshot(value) => Self::ComputerScreenshot(value),
+            InputContent::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+/// String or Param-shaped content for `FunctionCallOutputItemParam.output`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FunctionCallOutputParamValue {
+    /// An opaque text value, commonly a JSON string.
+    Text(String),
+    /// Typed text/image/file Param content parts.
+    Content(Vec<FunctionCallOutputContent>),
+}
+
+impl From<String> for FunctionCallOutputParamValue {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<&str> for FunctionCallOutputParamValue {
+    fn from(value: &str) -> Self {
+        Self::Text(value.to_owned())
+    }
+}
+
+impl From<Vec<FunctionCallOutputContent>> for FunctionCallOutputParamValue {
+    fn from(value: Vec<FunctionCallOutputContent>) -> Self {
+        Self::Content(value)
+    }
+}
+
+impl From<Vec<InputContent>> for FunctionCallOutputParamValue {
+    fn from(value: Vec<InputContent>) -> Self {
+        Self::Content(
+            value
+                .into_iter()
+                .map(FunctionCallOutputContent::from)
+                .collect(),
+        )
+    }
+}
+
+impl From<FunctionCallOutputValue> for FunctionCallOutputParamValue {
+    fn from(value: FunctionCallOutputValue) -> Self {
+        match value {
+            FunctionCallOutputValue::Text(text) => Self::Text(text),
+            FunctionCallOutputValue::Content(parts) => parts.into(),
+        }
+    }
+}
+
 /// Output supplied for a preceding function call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionCallOutput {
@@ -2601,7 +2924,7 @@ pub struct FunctionCallOutput {
     kind: FunctionCallOutputTag,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     call_id: Omittable<Nullable<String>>,
-    output: FunctionCallOutputValue,
+    output: FunctionCallOutputParamValue,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2619,13 +2942,16 @@ pub struct FunctionCallOutput {
 impl FunctionCallOutput {
     /// Creates a function output from an opaque string.
     #[must_use]
-    pub fn new(call_id: impl Into<String>, output: impl Into<FunctionCallOutputValue>) -> Self {
+    pub fn new(
+        call_id: impl Into<String>,
+        output: impl Into<FunctionCallOutputParamValue>,
+    ) -> Self {
         Self::from_output(output).with_call_id(call_id)
     }
 
     /// Creates a function-call output from the official required `output`.
     #[must_use]
-    pub fn from_output(output: impl Into<FunctionCallOutputValue>) -> Self {
+    pub fn from_output(output: impl Into<FunctionCallOutputParamValue>) -> Self {
         Self {
             kind: FunctionCallOutputTag::FunctionCallOutput,
             call_id: Omittable::Omitted,
@@ -2771,7 +3097,7 @@ impl FunctionCallOutput {
                 });
             }
         }
-        validate_function_call_output_value(&self.output)?;
+        validate_function_call_output_param_value(&self.output)?;
         validate_omittable_caller(&self.caller)
     }
 
@@ -2801,7 +3127,7 @@ impl FunctionCallOutput {
 
     /// Returns the opaque output string.
     #[must_use]
-    pub const fn output(&self) -> &FunctionCallOutputValue {
+    pub const fn output(&self) -> &FunctionCallOutputParamValue {
         &self.output
     }
 
@@ -2810,8 +3136,8 @@ impl FunctionCallOutput {
         &self,
     ) -> Result<T, serde_json::Error> {
         match &self.output {
-            FunctionCallOutputValue::Text(output) => serde_json::from_str(output),
-            FunctionCallOutputValue::Content(output) => {
+            FunctionCallOutputParamValue::Text(output) => serde_json::from_str(output),
+            FunctionCallOutputParamValue::Content(output) => {
                 serde_json::from_value(serde_json::to_value(output)?)
             }
         }
@@ -5988,16 +6314,17 @@ literal_tag!(ResponseObjectTag, Response, "response");
 /// An error returned when the model could not generate a response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResponseError {
-    code: String,
+    code: ResponseErrorCode,
     message: String,
     #[serde(flatten)]
     extra: ExtraFields,
 }
 
 impl ResponseError {
-    /// Returns the machine-readable error code.
+    /// Returns the official `ResponseErrorCode` when named, or the raw
+    /// future value when unknown.
     #[must_use]
-    pub fn code(&self) -> &str {
+    pub const fn code(&self) -> &ResponseErrorCode {
         &self.code
     }
 
@@ -6394,7 +6721,7 @@ impl Response {
                     ResponseInputItem::FunctionCallOutput(FunctionCallOutput {
                         kind: FunctionCallOutputTag::FunctionCallOutput,
                         call_id: value.call_id.clone(),
-                        output: value.output.clone(),
+                        output: value.output.clone().into(),
                         id: Omittable::Value(Nullable::Value(value.id.clone())),
                         name: value.name.clone(),
                         namespace: value.namespace.clone(),
@@ -12600,11 +12927,13 @@ macro_rules! tag_only_tool {
 literal_tag!(FileSearchToolTag, FileSearch, "file_search");
 
 open_string_enum! {
-    /// Ranker accepted by the Responses file-search tool.
+    /// Official `RankerVersionType` for Responses file-search ranking.
+    ///
+    /// Assistants `FileSearchRanker` (`default_2024_08_21`) is a different
+    /// official schema and is not a named Responses ranker.
     pub enum FileSearchRanker {
         Auto = "auto",
-        Default2024_11_15 = "default-2024-11-15",
-        Default2024_08_21 = "default_2024_08_21"
+        Default2024_11_15 = "default-2024-11-15"
     }
 }
 
@@ -13794,7 +14123,7 @@ pub struct FunctionShellTool {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     environment: Omittable<Nullable<FunctionShellEnvironment>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    allowed_callers: Omittable<Nullable<Vec<String>>>,
+    allowed_callers: Omittable<Nullable<Vec<AllowedCaller>>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -13827,7 +14156,10 @@ impl FunctionShellTool {
 
     /// Restricts invocation contexts.
     #[must_use]
-    pub fn allowed_callers(mut self, callers: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<AllowedCaller>>,
+    ) -> Self {
         self.allowed_callers = Omittable::Value(Nullable::Value(
             callers.into_iter().map(Into::into).collect(),
         ));
@@ -13949,7 +14281,7 @@ pub struct ApplyPatchTool {
     #[serde(rename = "type")]
     kind: ApplyPatchToolTag,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    allowed_callers: Omittable<Nullable<Vec<String>>>,
+    allowed_callers: Omittable<Nullable<Vec<AllowedCaller>>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -13967,7 +14299,10 @@ impl ApplyPatchTool {
 
     /// Restricts invocation contexts.
     #[must_use]
-    pub fn allowed_callers(mut self, callers: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<AllowedCaller>>,
+    ) -> Self {
         self.allowed_callers = Omittable::Value(Nullable::Value(
             callers.into_iter().map(Into::into).collect(),
         ));
@@ -14286,7 +14621,7 @@ pub struct CodeInterpreterTool {
     kind: CodeInterpreterToolTag,
     container: CodeInterpreterContainer,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    allowed_callers: Omittable<Nullable<Vec<String>>>,
+    allowed_callers: Omittable<Nullable<Vec<AllowedCaller>>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -14328,7 +14663,10 @@ impl CodeInterpreterTool {
 
     /// Restricts which invocation contexts may call this tool.
     #[must_use]
-    pub fn allowed_callers(mut self, callers: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<AllowedCaller>>,
+    ) -> Self {
         self.allowed_callers = Omittable::Value(Nullable::Value(
             callers.into_iter().map(Into::into).collect(),
         ));
@@ -14469,7 +14807,7 @@ pub struct CustomTool {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     defer_loading: Omittable<bool>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    allowed_callers: Omittable<Nullable<Vec<String>>>,
+    allowed_callers: Omittable<Nullable<Vec<AllowedCaller>>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -14512,7 +14850,10 @@ impl CustomTool {
 
     /// Restricts invocation contexts.
     #[must_use]
-    pub fn allowed_callers(mut self, callers: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn allowed_callers(
+        mut self,
+        callers: impl IntoIterator<Item = impl Into<AllowedCaller>>,
+    ) -> Self {
         self.allowed_callers = Omittable::Value(Nullable::Value(
             callers.into_iter().map(Into::into).collect(),
         ));
@@ -15347,6 +15688,7 @@ mod tests {
         assert_json_dto::<MessageRole>();
         assert_json_dto::<MessagePhase>();
         assert_json_dto::<ImageDetail>();
+        assert_json_dto::<FileDetail>();
         assert_json_dto::<TruncationStrategy>();
         assert_json_dto::<ReasoningEffort>();
         assert_json_dto::<ReasoningSummary>();
@@ -15354,6 +15696,7 @@ mod tests {
         assert_json_dto::<ReasoningSummaryPartStatus>();
         assert_json_dto::<InputText>();
         assert_json_dto::<InputImage>();
+        assert_json_dto::<InputImageParam>();
         assert_json_dto::<InputFile>();
         assert_json_dto::<InputContent>();
         assert_json_dto::<MessageContent>();
@@ -15384,6 +15727,8 @@ mod tests {
         assert_json_dto::<McpApprovalRequest>();
         assert_json_dto::<McpApprovalResponse>();
         assert_json_dto::<FunctionCallOutputValue>();
+        assert_json_dto::<FunctionCallOutputContent>();
+        assert_json_dto::<FunctionCallOutputParamValue>();
         assert_json_dto::<OutputText>();
         assert_json_dto::<Refusal>();
         assert_json_dto::<OutputContent>();
@@ -18073,14 +18418,18 @@ mod tests {
         .expect("official FunctionShellCallItemParam action");
         assert_eq!(item.action().commands(), ["uname"]);
         let action = serde_json::to_value(item.action()).expect("input action omits limits");
-        assert!(!action
-            .as_object()
-            .expect("object")
-            .contains_key("timeout_ms"));
-        assert!(!action
-            .as_object()
-            .expect("object")
-            .contains_key("max_output_length"));
+        assert!(
+            !action
+                .as_object()
+                .expect("object")
+                .contains_key("timeout_ms")
+        );
+        assert!(
+            !action
+                .as_object()
+                .expect("object")
+                .contains_key("max_output_length")
+        );
         assert!(
             serde_json::from_value::<FunctionShellAction>(json!({ "commands": ["echo"] })).is_err(),
             "official FunctionShellAction requires timeout_ms and max_output_length"
@@ -18184,6 +18533,241 @@ mod tests {
             serde_json::to_value(&InputImage::from_url("https://example.test/a.png"))
                 .expect("constructor sends documented default")["detail"],
             "auto"
+        );
+    }
+
+    #[test]
+    fn official_function_call_output_param_omits_image_detail() {
+        let official = json!({
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.test/a.png"
+                }
+            ]
+        });
+        let decoded: FunctionCallOutput = serde_json::from_value(official.clone())
+            .expect("official FunctionCallOutputItemParam image omits detail");
+        match decoded.output() {
+            FunctionCallOutputParamValue::Content(parts) => match &parts[0] {
+                FunctionCallOutputContent::Image(image) => {
+                    assert_eq!(image.image_url(), Some("https://example.test/a.png"));
+                    assert_eq!(
+                        serde_json::to_value(image)
+                            .expect("re-encode param image")
+                            .get("detail"),
+                        None
+                    );
+                }
+                other => panic!("expected InputImageParam, got {other:?}"),
+            },
+            other => panic!("expected content output, got {other:?}"),
+        }
+        assert_eq!(
+            serde_json::to_value(&InputImageParam::from_url("https://example.test/a.png"))
+                .expect("param constructor omits detail")
+                .get("detail"),
+            None
+        );
+        let with_null = serde_json::from_value::<FunctionCallOutput>(json!({
+            "type": "function_call_output",
+            "output": [{
+                "type": "input_image",
+                "image_url": "https://example.test/a.png",
+                "detail": null
+            }]
+        }))
+        .expect("official Param detail null");
+        assert!(matches!(
+            with_null.output(),
+            FunctionCallOutputParamValue::Content(parts)
+                if matches!(&parts[0], FunctionCallOutputContent::Image(_))
+        ));
+        assert!(
+            serde_json::from_value::<InputImage>(json!({
+                "type": "input_image",
+                "image_url": "https://example.test/a.png"
+            }))
+            .is_err(),
+            "resource InputImageContent still requires detail"
+        );
+    }
+
+    #[test]
+    fn official_file_search_ranker_matches_ranker_version_type() {
+        const OFFICIAL_RANKER_VERSION: [&str; 2] = ["auto", "default-2024-11-15"];
+        for value in OFFICIAL_RANKER_VERSION {
+            let decoded = FileSearchRanker::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official RankerVersionType value {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+        }
+        assert!(
+            !FileSearchRanker::from_raw("default_2024_08_21").is_known(),
+            "Assistants FileSearchRanker is not a named Responses RankerVersionType"
+        );
+        assert_eq!(
+            serde_json::to_value(&FileSearchRankingOptions::new().ranker(FileSearchRanker::Auto))
+                .expect("ranker")["ranker"],
+            "auto"
+        );
+    }
+
+    #[test]
+    fn official_response_error_code_matches_response_error_code() {
+        const OFFICIAL_CODES: [&str; 20] = [
+            "server_error",
+            "rate_limit_exceeded",
+            "invalid_prompt",
+            "data_residency_mismatch",
+            "bio_policy",
+            "vector_store_timeout",
+            "invalid_image",
+            "invalid_image_format",
+            "invalid_base64_image",
+            "invalid_image_url",
+            "image_too_large",
+            "image_too_small",
+            "image_parse_error",
+            "image_content_policy_violation",
+            "invalid_image_mode",
+            "image_file_too_large",
+            "unsupported_image_media_type",
+            "empty_image_file",
+            "failed_to_download_image",
+            "image_file_not_found",
+        ];
+        for value in OFFICIAL_CODES {
+            let decoded = ResponseErrorCode::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official ResponseErrorCode value {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            let error: ResponseError = serde_json::from_value(json!({
+                "code": value,
+                "message": "failed"
+            }))
+            .unwrap_or_else(|error| panic!("official error code {value} must decode: {error}"));
+            assert_eq!(error.code().as_str(), value);
+            assert_eq!(
+                serde_json::to_value(&error).expect("re-encode")["code"],
+                value
+            );
+        }
+        assert!(
+            !ResponseErrorCode::from_raw("ERR_SOMETHING").is_known(),
+            "stream ErrorPayload free-form codes are not ResponseErrorCode members"
+        );
+        let future: ResponseError = serde_json::from_value(json!({
+            "code": "future_error",
+            "message": "failed"
+        }))
+        .expect("unofficial codes remain lossless");
+        assert_eq!(future.code().as_str(), "future_error");
+        assert!(!future.code().is_known());
+    }
+
+    #[test]
+    fn official_allowed_caller_matches_callable_tool_allowed_caller() {
+        const OFFICIAL_CALLERS: [&str; 2] = ["direct", "programmatic"];
+        for value in OFFICIAL_CALLERS {
+            let decoded = AllowedCaller::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official CallableToolAllowedCaller value {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+        }
+        assert!(
+            !AllowedCaller::from_raw("unknown_caller").is_known(),
+            "unofficial callers remain Unknown"
+        );
+        let tool = FunctionTool::new("lookup").allowed_callers([AllowedCaller::Direct]);
+        assert_eq!(
+            serde_json::to_value(&tool).expect("serialize")["allowed_callers"],
+            json!(["direct"])
+        );
+        let decoded: FunctionTool = serde_json::from_value(json!({
+            "type": "function",
+            "name": "lookup",
+            "allowed_callers": ["programmatic"]
+        }))
+        .expect("official programmatic caller");
+        let value = serde_json::to_value(&decoded).expect("re-encode");
+        assert_eq!(value["allowed_callers"], json!(["programmatic"]));
+    }
+
+    #[test]
+    fn official_mcp_connector_id_matches_connector_enum() {
+        const OFFICIAL_CONNECTORS: [&str; 8] = [
+            "connector_dropbox",
+            "connector_gmail",
+            "connector_googlecalendar",
+            "connector_googledrive",
+            "connector_microsoftteams",
+            "connector_outlookcalendar",
+            "connector_outlookemail",
+            "connector_sharepoint",
+        ];
+        for value in OFFICIAL_CONNECTORS {
+            let decoded = McpConnectorId::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official MCP connector_id value {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            let tool = McpTool::connector("mail", value);
+            assert_eq!(
+                serde_json::to_value(&tool).expect("serialize")["connector_id"],
+                value
+            );
+        }
+        assert!(
+            !McpConnectorId::from_raw("connector_future").is_known(),
+            "unofficial connector ids remain Unknown"
+        );
+        let future = McpTool::connector("mail", "connector_future");
+        assert_eq!(
+            serde_json::to_value(&future).expect("unofficial connector")["connector_id"],
+            "connector_future"
+        );
+    }
+
+    #[test]
+    fn official_input_file_content_uses_file_detail_domain() {
+        const OFFICIAL_FILE_DETAIL: [&str; 3] = ["auto", "low", "high"];
+        for value in OFFICIAL_FILE_DETAIL {
+            let decoded = FileDetail::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official FileInputDetail value {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            let file: InputFile = serde_json::from_value(json!({
+                "type": "input_file",
+                "file_id": "file_1",
+                "detail": value
+            }))
+            .unwrap_or_else(|error| panic!("official file detail {value} must decode: {error}"));
+            assert_eq!(
+                serde_json::to_value(&file).expect("re-encode")["detail"],
+                value
+            );
+        }
+        assert!(
+            !FileDetail::from_raw("original").is_known(),
+            "original is official ImageDetail, not FileInputDetail"
+        );
+        assert!(ImageDetail::from_raw("original").is_known());
+        assert_eq!(
+            serde_json::to_value(&InputFile::from_file_id("file_1").detail(FileDetail::Low))
+                .expect("setter")["detail"],
+            "low"
         );
     }
 
