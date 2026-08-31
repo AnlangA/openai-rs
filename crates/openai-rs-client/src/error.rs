@@ -278,9 +278,15 @@ pub struct StreamError {
 impl StreamError {
     pub(crate) fn from_body(request_id: Option<&str>, body: &[u8]) -> Self {
         let typed = serde_json::from_slice::<StreamErrorBody>(body).ok();
+        let nested = serde_json::from_slice::<ApiErrorEnvelope>(body).ok();
         let message = typed
             .as_ref()
             .and_then(|error| error.message.as_deref())
+            .or_else(|| {
+                nested
+                    .as_ref()
+                    .and_then(|envelope| envelope.error.message.as_deref())
+            })
             .map(redact_inline)
             .unwrap_or_else(|| "OpenAI returned an in-band stream error".to_owned())
             .into_boxed_str();
@@ -289,10 +295,20 @@ impl StreamError {
             message,
             code: typed
                 .as_ref()
-                .and_then(|error| value_string(error.code.as_ref())),
+                .and_then(|error| value_string(error.code.as_ref()))
+                .or_else(|| {
+                    nested
+                        .as_ref()
+                        .and_then(|envelope| value_string(envelope.error.code.as_ref()))
+                }),
             param: typed
                 .as_ref()
-                .and_then(|error| value_string(error.param.as_ref())),
+                .and_then(|error| value_string(error.param.as_ref()))
+                .or_else(|| {
+                    nested
+                        .as_ref()
+                        .and_then(|envelope| value_string(envelope.error.param.as_ref()))
+                }),
             body: BodyPreview::from_bytes(body, false),
         }
     }

@@ -1980,7 +1980,7 @@ impl BetaCreateResponseRequest {
 
     /// Sets system or developer instructions.
     #[must_use]
-    pub fn instructions(mut self, instructions: impl Into<ResponseInstructions>) -> Self {
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
         self.base = self.base.instructions(instructions);
         self
     }

@@ -2369,6 +2369,8 @@ where
     M: MediaStreamMode,
 {
     images: Vec<ReplayableMultipartSource>,
+    /// Official SDK sends `image` for a scalar source and `image[]` for a list.
+    image_array_field: bool,
     mask: Omittable<ReplayableMultipartSource>,
     /// Serde-compatible text metadata.
     pub metadata: ImageEditMultipartMetadata,
@@ -2396,6 +2398,7 @@ impl CreateImageEditMultipartRequest<MediaNonStreaming> {
     pub fn new(image: ReplayableMultipartSource, prompt: impl Into<String>) -> Self {
         Self {
             images: vec![image],
+            image_array_field: false,
             mask: Omittable::Omitted,
             metadata: ImageEditMultipartMetadata::new(prompt),
             mode: PhantomData,
@@ -2415,6 +2418,7 @@ impl CreateImageEditMultipartRequest<MediaNonStreaming> {
         }
         Ok(Self {
             images,
+            image_array_field: true,
             mask: Omittable::Omitted,
             metadata: ImageEditMultipartMetadata::new(prompt),
             mode: PhantomData,
@@ -2428,6 +2432,7 @@ impl CreateImageEditMultipartRequest<MediaNonStreaming> {
         metadata.stream = Omittable::Value(Nullable::Value(true));
         CreateImageEditMultipartRequest {
             images: self.images,
+            image_array_field: self.image_array_field,
             mask: self.mask,
             metadata,
             mode: PhantomData,
@@ -2459,6 +2464,16 @@ where
     #[must_use]
     pub fn images(&self) -> &[ReplayableMultipartSource] {
         &self.images
+    }
+
+    /// Official multipart field name: `image` for a scalar, `image[]` for a list.
+    #[must_use]
+    pub fn image_field_name(&self) -> &'static str {
+        if self.image_array_field {
+            "image[]"
+        } else {
+            "image"
+        }
     }
 
     /// Optional binary mask.
@@ -2894,6 +2909,17 @@ mod tests {
 
     fn bytes_source(secret: &[u8]) -> ReplayableMultipartSource {
         ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(secret))
+    }
+
+    #[test]
+    fn image_edit_multipart_field_follows_scalar_vs_list_shape() {
+        let scalar = CreateImageEditMultipartRequest::new(bytes_source(b"one"), "edit");
+        assert_eq!(scalar.image_field_name(), "image");
+        let list = ok(CreateImageEditMultipartRequest::from_images(
+            [bytes_source(b"one")],
+            "edit",
+        ));
+        assert_eq!(list.image_field_name(), "image[]");
     }
 
     #[test]

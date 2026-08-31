@@ -742,8 +742,9 @@ where
     M: MediaStreamMode,
 {
     let mut form = multipart_metadata_form(&request.metadata)?;
+    let field = request.image_field_name();
     for image in request.images() {
-        form = form.part("image[]", PreparedReplayableSource::prepare(image).await?);
+        form = form.part(field, PreparedReplayableSource::prepare(image).await?);
     }
     if let Some(mask) = request.mask() {
         form = form.part("mask", PreparedReplayableSource::prepare(mask).await?);
@@ -829,6 +830,9 @@ where
         request_id: meta.request_id().map(Box::<str>::from),
         body: BodyPreview::from_bytes(frame.data.as_bytes(), false),
     })?;
+    if value.get("error").is_some_and(|error| !error.is_null()) {
+        return Err(StreamError::from_body(meta.request_id(), frame.data.as_bytes()).into());
+    }
     if let Some(event_name) = frame.event.as_deref()
         && value.get("type").and_then(Value::as_str) != Some(event_name)
     {

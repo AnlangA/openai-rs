@@ -1583,11 +1583,33 @@ impl<'de> Deserialize<'de> for ChatAllowedTool {
         };
 
         match object.get("type").and_then(Value::as_str) {
-            Some("function" | "custom") => serde_json::from_value(value)
-                .map(Self::Reference)
-                .map_err(D::Error::custom),
+            Some("function" | "custom") if is_name_only_allowed_tool(object) => {
+                serde_json::from_value(value)
+                    .map(Self::Reference)
+                    .map_err(D::Error::custom)
+            }
             _ => Ok(Self::Arbitrary(object.clone())),
         }
+    }
+}
+
+fn is_name_only_allowed_tool(object: &Map<String, Value>) -> bool {
+    let Some(kind) = object.get("type").and_then(Value::as_str) else {
+        return false;
+    };
+    let nested_key = match kind {
+        "function" => "function",
+        "custom" => "custom",
+        _ => return false,
+    };
+    if object.keys().any(|key| key != "type" && key != nested_key) {
+        return false;
+    }
+    match object.get(nested_key) {
+        Some(Value::Object(nested)) => {
+            nested.len() == 1 && nested.get("name").is_some_and(Value::is_string)
+        }
+        _ => false,
     }
 }
 
@@ -3871,13 +3893,31 @@ mod tests {
         assert!(matches!(allowed, ChatAllowedTool::Arbitrary(_)));
         assert_eq!(ok(serde_json::to_value(allowed)), arbitrary_allowed);
 
-        assert!(
-            serde_json::from_value::<ChatAllowedTool>(json!({
-                "type": "function",
-                "function": {}
-            }))
-            .is_err()
-        );
+        let empty_function = json!({"type": "function", "function": {}});
+        let allowed = ok(serde_json::from_value::<ChatAllowedTool>(
+            empty_function.clone(),
+        ));
+        assert!(matches!(allowed, ChatAllowedTool::Arbitrary(_)));
+        assert_eq!(ok(serde_json::to_value(allowed)), empty_function);
+
+        let named = json!({"type": "function", "function": {"name": "lookup"}});
+        let allowed = ok(serde_json::from_value::<ChatAllowedTool>(named.clone()));
+        assert!(matches!(allowed, ChatAllowedTool::Reference(_)));
+        assert_eq!(ok(serde_json::to_value(allowed)), named);
+
+        let full_definition = json!({
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "city lookup",
+                "parameters": {"type": "object"}
+            }
+        });
+        let allowed = ok(serde_json::from_value::<ChatAllowedTool>(
+            full_definition.clone(),
+        ));
+        assert!(matches!(allowed, ChatAllowedTool::Arbitrary(_)));
+        assert_eq!(ok(serde_json::to_value(allowed)), full_definition);
     }
 
     #[test]

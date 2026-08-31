@@ -149,9 +149,20 @@ impl fmt::Debug for ChatCompletionEventStream {
 }
 
 fn decode_chunk(data: &str, meta: &ResponseMeta) -> Result<ChatCompletionChunk, Error> {
-    deserialize_json(data.as_bytes()).map_err(|error| Error::Decode {
-        source: error.source,
-        path: error.path,
+    let value: serde_json::Value =
+        deserialize_json(data.as_bytes()).map_err(|error| Error::Decode {
+            source: error.source,
+            path: error.path,
+            meta_status: meta.status(),
+            request_id: meta.request_id().map(Box::<str>::from),
+            body: BodyPreview::from_bytes(data.as_bytes(), false),
+        })?;
+    if value.get("error").is_some_and(|error| !error.is_null()) {
+        return Err(StreamError::from_body(meta.request_id(), data.as_bytes()).into());
+    }
+    serde_json::from_value(value).map_err(|source| Error::Decode {
+        source,
+        path: None,
         meta_status: meta.status(),
         request_id: meta.request_id().map(Box::<str>::from),
         body: BodyPreview::from_bytes(data.as_bytes(), false),

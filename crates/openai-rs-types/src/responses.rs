@@ -5231,7 +5231,7 @@ struct CreateResponseBody {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input: Omittable<ResponseInput>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    instructions: Omittable<Nullable<ResponseInstructions>>,
+    instructions: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     background: Omittable<Nullable<bool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -5492,7 +5492,7 @@ macro_rules! impl_create_response_builders {
 
             /// Sets instructions.
             #[must_use]
-            pub fn instructions(mut self, instructions: impl Into<ResponseInstructions>) -> Self {
+            pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
                 self.body.instructions = Omittable::Value(Nullable::Value(instructions.into()));
                 self
             }
@@ -7013,7 +7013,7 @@ pub struct CompactResponseRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input: Omittable<Nullable<ResponseInput>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    instructions: Omittable<Nullable<ResponseInstructions>>,
+    instructions: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     previous_response_id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -7091,7 +7091,7 @@ impl CompactResponseRequest {
 
     /// Sets compaction instructions.
     #[must_use]
-    pub fn instructions(mut self, instructions: impl Into<ResponseInstructions>) -> Self {
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
         self.instructions = Omittable::Value(Nullable::Value(instructions.into()));
         self
     }
@@ -7393,7 +7393,7 @@ pub struct CountInputTokensRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input: Omittable<Nullable<ResponseInput>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    instructions: Omittable<Nullable<ResponseInstructions>>,
+    instructions: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     model: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -7443,7 +7443,7 @@ impl CountInputTokensRequest {
 
     /// Sets instructions.
     #[must_use]
-    pub fn instructions(mut self, instructions: impl Into<ResponseInstructions>) -> Self {
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
         self.instructions = Omittable::Value(Nullable::Value(instructions.into()));
         self
     }
@@ -17705,6 +17705,24 @@ mod tests {
         assert_eq!(value["previous_response_id"], "resp_1");
         assert_eq!(value["instructions"], "Stay concise.");
         assert_eq!(value["tools"][0]["name"], "lookup");
+
+        assert!(
+            serde_json::from_value::<CreateResponseRequest>(json!({
+                "model": "gpt-5.6",
+                "input": "hello",
+                "instructions": [{"type": "message", "role": "developer", "content": "no"}]
+            }))
+            .is_err(),
+            "create instructions are string or null, not item arrays"
+        );
+        assert!(
+            serde_json::from_value::<CompactResponseRequest>(json!({
+                "model": "gpt-5.6",
+                "instructions": [{"type": "message", "role": "developer", "content": "no"}]
+            }))
+            .is_err(),
+            "compact instructions are string or null, not item arrays"
+        );
     }
 
     #[test]

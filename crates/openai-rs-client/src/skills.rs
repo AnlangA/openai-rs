@@ -60,6 +60,7 @@ impl Skills {
         let form = prepare_skill_form(
             request.files(),
             request.relative_paths(),
+            request.files_field_name(),
             Omittable::Omitted,
         )
         .await?;
@@ -186,8 +187,13 @@ impl SkillVersions {
         request: CreateSkillVersionRequest,
     ) -> Result<ApiResponse<SkillVersionResource>, Error> {
         let path = skill_versions_path(skill_id)?;
-        let form =
-            prepare_skill_form(request.files(), request.relative_paths(), request.default).await?;
+        let form = prepare_skill_form(
+            request.files(),
+            request.relative_paths(),
+            request.files_field_name(),
+            request.default,
+        )
+        .await?;
         let response = self
             .client
             .multipart_transport()
@@ -288,6 +294,7 @@ impl SkillVersions {
 async fn prepare_skill_form(
     files: &[openai_rs_types::files::ReplayableMultipartSource],
     relative_paths: Option<&[SafeRelativeSkillPath]>,
+    field: &'static str,
     default: Omittable<bool>,
 ) -> Result<ReplayableMultipartForm, Error> {
     if files.is_empty() || files.len() > 500 {
@@ -300,7 +307,6 @@ async fn prepare_skill_form(
             "Skill directory path count does not match source count".into(),
         ));
     }
-    let field = if files.len() == 1 { "files" } else { "files[]" };
     let mut form = ReplayableMultipartForm::new();
     if let Omittable::Value(default) = default {
         form = form.text("default", default.to_string());
@@ -722,7 +728,7 @@ mod tests {
 
         let captures = captures.lock().expect("capture lock");
         let body = String::from_utf8_lossy(&captures[0].body);
-        assert!(body.contains("name=\"files\""));
+        assert!(body.contains("name=\"files[]\""));
         assert!(body.contains("filename=\"agents/research/SKILL.md\""));
         assert!(body.contains("NESTED"));
     }

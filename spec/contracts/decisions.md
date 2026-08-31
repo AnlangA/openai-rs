@@ -3000,3 +3000,12 @@ until a decision is recorded here and its fixtures pass.
 - Decision: output resources do not require `request_id`. If present it is retained in `ExtraFields`. Input DTOs continue to send only `approval_request_id`.
 - Impact: override `OVR-0007`.
 - Tests: output fixture without `request_id`; extra-field preservation when present.
+
+## D0112 — Create, compact, and token-count instructions are string or null
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CreateResponseBody.instructions`, `CompactResponseRequest.instructions`, `CountInputTokensRequest.instructions`
+- Sources: pinned `CreateResponse` / `CompactResponseMethodPublicBody` / `TokenCountsBody` type `instructions` as `string | null`. `Response.instructions` remains `string | InputItem[] | null`.
+- Decision: request DTOs send/accept only `Omittable<Nullable<String>>`. Resource `Response.instructions` keeps `ResponseInstructions`.
+- Tests: create/compact reject instruction item arrays; string/null round-trip.

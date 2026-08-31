@@ -578,6 +578,35 @@ mod tests {
         assert_eq!(captured.path_and_query, "/v1/chat/completions");
     }
 
+    #[tokio::test]
+    async fn create_stream_surfaces_in_band_data_error() {
+        let body = concat!(
+            "data: {\"error\":{\"message\":\"bad Bearer private\",\"code\":\"stream_failed\"}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (client, _captured) = serve_once("text/event-stream", body).await;
+        let request = ChatCompletionRequest::new("test-model", ChatUserMessage::text("hello"))
+            .into_streaming();
+        let mut stream = client
+            .chat_completions()
+            .create_stream(request)
+            .await
+            .expect("Chat stream handshake");
+        let error = stream
+            .next()
+            .await
+            .expect("remote error item")
+            .expect_err("in-band data error");
+        match error {
+            Error::Stream(error) => {
+                assert_eq!(error.code(), Some("stream_failed"));
+                assert!(!error.message().contains("private"));
+            }
+            other => panic!("expected stream error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
     #[test]
     fn request_typestate_is_not_raw_json() {
         let request = ChatCompletionRequest::new("test-model", ChatUserMessage::text("hello"));

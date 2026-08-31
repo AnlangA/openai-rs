@@ -425,6 +425,8 @@ impl SkillUploadFileCountError {
 pub struct CreateSkillRequest {
     files: Vec<ReplayableMultipartSource>,
     relative_paths: Option<Vec<SafeRelativeSkillPath>>,
+    /// Official SDK sends `files` for a scalar source and `files[]` for a list.
+    files_array_field: bool,
 }
 
 impl CreateSkillRequest {
@@ -434,6 +436,7 @@ impl CreateSkillRequest {
         Self {
             files: vec![file],
             relative_paths: None,
+            files_array_field: false,
         }
     }
 
@@ -448,6 +451,7 @@ impl CreateSkillRequest {
         Ok(Self {
             files,
             relative_paths: None,
+            files_array_field: true,
         })
     }
 
@@ -459,6 +463,7 @@ impl CreateSkillRequest {
         Ok(Self {
             files,
             relative_paths: Some(relative_paths),
+            files_array_field: true,
         })
     }
 
@@ -472,6 +477,16 @@ impl CreateSkillRequest {
     #[must_use]
     pub fn relative_paths(&self) -> Option<&[SafeRelativeSkillPath]> {
         self.relative_paths.as_deref()
+    }
+
+    /// Official multipart field name: `files` for a scalar, `files[]` for a list.
+    #[must_use]
+    pub fn files_field_name(&self) -> &'static str {
+        if self.files_array_field {
+            "files[]"
+        } else {
+            "files"
+        }
     }
 }
 
@@ -489,6 +504,8 @@ impl fmt::Debug for CreateSkillRequest {
 pub struct CreateSkillVersionRequest {
     files: Vec<ReplayableMultipartSource>,
     relative_paths: Option<Vec<SafeRelativeSkillPath>>,
+    /// Official SDK sends `files` for a scalar source and `files[]` for a list.
+    files_array_field: bool,
     /// Whether this version becomes the default.
     pub default: Omittable<bool>,
 }
@@ -500,6 +517,7 @@ impl CreateSkillVersionRequest {
         Self {
             files: vec![file],
             relative_paths: None,
+            files_array_field: false,
             default: Omittable::Omitted,
         }
     }
@@ -515,6 +533,7 @@ impl CreateSkillVersionRequest {
         Ok(Self {
             files,
             relative_paths: None,
+            files_array_field: true,
             default: Omittable::Omitted,
         })
     }
@@ -527,6 +546,7 @@ impl CreateSkillVersionRequest {
         Ok(Self {
             files,
             relative_paths: Some(relative_paths),
+            files_array_field: true,
             default: Omittable::Omitted,
         })
     }
@@ -548,6 +568,16 @@ impl CreateSkillVersionRequest {
     #[must_use]
     pub fn relative_paths(&self) -> Option<&[SafeRelativeSkillPath]> {
         self.relative_paths.as_deref()
+    }
+
+    /// Official multipart field name: `files` for a scalar, `files[]` for a list.
+    #[must_use]
+    pub fn files_field_name(&self) -> &'static str {
+        if self.files_array_field {
+            "files[]"
+        } else {
+            "files"
+        }
     }
 }
 
@@ -703,6 +733,15 @@ mod tests {
             source(b"secret-skill-b"),
         ]));
         assert_eq!(request.files().len(), 2);
+        assert_eq!(request.files_field_name(), "files[]");
+        assert_eq!(
+            CreateSkillRequest::new(source(b"zip")).files_field_name(),
+            "files"
+        );
+        assert_eq!(
+            ok(CreateSkillRequest::from_files([source(b"one")])).files_field_name(),
+            "files[]"
+        );
         let debug = format!("{request:?}");
         assert!(!debug.contains("secret-skill"));
 
