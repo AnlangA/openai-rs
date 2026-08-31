@@ -27,7 +27,9 @@ use url::{Host, Url};
 use zeroize::Zeroizing;
 
 use crate::operation::RetryClass;
-use crate::{ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy, TlsBackend};
+use crate::{
+    ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy, TlsBackend, trace,
+};
 
 const DEFAULT_ADMIN_BASE_URL: &str = "https://api.openai.com/v1/";
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -2203,6 +2205,19 @@ impl<O: AdminOperation> fmt::Debug for AdminRequest<O> {
 }
 
 impl AdminClient {
+    #[tracing::instrument(
+        level = "debug",
+        name = "openai.http_request",
+        skip_all,
+        fields(
+            operation.id = O::ID,
+            http.request.method = %O::METHOD,
+            http.route = O::ROUTE,
+            http.response.status_code = tracing::field::Empty,
+            openai.request_id = tracing::field::Empty,
+            retry.count = tracing::field::Empty,
+        )
+    )]
     async fn send<O: AdminOperation>(
         &self,
         request: AdminRequest<O>,
@@ -2259,7 +2274,11 @@ impl AdminClient {
                 .request_timeout
                 .checked_sub(started.elapsed())
                 .filter(|remaining| !remaining.is_zero())
-                .ok_or(Error::DeadlineExceeded)?;
+                .ok_or_else(|| {
+                    trace::emit_deadline_exceeded();
+                    trace::record_retry_count(retries);
+                    Error::DeadlineExceeded
+                })?;
             let mut builder = self
                 .inner
                 .http
@@ -2283,16 +2302,22 @@ impl AdminClient {
                 {
                     let delay = local_retry_delay(retries);
                     if !can_wait(started, delay, self.inner.request_timeout) {
+                        trace::record_retry_count(retries);
                         return Err(Error::from_reqwest(error));
                     }
                     retries += 1;
+                    trace::emit_retry(retries, delay, trace::RetryReason::from_reqwest(&error));
                     tokio::time::sleep(delay).await;
                     continue;
                 }
-                Err(error) => return Err(Error::from_reqwest(error)),
+                Err(error) => {
+                    trace::record_retry_count(retries);
+                    return Err(Error::from_reqwest(error));
+                }
             };
 
             if O::SUCCESS_STATUSES.contains(&response.status()) {
+                trace::record_http_outcome(retries, &response);
                 break response;
             }
 
@@ -2309,11 +2334,13 @@ impl AdminClient {
                 };
                 if can_wait(started, delay, self.inner.request_timeout) {
                     retries += 1;
+                    trace::emit_retry(retries, delay, trace::RetryReason::HttpStatus);
                     drop(response);
                     tokio::time::sleep(delay).await;
                     continue;
                 }
             }
+            trace::record_http_outcome(retries, &response);
             return Err(self.error_from_response(response).await);
         };
         let meta = ResponseMeta::from_headers(response.status(), response.headers());

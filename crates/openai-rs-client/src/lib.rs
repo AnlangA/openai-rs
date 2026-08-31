@@ -2,6 +2,12 @@
 //!
 //! [`Client`] deliberately accepts only an [`ApiKey`]. ChatGPT/Codex credentials
 //! live in the separate `openai-rs-codex` crate and cannot cross this boundary.
+//!
+//! HTTP send paths emit `tracing` spans named `openai.http_request` at debug
+//! level, and warn events when a request is retried. Install a subscriber in
+//! the application to collect them. Spans record the operation id, method,
+//! route template, status, and `x-request-id` only; credentials, URLs, and
+//! request bodies are never recorded.
 
 #[cfg(feature = "admin")]
 mod admin;
@@ -43,6 +49,7 @@ mod responses_websocket;
 mod retry;
 mod skills;
 pub mod sse;
+mod trace;
 pub(crate) mod transport;
 mod vector_stores;
 #[cfg(feature = "custom-voice")]

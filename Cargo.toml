@@ -48,6 +48,7 @@ sha2 = "0.10.9"
 static_assertions = "1.1.0"
 thiserror = "2.0.16"
 tokio = { version = "1.47.1", features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1.44"
 toml = "0.8.20"
 tokio-stream = "0.1.17"
 tower = "0.5.2"

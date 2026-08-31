@@ -24,9 +24,13 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::io::ReaderStream;
 use url::Url;
 
+use tracing::Instrument;
+
 use crate::transport::{PathSegment, deserialize_json};
 use crate::{
-    ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy, auth::AuthProvider,
+    ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy,
+    auth::AuthProvider,
+    trace::{self, RetryReason},
 };
 
 const JSON_MIME: &str = "application/json";
@@ -492,77 +496,95 @@ impl MultipartTransport {
         accept: &'static str,
     ) -> Result<reqwest::Response, Error> {
         let url = self.operation_url(path)?;
-        let started = Instant::now();
-        let mut retries = 0;
-        let mut auth_refreshed = false;
-        loop {
-            let remaining = remaining_time(started, self.overall_timeout)?;
-            let form = prepared.build_form().await?;
-            let authorization = self.auth.authorization().await?;
-            let request = self
-                .request(
-                    reqwest::Method::POST,
-                    url.clone(),
-                    accept,
-                    authorization.header.clone(),
-                )
-                .timeout(remaining)
-                .multipart(form)
-                .build()
-                .map_err(Error::from_reqwest)?;
-            self.ensure_same_origin(request.url())?;
-            let response = match self.http.execute(request).await {
-                Ok(response) => response,
-                Err(error)
-                    if self.retry_policy.retry_replayable_mutations
-                        && retries < self.retry_policy.max_retries
-                        && (error.is_connect() || error.is_timeout()) =>
-                {
-                    let delay = local_retry_delay(retries);
-                    if !can_wait(started, delay, self.overall_timeout) {
+        let route = trace::route_template(path);
+        let span = trace::http_request_span("multipart.replayable_form", "POST", &route);
+        async move {
+            let started = Instant::now();
+            let mut retries = 0;
+            let mut auth_refreshed = false;
+            loop {
+                let remaining =
+                    remaining_time(started, self.overall_timeout).inspect_err(|_| {
+                        trace::record_retry_count(retries);
+                    })?;
+                let form = prepared.build_form().await?;
+                let authorization = self.auth.authorization().await?;
+                let request = self
+                    .request(
+                        reqwest::Method::POST,
+                        url.clone(),
+                        accept,
+                        authorization.header.clone(),
+                    )
+                    .timeout(remaining)
+                    .multipart(form)
+                    .build()
+                    .map_err(Error::from_reqwest)?;
+                self.ensure_same_origin(request.url())?;
+                let response = match self.http.execute(request).await {
+                    Ok(response) => response,
+                    Err(error)
+                        if self.retry_policy.retry_replayable_mutations
+                            && retries < self.retry_policy.max_retries
+                            && (error.is_connect() || error.is_timeout()) =>
+                    {
+                        let delay = local_retry_delay(retries);
+                        if !can_wait(started, delay, self.overall_timeout) {
+                            trace::record_retry_count(retries);
+                            return Err(Error::from_reqwest(error));
+                        }
+                        retries += 1;
+                        trace::emit_retry(retries, delay, RetryReason::from_reqwest(&error));
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    Err(error) => {
+                        trace::record_retry_count(retries);
                         return Err(Error::from_reqwest(error));
                     }
-                    retries += 1;
-                    tokio::time::sleep(delay).await;
-                    continue;
-                }
-                Err(error) => return Err(Error::from_reqwest(error)),
-            };
-            if response.status() == StatusCode::UNAUTHORIZED
-                && authorization.generation.is_some()
-                && !auth_refreshed
-            {
-                let _ = self
-                    .auth
-                    .invalidate_if_generation(authorization.generation)
-                    .await;
-                auth_refreshed = true;
-                drop(response);
-                continue;
-            }
-            if is_success_status(response.status()) {
-                return Ok(response);
-            }
-            if self.retry_policy.retry_replayable_mutations
-                && retries < self.retry_policy.max_retries
-                && should_retry_response(&response)
-            {
-                let delay = retry_delay(
-                    response.headers(),
-                    retries,
-                    self.retry_policy.max_server_delay,
-                );
-                if let Some(delay) = delay
-                    && can_wait(started, delay, self.overall_timeout)
+                };
+                if response.status() == StatusCode::UNAUTHORIZED
+                    && authorization.generation.is_some()
+                    && !auth_refreshed
                 {
-                    retries += 1;
+                    let _ = self
+                        .auth
+                        .invalidate_if_generation(authorization.generation)
+                        .await;
+                    auth_refreshed = true;
+                    trace::emit_auth_refresh();
                     drop(response);
-                    tokio::time::sleep(delay).await;
                     continue;
                 }
+                if is_success_status(response.status()) {
+                    trace::record_http_outcome(retries, &response);
+                    return Ok(response);
+                }
+                if self.retry_policy.retry_replayable_mutations
+                    && retries < self.retry_policy.max_retries
+                    && should_retry_response(&response)
+                {
+                    let delay = retry_delay(
+                        response.headers(),
+                        retries,
+                        self.retry_policy.max_server_delay,
+                    );
+                    if let Some(delay) = delay
+                        && can_wait(started, delay, self.overall_timeout)
+                    {
+                        retries += 1;
+                        trace::emit_retry(retries, delay, RetryReason::HttpStatus);
+                        drop(response);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                }
+                trace::record_http_outcome(retries, &response);
+                return self.api_error(response).await;
             }
-            return self.api_error(response).await;
         }
+        .instrument(span)
+        .await
     }
 
     pub(crate) async fn send_one_shot_form(
@@ -572,35 +594,43 @@ impl MultipartTransport {
         accept: &'static str,
     ) -> Result<reqwest::Response, Error> {
         let url = self.operation_url(path)?;
-        let authorization = self.auth.authorization().await?;
-        let request = self
-            .request(
-                reqwest::Method::POST,
-                url,
-                accept,
-                authorization.header.clone(),
-            )
-            .timeout(self.overall_timeout)
-            .multipart(form)
-            .build()
-            .map_err(Error::from_reqwest)?;
-        self.ensure_same_origin(request.url())?;
-        let response = self
-            .http
-            .execute(request)
-            .await
-            .map_err(Error::from_reqwest)?;
-        if response.status() == StatusCode::UNAUTHORIZED {
-            let _ = self
-                .auth
-                .invalidate_if_generation(authorization.generation)
-                .await;
+        let route = trace::route_template(path);
+        let span = trace::http_request_span("multipart.one_shot_form", "POST", &route);
+        async move {
+            let authorization = self.auth.authorization().await?;
+            let request = self
+                .request(
+                    reqwest::Method::POST,
+                    url,
+                    accept,
+                    authorization.header.clone(),
+                )
+                .timeout(self.overall_timeout)
+                .multipart(form)
+                .build()
+                .map_err(Error::from_reqwest)?;
+            self.ensure_same_origin(request.url())?;
+            let response = self
+                .http
+                .execute(request)
+                .await
+                .map_err(Error::from_reqwest)?;
+            if response.status() == StatusCode::UNAUTHORIZED {
+                let _ = self
+                    .auth
+                    .invalidate_if_generation(authorization.generation)
+                    .await;
+                trace::emit_auth_refresh();
+            }
+            trace::record_http_outcome(0, &response);
+            if is_success_status(response.status()) {
+                Ok(response)
+            } else {
+                self.api_error(response).await
+            }
         }
-        if is_success_status(response.status()) {
-            Ok(response)
-        } else {
-            self.api_error(response).await
-        }
+        .instrument(span)
+        .await
     }
 
     /// Sends a replayable JSON POST while allowing an operation-specific
@@ -616,77 +646,95 @@ impl MultipartTransport {
     {
         let url = self.operation_url(path)?;
         let encoded = serde_json::to_vec(body).map_err(Error::Encode)?;
-        let started = Instant::now();
-        let mut retries = 0;
-        let mut auth_refreshed = false;
-        loop {
-            let remaining = remaining_time(started, self.overall_timeout)?;
-            let authorization = self.auth.authorization().await?;
-            let request = self
-                .request(
-                    reqwest::Method::POST,
-                    url.clone(),
-                    accept,
-                    authorization.header.clone(),
-                )
-                .timeout(remaining)
-                .header(header::CONTENT_TYPE, JSON_MIME)
-                .body(encoded.clone())
-                .build()
-                .map_err(Error::from_reqwest)?;
-            self.ensure_same_origin(request.url())?;
-            let response = match self.http.execute(request).await {
-                Ok(response) => response,
-                Err(error)
-                    if self.retry_policy.retry_replayable_mutations
-                        && retries < self.retry_policy.max_retries
-                        && (error.is_connect() || error.is_timeout()) =>
-                {
-                    let delay = local_retry_delay(retries);
-                    if !can_wait(started, delay, self.overall_timeout) {
+        let route = trace::route_template(path);
+        let span = trace::http_request_span("multipart.replayable_json", "POST", &route);
+        async move {
+            let started = Instant::now();
+            let mut retries = 0;
+            let mut auth_refreshed = false;
+            loop {
+                let remaining =
+                    remaining_time(started, self.overall_timeout).inspect_err(|_| {
+                        trace::record_retry_count(retries);
+                    })?;
+                let authorization = self.auth.authorization().await?;
+                let request = self
+                    .request(
+                        reqwest::Method::POST,
+                        url.clone(),
+                        accept,
+                        authorization.header.clone(),
+                    )
+                    .timeout(remaining)
+                    .header(header::CONTENT_TYPE, JSON_MIME)
+                    .body(encoded.clone())
+                    .build()
+                    .map_err(Error::from_reqwest)?;
+                self.ensure_same_origin(request.url())?;
+                let response = match self.http.execute(request).await {
+                    Ok(response) => response,
+                    Err(error)
+                        if self.retry_policy.retry_replayable_mutations
+                            && retries < self.retry_policy.max_retries
+                            && (error.is_connect() || error.is_timeout()) =>
+                    {
+                        let delay = local_retry_delay(retries);
+                        if !can_wait(started, delay, self.overall_timeout) {
+                            trace::record_retry_count(retries);
+                            return Err(Error::from_reqwest(error));
+                        }
+                        retries += 1;
+                        trace::emit_retry(retries, delay, RetryReason::from_reqwest(&error));
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    Err(error) => {
+                        trace::record_retry_count(retries);
                         return Err(Error::from_reqwest(error));
                     }
-                    retries += 1;
-                    tokio::time::sleep(delay).await;
-                    continue;
-                }
-                Err(error) => return Err(Error::from_reqwest(error)),
-            };
-            if response.status() == StatusCode::UNAUTHORIZED
-                && authorization.generation.is_some()
-                && !auth_refreshed
-            {
-                let _ = self
-                    .auth
-                    .invalidate_if_generation(authorization.generation)
-                    .await;
-                auth_refreshed = true;
-                drop(response);
-                continue;
-            }
-            if is_success_status(response.status()) {
-                return Ok(response);
-            }
-            if self.retry_policy.retry_replayable_mutations
-                && retries < self.retry_policy.max_retries
-                && should_retry_response(&response)
-            {
-                let delay = retry_delay(
-                    response.headers(),
-                    retries,
-                    self.retry_policy.max_server_delay,
-                );
-                if let Some(delay) = delay
-                    && can_wait(started, delay, self.overall_timeout)
+                };
+                if response.status() == StatusCode::UNAUTHORIZED
+                    && authorization.generation.is_some()
+                    && !auth_refreshed
                 {
-                    retries += 1;
+                    let _ = self
+                        .auth
+                        .invalidate_if_generation(authorization.generation)
+                        .await;
+                    auth_refreshed = true;
+                    trace::emit_auth_refresh();
                     drop(response);
-                    tokio::time::sleep(delay).await;
                     continue;
                 }
+                if is_success_status(response.status()) {
+                    trace::record_http_outcome(retries, &response);
+                    return Ok(response);
+                }
+                if self.retry_policy.retry_replayable_mutations
+                    && retries < self.retry_policy.max_retries
+                    && should_retry_response(&response)
+                {
+                    let delay = retry_delay(
+                        response.headers(),
+                        retries,
+                        self.retry_policy.max_server_delay,
+                    );
+                    if let Some(delay) = delay
+                        && can_wait(started, delay, self.overall_timeout)
+                    {
+                        retries += 1;
+                        trace::emit_retry(retries, delay, RetryReason::HttpStatus);
+                        drop(response);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                }
+                trace::record_http_outcome(retries, &response);
+                return self.api_error(response).await;
             }
-            return self.api_error(response).await;
         }
+        .instrument(span)
+        .await
     }
 
     async fn send_download(
@@ -694,71 +742,88 @@ impl MultipartTransport {
         url: Url,
         accept: &'static str,
     ) -> Result<reqwest::Response, Error> {
-        let started = Instant::now();
-        let mut retries = 0;
-        let mut auth_refreshed = false;
-        loop {
-            let remaining = remaining_time(started, self.overall_timeout)?;
-            let authorization = self.auth.authorization().await?;
-            let request = self
-                .request(
-                    reqwest::Method::GET,
-                    url.clone(),
-                    accept,
-                    authorization.header.clone(),
-                )
-                .timeout(remaining)
-                .build()
-                .map_err(Error::from_reqwest)?;
-            self.ensure_same_origin(request.url())?;
-            let response = match self.http.execute(request).await {
-                Ok(response) => response,
-                Err(error)
-                    if retries < self.retry_policy.max_retries
-                        && (error.is_connect() || error.is_timeout()) =>
-                {
-                    let delay = local_retry_delay(retries);
-                    if !can_wait(started, delay, self.overall_timeout) {
+        let span = trace::http_request_span("multipart.download", "GET", "/download");
+        async move {
+            let started = Instant::now();
+            let mut retries = 0;
+            let mut auth_refreshed = false;
+            loop {
+                let remaining =
+                    remaining_time(started, self.overall_timeout).inspect_err(|_| {
+                        trace::record_retry_count(retries);
+                    })?;
+                let authorization = self.auth.authorization().await?;
+                let request = self
+                    .request(
+                        reqwest::Method::GET,
+                        url.clone(),
+                        accept,
+                        authorization.header.clone(),
+                    )
+                    .timeout(remaining)
+                    .build()
+                    .map_err(Error::from_reqwest)?;
+                self.ensure_same_origin(request.url())?;
+                let response = match self.http.execute(request).await {
+                    Ok(response) => response,
+                    Err(error)
+                        if retries < self.retry_policy.max_retries
+                            && (error.is_connect() || error.is_timeout()) =>
+                    {
+                        let delay = local_retry_delay(retries);
+                        if !can_wait(started, delay, self.overall_timeout) {
+                            trace::record_retry_count(retries);
+                            return Err(Error::from_reqwest(error));
+                        }
+                        retries += 1;
+                        trace::emit_retry(retries, delay, RetryReason::from_reqwest(&error));
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    Err(error) => {
+                        trace::record_retry_count(retries);
                         return Err(Error::from_reqwest(error));
                     }
-                    retries += 1;
-                    tokio::time::sleep(delay).await;
-                    continue;
-                }
-                Err(error) => return Err(Error::from_reqwest(error)),
-            };
-            if response.status() == StatusCode::UNAUTHORIZED
-                && authorization.generation.is_some()
-                && !auth_refreshed
-            {
-                let _ = self
-                    .auth
-                    .invalidate_if_generation(authorization.generation)
-                    .await;
-                auth_refreshed = true;
-                drop(response);
-                continue;
-            }
-            if is_success_status(response.status()) {
-                return Ok(response);
-            }
-            if retries < self.retry_policy.max_retries && should_retry_response(&response) {
-                let delay = retry_delay(
-                    response.headers(),
-                    retries,
-                    self.retry_policy.max_server_delay,
-                );
-                if let Some(delay) = delay
-                    && can_wait(started, delay, self.overall_timeout)
+                };
+                if response.status() == StatusCode::UNAUTHORIZED
+                    && authorization.generation.is_some()
+                    && !auth_refreshed
                 {
-                    retries += 1;
+                    let _ = self
+                        .auth
+                        .invalidate_if_generation(authorization.generation)
+                        .await;
+                    auth_refreshed = true;
+                    trace::emit_auth_refresh();
                     drop(response);
-                    tokio::time::sleep(delay).await;
                     continue;
                 }
+                if is_success_status(response.status()) {
+                    trace::record_http_outcome(retries, &response);
+                    return Ok(response);
+                }
+                if retries < self.retry_policy.max_retries && should_retry_response(&response) {
+                    let delay = retry_delay(
+                        response.headers(),
+                        retries,
+                        self.retry_policy.max_server_delay,
+                    );
+                    if let Some(delay) = delay
+                        && can_wait(started, delay, self.overall_timeout)
+                    {
+                        retries += 1;
+                        trace::emit_retry(retries, delay, RetryReason::HttpStatus);
+                        drop(response);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                }
+                trace::record_http_outcome(retries, &response);
+                return self.api_error(response).await;
             }
-            return self.api_error(response).await;
         }
+        .instrument(span)
+        .await
     }
 
     fn request(
@@ -1199,7 +1264,10 @@ fn remaining_time(started: Instant, overall_timeout: Duration) -> Result<Duratio
     overall_timeout
         .checked_sub(started.elapsed())
         .filter(|remaining| !remaining.is_zero())
-        .ok_or(Error::DeadlineExceeded)
+        .ok_or_else(|| {
+            crate::trace::emit_deadline_exceeded();
+            Error::DeadlineExceeded
+        })
 }
 
 fn should_retry_response(response: &reqwest::Response) -> bool {

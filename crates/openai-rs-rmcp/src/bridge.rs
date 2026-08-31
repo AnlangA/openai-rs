@@ -1,5 +1,6 @@
 use openai_rs_types::responses::{FunctionCall, FunctionCallOutput, FunctionTool};
 use rmcp::model::JsonObject;
+use tracing::Instrument;
 
 use crate::{
     BridgeError, CatalogPolicy, ExecutionControl, ResponsesToolExecutor, ResultEncoding,
@@ -99,6 +100,7 @@ where
     ) -> Result<Self, BridgeError> {
         let tools = executor.list_tools(control).await?;
         let catalog = ToolCatalog::build(tools, policy)?;
+        tracing::debug!(tool_count = catalog.len(), "discovered RMCP tools");
         Ok(Self::new(executor, catalog))
     }
 
@@ -128,26 +130,39 @@ where
         arguments: &str,
         control: &ExecutionControl,
     ) -> Result<DispatchOutcome, BridgeError> {
-        let arguments: JsonObject = parse_function_arguments(arguments)?;
-        let binding =
-            self.catalog
-                .resolve(openai_name)
-                .ok_or_else(|| BridgeError::UnknownFunction {
-                    name: openai_name.to_owned(),
-                })?;
-        let mcp_name = binding.mcp_name().to_owned();
-        let result = self
-            .executor
-            .call_tool(&mcp_name, arguments, control)
-            .await?;
-        let encoded = encode_tool_result(&result, self.result_encoding)?;
-        let is_error = encoded.is_error();
-        let output = FunctionCallOutput::new(call_id, encoded.into_output());
-        Ok(if is_error {
-            DispatchOutcome::ToolError(output)
-        } else {
-            DispatchOutcome::Success(output)
-        })
+        let span = tracing::debug_span!(
+            "rmcp.tool_dispatch",
+            call_id = call_id,
+            openai_name = openai_name,
+            mcp_name = tracing::field::Empty,
+            is_error = tracing::field::Empty,
+        );
+        async move {
+            let arguments: JsonObject = parse_function_arguments(arguments)?;
+            let binding =
+                self.catalog
+                    .resolve(openai_name)
+                    .ok_or_else(|| BridgeError::UnknownFunction {
+                        name: openai_name.to_owned(),
+                    })?;
+            let mcp_name = binding.mcp_name().to_owned();
+            tracing::Span::current().record("mcp_name", mcp_name.as_str());
+            let result = self
+                .executor
+                .call_tool(&mcp_name, arguments, control)
+                .await?;
+            let encoded = encode_tool_result(&result, self.result_encoding)?;
+            let is_error = encoded.is_error();
+            tracing::Span::current().record("is_error", is_error);
+            let output = FunctionCallOutput::new(call_id, encoded.into_output());
+            Ok(if is_error {
+                DispatchOutcome::ToolError(output)
+            } else {
+                DispatchOutcome::Success(output)
+            })
+        }
+        .instrument(span)
+        .await
     }
 }
 
@@ -247,6 +262,56 @@ mod tests {
             [(name, arguments)]
                 if name == "weather/read" && arguments["city"] == "杭州"
         ));
+    }
+
+    #[tokio::test]
+    async fn dispatch_span_records_mcp_name() {
+        let capture = crate::trace_capture::Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        let executor = FakeExecutor {
+            tools: vec![fake_tool()],
+            calls: Arc::new(Mutex::new(Vec::new())),
+            result: CallToolResult::success(vec![ContentBlock::text("sunny")]),
+        };
+        let bridge = ResponsesToolBridge::discover(
+            executor,
+            CatalogPolicy::default(),
+            &ExecutionControl::default(),
+        )
+        .await
+        .expect("fake catalog must build");
+        let function = bridge
+            .function_tools()
+            .into_iter()
+            .next()
+            .expect("one function");
+        let outcome = bridge
+            .dispatch_parts(
+                "call_1",
+                function.name(),
+                r#"{"city":"x"}"#,
+                &ExecutionControl::default(),
+            )
+            .await
+            .expect("dispatch");
+        assert!(!outcome.is_tool_error());
+        let spans = capture.spans();
+        let span = spans
+            .iter()
+            .find(|span| span.name == "rmcp.tool_dispatch")
+            .cloned()
+            .unwrap_or_else(|| {
+                panic!(
+                    "dispatch span missing; captured {:?}",
+                    spans
+                        .iter()
+                        .map(|span| (span.name.as_str(), span.fields.clone()))
+                        .collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(span.field("mcp_name"), Some("weather/read"));
+        assert_eq!(span.field("call_id"), Some("call_1"));
+        assert!(!capture.contains_text(r#"{"city":"x"}"#));
     }
 
     #[tokio::test]
