@@ -453,6 +453,9 @@ macro_rules! tagged_union {
 }
 
 /// Tagged union that rejects known-but-invalid tags instead of keeping them.
+// Only the `legacy-evals` evals module consumes this macro; gating the
+// definition keeps feature-unified builds of dependent crates warning-free.
+#[cfg(feature = "legacy-evals")]
 macro_rules! tagged_union_reject_known {
     ($(#[$meta:meta])* pub enum $name:ident {
         $($variant:ident($ty:ty) => $tag:literal),+ $(,)?

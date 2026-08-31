@@ -115,7 +115,7 @@ pub use operation::{ApiResponse, RateLimitMetadata, ResponseMeta};
 pub use poll::{PollCancellationToken, PollError, PollOptions};
 #[cfg(feature = "realtime")]
 pub use realtime::{
-    Realtime, RealtimeCallCreated, RealtimeConnectTarget, RealtimeWebSocket,
+    Realtime, RealtimeCallCreated, RealtimeConnectTarget, RealtimeKeepalive, RealtimeWebSocket,
     RealtimeWebSocketConfig,
 };
 pub use response_stream::ResponseEventStream;

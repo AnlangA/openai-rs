@@ -1078,7 +1078,7 @@ impl ConversationMessage {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(responses::StoredInputMessage::new(role, content)
-                    .status(self.status.clone())
+                    .status(responses::MessageStatus::from_raw(self.status.as_str()))
                     .into())
             }
             _ => Err(ConversationItemConversionError::UnsupportedMessageRole {
@@ -2343,7 +2343,7 @@ mod tests {
     fn output_message_converts_to_conversation_and_back_without_json_authorship() {
         let output = responses::OutputMessage::new(
             "msg_1",
-            responses::ResponseItemStatus::Completed,
+            responses::MessageStatus::Completed,
             [responses::OutputText::new("answer")],
         );
         let item = ConversationItem::try_from(responses::ResponseOutputItem::Message(output))

@@ -3634,3 +3634,291 @@ until a decision is recorded here and its fixtures pass.
 - Overrides: none
 - Tests: `realtime_connect_target_is_nameable_through_the_facade`, `admin_checkpoint_permissions_is_nameable_through_the_facade`.
 
+## D0165 — GA compact service_tier uses the pinned five-value ServiceTierEnum
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CompactResponseRequest.service_tier`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`CompactResponseMethodPublicBody.service_tier` → `ServiceTierEnum` = auto/default/fast/flex/priority); openai-node agrees at the same position. Extends D0140, which fixed only the beta side.
+- Decision: new open enum `CompactServiceTier` (wire-identical to `BetaCompactServiceTier`); create-side and `Response` echo keep the seven-value tiers.
+- Reason: reusing the seven-value `ServiceTier` let the GA compact request send pin-external `scale`/`ultrafast`.
+- Impact: `openai-rs-types` Responses compact builder (breaking: setter type narrowed).
+- Overrides: none
+- Tests: `compact_service_tier_pins_the_five_official_values`.
+
+## D0166 — Easy-form input message pins the four-role construction domain
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `InputMessage::new`
+- Sources: pinned `EasyInputMessage.role` enum (user/assistant/system/developer); openai-python `EasyInputMessageParam.role` Literal.
+- Decision: new `EasyInputMessageRole` open enum (plus `InputMessage::assistant()` and `From<StoredInputMessageRole>`); the decode-side field stays the open `MessageRole` per D0137.
+- Reason: the eight-value resource domain let easy-form requests carry roles the pinned request schema rejects.
+- Impact: `openai-rs-types` Responses input construction (breaking: constructor parameter narrowed).
+- Overrides: none
+- Tests: `easy_input_message_role_pins_the_four_official_values`.
+
+## D0167 — computer_screenshot is item-form-only message content
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `EasyInputContent`, `MessageContent`, `FunctionCallOutputContent`, `FunctionCallOutputValue`
+- Sources: pinned `InputMessageContentList`→`InputContent`, `FunctionCallOutputItemParam.output`, and `FunctionAndCustomToolCallOutput` each enumerate exactly three branches (text/image/file); only the item-form `Message.content` includes `ComputerScreenshotContent`. D0045's citation covered the item-form union only.
+- Decision: new three-branch `EasyInputContent` union for easy-form and function-output param paths; item-form keeps the four-branch `InputContent`; the cross-domain `From<Vec<InputContent>>` conversions were removed so the screenshot variant cannot be smuggled onto param paths; out-of-domain tags still decode as `Unknown` losslessly.
+- Reason: the shared param union let requests carry a content branch the pinned request schemas do not define.
+- Impact: `openai-rs-types` Responses param content unions (breaking: variant and conversion removals).
+- Overrides: partially supersedes D0045's scope (its item-form routing stands).
+- Tests: `param_content_unions_exclude_computer_screenshot_outside_item_form`.
+
+## D0168 — Per-host item-status enums narrow the construction domain
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `MessageStatus`, `FunctionCallItemStatus`, `McpToolCallStatus`, `WebSearchToolCallStatus`, `FileSearchToolCallStatus`, `ImageGenToolCallStatus`, `CodeInterpreterToolCallStatus`, and the narrowed constructors (`StoredInputMessage::status`, `OutputMessage::new`, `FunctionCall::new`, item `new`/`with_status` setters)
+- Sources: pinned per-item status enums (`MessageStatus`, `FunctionCallItemStatus`, `MCPToolCallStatus` incl. calling/failed, `WebSearchToolCall.status` incl. searching, `FileSearchToolCall.status`, `ImageGenToolCall.status` incl. generating, `CodeInterpreterToolCall.status` incl. interpreting); openai-python models each item as its own `Literal`.
+- Decision: seven per-host small open enums with `From` into the shared `ResponseItemStatus`; every request-side constructor and status setter takes the host enum (decoded statuses replay through `from_raw`, e.g. the conversation adapter). Response decoding keeps the shared eight-value superset (D0025/D0026/D0028).
+- Reason: the shared union as the construction domain let any item carry statuses its pinned schema rejects, inconsistent with D0115's per-host treatment.
+- Impact: `openai-rs-types` Responses item constructors (breaking: parameter types narrowed); conversation/structured/rmcp call sites adapted.
+- Overrides: none
+- Tests: `per_host_item_status_enums_pin_official_domains`.
+
+## D0169 — Legacy Realtime numeric ranges are opt-in validate; decode stays lossless
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `LegacyRealtimeSpeed`, `LegacyRealtimeTemperature`, `LegacyRealtimeMaxResponseOutputTokens`, `LegacyRealtimeSecretExpiration`, and the two legacy request `validate()` hooks
+- Sources: D0015/D0017/D0153 precedent; only `speed` carries schema-backed min/max (0.25–1.5), the rest are description prose; openai-python/node decode without validation; the GA client-secret request already used the opt-in pattern.
+- Decision: the four leaf types deserialize transparently (the `Limited` arm widens `u16`→`i64` so any JSON integer round-trips); constructors keep rejecting out-of-range values; the new request-level `validate()` hooks re-check values that arrived via Serde.
+- Reason: decode-time rejection of prose-only ranges failed whole official payloads that the schema permits
+- Impact: `openai-rs-types` legacy Realtime (breaking: `Limited(i64)`, `finite() -> Option<i64>`).
+- Overrides: none
+- Tests: `out_of_range_numeric_values_decode_losslessly_and_round_trip`, `request_validate_rejects_decoded_out_of_range_values`.
+
+## D0170 — Legacy session response follows the official flat shape; client_secret is defensive Omittable
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `LegacyRealtimeSessionCreateResponse.client_secret`
+- Sources: the pinned `RealtimeSessionCreateResponse` is a new nested shape without `client_secret` while the pinned *request* requires one — a request/response swap artifact; openai-python (beta) and openai-node both type the response with the required flat `client_secret {value, expires_at}`.
+- Decision: follow the two official SDKs' flat shape, and relax `client_secret` to `Omittable` (missing-key tolerant) so the pinned nested shape would also decode (its undeclared fields land in `ExtraFields`); the accessor returns the presence state.
+- Reason: the required field was the only hard failure point against the artifact shape; defensive widening costs nothing on the baseline shape.
+- Impact: `openai-rs-types` legacy Realtime (breaking: accessor returns `&Omittable<...>`).
+- Overrides: none
+- Tests: `session_response_without_client_secret_decodes_new_nested_shape`, updated `response_secret_debug_is_redacted_and_json_round_trips`.
+
+## D0171 — Realtime keepalive is opt-in; create_call is explicitly single-shot
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `RealtimeKeepalive`, `RealtimeWebSocketConfig.keepalive`, `Realtime::create_call`
+- Sources: openai-python rides `websockets` defaults (keepalive ping 20s, pong timeout 20s) with no typed opt-out; openai-node ships no WebSocket transport (browsers cannot client-ping); this crate documents no automatic reconnect (D0122/D0148). Closes round-2 item 2-D1.
+- Decision: `RealtimeKeepalive { ping_interval, pong_timeout }` (non-zero validated) is available via `RealtimeWebSocketConfig::keepalive` (default `None` = off, matching the no-behavior-change side of the split baselines) plus `with_keepalive_intervals` for callers that cannot name the type. `recv` drives it with a biased `select!`: a ping is sent every interval and the connection fails with `WebSocketProtocol` when no inbound frame of any kind arrives within `ping_interval + pong_timeout` (any-frame liveness, not per-Pong matching, so middleboxes swallowing control frames cannot cause false timeouts); no automatic reconnect. `create_call` is documented and annotated as retry-equivalent `RetryClass::Never` (a replay could double-answer the call), matching accept/reject/hangup/refer; python's retry-everything default is the recorded divergent baseline. `RealtimeKeepalive` is re-exported at the client root and the facade.
+- Reason: idle sessions previously hung forever with no liveness detection; the call-create classification was implicit.
+- Impact: `openai-rs-client` Realtime config and transport; no default behavior change.
+- Overrides: none
+- Tests: `keepalive_policy_is_opt_in_and_validates_its_fields`, `keepalive_times_out_idle_connection_without_inbound_frames`, `keepalive_disabled_by_default_leaves_idle_connection_unchanged`, `keepalive_silence_window_refreshes_on_every_inbound_frame`, `create_call_is_single_shot_even_after_a_retryable_looking_error`.
+
+## D0172 — Image edit quality and size split per host
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ImageEditMultipartMetadata.quality`, `ImageEditJsonRequestBody.quality`/`.size`
+- Sources: pinned `CreateImageEditRequest.quality` (standard/low/medium/high/auto — no `hd`); pinned `EditImageBodyJsonParam.quality` (low/medium/high/auto) and `.size` (closed auto/1024x1024/1536x1024/1024x1536, no bare-string branch); multipart edit and generation `size` keep `anyOf [string, enum]`.
+- Decision: new open enums `ImageEditMultipartQuality` (5), `ImageEditJsonQuality` (4), `ImageEditJsonSize` (4, `Unknown` retained); generation-side `ImageQuality`/`ImageSize` unchanged; lossless `From<narrow>` conversions; builder setters narrowed.
+- Reason: reusing the generation enums let both edit hosts send pin-external values.
+- Impact: `openai-rs-types` image edit builders (breaking: setter types).
+- Overrides: none
+- Tests: `image_edit_multipart_quality_pins_the_five_official_values`, `image_edit_json_quality_pins_the_four_official_values`, `image_edit_json_size_pins_the_four_closed_values`.
+
+## D0173 — FT reinforcement grader union splits top-level and nested member domains
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `experimental_graders::Grader`, `ReinforcementGraderMember`, `GraderCollection`, `MultiGrader`, `validate_reinforcement_grader`
+- Sources: pinned `FineTuneReinforcementMethod.grader`/`ValidateGraderRequest`/`RunGraderRequest` oneOf (exactly five branches, no `GraderLabelModel`); `GraderMulti.graders` oneOf includes `GraderLabelModel` and excludes `GraderMulti` (non-recursive); the evals-side D0158 split is the in-repo precedent.
+- Decision: the top-level union drops `label_model`; a new member union (label_model yes, multi no) backs the nested collection; the One|Many array-compat shape stays and gains a `one()` constructor; out-of-domain tags decode as `Unknown` losslessly.
+- Reason: the merged union let the top level carry label_model and nested multi recurse without bound, both outside the pinned schemas
+- Impact: `openai-rs-types` Fine-tuning (breaking: `Grader::LabelModel` removed; collection member type narrowed).
+- Overrides: none
+- Tests: `top_level_label_model_grader_is_not_constructible_but_stays_lossless`, `nested_multi_member_is_not_recursively_constructible_but_stays_lossless`.
+
+## D0174 — Vector-store list limits enforce only the schema-backed lower bound
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `VectorStoreListLimit`, `VectorStoreValidationError::InvalidListLimit`
+- Sources: the three pinned VS list `limit` parameters carry only `default: 20` (no `maximum`; the 1..=100 ceiling is prose); openai-python passes unbounded integers; D0154 established the same treatment for Files/Batches; search `max_num_results` keeps its schema-backed 1..=50.
+- Decision: drop `MAX_VECTOR_STORE_LIST_LIMIT`, keep `>= 1`, keep the default constant.
+- Reason: the invented ceiling rejected values the pinned endpoints and official SDKs accept
+- Impact: `openai-rs-types` Vector Stores query types (breaking: public constant removed).
+- Overrides: none
+- Tests: `vector_store_list_limit_requires_at_least_one`.
+
+## D0175 — Skills object discriminators split per host
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `SkillObjectType`, `SkillListObjectType`
+- Sources: the pinned `SkillResource.object`/`SkillListResource.object`/`SkillVersionListResource.object` are single-value constants (`skill`/`list`/`list`); openai-python types them per host; the files crate's `FileObjectType`/`FileListObjectType` split is the in-repo precedent.
+- Decision: split the shared two-value enum into `SkillObjectType{Skill}` and `SkillListObjectType{List}` (both list pages share the latter); the version/deleted single-value enums stay.
+- Reason: a shared two-value enum blurred the per-host constants the pin and official SDKs define
+- Impact: `openai-rs-types` Skills (response-side only; no wire change).
+- Overrides: none
+- Tests: `object_discriminators_are_split_per_host`.
+
+## D0176 — Administration transport gains the platform retry semantics
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `AdminClient`/`AdminClientBuilder`/`AdminInner::send`
+- Sources: openai-python `_base_client.py` retries every request by default (including mutations); transport.rs already implements the D0131 classification and delay semantics; the admin channel previously had no retry surface at all.
+- Decision: `AdminInner` carries a `RetryPolicy` (builder `with_retry_policy`, default `openai_compatible`); GET/DELETE classify as Safe, POST as Replayable (gated by `retry_replayable_mutations`); connect/timeout errors retry before a status is known; `request_timeout` doubles as the per-operation budget; the transport's private delay helpers are minimally duplicated with a same-source note. The sealed trust boundary is unchanged.
+- Reason: 119 operations — including read-only GETs — failed on transient 429/5xx while the platform channel retried.
+- Impact: `openai-rs-client` admin channel (new builder method).
+- Overrides: none
+- Tests: `admin_get_retries_429_to_success_with_local_backoff`, `admin_post_retry_is_gated_by_replayable_mutations`, `admin_get_does_not_retry_when_the_policy_is_disabled`.
+
+## D0177 — AssignmentObject pins the six evidenced discriminators
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `AssignmentObject`
+- Sources: the four pinned assignment resources use single-value `object` constants (group.user / group.role / user.role / group.user.deleted); `DeletedRoleAssignmentResource.object` is a free string whose description exemplifies `group.role.deleted`/`user.role.deleted`; the four `organization.*.assignment` values appear nowhere in any baseline.
+- Decision: remove the four phantom variants; unknown values still decode as `Unknown` losslessly.
+- Reason: phantom variants mislead pattern matching and documentation without any baseline evidence
+- Impact: `openai-rs-types` Admin (response-side; misleading variants removed).
+- Overrides: none
+- Tests: updated `admin_typed_objects_match_openapi`.
+
+## D0178 — Usage group_by is typed as the ten-value endpoint union
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `UsageGroupBy`, `UsageQueryParams.group_by`
+- Sources: the union of the eleven pinned usage endpoints' `group_by` item enums equals ten values, matching the `UsageDimensions` field set; openai-python types each endpoint's list as `Literal` unions; costs' `line_item` stays on `UsageCostsGroupBy` (D0150).
+- Decision: new open enum `UsageGroupBy`; the shared usage parameter narrows to `Omittable<Vec<UsageGroupBy>>`.
+- Reason: an untyped vector accepted arbitrary group_by strings the pinned endpoint enums reject
+- Impact: `openai-rs-types` Admin usage query (breaking: field type).
+- Overrides: none
+- Tests: `usage_group_by_pins_the_ten_value_union_of_the_usage_endpoints`.
+
+## D0179 — AdminListObject is the single `list` constant
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `AdminListObject`
+- Sources: every pinned admin list envelope types `object` as the single `list` constant; the only `page` envelope is `UsageResponse`, already carried by the dedicated `UsagePageTag`.
+- Decision: remove the `Page` variant; decoding stays lossless via `Unknown`.
+- Reason: the Page variant had no pinned list envelope behind it
+- Impact: `openai-rs-types` Admin (response-side narrowing).
+- Overrides: none
+- Tests: `admin_list_object_pins_the_single_list_constant`.
+
+## D0180 — Administration query encoder drops explicit null and empty-string values
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `append_query_value` (`openai-rs-client` admin channel). Closes round-2 item 2-D3.
+- Sources: D0145 established the drop rule for the JSON transport after openai-python `_qs.py::_stringify_item`; the admin encoder was the last path emitting `key=`.
+- Decision: `Value::Null` and empty strings skip the key; array/nested recursion inherits the leaf rule; a fully-dropped query yields no `?`. The admin channel's only Nullable query field (`after`) treats explicit null as omission, matching Python's `after=None`.
+- Reason: the admin channel was the last path emitting `key=` for values both official SDKs drop or reject
+- Impact: `openai-rs-client` admin query encoding only.
+- Overrides: none
+- Tests: `query_encoder_drops_null_and_empty_string_leaf_values`, updated `query_encoder_supports_arrays_null_and_deep_objects`.
+
+## D0181 — open_string_enum exposes AsRef only, not Borrow
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `open_string_enum!` (`scalar.rs`)
+- Sources: the std `Borrow` contract requires borrowed and owned values to agree under Eq/Ord/Hash; the derived enum implementations hash the discriminant (unit variants exclude the wire string entirely) and order by discriminant, so both necessarily violate the contract (`map.get("str")` would compile and probe the wrong bucket).
+- Decision: the macro no longer generates `impl Borrow<str>`; `AsRef<str>`/`as_str`/`Display` remain; `opaque_string_id!` keeps its (consistent) `Borrow`.
+- Reason: no in-repo call sites depend on it (workspace-wide check green); removing it eliminates a silent-miss collection-key trap.
+- Impact: `openai-rs-types` macro surface (breaking only for `&str`-probing keyed collections of open enums, which do not exist in-tree).
+- Overrides: none
+- Tests: `open_enum_borrow_is_as_ref_only_and_keys_stay_whole_values`.
+
+## D0182 — Sibling-key ref inlining is bounded by a node budget
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `MAX_REF_INLINE_NODES`, `StructuredError::ExpansionBudgetExceeded`, `normalize`/`normalize_object`
+- Sources: D0143's chain detection bounds single-path depth only; an acyclic DAG whose levels each carry two sibling-key references expands geometrically (40 levels ≈ 2^40 nodes).
+- Decision: every inline charges the merged subtree's node count against `MAX_REF_INLINE_NODES` (100,000, saturating); exhaustion returns `ExpansionBudgetExceeded { path, budget }` while the in-flight schema stays bounded. The module contract documents the chain (depth) / budget (total) split.
+- Reason: chain detection bounds depth, not total size, so a wide acyclic DAG could exhaust memory
+- Impact: `openai-rs-types` structured output; new public constant and error variant (enum already `#[non_exhaustive]`).
+- Overrides: none
+- Tests: `wide_ref_dag_trips_the_expansion_budget_instead_of_exploding`, `small_ref_dag_stays_within_the_expansion_budget`.
+
+## D0183 — Codex app-server enums are pinned to the schema domains
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `openai-rs-codex` protocol (ThreadStartParams/TurnStartParams/UserInput/Turn/CancelLoginResponse/Account/RateLimitSnapshot/AccountUpdatedNotification)
+- Sources: pinned Codex 0.144.5 `v2/AskForApproval` (two-branch oneOf), `v2/SandboxMode` (3), `v2/Personality` (3), `v2/ReasoningSummary` (4), `v2/ImageDetail` (4), `v2/TurnStatus` (4), `v2/CancelLoginAccountStatus` (2), `v2/PlanType` (12), `v2/RateLimitReachedType` (5), `v2/AuthMode` (7); `v2/ReasoningEffort` has no enum (stays `String`).
+- Decision: send- and receive-side closed domains become D0115-style open enums (known + `Unknown`); `AskForApproval` is a two-branch union (mode enum + `GranularAskForApproval` object whose wire keys stay snake_case per the pin: `mcp_elicitations`/`request_permissions`/`rules`/`sandbox_approval`/`skill_approval`); the pinned `unknown` plan literal is named `UnknownPlan` (existing convention); `Account.kind`'s doc now lists `amazonBedrock`.
+- Reason: bare `String` hid pinned domains; the granular approval object was previously inexpressible.
+- Impact: `openai-rs-codex` protocol (breaking: field types).
+- Overrides: none
+- Tests: `thread_start_params_serialize_typed_enum_domains`, `approval_policy_granular_branch_matches_the_pinned_wire_shape`, `turn_start_params_serialize_typed_enum_domains`, `image_detail_covers_the_pinned_domain_and_keeps_unknowns`, `receive_side_enums_decode_known_and_unknown_values`.
+
+## D0184 — RMCP catalog name limit is single-sourced from the types-side function-tool constant
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `MAX_FUNCTION_NAME_BYTES` (`openai-rs-rmcp` catalog.rs)
+- Sources: pinned `FunctionToolParam.name` maxLength 128; `openai_rs_types::responses::MAX_FUNCTION_TOOL_NAME_CHARS` is the same bound used by the request-side validator.
+- Decision: the catalog's valid-name budget aliases the types-side public constant (64 → 128); the mapped-name prefix budget stays derived (limit − 2 separator − 16 hex), so mapped names land exactly at the 128-byte bound.
+- Reason: the previous 64-byte threshold unnecessarily mapped 65–128-byte valid MCP names and could drift from the request-side validator.
+- Impact: `openai-rs-rmcp` name policy; 65–128-byte names are now exposed verbatim.
+- Overrides: none
+- Tests: `name_length_boundaries_follow_the_pinned_function_tool_limit`.
+
+## D0185 — RMCP lossless envelope retains resultType (SEP-2322) and _meta
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ToolResultEnvelope` (`openai-rs-rmcp` result.rs)
+- Sources: rmcp 3.1.4 `CallToolResult` carries `result_type: Option<ResultType>` (wire `resultType`; absent means complete) and `meta` (wire `_meta`); SEP-2322 adds the partial/complete discriminator.
+- Decision: the envelope adds `result_type: Option<String>` and `meta: Option<Map<String, Value>>`, both skipped when absent; `from_rmcp` copies both verbatim (preserving non-`complete` discriminators such as `input_required`); the type docs now describe the full mirror.
+- Reason: dropping the two fields contradicted the envelope's lossless contract once peers adopt SEP-2322
+- Impact: `openai-rs-rmcp` result encoding; `CompactWhenPossible` flattening unchanged.
+- Overrides: none
+- Tests: `lossless_envelope_round_trips_result_type_and_meta`, `lossless_envelope_omits_result_type_and_meta_keys_when_absent`, plus new assertions in `lossless_envelope_covers_every_rmcp_content_kind`.
+
+## D0186 — Facade re-exports keep pace with client-root additions (round 3)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `openai-rs-sdk` facade (`AdminOperation`, `AdminQuery`, `AdminAuthScope`, `AdminRequestEncoding`, `AdminResponseMode`, `AdminClientOperationContract`, both operation manifests, `C2paValidationState`, `ContentProvenanceObjectType`, `ProvenanceDetectionOutcome`, `RealtimeKeepalive`)
+- Sources: all names are public at the client root (the traits bound public generic methods; the provenance discriminants are returned by already-re-exported getters; `RealtimeKeepalive` configures the re-exported realtime client). Continues D0135/D0164.
+- Decision: mirror the client-root export list under the corresponding facade gates, plus compile-level nameability tests; the client crate's `tagged_union_reject_known!` macro is now gated behind `legacy-evals` so feature-unified builds of dependent crates stay warning-free.
+- Reason: facade-only users could not name public bounds, manifests, or the new keepalive configuration
+- Impact: facade crate only; no wire behavior change.
+- Overrides: none
+- Tests: `admin_operation_machinery_is_nameable_through_the_facade`, `content_provenance_discriminators_are_nameable_through_the_facade`.
+
+## D0187 — Round-3 recorded positions (docs/tests only)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: SSE strict handshakes; MultiGrader array form; Accept-header refinement; Uploads bytes pre-check; README example parity; webhook signature-cap test
+- Sources: openai-python `_streaming.py` consumes only `data.type` and openai-node tolerates a missing `event:` line, yet every official fixture and spec example emits `event:` matching `data.type`; the pinned `GraderMulti.graders` schema is a single object while the spec's own example uses an array; openai-python sends the default `Accept: application/json` everywhere and the server does not branch on Accept; the pinned upload `bytes` has no minimum; the README claims parity with the executable example.
+- Decision: keep the three SSE strict checks (content-type gate, `event:` presence, `event` == `data.type`) as intentional anti-misrouting hardening with no observed official counterexample; keep the `MultiGraderMembers` One|Many decode with the explicit `many()` constructor as documented example compatibility; keep the per-mode Accept refinement; keep the defensive `bytes < 0` upload pre-check (alongside the path-segment guards, it rejects only semantically impossible values while 0 stays legal); the README Responses sample is byte-identical to `examples/responses.rs` (verified by diff) and must move with it; the webhook signature-cap test now exercises the real 32-valid-candidate branch (with an invalid-candidate counter-assertion).
+- Reason: each position either hardens beyond lenient baselines without rejecting any evidenced wire form, or documents parity the repo already promises.
+- Impact: documentation and test coverage only (plus the README sample).
+- Overrides: none
+- Tests: `rejects_replay_future_tamper_and_unbounded_signature_lists` (rewritten), `multi_grader_accepts_pinned_single_and_official_example_array`, existing SSE handshake tests.
+
+## D0188 — Prompt-cached message drops the unsupported id/status null setters (corrects D0050)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BetaPromptCachedInputMessage` null setters. Closes round-3 item 3-29 (round-2 item 2-D2).
+- Sources: within the pinned beta input union, the message tag resolves to `BetaEasyInputMessage` (no id/status; `phase` anyOf-null) or `BetaInputMessage` (`agent` anyOf-null; `status` a non-null enum; no id/phase); `id` exists only on the resource shape `BetaInputMessageResource`, which the input union never references; openai-python and openai-node param types carry neither field. D0050's Sources cited the `Beta*ItemParam` family, which does not cover this message-tag branch.
+- Decision: remove `id_null()` and `status_null()` (no pinned branch permits either null); keep the non-null `id()`/`status()` setters as documented replay-compat supersets (decoded stored items carry them, and the field serialization stays lossless); `agent`/`agent_null`/`phase`/`phase_null` keep their branch-backed evidence. D0050's evidence attribution is hereby corrected rather than superseded.
+- Reason: the two null setters could emit keys no pinned request schema defines, and the ledger cited the wrong family as cover.
+- Impact: `openai-rs-types` beta Responses construction surface (breaking: two setters removed).
+- Overrides: corrects D0050
+- Tests: updated `beta_item_official_nulls_match_openapi` (id/status keys now asserted absent, agent/phase nulls retained).
+

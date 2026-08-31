@@ -300,12 +300,17 @@ mod tests {
     const ID: &str = "evt_delivery_123";
     const PAYLOAD: &[u8] = br#"{"type":"future.event","id":"evt_1","private":"do-not-log"}"#;
 
-    fn headers(secret: &[u8], timestamp: u64, payload: &[u8]) -> HeaderMap {
+    fn signature(secret: &[u8], timestamp: u64, payload: &[u8]) -> String {
         let timestamp = timestamp.to_string();
         let signed = [ID.as_bytes(), b".", timestamp.as_bytes(), b".", payload].concat();
         let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("test HMAC key");
         mac.update(&signed);
-        let signature = STANDARD.encode(mac.finalize().into_bytes());
+        STANDARD.encode(mac.finalize().into_bytes())
+    }
+
+    fn headers(secret: &[u8], timestamp: u64, payload: &[u8]) -> HeaderMap {
+        let signature = signature(secret, timestamp, payload);
+        let timestamp = timestamp.to_string();
         let mut headers = HeaderMap::new();
         headers.insert("webhook-id", HeaderValue::from_static(ID));
         headers.insert(
@@ -349,16 +354,38 @@ mod tests {
             Err(WebhookVerificationError::SignatureMismatch)
         ));
 
-        let mut too_many = headers(secret, NOW, PAYLOAD);
-        let candidates = std::iter::repeat_n("v1,AAAA", MAX_SIGNATURE_CANDIDATES + 1)
+        // 32 well-formed signatures plus one extra candidate: every token is
+        // a valid HMAC for this delivery, so rejection can only come from the
+        // candidate cap inside `decode_signatures`, which fires while the
+        // 33rd candidate is inspected (before any HMAC work).
+        let valid = signature(secret, NOW, PAYLOAD);
+        let mut capped = headers(secret, NOW, PAYLOAD);
+        let candidates = std::iter::repeat_n(format!("v1,{valid}"), MAX_SIGNATURE_CANDIDATES + 1)
             .collect::<Vec<_>>()
             .join(" ");
-        too_many.insert(
+        capped.insert(
             "webhook-signature",
             HeaderValue::from_str(&candidates).expect("bounded test header"),
         );
         assert!(matches!(
-            verifier.verify_at(PAYLOAD, &too_many, NOW),
+            verifier.verify_at(PAYLOAD, &capped, NOW),
+            Err(WebhookVerificationError::InvalidSignatureHeader)
+        ));
+
+        // Contrast path: the same 33 candidates, none of which decodes to a
+        // 32-byte HMAC, never reach the cap and fail through the
+        // zero-valid-signature branch instead — both branches must reject
+        // with the same variant.
+        let mut none_valid = headers(secret, NOW, PAYLOAD);
+        let candidates = std::iter::repeat_n("v1,AAAA", MAX_SIGNATURE_CANDIDATES + 1)
+            .collect::<Vec<_>>()
+            .join(" ");
+        none_valid.insert(
+            "webhook-signature",
+            HeaderValue::from_str(&candidates).expect("bounded test header"),
+        );
+        assert!(matches!(
+            verifier.verify_at(PAYLOAD, &none_valid, NOW),
             Err(WebhookVerificationError::InvalidSignatureHeader)
         ));
     }

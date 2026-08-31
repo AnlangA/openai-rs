@@ -1130,8 +1130,9 @@ mod tests {
         AppServerClient, AppServerConfig, AppServerEvent, AppServerLimits, StderrTail, sha256_file,
     };
     use crate::{
-        BrowserLoginOptions, ClientInfo, Error, Notification, RuntimeCompatibility,
-        RuntimeIdentity, ThreadStartParams, TurnInterruptParams, TurnStartParams,
+        BrowserLoginOptions, CancelLoginStatus, ClientInfo, Error, Notification, PlanType,
+        RateLimitReachedType, RuntimeCompatibility, RuntimeIdentity, ThreadStartParams,
+        TurnInterruptParams, TurnStartParams, TurnStatus,
     };
 
     fn fake_runtime(executable: &Path) -> Result<RuntimeCompatibility, Box<dyn std::error::Error>> {
@@ -1288,19 +1289,22 @@ mod tests {
         assert_eq!(device.user_code, "ABCD-1234");
         assert_eq!(
             client.account_login_cancel(device.login_id).await?.status,
-            "canceled"
+            CancelLoginStatus::Canceled
         );
 
         let account = client.account_read(false).await?;
         assert_eq!(
             account.account.and_then(|account| account.plan_type),
-            Some("future_plan".to_owned())
+            Some(PlanType::from_raw("future_plan"))
         );
         let limits = client.account_rate_limits().await?;
-        assert_eq!(limits.rate_limits.plan_type.as_deref(), Some("future_plan"));
         assert_eq!(
-            limits.rate_limits.rate_limit_reached_type.as_deref(),
-            Some("future_state")
+            limits.rate_limits.plan_type,
+            Some(PlanType::from_raw("future_plan"))
+        );
+        assert_eq!(
+            limits.rate_limits.rate_limit_reached_type,
+            Some(RateLimitReachedType::from_raw("future_state"))
         );
         let usage = client.account_usage().await?;
         assert_eq!(usage.summary.lifetime_tokens, Some(123));
@@ -1325,7 +1329,7 @@ mod tests {
             AppServerEvent::Notification(notification) => match *notification {
                 Notification::TurnCompleted(completed) => {
                     assert_eq!(completed.thread_id, "thr_123");
-                    assert_eq!(completed.turn.status, "completed");
+                    assert_eq!(completed.turn.status, TurnStatus::Completed);
                 }
                 other => return Err(format!("unexpected notification: {other:?}").into()),
             },

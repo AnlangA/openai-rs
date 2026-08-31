@@ -39,9 +39,16 @@ crate::open_string_enum! {
 }
 
 crate::open_string_enum! {
-    /// Skill/list object discriminator.
-    pub enum SkillObject {
-        Skill = "skill",
+    /// Object discriminator returned for one Skill.
+    pub enum SkillObjectType {
+        Skill = "skill"
+    }
+}
+
+crate::open_string_enum! {
+    /// Object discriminator returned by the Skill and Skill Version
+    /// collection endpoints.
+    pub enum SkillListObjectType {
         List = "list"
     }
 }
@@ -133,7 +140,7 @@ pub struct SkillResource {
     /// Skill identifier.
     pub id: SkillId,
     /// Object discriminator.
-    pub object: SkillObject,
+    pub object: SkillObjectType,
     /// Skill name parsed from its bundle.
     pub name: String,
     /// Skill description parsed from its bundle.
@@ -161,7 +168,7 @@ impl SkillResource {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SkillListResource {
     /// List discriminator.
-    pub object: SkillObject,
+    pub object: SkillListObjectType,
     /// Skills on this page.
     pub data: Vec<SkillResource>,
     /// First item ID, explicitly nullable on empty pages.
@@ -229,7 +236,7 @@ impl SkillVersionResource {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SkillVersionListResource {
     /// List discriminator.
-    pub object: SkillObject,
+    pub object: SkillListObjectType,
     /// Versions on this page.
     pub data: Vec<SkillVersionResource>,
     /// First item ID, explicitly nullable on empty pages.
@@ -642,6 +649,30 @@ mod tests {
     }
 
     #[test]
+    fn object_discriminators_are_split_per_host() {
+        assert_eq!(SkillObjectType::Skill.as_str(), "skill");
+        assert_eq!(SkillListObjectType::List.as_str(), "list");
+        assert_eq!(SkillVersionObject::Version.as_str(), "skill.version");
+        assert_eq!(DeletedSkillObject::Deleted.as_str(), "skill.deleted");
+        assert_eq!(
+            DeletedSkillVersionObject::Deleted.as_str(),
+            "skill.version.deleted"
+        );
+
+        // The split mirrors FileObjectType/FileListObjectType: each host keeps
+        // only its own discriminator instead of sharing a cross-host union, so
+        // the other host's value decodes as an explicit Unknown.
+        assert_eq!(
+            SkillObjectType::from_raw("list").unknown_value(),
+            Some("list")
+        );
+        assert_eq!(
+            SkillListObjectType::from_raw("skill").unknown_value(),
+            Some("skill")
+        );
+    }
+
+    #[test]
     fn skill_and_list_responses_preserve_null_cursors_and_extras() {
         let fixture = json!({
             "object": "list",
@@ -661,6 +692,8 @@ mod tests {
             "page_future": 1
         });
         let page = ok(serde_json::from_value::<SkillListResource>(fixture.clone()));
+        assert_eq!(page.object, SkillListObjectType::List);
+        assert_eq!(page.data[0].object, SkillObjectType::Skill);
         assert_eq!(page.next_after(), Some("skill_1"));
         assert!(page.data[0].extra().contains_key("skill_future"));
         assert!(page.extra().contains_key("page_future"));
@@ -701,6 +734,8 @@ mod tests {
             fixture.clone(),
         ));
         assert_eq!(page.next_after(), Some("skillver_1"));
+        assert_eq!(page.object, SkillListObjectType::List);
+        assert_eq!(page.data[0].object, SkillVersionObject::Version);
         assert!(page.data[0].extra().contains_key("version_future"));
         assert_eq!(ok(serde_json::to_value(page)), fixture);
 

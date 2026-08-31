@@ -156,7 +156,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
-    use openai_rs_types::{JsonText, responses::ResponseItemStatus};
+    use openai_rs_types::{JsonText, responses::FunctionCallItemStatus};
     use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
     use serde_json::{Value, json};
 
@@ -224,7 +224,7 @@ mod tests {
             "call_1",
             function.name(),
             JsonText::from_raw(r#"{"city":"杭州"}"#),
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         );
 
         let outcome = bridge.dispatch(&call, &ExecutionControl::default()).await;

@@ -180,10 +180,11 @@ pub const MAX_STATIC_CHUNK_TOKENS: u32 = 4_096;
 pub const MIN_VECTOR_STORE_EXPIRATION_DAYS: u16 = 1;
 /// Maximum expiration period in days.
 pub const MAX_VECTOR_STORE_EXPIRATION_DAYS: u16 = 365;
-/// Default list page size.
+/// Effective page size when `limit` is omitted.
+///
+/// The pinned list schemas document a default of 20 but impose no `maximum`,
+/// so no upper bound is invented here.
 pub const DEFAULT_VECTOR_STORE_LIST_LIMIT: u32 = 20;
-/// Maximum list page size.
-pub const MAX_VECTOR_STORE_LIST_LIMIT: u32 = 100;
 /// Default number of vector search results.
 pub const DEFAULT_VECTOR_STORE_SEARCH_RESULTS: u8 = 10;
 /// Maximum vector search result count.
@@ -266,8 +267,8 @@ pub enum VectorStoreValidationError {
         /// Selected maximum chunk size.
         maximum: u32,
     },
-    /// Page size is outside `1..=100`.
-    #[error("vector-store list limit must be 1..=100, got {limit}")]
+    /// Page size is below the schema-backed minimum of 1.
+    #[error("vector-store list limit must be at least 1, got {limit}")]
     InvalidListLimit {
         /// Rejected value.
         limit: u32,
@@ -1479,9 +1480,12 @@ impl DeletedVectorStore {
 pub struct VectorStoreListLimit(u32);
 
 impl VectorStoreListLimit {
-    /// Creates a limit in `1..=100`.
+    /// Validates a page size of at least 1.
+    ///
+    /// The pinned schemas document "between 1 and 100" in prose but carry no
+    /// `maximum`, so no upper bound is enforced.
     pub const fn new(value: u32) -> Result<Self, VectorStoreValidationError> {
-        if value == 0 || value > MAX_VECTOR_STORE_LIST_LIMIT {
+        if value == 0 {
             Err(VectorStoreValidationError::InvalidListLimit { limit: value })
         } else {
             Ok(Self(value))
@@ -2882,6 +2886,52 @@ mod tests {
         .expect("values");
         assert_eq!(value["name"], "renamed");
         assert_eq!(value["expires_after"]["anchor"], "last_active_at");
+    }
+
+    #[test]
+    fn vector_store_list_limit_requires_at_least_one() {
+        // The pinned list schemas document "between 1 and 100" in prose but
+        // carry no `maximum`, and the official Python SDK passes the value
+        // through unbounded, so only the schema-backed lower bound is enforced
+        // (D0154).
+        assert!(VectorStoreListLimit::new(0).is_err());
+        assert!(serde_json::from_str::<VectorStoreListLimit>("0").is_err());
+        assert_eq!(
+            VectorStoreListLimit::new(1)
+                .expect("minimum is valid")
+                .get(),
+            1_u32
+        );
+        assert_eq!(
+            VectorStoreListLimit::new(u32::MAX)
+                .expect("no invented upper bound")
+                .get(),
+            u32::MAX
+        );
+        assert_eq!(
+            serde_json::from_str::<VectorStoreListLimit>("101")
+                .expect("value above the documented prose ceiling stays valid")
+                .get(),
+            101_u32
+        );
+
+        // The default stays the pinned 20 and both params surfaces share the
+        // validated type.
+        assert_eq!(
+            VectorStoreListParams::new().effective_limit(),
+            DEFAULT_VECTOR_STORE_LIST_LIMIT
+        );
+        let above_ceiling = VectorStoreListLimit::new(500).expect("prose-only ceiling");
+        let encoded = serde_json::to_value(VectorStoreListParams::new().with_limit(above_ceiling))
+            .expect("encode list params");
+        assert_eq!(encoded, json!({"limit": 500}));
+        let decoded: VectorStoreListParams =
+            serde_json::from_value(encoded).expect("decode list params");
+        assert_eq!(decoded.effective_limit(), 500);
+        let file_params =
+            serde_json::to_value(VectorStoreFileListParams::new().with_limit(above_ceiling))
+                .expect("encode file list params");
+        assert_eq!(file_params, json!({"limit": 500}));
     }
 
     #[test]

@@ -119,3 +119,76 @@ fn admin_checkpoint_permissions_is_nameable_through_the_facade() {
     let permissions = client.checkpoint_permissions();
     assert!(format!("{permissions:?}").contains("AdminCheckpointPermissions"));
 }
+
+/// The admin operation machinery (`AdminOperation`/`AdminQuery` trait pair,
+/// their supporting enums, `AdminClientOperationContract`, and both manifest
+/// constants) used to be reachable only by depending on `openai-rs-client`
+/// directly (issue 3-25): helper code parameterized over the traits was
+/// unnameable through the facade. This test keeps the traits usable as
+/// generic bounds and the remaining items compile-checked via reference
+/// paths, mirroring the client crate's root export list.
+#[cfg(feature = "admin")]
+#[test]
+fn admin_operation_machinery_is_nameable_through_the_facade() {
+    use openai_rs::admin::operations::OpAdminApiKeysList;
+    use openai_rs::admin::{
+        ADMIN_CHECKPOINT_PERMISSION_OPERATION_MANIFEST, ADMIN_CLIENT_OPERATION_MANIFEST,
+        AdminAuthScope, AdminClientOperationContract, AdminListParams, AdminOperation, AdminQuery,
+        AdminRequestEncoding, AdminResponseMode,
+    };
+
+    fn assert_operation_contract<O: AdminOperation>() {
+        assert_eq!(O::AUTH, AdminAuthScope::Admin);
+        assert!(matches!(
+            O::REQUEST_ENCODING,
+            AdminRequestEncoding::None | AdminRequestEncoding::Json
+        ));
+        assert!(matches!(O::RESPONSE_MODE, AdminResponseMode::Json));
+    }
+
+    fn assert_query<Q: AdminQuery>() {
+        fn is_serializable<T: serde::Serialize>() {}
+        is_serializable::<Q>();
+    }
+
+    assert_operation_contract::<OpAdminApiKeysList>();
+    assert_query::<AdminListParams>();
+
+    let client_manifest: &'static [AdminClientOperationContract] = ADMIN_CLIENT_OPERATION_MANIFEST;
+    let checkpoint_manifest: &'static [AdminClientOperationContract] =
+        ADMIN_CHECKPOINT_PERMISSION_OPERATION_MANIFEST;
+    let contract = OpAdminApiKeysList::CONTRACT;
+    assert_eq!(contract.operation_id, "admin-api-keys-list");
+    assert!(client_manifest.contains(&contract));
+    assert!(!checkpoint_manifest.is_empty());
+    assert!(client_manifest.iter().any(|entry| entry == &contract));
+}
+
+/// The three content-provenance discriminator DTOs re-exported by the client
+/// crate's root were missing from the facade's flat client-gate list (issue
+/// 3-25). This test keeps them nameable and constructible through the facade.
+#[test]
+fn content_provenance_discriminators_are_nameable_through_the_facade() {
+    use openai_rs::{C2paValidationState, ContentProvenanceObjectType, ProvenanceDetectionOutcome};
+
+    assert_eq!(
+        ContentProvenanceObjectType::ContentProvenanceCheck.as_str(),
+        "content_provenance_check"
+    );
+    assert_eq!(
+        ContentProvenanceObjectType::from_raw("future_check").unknown_value(),
+        Some("future_check")
+    );
+
+    assert_eq!(ProvenanceDetectionOutcome::Detected.as_str(), "detected");
+    assert_eq!(
+        ProvenanceDetectionOutcome::NotDetected.as_str(),
+        "not_detected"
+    );
+
+    assert_eq!(C2paValidationState::Trusted.as_str(), "trusted");
+    assert_eq!(C2paValidationState::Valid.as_str(), "valid");
+    assert_eq!(C2paValidationState::Invalid.as_str(), "invalid");
+    assert_eq!(C2paValidationState::NotPresent.as_str(), "not_present");
+    assert!(C2paValidationState::from_raw("trusted").is_known());
+}

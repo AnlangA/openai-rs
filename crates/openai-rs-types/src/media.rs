@@ -1673,6 +1673,70 @@ crate::open_string_enum! {
 }
 
 crate::open_string_enum! {
+    /// Output quality accepted by the multipart image edit host.
+    ///
+    /// Members match the pinned `CreateImageEditRequest.quality` enum
+    /// (standard/low/medium/high/auto) exactly. The DALL-E 3 `hd` value
+    /// belongs to the generation side's wider [`ImageQuality`] domain.
+    pub enum ImageEditMultipartQuality {
+        Standard = "standard",
+        Low = "low",
+        Medium = "medium",
+        High = "high",
+        Auto = "auto",
+    }
+}
+
+impl From<ImageEditMultipartQuality> for ImageQuality {
+    fn from(value: ImageEditMultipartQuality) -> Self {
+        Self::from_raw(value.as_str())
+    }
+}
+
+crate::open_string_enum! {
+    /// Output quality accepted by the JSON image edit host.
+    ///
+    /// Members match the pinned `EditImageBodyJsonParam.quality` enum
+    /// (low/medium/high/auto) exactly. The multipart-only `standard` and
+    /// DALL-E 3 `hd` values belong to other hosts' domains.
+    pub enum ImageEditJsonQuality {
+        Low = "low",
+        Medium = "medium",
+        High = "high",
+        Auto = "auto",
+    }
+}
+
+impl From<ImageEditJsonQuality> for ImageQuality {
+    fn from(value: ImageEditJsonQuality) -> Self {
+        Self::from_raw(value.as_str())
+    }
+}
+
+crate::open_string_enum! {
+    /// Output size accepted by the JSON image edit host.
+    ///
+    /// Members match the pinned `EditImageBodyJsonParam.size` enum, which is
+    /// closed at four values with no bare string branch. [`Self::Unknown`]
+    /// keeps unexpected strings lossless per the crate's open-enum policy.
+    /// The multipart edit and generation hosts keep the wider [`ImageSize`]
+    /// because their pinned schemas carry an arbitrary `WIDTHxHEIGHT`
+    /// branch.
+    pub enum ImageEditJsonSize {
+        Auto = "auto",
+        Square1024 = "1024x1024",
+        Landscape1536x1024 = "1536x1024",
+        Portrait1024x1536 = "1024x1536",
+    }
+}
+
+impl From<ImageEditJsonSize> for ImageSize {
+    fn from(value: ImageEditJsonSize) -> Self {
+        Self::from_raw(value.as_str())
+    }
+}
+
+crate::open_string_enum! {
     /// Legacy Images response representation.
     pub enum ImageResponseFormat {
         Url = "url",
@@ -2048,15 +2112,19 @@ pub struct ImageEditJsonRequestBody {
     /// Number of edited images or explicit null.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub n: Omittable<Nullable<ImageCount>>,
-    /// Output quality or explicit null.
+    /// Output quality or explicit null. The pinned JSON edit schema closes
+    /// the domain at low/medium/high/auto; other strings stay lossless via
+    /// [`ImageEditJsonQuality::Unknown`].
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub quality: Omittable<Nullable<ImageQuality>>,
+    pub quality: Omittable<Nullable<ImageEditJsonQuality>>,
     /// Input fidelity or explicit null.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_fidelity: Omittable<Nullable<ImageInputFidelity>>,
-    /// Output size or explicit null.
+    /// Output size or explicit null. The pinned JSON edit schema closes the
+    /// domain at four values; unexpected strings stay lossless via
+    /// [`ImageEditJsonSize::Unknown`].
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub size: Omittable<Nullable<ImageSize>>,
+    pub size: Omittable<Nullable<ImageEditJsonSize>>,
     /// Stable end-user identifier.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub user: Omittable<String>,
@@ -2251,7 +2319,7 @@ where
 
     /// Select output quality.
     #[must_use]
-    pub fn with_quality(mut self, quality: ImageQuality) -> Self {
+    pub fn with_quality(mut self, quality: ImageEditJsonQuality) -> Self {
         self.body.quality = Omittable::Value(Nullable::Value(quality));
         self
     }
@@ -2311,9 +2379,11 @@ pub struct ImageEditMultipartMetadata {
     stream: Omittable<Nullable<bool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     partial_images: Omittable<Nullable<PartialImageCount>>,
-    /// Output quality or explicit null.
+    /// Output quality or explicit null. The pinned multipart edit schema
+    /// closes the domain at standard/low/medium/high/auto; other strings
+    /// stay lossless via [`ImageEditMultipartQuality::Unknown`].
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub quality: Omittable<Nullable<ImageQuality>>,
+    pub quality: Omittable<Nullable<ImageEditMultipartQuality>>,
 }
 
 impl ImageEditMultipartMetadata {
@@ -2494,7 +2564,7 @@ where
 
     /// Select output quality.
     #[must_use]
-    pub fn with_quality(mut self, quality: ImageQuality) -> Self {
+    pub fn with_quality(mut self, quality: ImageEditMultipartQuality) -> Self {
         self.metadata.quality = Omittable::Value(Nullable::Value(quality));
         self
     }
@@ -3244,7 +3314,7 @@ mod tests {
         )
         .with_image(ImageReference::file("file_2"))
         .with_mask(ImageReference::file("file_mask"))
-        .with_quality(ImageQuality::High)
+        .with_quality(ImageEditJsonQuality::High)
         .into_streaming()
         .with_partial_images(ok(PartialImageCount::new(1)));
         let value = ok(serde_json::to_value(&request));
@@ -3359,7 +3429,7 @@ mod tests {
             "Edit",
         ))
         .with_mask(bytes_source(b"secret-mask"))
-        .with_quality(ImageQuality::High)
+        .with_quality(ImageEditMultipartQuality::High)
         .into_streaming()
         .with_partial_images(ok(PartialImageCount::new(1)));
         assert_eq!(request.images().len(), 2);
@@ -3373,6 +3443,165 @@ mod tests {
         let debug = format!("{request:?}");
         assert!(!debug.contains("secret-image"));
         assert!(!debug.contains("secret-mask"));
+    }
+
+    #[test]
+    fn image_edit_multipart_quality_pins_the_five_official_values() {
+        // Pinned CreateImageEditRequest.quality references a five-value
+        // enum: standard/low/medium/high/auto. The generation side keeps
+        // the wider six-value ImageQuality domain.
+        const MULTIPART_QUALITIES: [&str; 5] = ["standard", "low", "medium", "high", "auto"];
+        for value in MULTIPART_QUALITIES {
+            let decoded = ImageEditMultipartQuality::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official multipart edit quality {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            let request = ok(CreateImageEditMultipartRequest::from_images(
+                [bytes_source(b"image-one")],
+                "Edit",
+            ))
+            .with_quality(decoded);
+            assert_eq!(
+                ok(serde_json::to_value(&request.metadata))["quality"],
+                value
+            );
+        }
+        // DALL-E 3's `hd` belongs to the generation domain only.
+        let hd = ImageEditMultipartQuality::from_raw("hd");
+        assert!(!hd.is_known());
+        assert_eq!(hd.as_str(), "hd");
+        let mut metadata = ImageEditMultipartMetadata::new("Edit");
+        metadata.quality = Omittable::Value(Nullable::Value(hd));
+        let encoded = ok(serde_json::to_value(&metadata));
+        assert_eq!(encoded["quality"], "hd");
+        let decoded: ImageEditMultipartMetadata = ok(serde_json::from_value(encoded));
+        match decoded.quality {
+            Omittable::Value(Nullable::Value(quality)) => {
+                assert!(
+                    !quality.is_known(),
+                    "`hd` stays Unknown on the multipart host"
+                );
+            }
+            round_tripped => panic!("quality must round-trip, got {round_tripped:?}"),
+        }
+        assert!(ImageQuality::from_raw("hd").is_known());
+        assert_eq!(
+            ImageQuality::from(ImageEditMultipartQuality::Standard),
+            ImageQuality::Standard
+        );
+        assert_eq!(
+            ImageQuality::from(ImageEditMultipartQuality::from_raw("hd")),
+            ImageQuality::from_raw("hd")
+        );
+    }
+
+    #[test]
+    fn image_edit_json_quality_pins_the_four_official_values() {
+        // Pinned EditImageBodyJsonParam.quality references a four-value
+        // enum: low/medium/high/auto. Neither `standard` (multipart-only)
+        // nor `hd` (generation-only) is constructible here.
+        const JSON_QUALITIES: [&str; 4] = ["low", "medium", "high", "auto"];
+        for value in JSON_QUALITIES {
+            let decoded = ImageEditJsonQuality::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official JSON edit quality {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            let request = CreateImageEditJsonRequest::new(
+                ImageReference::url("https://example.test/a.png"),
+                "Edit",
+            )
+            .with_quality(decoded);
+            assert_eq!(ok(serde_json::to_value(&request))["quality"], value);
+        }
+        for foreign in ["standard", "hd"] {
+            let decoded = ImageEditJsonQuality::from_raw(foreign);
+            assert!(
+                !decoded.is_known(),
+                "{foreign} is outside the pinned JSON edit quality domain"
+            );
+            let round_tripped = ok(serde_json::from_value::<ImageEditJsonRequest>(json!({
+                "images": [{"image_url": "https://example.test/a.png"}],
+                "prompt": "Edit",
+                "quality": foreign
+            })));
+            assert_eq!(ok(serde_json::to_value(&round_tripped))["quality"], foreign);
+        }
+        assert_eq!(
+            ImageQuality::from(ImageEditJsonQuality::Low),
+            ImageQuality::Low
+        );
+        assert_eq!(
+            ImageQuality::from(ImageEditJsonQuality::from_raw("hd")),
+            ImageQuality::Hd
+        );
+    }
+
+    #[test]
+    fn image_edit_json_size_pins_the_four_closed_values() {
+        // Pinned EditImageBodyJsonParam.size is closed at four values with
+        // no bare string branch. The multipart edit and generation hosts
+        // keep the open ImageSize because their schemas carry an arbitrary
+        // WIDTHxHEIGHT branch.
+        const JSON_SIZES: [&str; 4] = ["auto", "1024x1024", "1536x1024", "1024x1536"];
+        for value in JSON_SIZES {
+            let decoded = ImageEditJsonSize::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official JSON edit size {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            assert!(ImageSize::from(decoded.clone()).is_known());
+            let mut request = CreateImageEditJsonRequest::new(
+                ImageReference::url("https://example.test/a.png"),
+                "Edit",
+            );
+            request.body.size = Omittable::Value(Nullable::Value(decoded));
+            assert_eq!(ok(serde_json::to_value(&request))["size"], value);
+        }
+        assert_eq!(ImageSize::from(ImageEditJsonSize::Auto), ImageSize::Auto);
+        assert_eq!(
+            ImageSize::from(ImageEditJsonSize::Square1024),
+            ImageSize::Square1024
+        );
+        assert_eq!(
+            ImageSize::from(ImageEditJsonSize::Landscape1536x1024),
+            ImageSize::Landscape1536x1024
+        );
+        assert_eq!(
+            ImageSize::from(ImageEditJsonSize::Portrait1024x1536),
+            ImageSize::Portrait1024x1536
+        );
+        for foreign in ["256x256", "1792x1024", "1536x864"] {
+            let decoded = ImageEditJsonSize::from_raw(foreign);
+            assert!(
+                !decoded.is_known(),
+                "{foreign} is outside the pinned JSON edit size domain"
+            );
+            let round_tripped = ok(serde_json::from_value::<ImageEditJsonRequest>(json!({
+                "images": [{"image_url": "https://example.test/a.png"}],
+                "prompt": "Edit",
+                "size": foreign
+            })));
+            assert_eq!(ok(serde_json::to_value(&round_tripped))["size"], foreign);
+        }
+        // The open hosts still carry the values the JSON host rejects.
+        let mut multipart = ok(CreateImageEditMultipartRequest::from_images(
+            [bytes_source(b"image-one")],
+            "Edit",
+        ));
+        multipart.metadata.size =
+            Omittable::Value(Nullable::Value(ImageSize::from_raw("1536x864")));
+        assert_eq!(
+            ok(serde_json::to_value(&multipart.metadata))["size"],
+            "1536x864"
+        );
+        let generation =
+            CreateImageRequest::new("A lighthouse").with_size(ImageSize::from_raw("256x256"));
+        assert_eq!(ok(serde_json::to_value(&generation))["size"], "256x256");
     }
 
     #[test]

@@ -6,9 +6,16 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::BridgeError;
-use openai_rs_types::responses::FunctionTool;
+use openai_rs_types::responses::{FunctionTool, MAX_FUNCTION_TOOL_NAME_CHARS};
 
-const MAX_FUNCTION_NAME_BYTES: usize = 64;
+/// Inclusive maximum for an OpenAI-exposed function name, in bytes.
+///
+/// Single-sourced from the types-side validator constant
+/// `MAX_FUNCTION_TOOL_NAME_CHARS` (the pinned `FunctionToolParam.name`
+/// `maxLength` of 128), so the catalog cannot drift from the request
+/// builder. Catalog names are restricted to ASCII, where a byte budget and
+/// a character budget coincide.
+const MAX_FUNCTION_NAME_BYTES: usize = MAX_FUNCTION_TOOL_NAME_CHARS;
 const HASH_BYTES: usize = 8;
 const HASH_HEX_BYTES: usize = HASH_BYTES * 2;
 const HASH_SEPARATOR_BYTES: usize = 2;
@@ -304,17 +311,23 @@ fn mapped_name(original: &str, nonce: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::sync::Arc;
 
     use serde_json::{Map, json};
 
     use super::*;
 
-    fn tool(name: &'static str, schema: Value) -> Tool {
+    fn tool(name: impl Into<Cow<'static, str>>, schema: Value) -> Tool {
         let Value::Object(schema) = schema else {
             panic!("test schema must be an object");
         };
-        Tool::new(name, format!("{name} description"), Arc::new(schema))
+        let name = name.into();
+        Tool::new(
+            name.clone(),
+            format!("{} description", name.as_ref()),
+            Arc::new(schema),
+        )
     }
 
     #[test]
@@ -369,6 +382,66 @@ mod tests {
             .map(CatalogEntry::openai_name)
             .collect::<HashSet<_>>();
         assert_eq!(names.len(), 2);
+    }
+
+    #[test]
+    fn name_length_boundaries_follow_the_pinned_function_tool_limit() {
+        // 65 bytes used to exceed the legacy 64-byte budget and was mapped;
+        // the pinned `FunctionToolParam.name` maxLength is 128, so every
+        // in-range length now survives verbatim, including the boundary.
+        let just_over_legacy = "a".repeat(65);
+        let at_limit = "t".repeat(MAX_FUNCTION_TOOL_NAME_CHARS);
+        let catalog = ToolCatalog::build(
+            [
+                tool(just_over_legacy.clone(), json!({"type": "object"})),
+                tool(at_limit.clone(), json!({"type": "object"})),
+            ],
+            CatalogPolicy::default(),
+        )
+        .expect("names within the pinned limit must be retained");
+        assert_eq!(
+            catalog
+                .resolve(&just_over_legacy)
+                .map(CatalogEntry::mcp_name),
+            Some(just_over_legacy.as_str())
+        );
+        assert_eq!(
+            catalog.resolve(&at_limit).map(CatalogEntry::mcp_name),
+            Some(at_limit.as_str())
+        );
+
+        // The strict policy accepts the boundary length as well: only empty
+        // names and invalid characters are rejected there.
+        assert!(
+            ToolCatalog::build(
+                [tool(at_limit.clone(), json!({"type": "object"}))],
+                CatalogPolicy::new(ToolNamePolicy::RejectInvalid, SchemaPolicy::RequireObject),
+            )
+            .is_ok()
+        );
+
+        // One byte past the limit is invalid and must map down to a
+        // deterministic name that fits the budget: the retained prefix
+        // (128 - 2 separator - 16 hex chars) plus the hash suffix.
+        let over_limit = "n".repeat(MAX_FUNCTION_TOOL_NAME_CHARS + 1);
+        let catalog = ToolCatalog::build(
+            [tool(over_limit.clone(), json!({"type": "object"}))],
+            CatalogPolicy::default(),
+        )
+        .expect("an over-limit name is mapped under the default policy");
+        let mapped = catalog
+            .entries()
+            .next()
+            .expect("catalog holds the mapped entry");
+        assert_eq!(mapped.mcp_name(), over_limit);
+        assert_ne!(mapped.openai_name(), over_limit);
+        assert!(is_valid_function_name(mapped.openai_name()));
+        assert!(mapped.openai_name().len() <= MAX_FUNCTION_NAME_BYTES);
+        assert!(
+            mapped
+                .openai_name()
+                .starts_with(&over_limit[..MAX_MAPPED_PREFIX_BYTES])
+        );
     }
 
     #[test]

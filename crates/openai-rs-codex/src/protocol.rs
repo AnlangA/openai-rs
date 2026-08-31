@@ -146,25 +146,74 @@ pub(crate) struct LoginAccountResponse {
     pub extra: serde_json::Map<String, Value>,
 }
 
+openai_rs_types::open_string_enum! {
+    /// Outcome of an `account/login/cancel` call.
+    ///
+    /// The pinned `v2/CancelLoginAccountStatus` enumerates exactly `canceled`
+    /// and `notFound`; values added by a newer app-server decode losslessly as
+    /// [`CancelLoginStatus::Unknown`].
+    pub enum CancelLoginStatus {
+        Canceled = "canceled",
+        NotFound = "notFound"
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelLoginResponse {
-    /// Open string so newly added server statuses remain lossless.
-    pub status: String,
+    pub status: CancelLoginStatus,
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
+}
+
+openai_rs_types::open_string_enum! {
+    /// ChatGPT plan classification reported by app-server.
+    ///
+    /// The pinned `v2/PlanType` enumerates the twelve values below; plans
+    /// introduced later decode losslessly as [`PlanType::Unknown`].
+    pub enum PlanType {
+        Free = "free",
+        Go = "go",
+        Plus = "plus",
+        Pro = "pro",
+        Prolite = "prolite",
+        Team = "team",
+        SelfServeBusinessUsageBased = "self_serve_business_usage_based",
+        Business = "business",
+        EnterpriseCbpUsageBased = "enterprise_cbp_usage_based",
+        Enterprise = "enterprise",
+        Edu = "edu",
+        /// The pinned literal `unknown` plan placeholder, distinct from the
+        /// macro-generated [`PlanType::Unknown`] forward-compatibility variant.
+        UnknownPlan = "unknown"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Why an account hit a rate limit.
+    ///
+    /// The pinned `v2/RateLimitReachedType` enumerates exactly five values;
+    /// states added later decode losslessly as [`RateLimitReachedType::Unknown`].
+    pub enum RateLimitReachedType {
+        RateLimitReached = "rate_limit_reached",
+        WorkspaceOwnerCreditsDepleted = "workspace_owner_credits_depleted",
+        WorkspaceMemberCreditsDepleted = "workspace_member_credits_depleted",
+        WorkspaceOwnerUsageLimitReached = "workspace_owner_usage_limit_reached",
+        WorkspaceMemberUsageLimitReached = "workspace_member_usage_limit_reached"
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {
-    /// Open discriminator (`apiKey`, `chatgpt`, or a future account type).
+    /// Open discriminator (`apiKey`, `chatgpt`, `amazonBedrock`, or a future
+    /// account type).
     #[serde(rename = "type")]
     pub kind: String,
     #[serde(default)]
     pub email: Option<String>,
     #[serde(default)]
-    pub plan_type: Option<String>,
+    pub plan_type: Option<PlanType>,
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -206,10 +255,10 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
-    /// Open string; app-server may add new plan names.
-    pub plan_type: Option<String>,
-    /// Open string; app-server may add new reached states.
-    pub rate_limit_reached_type: Option<String>,
+    /// Plan classification; unknown plans stay lossless.
+    pub plan_type: Option<PlanType>,
+    /// Why the limit was reached; unknown states stay lossless.
+    pub rate_limit_reached_type: Option<RateLimitReachedType>,
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -256,6 +305,160 @@ pub struct AccountUsageResponse {
     pub extra: serde_json::Map<String, Value>,
 }
 
+openai_rs_types::open_string_enum! {
+    /// String branch of the pinned `v2/AskForApproval`.
+    ///
+    /// Enumerates `untrusted`, `on-request`, and `never`; policies introduced
+    /// later decode losslessly as [`AskForApprovalMode::Unknown`].
+    pub enum AskForApprovalMode {
+        Untrusted = "untrusted",
+        OnRequest = "on-request",
+        Never = "never"
+    }
+}
+
+/// Settings of the granular approval-policy branch.
+///
+/// Wire shape of the `granular` object inside the pinned
+/// `v2/AskForApproval` union. The keys stay snake_case exactly as pinned
+/// (`mcp_elicitations`, `rules`, `sandbox_approval` required;
+/// `request_permissions`, `skill_approval` optional, defaulting to `false`
+/// on the app-server side when omitted).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GranularAskForApproval {
+    pub mcp_elicitations: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_permissions: Option<bool>,
+    pub rules: bool,
+    pub sandbox_approval: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_approval: Option<bool>,
+}
+
+impl GranularAskForApproval {
+    /// Constructs the granular policy from its three pinned required
+    /// settings, leaving both optional flags unset.
+    #[must_use]
+    pub fn new(mcp_elicitations: bool, rules: bool, sandbox_approval: bool) -> Self {
+        Self {
+            mcp_elicitations,
+            request_permissions: None,
+            rules,
+            sandbox_approval,
+            skill_approval: None,
+        }
+    }
+
+    /// Explicitly sends `request_permissions`.
+    #[must_use]
+    pub fn with_request_permissions(mut self, request_permissions: bool) -> Self {
+        self.request_permissions = Some(request_permissions);
+        self
+    }
+
+    /// Explicitly sends `skill_approval`.
+    #[must_use]
+    pub fn with_skill_approval(mut self, skill_approval: bool) -> Self {
+        self.skill_approval = Some(skill_approval);
+        self
+    }
+}
+
+/// Approval policy: either a named string or a granular object.
+///
+/// Mirrors the two-branch `oneOf` of the pinned `v2/AskForApproval`: the
+/// string branch is typed by the open enum [`AskForApprovalMode`] (unknown
+/// strings stay lossless), and the object branch serializes as
+/// `{"granular": {...}}` with the pinned snake_case keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AskForApproval {
+    Mode(AskForApprovalMode),
+    Granular(GranularAskForApproval),
+}
+
+impl From<AskForApprovalMode> for AskForApproval {
+    fn from(mode: AskForApprovalMode) -> Self {
+        Self::Mode(mode)
+    }
+}
+
+impl From<GranularAskForApproval> for AskForApproval {
+    fn from(granular: GranularAskForApproval) -> Self {
+        Self::Granular(granular)
+    }
+}
+
+impl Serialize for AskForApproval {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Mode(mode) => mode.serialize(serializer),
+            Self::Granular(granular) => {
+                #[derive(Serialize)]
+                struct Wrapper<'a> {
+                    granular: &'a GranularAskForApproval,
+                }
+                Wrapper { granular }.serialize(serializer)
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AskForApproval {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        match value {
+            Value::String(_) => AskForApprovalMode::deserialize(value)
+                .map(Self::Mode)
+                .map_err(serde::de::Error::custom),
+            Value::Object(mut object) => {
+                let granular = object.remove("granular").ok_or_else(|| {
+                    serde::de::Error::custom(
+                        "granular approval policy object requires a `granular` key",
+                    )
+                })?;
+                GranularAskForApproval::deserialize(granular)
+                    .map(Self::Granular)
+                    .map_err(serde::de::Error::custom)
+            }
+            other => Err(serde::de::Error::custom(format!(
+                "approval policy must be a string or a granular object, got {other}"
+            ))),
+        }
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Sandbox mode selected for a thread.
+    ///
+    /// The pinned `v2/SandboxMode` enumerates exactly `read-only`,
+    /// `workspace-write`, and `danger-full-access`; modes introduced later
+    /// decode losslessly as [`SandboxMode::Unknown`].
+    pub enum SandboxMode {
+        ReadOnly = "read-only",
+        WorkspaceWrite = "workspace-write",
+        DangerFullAccess = "danger-full-access"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Assistant personality selected for a thread or turn.
+    ///
+    /// The pinned `v2/Personality` enumerates exactly `none`, `friendly`,
+    /// and `pragmatic`; personalities introduced later decode losslessly as
+    /// [`Personality::Unknown`].
+    pub enum Personality {
+        None = "none",
+        Friendly = "friendly",
+        Pragmatic = "pragmatic"
+    }
+}
+
 /// Core, stable subset of `thread/start` parameters.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -267,11 +470,11 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approval_policy: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sandbox: Option<String>,
+    pub sandbox: Option<SandboxMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub personality: Option<String>,
+    pub personality: Option<Personality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -341,6 +544,20 @@ pub struct TextElement {
     pub placeholder: Option<String>,
 }
 
+openai_rs_types::open_string_enum! {
+    /// Processing fidelity requested for an image input.
+    ///
+    /// The pinned `v2/ImageDetail` enumerates exactly `auto`, `low`, `high`,
+    /// and `original`; values introduced later decode losslessly as
+    /// [`ImageDetail::Unknown`].
+    pub enum ImageDetail {
+        Auto = "auto",
+        Low = "low",
+        High = "high",
+        Original = "original"
+    }
+}
+
 /// Typed user input accepted by `turn/start`.
 ///
 /// Exactly the five variants of the pinned `v2/UserInput` schema (`text`,
@@ -357,12 +574,12 @@ pub enum UserInput {
     Image {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        detail: Option<String>,
+        detail: Option<ImageDetail>,
     },
     LocalImage {
         path: PathBuf,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        detail: Option<String>,
+        detail: Option<ImageDetail>,
     },
     Skill {
         name: String,
@@ -384,6 +601,20 @@ impl UserInput {
     }
 }
 
+openai_rs_types::open_string_enum! {
+    /// Requested form of a reasoning summary on `turn/start`.
+    ///
+    /// The pinned `v2/ReasoningSummary` enumerates `auto`, `concise`,
+    /// `detailed`, and the summary-disabling `none`; values introduced later
+    /// decode losslessly as [`ReasoningSummary::Unknown`].
+    pub enum ReasoningSummary {
+        Auto = "auto",
+        Concise = "concise",
+        Detailed = "detailed",
+        None = "none"
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartParams {
@@ -395,12 +626,14 @@ pub struct TurnStartParams {
     pub cwd: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Plain string: the pinned `v2/ReasoningEffort` is a `minLength 1`
+    /// string with no enumerated values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
+    pub summary: Option<ReasoningSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub personality: Option<String>,
+    pub personality: Option<Personality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<Value>,
 }
@@ -422,14 +655,27 @@ impl TurnStartParams {
     }
 }
 
+openai_rs_types::open_string_enum! {
+    /// Lifecycle state of a turn.
+    ///
+    /// The pinned `v2/TurnStatus` enumerates exactly `completed`,
+    /// `interrupted`, `failed`, and `inProgress`; statuses introduced later
+    /// decode losslessly as [`TurnStatus::Unknown`].
+    pub enum TurnStatus {
+        Completed = "completed",
+        Interrupted = "interrupted",
+        Failed = "failed",
+        InProgress = "inProgress"
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
     pub id: String,
     #[serde(default)]
     pub items: Vec<Value>,
-    /// Open status string (`inProgress`, `completed`, `interrupted`, `failed`, …).
-    pub status: String,
+    pub status: TurnStatus,
     #[serde(default)]
     pub error: Option<Value>,
     #[serde(default)]
@@ -473,11 +719,29 @@ pub struct AccountLoginCompletedNotification {
     pub extra: serde_json::Map<String, Value>,
 }
 
+openai_rs_types::open_string_enum! {
+    /// How the app-server authenticated the current account.
+    ///
+    /// The pinned `v2/AuthMode` enumerates seven values (`apikey`, `chatgpt`,
+    /// `chatgptAuthTokens`, `headers`, `agentIdentity`, `personalAccessToken`,
+    /// `bedrockApiKey`); modes introduced later decode losslessly as
+    /// [`AuthMode::Unknown`].
+    pub enum AuthMode {
+        ApiKey = "apikey",
+        Chatgpt = "chatgpt",
+        ChatgptAuthTokens = "chatgptAuthTokens",
+        Headers = "headers",
+        AgentIdentity = "agentIdentity",
+        PersonalAccessToken = "personalAccessToken",
+        BedrockApiKey = "bedrockApiKey"
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUpdatedNotification {
-    pub auth_mode: Option<String>,
-    pub plan_type: Option<String>,
+    pub auth_mode: Option<AuthMode>,
+    pub plan_type: Option<PlanType>,
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -609,12 +873,17 @@ pub(crate) fn decode_notification(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use serde_json::json;
 
     use super::{
-        ByteRange, ClientInfo, InitializeCapabilities, InitializeParams, LoginAccountResponse,
-        Notification, Nullable, Omittable, TextElement, TurnStartParams, UserInput,
-        decode_notification,
+        AccountUpdatedNotification, AskForApproval, AskForApprovalMode, AuthMode, ByteRange,
+        CancelLoginResponse, CancelLoginStatus, ClientInfo, GranularAskForApproval, ImageDetail,
+        InitializeCapabilities, InitializeParams, LoginAccountResponse, Notification, Nullable,
+        Omittable, Personality, PlanType, RateLimitReachedType, RateLimitSnapshot,
+        ReasoningSummary, SandboxMode, TextElement, ThreadStartParams, Turn, TurnStartParams,
+        TurnStatus, UserInput, decode_notification,
     };
 
     #[test]
@@ -837,5 +1106,327 @@ mod tests {
             Notification::Unknown(unknown) => assert_eq!(unknown.raw, raw),
             other => panic!("expected unknown notification, got {other:?}"),
         }
+    }
+
+    /// 3-02: `thread/start` enum parameters cover the pinned wire domains and
+    /// unknown values round-trip losslessly.
+    #[test]
+    fn thread_start_params_serialize_typed_enum_domains() -> Result<(), serde_json::Error> {
+        for (wire, expected) in [
+            ("untrusted", AskForApprovalMode::Untrusted),
+            ("on-request", AskForApprovalMode::OnRequest),
+            ("never", AskForApprovalMode::Never),
+        ] {
+            assert_eq!(AskForApprovalMode::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        for (wire, expected) in [
+            ("read-only", SandboxMode::ReadOnly),
+            ("workspace-write", SandboxMode::WorkspaceWrite),
+            ("danger-full-access", SandboxMode::DangerFullAccess),
+        ] {
+            assert_eq!(SandboxMode::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        for (wire, expected) in [
+            ("none", Personality::None),
+            ("friendly", Personality::Friendly),
+            ("pragmatic", Personality::Pragmatic),
+        ] {
+            assert_eq!(Personality::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+
+        let params = ThreadStartParams {
+            approval_policy: Some(AskForApproval::Mode(AskForApprovalMode::OnRequest)),
+            sandbox: Some(SandboxMode::WorkspaceWrite),
+            personality: Some(Personality::Pragmatic),
+            ..ThreadStartParams::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&params)?,
+            json!({
+                "approvalPolicy": "on-request",
+                "sandbox": "workspace-write",
+                "personality": "pragmatic"
+            })
+        );
+
+        let future = ThreadStartParams {
+            sandbox: Some(SandboxMode::from_raw("future-sandbox")),
+            personality: Some(Personality::from_raw("future-persona")),
+            approval_policy: Some(AskForApproval::Mode(AskForApprovalMode::from_raw(
+                "future-policy",
+            ))),
+            ..ThreadStartParams::default()
+        };
+        let encoded = serde_json::to_value(&future)?;
+        assert_eq!(encoded["sandbox"], json!("future-sandbox"));
+        assert_eq!(encoded["personality"], json!("future-persona"));
+        assert_eq!(encoded["approvalPolicy"], json!("future-policy"));
+        assert_eq!(
+            serde_json::from_value::<ThreadStartParams>(encoded)?,
+            future
+        );
+        Ok(())
+    }
+
+    /// 3-02: the granular object branch of `v2/AskForApproval` keeps the
+    /// pinned `{"granular": {...}}` wrapper with snake_case settings keys.
+    #[test]
+    fn approval_policy_granular_branch_matches_the_pinned_wire_shape()
+    -> Result<(), serde_json::Error> {
+        let granular = GranularAskForApproval::new(true, false, true)
+            .with_request_permissions(true)
+            .with_skill_approval(false);
+        let policy = AskForApproval::Granular(granular);
+        let encoded = serde_json::to_value(&policy)?;
+        assert_eq!(
+            encoded,
+            json!({
+                "granular": {
+                    "mcp_elicitations": true,
+                    "rules": false,
+                    "sandbox_approval": true,
+                    "request_permissions": true,
+                    "skill_approval": false
+                }
+            })
+        );
+        assert_eq!(serde_json::from_value::<AskForApproval>(encoded)?, policy);
+
+        // Optional flags are omitted entirely when unset; the pin defaults
+        // both to `false` on the app-server side.
+        let minimal = AskForApproval::Granular(GranularAskForApproval::new(false, true, false));
+        let encoded = serde_json::to_value(&minimal)?;
+        assert_eq!(
+            encoded,
+            json!({
+                "granular": {
+                    "mcp_elicitations": false,
+                    "rules": true,
+                    "sandbox_approval": false
+                }
+            })
+        );
+        assert_eq!(serde_json::from_value::<AskForApproval>(encoded)?, minimal);
+
+        // The granular policy nests inside `thread/start` exactly like the
+        // string branch.
+        let params = ThreadStartParams {
+            approval_policy: Some(policy),
+            ..ThreadStartParams::default()
+        };
+        let encoded = serde_json::to_value(&params)?;
+        assert_eq!(
+            encoded["approvalPolicy"]["granular"]["sandbox_approval"],
+            json!(true)
+        );
+        assert_eq!(
+            serde_json::from_value::<ThreadStartParams>(encoded)?,
+            params
+        );
+
+        // The object branch is pinned to a single required `granular` key.
+        assert!(
+            serde_json::from_value::<AskForApproval>(json!({"other": true})).is_err(),
+            "object without a `granular` key must not decode"
+        );
+        Ok(())
+    }
+
+    /// 3-02: `turn/start` enum parameters cover the pinned wire domains;
+    /// `effort` stays a plain string because the pinned `v2/ReasoningEffort`
+    /// enumerates no values.
+    #[test]
+    fn turn_start_params_serialize_typed_enum_domains() -> Result<(), serde_json::Error> {
+        for (wire, expected) in [
+            ("auto", ReasoningSummary::Auto),
+            ("concise", ReasoningSummary::Concise),
+            ("detailed", ReasoningSummary::Detailed),
+            ("none", ReasoningSummary::None),
+        ] {
+            assert_eq!(ReasoningSummary::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+
+        let params = TurnStartParams {
+            summary: Some(ReasoningSummary::Concise),
+            personality: Some(Personality::None),
+            effort: Some("minimal".to_owned()),
+            ..TurnStartParams::text("thr_123", "hello")
+        };
+        let encoded = serde_json::to_value(&params)?;
+        assert_eq!(encoded["summary"], json!("concise"));
+        assert_eq!(encoded["personality"], json!("none"));
+        assert_eq!(encoded["effort"], json!("minimal"));
+
+        let future = TurnStartParams {
+            summary: Some(ReasoningSummary::from_raw("future-summary")),
+            personality: Some(Personality::from_raw("future-persona")),
+            ..TurnStartParams::text("thr_123", "hello")
+        };
+        let encoded = serde_json::to_value(&future)?;
+        assert_eq!(encoded["summary"], json!("future-summary"));
+        assert_eq!(encoded["personality"], json!("future-persona"));
+        assert_eq!(serde_json::from_value::<TurnStartParams>(encoded)?, future);
+        Ok(())
+    }
+
+    /// 3-22: `image`/`localImage` `detail` covers the four pinned values and
+    /// keeps unknown fidelity strings losslessly.
+    #[test]
+    fn image_detail_covers_the_pinned_domain_and_keeps_unknowns() -> Result<(), serde_json::Error> {
+        for (wire, expected) in [
+            ("auto", ImageDetail::Auto),
+            ("low", ImageDetail::Low),
+            ("high", ImageDetail::High),
+            ("original", ImageDetail::Original),
+        ] {
+            assert_eq!(ImageDetail::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+
+        let image = UserInput::Image {
+            url: "https://example.test/a.png".to_owned(),
+            detail: Some(ImageDetail::from_raw("ultra")),
+        };
+        let encoded = serde_json::to_value(&image)?;
+        assert_eq!(encoded["detail"], json!("ultra"));
+        assert_eq!(serde_json::from_value::<UserInput>(encoded)?, image);
+
+        let local = UserInput::LocalImage {
+            path: PathBuf::from("/tmp/a.png"),
+            detail: Some(ImageDetail::Original),
+        };
+        let encoded = serde_json::to_value(&local)?;
+        assert_eq!(
+            encoded,
+            json!({"type": "localImage", "path": "/tmp/a.png", "detail": "original"})
+        );
+        assert_eq!(serde_json::from_value::<UserInput>(encoded)?, local);
+        Ok(())
+    }
+
+    /// 3-23: receive-side closed enums decode their pinned domains and keep
+    /// unknown values from a newer app-server losslessly.
+    #[test]
+    fn receive_side_enums_decode_known_and_unknown_values() -> Result<(), serde_json::Error> {
+        let turn: Turn = serde_json::from_value(json!({
+            "id": "turn_1", "items": [], "status": "inProgress"
+        }))?;
+        assert_eq!(turn.status, TurnStatus::InProgress);
+        for (wire, expected) in [
+            ("completed", TurnStatus::Completed),
+            ("interrupted", TurnStatus::Interrupted),
+            ("failed", TurnStatus::Failed),
+            ("inProgress", TurnStatus::InProgress),
+        ] {
+            assert_eq!(TurnStatus::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        let turn: Turn =
+            serde_json::from_value(json!({"id": "turn_1", "items": [], "status": "queued"}))?;
+        assert!(!turn.status.is_known());
+        assert_eq!(turn.status.unknown_value(), Some("queued"));
+        let encoded = serde_json::to_value(&turn)?;
+        assert_eq!(encoded["status"], json!("queued"));
+
+        for (wire, expected) in [
+            ("canceled", CancelLoginStatus::Canceled),
+            ("notFound", CancelLoginStatus::NotFound),
+        ] {
+            assert_eq!(CancelLoginStatus::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        let canceled: CancelLoginResponse = serde_json::from_value(json!({"status": "notFound"}))?;
+        assert_eq!(canceled.status, CancelLoginStatus::NotFound);
+
+        for (wire, expected) in [
+            ("free", PlanType::Free),
+            ("go", PlanType::Go),
+            ("plus", PlanType::Plus),
+            ("pro", PlanType::Pro),
+            ("prolite", PlanType::Prolite),
+            ("team", PlanType::Team),
+            (
+                "self_serve_business_usage_based",
+                PlanType::SelfServeBusinessUsageBased,
+            ),
+            ("business", PlanType::Business),
+            (
+                "enterprise_cbp_usage_based",
+                PlanType::EnterpriseCbpUsageBased,
+            ),
+            ("enterprise", PlanType::Enterprise),
+            ("edu", PlanType::Edu),
+            ("unknown", PlanType::UnknownPlan),
+        ] {
+            assert_eq!(PlanType::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+
+        for (wire, expected) in [
+            ("rate_limit_reached", RateLimitReachedType::RateLimitReached),
+            (
+                "workspace_owner_credits_depleted",
+                RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
+            ),
+            (
+                "workspace_member_credits_depleted",
+                RateLimitReachedType::WorkspaceMemberCreditsDepleted,
+            ),
+            (
+                "workspace_owner_usage_limit_reached",
+                RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
+            ),
+            (
+                "workspace_member_usage_limit_reached",
+                RateLimitReachedType::WorkspaceMemberUsageLimitReached,
+            ),
+        ] {
+            assert_eq!(RateLimitReachedType::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+
+        let snapshot: RateLimitSnapshot = serde_json::from_value(json!({
+            "planType": "future_plan",
+            "rateLimitReachedType": "future_state"
+        }))?;
+        assert_eq!(snapshot.plan_type, Some(PlanType::from_raw("future_plan")));
+        assert_eq!(
+            snapshot.rate_limit_reached_type,
+            Some(RateLimitReachedType::from_raw("future_state"))
+        );
+        let encoded = serde_json::to_value(&snapshot)?;
+        assert_eq!(encoded["planType"], json!("future_plan"));
+        assert_eq!(encoded["rateLimitReachedType"], json!("future_state"));
+
+        for (wire, expected) in [
+            ("apikey", AuthMode::ApiKey),
+            ("chatgpt", AuthMode::Chatgpt),
+            ("chatgptAuthTokens", AuthMode::ChatgptAuthTokens),
+            ("headers", AuthMode::Headers),
+            ("agentIdentity", AuthMode::AgentIdentity),
+            ("personalAccessToken", AuthMode::PersonalAccessToken),
+            ("bedrockApiKey", AuthMode::BedrockApiKey),
+        ] {
+            assert_eq!(AuthMode::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        let updated: AccountUpdatedNotification =
+            serde_json::from_value(json!({"authMode": "chatgptAuthTokens", "planType": "edu"}))?;
+        assert_eq!(updated.auth_mode, Some(AuthMode::ChatgptAuthTokens));
+        assert_eq!(updated.plan_type, Some(PlanType::Edu));
+
+        let updated: AccountUpdatedNotification =
+            serde_json::from_value(json!({"authMode": "futureMode"}))?;
+        assert_eq!(
+            updated.auth_mode.as_ref().map(|mode| mode.as_str()),
+            Some("futureMode")
+        );
+        let encoded = serde_json::to_value(&updated)?;
+        assert_eq!(encoded["authMode"], json!("futureMode"));
+        Ok(())
     }
 }

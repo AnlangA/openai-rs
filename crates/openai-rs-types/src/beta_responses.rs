@@ -547,6 +547,9 @@ impl BetaPromptCachedInputMessage {
     }
 
     /// Adds the platform item id when replaying a returned item.
+    ///
+    /// Replay-compat superset: neither pinned message branch (`BetaEasyInputMessage`
+    /// / `BetaInputMessage`) declares `id`; it exists only on the resource shape.
     #[must_use]
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = Omittable::Value(Nullable::Value(id.into()));
@@ -554,16 +557,12 @@ impl BetaPromptCachedInputMessage {
     }
 
     /// Sets an item status when echoing a stored message.
+    ///
+    /// Replay-compat superset: `BetaInputMessage.status` is a non-null enum and
+    /// the easy-form branch has no status at all.
     #[must_use]
     pub fn status(mut self, status: ResponseItemStatus) -> Self {
         self.status = Omittable::Value(Nullable::Value(status));
-        self
-    }
-
-    /// Sends official `id: null`.
-    #[must_use]
-    pub fn id_null(mut self) -> Self {
-        self.id = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -578,13 +577,6 @@ impl BetaPromptCachedInputMessage {
     #[must_use]
     pub fn phase_null(mut self) -> Self {
         self.phase = Omittable::Value(Nullable::Null);
-        self
-    }
-
-    /// Sends official `status: null`.
-    #[must_use]
-    pub fn status_null(mut self) -> Self {
-        self.status = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -5184,15 +5176,13 @@ mod tests {
             crate::responses::InputText::new("hello"),
         )
         .prompt_cache_breakpoint_null()])
-        .id_null()
         .agent_null()
-        .phase_null()
-        .status_null();
+        .phase_null();
         let cached_value = serde_json::to_value(&cached).expect("serialize cached nulls");
-        assert_eq!(cached_value["id"], Value::Null);
+        assert!(cached_value.get("id").is_none());
+        assert!(cached_value.get("status").is_none());
         assert_eq!(cached_value["agent"], Value::Null);
         assert_eq!(cached_value["phase"], Value::Null);
-        assert_eq!(cached_value["status"], Value::Null);
         assert_eq!(
             cached_value["content"][0]["prompt_cache_breakpoint"],
             Value::Null

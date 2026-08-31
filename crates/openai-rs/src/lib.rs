@@ -19,10 +19,11 @@ pub use openai_rs_types::{
 pub use openai_rs_client::{
     AddUploadPartOneShotRequest, ApiError, ApiKey, ApiKeyError, ApiResponse, Audio,
     BatchPageStream, BatchSubmission, BatchSubmissionError, BatchSubmissionOptions, Batches,
-    BodyPreview, C2paProvenanceResult, ChatCompletionEventStream, ChatCompletionMessagePageStream,
-    ChatCompletionMessages, ChatCompletionPageStream, ChatCompletions, Client, ClientBuilder,
-    ContainerFileContentStream, ContainerFilePageStream, ContainerFiles, ContainerPageStream,
-    Containers, ContentProvenanceCheck, ContentProvenanceChecks, ContentProvenanceResult,
+    BodyPreview, C2paProvenanceResult, C2paValidationState, ChatCompletionEventStream,
+    ChatCompletionMessagePageStream, ChatCompletionMessages, ChatCompletionPageStream,
+    ChatCompletions, Client, ClientBuilder, ContainerFileContentStream, ContainerFilePageStream,
+    ContainerFiles, ContainerPageStream, Containers, ContentProvenanceCheck,
+    ContentProvenanceChecks, ContentProvenanceObjectType, ContentProvenanceResult,
     ConversationItemPageStream, ConversationItems, Conversations,
     CreateContentProvenanceCheckRequest, CreateFileOneShotRequest, DeleteResponseResult,
     Embeddings, Error, FileContentStream, FilePageStream, Files, FineTuning,
@@ -31,9 +32,10 @@ pub use openai_rs_client::{
     FineTuningPollError, FineTuningPollOptions, ImageEditEventStream, ImageGenerationEventStream,
     Images, InputItems, InputTokens, MediaByteStream, MediaEventStream, MediaTextBody, Models,
     Moderations, OneShotMultipartSource, PollCancellationToken, PollError, PollOptions,
-    RateLimitMetadata, ResponseEventStream, ResponseInputItemPageStream, ResponseMeta, Responses,
-    RetrieveResponseParams, RetrieveResponseStreamParams, RetryPolicy, SkillContentStream,
-    SkillPageStream, SkillVersionPageStream, SkillVersions, Skills, SpeechEventStream, StreamError,
+    ProvenanceDetectionOutcome, RateLimitMetadata, ResponseEventStream,
+    ResponseInputItemPageStream, ResponseMeta, Responses, RetrieveResponseParams,
+    RetrieveResponseStreamParams, RetryPolicy, SkillContentStream, SkillPageStream,
+    SkillVersionPageStream, SkillVersions, Skills, SpeechEventStream, StreamError,
     SynthIdProvenanceResult, TlsBackend, TranscriptionEventStream, TranscriptionOutput,
     TranslationOutput, Uploads, VectorStoreFileBatches, VectorStoreFilePageStream,
     VectorStoreFiles, VectorStorePageStream, VectorStores,
@@ -86,7 +88,7 @@ pub use openai_rs_client::{
 
 #[cfg(all(feature = "client", feature = "realtime"))]
 pub use openai_rs_client::{
-    Realtime, RealtimeCallCreated, RealtimeConnectTarget, RealtimeWebSocket,
+    Realtime, RealtimeCallCreated, RealtimeConnectTarget, RealtimeKeepalive, RealtimeWebSocket,
     RealtimeWebSocketConfig, ResponsesWebSocket, ResponsesWebSocketConfig,
     WebSocketReconnectPolicy,
 };
@@ -105,10 +107,12 @@ pub use openai_rs_client::{
 #[cfg(feature = "admin")]
 pub mod admin {
     pub use openai_rs_client::{
-        AdminApiKey, AdminApiKeyError, AdminApiKeys, AdminAuditLogs, AdminCertificates,
-        AdminCheckpointPermissions, AdminClient, AdminClientBuilder, AdminDataRetention,
-        AdminGroups, AdminInvites, AdminProjects, AdminRequest, AdminRoles, AdminUsage, AdminUsers,
-        operations,
+        ADMIN_CHECKPOINT_PERMISSION_OPERATION_MANIFEST, ADMIN_CLIENT_OPERATION_MANIFEST,
+        AdminApiKey, AdminApiKeyError, AdminApiKeys, AdminAuditLogs, AdminAuthScope,
+        AdminCertificates, AdminCheckpointPermissions, AdminClient, AdminClientBuilder,
+        AdminClientOperationContract, AdminDataRetention, AdminGroups, AdminInvites,
+        AdminOperation, AdminProjects, AdminQuery, AdminRequest, AdminRequestEncoding,
+        AdminResponseMode, AdminRoles, AdminUsage, AdminUsers, operations,
     };
     pub use openai_rs_types::admin::*;
 }

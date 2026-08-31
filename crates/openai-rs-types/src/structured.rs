@@ -17,6 +17,14 @@
 //! expanding without bound. A `$ref` that is not a string is likewise
 //! rejected instead of being silently passed through.
 //!
+//! Cycle detection alone does not bound the work: a reference graph that
+//! fans out (a DAG rather than a cycle) can double the schema on every
+//! level even though no reference repeats on one path. Every node that
+//! sibling-key inlining produces is therefore charged against a fixed
+//! expansion budget ([`MAX_REF_INLINE_NODES`]); exhausting it fails with
+//! [`StructuredError::ExpansionBudgetExceeded`] instead of letting the
+//! output grow exponentially.
+//!
 //! `additionalProperties` is defaulted to `false` only when the key is
 //! missing - a pre-existing non-`false` value (for example the map shape that
 //! a `HashMap` field produces) is reported instead of overwritten.
@@ -27,6 +35,18 @@ use schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
+
+/// Maximum number of JSON nodes that sibling-key `$ref` inlining may produce
+/// during a single normalization pass.
+///
+/// A cyclic reference chain is rejected outright by
+/// [`StructuredError::RecursiveReference`], but an acyclic reference graph can
+/// still fan out: two sibling-key references per level double the expansion on
+/// every step, so a 40-level DAG would otherwise demand ~2^40 nodes. Charging
+/// every node the inliner emits against this budget turns that into
+/// [`StructuredError::ExpansionBudgetExceeded`] while the in-flight schema is
+/// still of bounded size.
+pub const MAX_REF_INLINE_NODES: usize = 100_000;
 
 /// Failure while building or using a typed JSON contract.
 #[derive(Debug, Error)]
@@ -71,6 +91,21 @@ pub enum StructuredError {
         path: String,
         /// Reference that recursed into a definition already being inlined.
         reference: String,
+    },
+    /// Sibling-key `$ref` inlining produced more nodes than
+    /// [`MAX_REF_INLINE_NODES`] allows. A fan-out reference graph (a DAG, not
+    /// a cycle) can double the schema on every level; the budget stops the
+    /// expansion with an error instead of unbounded memory growth.
+    #[error(
+        "JSON Schema `$ref` expansion at {path} exceeded the {budget} node budget \
+         (`MAX_REF_INLINE_NODES`)"
+    )]
+    ExpansionBudgetExceeded {
+        /// JSON Pointer-like location of the reference whose expansion
+        /// exceeded the budget.
+        path: String,
+        /// Node budget that the expansion exceeded.
+        budget: usize,
     },
     /// A generated schema was not an object schema.
     #[error("root JSON Schema must describe an object")]
@@ -450,9 +485,11 @@ impl ToolRegistry {
 pub fn normalize_strict_schema(schema: &mut Value) -> Result<(), StructuredError> {
     // `$ref`s are resolved against a pristine snapshot of the document so
     // inlining never observes this pass's intermediate mutations.  Inlining
-    // starts with an empty chain of actively expanded references.
+    // starts with an empty chain of actively expanded references and an
+    // empty expansion budget.
     let base = schema.clone();
-    normalize(schema, "#", &base, &[])?;
+    let mut budget = InlineBudget::default();
+    normalize(schema, "#", &base, &[], &mut budget)?;
     let is_object = schema.as_object().is_some_and(schema_is_object);
     if !is_object {
         return Err(StructuredError::RootMustBeObject);
@@ -480,11 +517,19 @@ fn validate_name(name: &str) -> Result<(), StructuredError> {
 /// introduces references that already exist in the pristine `base` snapshot,
 /// the chain length - and with it the recursion depth - stays bounded by the
 /// number of distinct references in the document.
+///
+/// `budget` charges every JSON node that sibling-key inlining produces
+/// across the whole pass.  The chain bounds the depth of one expansion path
+/// but not the total: a DAG that fans out into sibling-key references
+/// multiplies its expansion on every level without ever repeating a
+/// reference on one path, so the cumulative node count is what stops the
+/// blow-up (see [`MAX_REF_INLINE_NODES`]).
 fn normalize(
     value: &mut Value,
     path: &str,
     base: &Value,
     chain: &[String],
+    budget: &mut InlineBudget,
 ) -> Result<(), StructuredError> {
     let Some(object) = value.as_object_mut() else {
         return Ok(());
@@ -577,12 +622,22 @@ fn normalize(
                 merged.insert(key.clone(), sibling.clone());
             }
         }
-        *value = Value::Object(merged);
-        return normalize(value, path, base, &chain);
+        // Charge the merged subtree against the expansion budget before it
+        // replaces this node, so a fan-out DAG fails here - with the schema
+        // still of bounded size - instead of growing without limit.
+        let merged = Value::Object(merged);
+        if !budget.charge(count_nodes(&merged)) {
+            return Err(StructuredError::ExpansionBudgetExceeded {
+                path: format!("{path}/$ref"),
+                budget: MAX_REF_INLINE_NODES,
+            });
+        }
+        *value = merged;
+        return normalize(value, path, base, &chain, budget);
     }
 
     if schema_is_object(object) {
-        normalize_object(object, path, base, chain)?;
+        normalize_object(object, path, base, chain, budget)?;
     }
 
     for (key, child) in object.iter_mut() {
@@ -594,16 +649,23 @@ fn normalize(
                         &format!("{path}/{}/{}", escape_pointer(key), escape_pointer(name)),
                         base,
                         chain,
+                        budget,
                     )?;
                 }
             }
             Value::Array(children) if key == "anyOf" => {
                 for (index, schema) in children.iter_mut().enumerate() {
-                    normalize(schema, &format!("{path}/{key}/{index}"), base, chain)?;
+                    normalize(
+                        schema,
+                        &format!("{path}/{key}/{index}"),
+                        base,
+                        chain,
+                        budget,
+                    )?;
                 }
             }
             Value::Object(_) | Value::Bool(_) if key == "items" => {
-                normalize(child, &format!("{path}/{key}"), base, chain)?;
+                normalize(child, &format!("{path}/{key}"), base, chain, budget)?;
             }
             _ => {}
         }
@@ -616,6 +678,7 @@ fn normalize_object(
     path: &str,
     base: &Value,
     chain: &[String],
+    budget: &mut InlineBudget,
 ) -> Result<(), StructuredError> {
     // Only default `additionalProperties` to `false` when the key is absent.
     // A non-`false` value (for example the map shape of a `HashMap` field)
@@ -654,12 +717,40 @@ fn normalize_object(
                 &format!("{path}/properties/{}", escape_pointer(name)),
                 base,
                 chain,
+                budget,
             )?;
             required.push(Value::String(name.clone()));
         }
     }
     object.insert("required".into(), Value::Array(required));
     Ok(())
+}
+
+/// Running total of JSON nodes produced by sibling-key `$ref` inlining during
+/// one normalization pass.
+#[derive(Debug, Default)]
+struct InlineBudget {
+    spent: usize,
+}
+
+impl InlineBudget {
+    /// Charges `nodes` freshly produced nodes against
+    /// [`MAX_REF_INLINE_NODES`], returning `false` once the budget is spent.
+    /// The saturating add keeps a hostile schema from wrapping around.
+    fn charge(&mut self, nodes: usize) -> bool {
+        self.spent = self.spent.saturating_add(nodes);
+        self.spent <= MAX_REF_INLINE_NODES
+    }
+}
+
+/// Counts every JSON node in `value`, including `value` itself.
+fn count_nodes(value: &Value) -> usize {
+    let children = match value {
+        Value::Object(object) => object.values().map(count_nodes).sum(),
+        Value::Array(items) => items.iter().map(count_nodes).sum(),
+        _ => 0,
+    };
+    1 + children
 }
 
 fn schema_is_object(object: &Map<String, Value>) -> bool {
@@ -737,8 +828,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        StructuredError, StructuredOutput, TypedFunction, normalize_strict_schema,
-        schema_allows_null,
+        MAX_REF_INLINE_NODES, StructuredError, StructuredOutput, TypedFunction,
+        normalize_strict_schema, schema_allows_null,
     };
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -948,6 +1039,102 @@ mod tests {
                 if reference == "#/$defs/A"
                     && path == "#/properties/a/properties/b/properties/a/$ref"
         ));
+    }
+
+    /// Builds a DAG of `depth` definitions where every level fans out into
+    /// two sibling-key references to the next one. No reference repeats on a
+    /// single path, so the recursion chain never fires; only the node budget
+    /// can stop the 2^depth expansion.
+    fn wide_ref_dag(depth: usize) -> serde_json::Value {
+        let mut defs = serde_json::Map::new();
+        for level in 0..depth {
+            let next = format!("#/$defs/D{}", level + 1);
+            defs.insert(
+                format!("D{level}"),
+                json!({
+                    "type": "object",
+                    "required": ["left", "right"],
+                    "properties": {
+                        "left": { "$ref": next, "description": "fan out" },
+                        "right": { "$ref": next, "description": "fan out" }
+                    }
+                }),
+            );
+        }
+        defs.insert(
+            format!("D{depth}"),
+            json!({
+                "type": "object",
+                "required": ["leaf"],
+                "properties": { "leaf": { "type": "string" } }
+            }),
+        );
+        json!({
+            "type": "object",
+            "required": ["root"],
+            "properties": {
+                "root": { "$ref": "#/$defs/D0", "description": "entry point" }
+            },
+            "$defs": defs
+        })
+    }
+
+    #[test]
+    fn wide_ref_dag_trips_the_expansion_budget_instead_of_exploding() {
+        // 40 fan-out levels would inline ~2^40 nodes; the budget must fail
+        // the pass after ~`MAX_REF_INLINE_NODES` produced nodes while the
+        // in-flight schema is still of bounded size.
+        let mut schema = wide_ref_dag(40);
+        let error = normalize_strict_schema(&mut schema).expect_err("budget must trip");
+        assert!(
+            matches!(
+                &error,
+                StructuredError::ExpansionBudgetExceeded { path, budget }
+                    if *budget == MAX_REF_INLINE_NODES
+                        && path.starts_with("#/properties/root/properties/")
+                        && path.ends_with("/$ref")
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn small_ref_dag_stays_within_the_expansion_budget() {
+        // A diamond - root -> A, A branching twice into B - is a DAG too, but
+        // tiny: it must fully inline instead of tripping the budget.
+        let mut schema = json!({
+            "type": "object",
+            "required": ["root"],
+            "properties": {
+                "root": { "$ref": "#/$defs/A", "description": "entry point" }
+            },
+            "$defs": {
+                "A": {
+                    "type": "object",
+                    "required": ["left", "right"],
+                    "properties": {
+                        "left": { "$ref": "#/$defs/B", "description": "shared" },
+                        "right": { "$ref": "#/$defs/B", "description": "shared" }
+                    }
+                },
+                "B": {
+                    "type": "object",
+                    "required": ["leaf"],
+                    "properties": { "leaf": { "type": "string" } }
+                }
+            }
+        });
+        normalize_strict_schema(&mut schema).expect("small DAG fits the budget");
+        assert_no_ref_with_siblings(&schema);
+        let root = &schema["properties"]["root"];
+        assert_eq!(root["description"], "entry point");
+        for branch in ["left", "right"] {
+            assert_eq!(root["properties"][branch]["description"], "shared");
+            assert_eq!(
+                root["properties"][branch]["properties"]["leaf"]["type"],
+                "string"
+            );
+        }
     }
 
     #[test]
@@ -1166,7 +1353,7 @@ mod tests {
             serde_json::json!({ "city": "Beijing", "unit": null })
                 .to_string()
                 .into(),
-            crate::responses::ResponseItemStatus::Completed,
+            crate::responses::FunctionCallItemStatus::Completed,
         );
         let out = registry.execute(&call).await.expect("execute");
         assert_eq!(
@@ -1182,7 +1369,7 @@ mod tests {
             serde_json::json!({ "city": "Invalid", "unit": null })
                 .to_string()
                 .into(),
-            crate::responses::ResponseItemStatus::Completed,
+            crate::responses::FunctionCallItemStatus::Completed,
         );
         let err_out = registry.execute(&err_call).await.expect("execute error");
         assert_eq!(

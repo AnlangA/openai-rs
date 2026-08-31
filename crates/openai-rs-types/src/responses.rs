@@ -47,6 +47,188 @@ open_string_enum! {
 }
 
 open_string_enum! {
+    /// Status of a message item, per the pinned `MessageStatus`.
+    ///
+    /// Construction domain for message items; the decode side keeps the
+    /// shared open [`ResponseItemStatus`].
+    pub enum MessageStatus {
+        InProgress = "in_progress",
+        Completed = "completed",
+        Incomplete = "incomplete"
+    }
+}
+
+open_string_enum! {
+    /// Status of a function-call item, per the pinned
+    /// `FunctionCallItemStatus` / `FunctionCallOutputStatusEnum`.
+    ///
+    /// Construction domain for function-call items and their outputs; the
+    /// decode side keeps the shared open [`ResponseItemStatus`].
+    pub enum FunctionCallItemStatus {
+        InProgress = "in_progress",
+        Completed = "completed",
+        Incomplete = "incomplete"
+    }
+}
+
+open_string_enum! {
+    /// Status of an MCP tool-call item, per the pinned `MCPToolCallStatus`.
+    ///
+    /// Adds `calling` / `failed` on top of the message trio; the decode side
+    /// keeps the shared open [`ResponseItemStatus`].
+    pub enum McpToolCallStatus {
+        InProgress = "in_progress",
+        Completed = "completed",
+        Incomplete = "incomplete",
+        Calling = "calling",
+        Failed = "failed"
+    }
+}
+
+open_string_enum! {
+    /// Status of a web-search tool call, per the pinned `WebSearchToolCall.status`.
+    ///
+    /// Carries `searching` / `failed` but no `incomplete`; the decode side
+    /// keeps the shared open [`ResponseItemStatus`].
+    pub enum WebSearchToolCallStatus {
+        InProgress = "in_progress",
+        Searching = "searching",
+        Completed = "completed",
+        Failed = "failed"
+    }
+}
+
+open_string_enum! {
+    /// Status of a file-search tool call, per the pinned
+    /// `FileSearchToolCall.status`.
+    ///
+    /// The full five-value domain (`in_progress`/`searching`/`completed`/
+    /// `incomplete`/`failed`); the decode side keeps the shared open
+    /// [`ResponseItemStatus`].
+    pub enum FileSearchToolCallStatus {
+        InProgress = "in_progress",
+        Searching = "searching",
+        Completed = "completed",
+        Incomplete = "incomplete",
+        Failed = "failed"
+    }
+}
+
+open_string_enum! {
+    /// Status of an image-generation call, per the pinned
+    /// `ImageGenToolCall.status`.
+    ///
+    /// Carries `generating` / `failed` but no `incomplete` or `searching`;
+    /// the decode side keeps the shared open [`ResponseItemStatus`].
+    pub enum ImageGenToolCallStatus {
+        InProgress = "in_progress",
+        Completed = "completed",
+        Generating = "generating",
+        Failed = "failed"
+    }
+}
+
+open_string_enum! {
+    /// Status of a code-interpreter call, per the pinned
+    /// `CodeInterpreterToolCall.status`.
+    ///
+    /// Carries `interpreting` / `incomplete` / `failed`; the decode side
+    /// keeps the shared open [`ResponseItemStatus`].
+    pub enum CodeInterpreterToolCallStatus {
+        InProgress = "in_progress",
+        Completed = "completed",
+        Incomplete = "incomplete",
+        Interpreting = "interpreting",
+        Failed = "failed"
+    }
+}
+
+impl From<MessageStatus> for ResponseItemStatus {
+    fn from(value: MessageStatus) -> Self {
+        match value {
+            MessageStatus::InProgress => Self::InProgress,
+            MessageStatus::Completed => Self::Completed,
+            MessageStatus::Incomplete => Self::Incomplete,
+            MessageStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<FunctionCallItemStatus> for ResponseItemStatus {
+    fn from(value: FunctionCallItemStatus) -> Self {
+        match value {
+            FunctionCallItemStatus::InProgress => Self::InProgress,
+            FunctionCallItemStatus::Completed => Self::Completed,
+            FunctionCallItemStatus::Incomplete => Self::Incomplete,
+            FunctionCallItemStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<McpToolCallStatus> for ResponseItemStatus {
+    fn from(value: McpToolCallStatus) -> Self {
+        match value {
+            McpToolCallStatus::InProgress => Self::InProgress,
+            McpToolCallStatus::Completed => Self::Completed,
+            McpToolCallStatus::Incomplete => Self::Incomplete,
+            McpToolCallStatus::Calling => Self::Calling,
+            McpToolCallStatus::Failed => Self::Failed,
+            McpToolCallStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<WebSearchToolCallStatus> for ResponseItemStatus {
+    fn from(value: WebSearchToolCallStatus) -> Self {
+        match value {
+            WebSearchToolCallStatus::InProgress => Self::InProgress,
+            WebSearchToolCallStatus::Searching => Self::Searching,
+            WebSearchToolCallStatus::Completed => Self::Completed,
+            WebSearchToolCallStatus::Failed => Self::Failed,
+            WebSearchToolCallStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<FileSearchToolCallStatus> for ResponseItemStatus {
+    fn from(value: FileSearchToolCallStatus) -> Self {
+        match value {
+            FileSearchToolCallStatus::InProgress => Self::InProgress,
+            FileSearchToolCallStatus::Searching => Self::Searching,
+            FileSearchToolCallStatus::Completed => Self::Completed,
+            FileSearchToolCallStatus::Incomplete => Self::Incomplete,
+            FileSearchToolCallStatus::Failed => Self::Failed,
+            FileSearchToolCallStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<ImageGenToolCallStatus> for ResponseItemStatus {
+    fn from(value: ImageGenToolCallStatus) -> Self {
+        match value {
+            ImageGenToolCallStatus::InProgress => Self::InProgress,
+            ImageGenToolCallStatus::Completed => Self::Completed,
+            ImageGenToolCallStatus::Generating => Self::Generating,
+            ImageGenToolCallStatus::Failed => Self::Failed,
+            ImageGenToolCallStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<CodeInterpreterToolCallStatus> for ResponseItemStatus {
+    fn from(value: CodeInterpreterToolCallStatus) -> Self {
+        match value {
+            CodeInterpreterToolCallStatus::InProgress => Self::InProgress,
+            CodeInterpreterToolCallStatus::Completed => Self::Completed,
+            CodeInterpreterToolCallStatus::Incomplete => Self::Incomplete,
+            CodeInterpreterToolCallStatus::Interpreting => Self::Interpreting,
+            CodeInterpreterToolCallStatus::Failed => Self::Failed,
+            CodeInterpreterToolCallStatus::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
+open_string_enum! {
     /// Role assigned to a Responses message.
     ///
     /// Members match official `MessageRole` / `BetaMessageRole` and the
@@ -254,6 +436,23 @@ open_string_enum! {
         Priority = "priority",
         Fast = "fast",
         Ultrafast = "ultrafast"
+    }
+}
+
+open_string_enum! {
+    /// Processing tier accepted by the GA compact request.
+    ///
+    /// Members match the pinned `ServiceTierEnum` (auto/default/fast/flex/
+    /// priority) exactly — the same domain the beta side models as
+    /// [`crate::beta_responses::BetaCompactServiceTier`]. The create and
+    /// response-echo sides keep the wider [`ServiceTier`] domain, which also
+    /// accepts `scale` / `ultrafast`.
+    pub enum CompactServiceTier {
+        Auto = "auto",
+        Default = "default",
+        Fast = "fast",
+        Flex = "flex",
+        Priority = "priority"
     }
 }
 
@@ -1367,7 +1566,12 @@ impl InputFile {
 }
 
 tagged_union! {
-    /// One rich content part in an input message.
+    /// One rich content part in an item-form input message.
+    ///
+    /// This is the widest input content union: the pinned item-form `Message`
+    /// branch is the only request location where `computer_screenshot` is
+    /// legal. The easy-form message and function-call outputs use the
+    /// three-branch [`EasyInputContent`] instead.
     pub enum InputContent {
         Text(InputText) => "input_text",
         Image(InputImage) => "input_image",
@@ -1400,6 +1604,39 @@ impl From<ComputerScreenshot> for InputContent {
     }
 }
 
+tagged_union! {
+    /// One rich content part accepted by easy-form message content.
+    ///
+    /// Members match the pinned `InputContent` request schema — the union
+    /// behind `EasyInputMessage.content` / python's
+    /// `ResponseInputMessageContentListParam` — exactly: `computer_screenshot`
+    /// is legal only inside item-form messages ([`InputContent`]) and is not
+    /// constructible here. The open `Unknown` variant keeps decoding lossless.
+    pub enum EasyInputContent {
+        Text(InputText) => "input_text",
+        Image(InputImage) => "input_image",
+        File(InputFile) => "input_file"
+    }
+}
+
+impl From<InputText> for EasyInputContent {
+    fn from(value: InputText) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<InputImage> for EasyInputContent {
+    fn from(value: InputImage) -> Self {
+        Self::Image(value)
+    }
+}
+
+impl From<InputFile> for EasyInputContent {
+    fn from(value: InputFile) -> Self {
+        Self::File(value)
+    }
+}
+
 /// Text or an ordered list of rich message content parts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -1407,7 +1644,7 @@ pub enum MessageContent {
     /// Plain text content.
     Text(String),
     /// Rich content parts.
-    Parts(Vec<InputContent>),
+    Parts(Vec<EasyInputContent>),
 }
 
 impl From<String> for MessageContent {
@@ -1422,8 +1659,8 @@ impl From<&str> for MessageContent {
     }
 }
 
-impl From<Vec<InputContent>> for MessageContent {
-    fn from(value: Vec<InputContent>) -> Self {
+impl From<Vec<EasyInputContent>> for MessageContent {
+    fn from(value: Vec<EasyInputContent>) -> Self {
         Self::Parts(value)
     }
 }
@@ -1432,7 +1669,9 @@ impl From<Vec<InputContent>> for MessageContent {
 ///
 /// The service accepts request messages without an explicit `type`; the
 /// constructor emits that compact shape. Decoding also accepts an explicit
-/// `"type":"message"` and validates it when present.
+/// `"type":"message"` and validates it when present. Construction pins the
+/// four-role [`EasyInputMessageRole`] and the three-branch
+/// [`EasyInputContent`] content union; decoding keeps both domains open.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InputMessage {
     #[serde(
@@ -1451,11 +1690,15 @@ pub struct InputMessage {
 
 impl InputMessage {
     /// Creates a message for the supplied role.
+    ///
+    /// The constructor domain is the pinned four-value
+    /// [`EasyInputMessageRole`]; decoding keeps the open [`MessageRole`] so
+    /// multi-agent roles stay lossless.
     #[must_use]
-    pub fn new(role: MessageRole, content: impl Into<MessageContent>) -> Self {
+    pub fn new(role: EasyInputMessageRole, content: impl Into<MessageContent>) -> Self {
         Self {
             kind: Omittable::Omitted,
-            role,
+            role: role.into(),
             content: content.into(),
             phase: Omittable::Omitted,
             extra: ExtraFields::new(),
@@ -1465,19 +1708,25 @@ impl InputMessage {
     /// Creates a user message.
     #[must_use]
     pub fn user(content: impl Into<MessageContent>) -> Self {
-        Self::new(MessageRole::User, content)
+        Self::new(EasyInputMessageRole::User, content)
+    }
+
+    /// Creates an assistant message.
+    #[must_use]
+    pub fn assistant(content: impl Into<MessageContent>) -> Self {
+        Self::new(EasyInputMessageRole::Assistant, content)
     }
 
     /// Creates a developer message.
     #[must_use]
     pub fn developer(content: impl Into<MessageContent>) -> Self {
-        Self::new(MessageRole::Developer, content)
+        Self::new(EasyInputMessageRole::Developer, content)
     }
 
     /// Creates a system message.
     #[must_use]
     pub fn system(content: impl Into<MessageContent>) -> Self {
-        Self::new(MessageRole::System, content)
+        Self::new(EasyInputMessageRole::System, content)
     }
 
     /// Emits the optional `type: "message"` request property.
@@ -1533,6 +1782,33 @@ impl InputMessage {
     }
 }
 
+open_string_enum! {
+    /// Role accepted by the easy-form input message when constructing requests.
+    ///
+    /// Members match the pinned `EasyInputMessage.role` / python
+    /// `EasyInputMessageParam.role` Literal (user/assistant/system/developer)
+    /// exactly. Multi-agent roles such as `critic` or `tool` decode through
+    /// the open [`MessageRole`] but cannot be constructed here.
+    pub enum EasyInputMessageRole {
+        User = "user",
+        Assistant = "assistant",
+        System = "system",
+        Developer = "developer"
+    }
+}
+
+impl From<EasyInputMessageRole> for MessageRole {
+    fn from(value: EasyInputMessageRole) -> Self {
+        match value {
+            EasyInputMessageRole::User => Self::User,
+            EasyInputMessageRole::Assistant => Self::Assistant,
+            EasyInputMessageRole::System => Self::System,
+            EasyInputMessageRole::Developer => Self::Developer,
+            EasyInputMessageRole::Unknown(value) => Self::Unknown(value),
+        }
+    }
+}
+
 /// Role accepted by the stored `InputMessage` schema when constructing
 /// requests (`user` / `system` / `developer`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1547,6 +1823,16 @@ pub enum StoredInputMessageRole {
 }
 
 impl From<StoredInputMessageRole> for MessageRole {
+    fn from(value: StoredInputMessageRole) -> Self {
+        match value {
+            StoredInputMessageRole::User => Self::User,
+            StoredInputMessageRole::System => Self::System,
+            StoredInputMessageRole::Developer => Self::Developer,
+        }
+    }
+}
+
+impl From<StoredInputMessageRole> for EasyInputMessageRole {
     fn from(value: StoredInputMessageRole) -> Self {
         match value {
             StoredInputMessageRole::User => Self::User,
@@ -1606,9 +1892,12 @@ impl StoredInputMessage {
     }
 
     /// Sets the returned item status.
+    ///
+    /// The pinned `MessageStatus` domain is the three message-trio values;
+    /// decoded statuses replay through [`MessageStatus::from_raw`].
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(status);
+    pub fn status(mut self, status: MessageStatus) -> Self {
+        self.status = Omittable::Value(status.into());
         self
     }
 
@@ -2049,9 +2338,23 @@ fn validate_input_contents(parts: &[InputContent]) -> Result<(), CreateResponseC
     Ok(())
 }
 
+fn validate_easy_input_contents(
+    parts: &[EasyInputContent],
+) -> Result<(), CreateResponseConstraintError> {
+    for part in parts {
+        match part {
+            EasyInputContent::File(file) => file.validate()?,
+            EasyInputContent::Image(image) => image.validate()?,
+            EasyInputContent::Text(text) => text.validate()?,
+            EasyInputContent::Unknown(_) => {}
+        }
+    }
+    Ok(())
+}
+
 fn validate_message_content(content: &MessageContent) -> Result<(), CreateResponseConstraintError> {
     if let MessageContent::Parts(parts) = content {
-        validate_input_contents(parts)?;
+        validate_easy_input_contents(parts)?;
     }
     Ok(())
 }
@@ -2069,7 +2372,7 @@ fn validate_function_call_output_value(
                 });
             }
         }
-        FunctionCallOutputValue::Content(parts) => validate_input_contents(parts)?,
+        FunctionCallOutputValue::Content(parts) => validate_easy_input_contents(parts)?,
     }
     Ok(())
 }
@@ -2093,8 +2396,7 @@ fn validate_function_call_output_param_value(
                     FunctionCallOutputContent::Text(text) => text.validate()?,
                     FunctionCallOutputContent::Image(image) => image.validate()?,
                     FunctionCallOutputContent::File(file) => file.validate()?,
-                    FunctionCallOutputContent::ComputerScreenshot(_)
-                    | FunctionCallOutputContent::Unknown(_) => {}
+                    FunctionCallOutputContent::Unknown(_) => {}
                 }
             }
         }
@@ -2736,13 +3038,18 @@ pub struct FunctionCall {
 
 impl FunctionCall {
     /// Creates a complete function call item.
+    ///
+    /// `status` still takes the shared open [`ResponseItemStatus`] because
+    /// in-crate structured-output and RMCP adapters replay decoded statuses
+    /// verbatim; the pinned construction domain is the narrower
+    /// [`FunctionCallItemStatus`], accepted by [`Self::with_status`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
         call_id: impl Into<String>,
         name: impl Into<String>,
         arguments: JsonText,
-        status: ResponseItemStatus,
+        status: FunctionCallItemStatus,
     ) -> Self {
         Self {
             kind: FunctionCallTag::FunctionCall,
@@ -2752,7 +3059,7 @@ impl FunctionCall {
             arguments,
             namespace: Omittable::Omitted,
             caller: Omittable::Omitted,
-            status: Omittable::Value(status),
+            status: Omittable::Value(status.into()),
             created_by: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
@@ -2783,9 +3090,13 @@ impl FunctionCall {
     }
 
     /// Sets the item status when echoing a returned call.
+    ///
+    /// The pinned `FunctionCallItemStatus` domain is the three message-trio
+    /// values; tool-call-only states such as `searching` stay
+    /// construction-invalid.
     #[must_use]
-    pub fn with_status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(status);
+    pub fn with_status(mut self, status: FunctionCallItemStatus) -> Self {
+        self.status = Omittable::Value(status.into());
         self
     }
 
@@ -2872,14 +3183,19 @@ impl FunctionCall {
     }
 }
 
-/// String or rich content supplied as a function call output.
+/// String or rich content supplied as a function or custom tool call output.
+///
+/// Content parts follow the pinned three-branch
+/// `FunctionAndCustomToolCallOutput` union (text/image/file) modeled as
+/// [`EasyInputContent`]; `computer_screenshot` is not a legal tool-output
+/// part and decodes as the open `Unknown` retention.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FunctionCallOutputValue {
     /// An opaque text value, commonly a JSON string.
     Text(String),
     /// Typed text/image/file content parts.
-    Content(Vec<InputContent>),
+    Content(Vec<EasyInputContent>),
 }
 
 impl From<String> for FunctionCallOutputValue {
@@ -2894,19 +3210,23 @@ impl From<&str> for FunctionCallOutputValue {
     }
 }
 
-impl From<Vec<InputContent>> for FunctionCallOutputValue {
-    fn from(value: Vec<InputContent>) -> Self {
+impl From<Vec<EasyInputContent>> for FunctionCallOutputValue {
+    fn from(value: Vec<EasyInputContent>) -> Self {
         Self::Content(value)
     }
 }
 
 tagged_union! {
     /// One official `FunctionCallOutputItemParam` output content part.
+    ///
+    /// Members match the pinned three-branch request union (text/image/file)
+    /// and the response-side `FunctionAndCustomToolCallOutput` exactly;
+    /// `computer_screenshot` is not a legal function-output part and decodes
+    /// as the open [`EasyInputContent`]-style `Unknown` retention instead.
     pub enum FunctionCallOutputContent {
         Text(InputText) => "input_text",
         Image(InputImageParam) => "input_image",
-        File(InputFile) => "input_file",
-        ComputerScreenshot(ComputerScreenshot) => "computer_screenshot"
+        File(InputFile) => "input_file"
     }
 }
 
@@ -2928,14 +3248,13 @@ impl From<InputFile> for FunctionCallOutputContent {
     }
 }
 
-impl From<InputContent> for FunctionCallOutputContent {
-    fn from(value: InputContent) -> Self {
+impl From<EasyInputContent> for FunctionCallOutputContent {
+    fn from(value: EasyInputContent) -> Self {
         match value {
-            InputContent::Text(text) => Self::Text(text),
-            InputContent::Image(image) => Self::Image(image.into()),
-            InputContent::File(file) => Self::File(file),
-            InputContent::ComputerScreenshot(value) => Self::ComputerScreenshot(value),
-            InputContent::Unknown(value) => Self::Unknown(value),
+            EasyInputContent::Text(text) => Self::Text(text),
+            EasyInputContent::Image(image) => Self::Image(image.into()),
+            EasyInputContent::File(file) => Self::File(file),
+            EasyInputContent::Unknown(value) => Self::Unknown(value),
         }
     }
 }
@@ -2968,14 +3287,9 @@ impl From<Vec<FunctionCallOutputContent>> for FunctionCallOutputParamValue {
     }
 }
 
-impl From<Vec<InputContent>> for FunctionCallOutputParamValue {
-    fn from(value: Vec<InputContent>) -> Self {
-        Self::Content(
-            value
-                .into_iter()
-                .map(FunctionCallOutputContent::from)
-                .collect(),
-        )
+impl From<Vec<EasyInputContent>> for FunctionCallOutputParamValue {
+    fn from(value: Vec<EasyInputContent>) -> Self {
+        Self::Content(value.into_iter().map(Into::into).collect())
     }
 }
 
@@ -3067,9 +3381,12 @@ impl FunctionCallOutput {
     }
 
     /// Sets an item status for stored input items.
+    ///
+    /// The pinned `FunctionCallOutputStatusEnum` domain is the three
+    /// message-trio values.
     #[must_use]
-    pub fn status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(Nullable::Value(status));
+    pub fn status(mut self, status: FunctionCallItemStatus) -> Self {
+        self.status = Omittable::Value(Nullable::Value(status.into()));
         self
     }
 
@@ -3585,9 +3902,12 @@ impl McpCall {
     }
 
     /// Sets the item status when echoing a returned call.
+    ///
+    /// The pinned `MCPToolCallStatus` domain adds `calling` / `failed` on
+    /// top of the message trio.
     #[must_use]
-    pub fn with_status(mut self, status: ResponseItemStatus) -> Self {
-        self.status = Omittable::Value(status);
+    pub fn with_status(mut self, status: McpToolCallStatus) -> Self {
+        self.status = Omittable::Value(status.into());
         self
     }
 
@@ -4098,16 +4418,20 @@ pub struct OutputMessage {
 
 impl OutputMessage {
     /// Creates an assistant message, primarily for adapters and tests.
+    ///
+    /// `status` still takes the shared open [`ResponseItemStatus`] because
+    /// in-crate conversation adapters replay decoded statuses verbatim; the
+    /// pinned construction domain is the narrower [`MessageStatus`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
-        status: ResponseItemStatus,
+        status: MessageStatus,
         content: impl IntoIterator<Item = impl Into<OutputContent>>,
     ) -> Self {
         Self {
             kind: OutputMessageTag::Message,
             id: id.into(),
-            status,
+            status: status.into(),
             role: AssistantRoleTag::Assistant,
             content: content.into_iter().map(Into::into).collect(),
             phase: Omittable::Omitted,
@@ -7117,7 +7441,7 @@ pub struct CompactResponseRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     prompt_cache_retention: Omittable<Nullable<PromptCacheRetention>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    service_tier: Omittable<Nullable<ServiceTier>>,
+    service_tier: Omittable<Nullable<CompactServiceTier>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -7254,9 +7578,13 @@ impl CompactResponseRequest {
     }
 
     /// Sets the requested service tier.
+    ///
+    /// The compact body pins the five-value `ServiceTierEnum`; the create
+    /// side's wider [`ServiceTier`] domain (with `scale` / `ultrafast`) does
+    /// not apply here.
     #[must_use]
-    pub fn service_tier(mut self, service_tier: impl Into<ServiceTier>) -> Self {
-        self.service_tier = Omittable::Value(Nullable::Value(service_tier.into()));
+    pub fn service_tier(mut self, service_tier: CompactServiceTier) -> Self {
+        self.service_tier = Omittable::Value(Nullable::Value(service_tier));
         self
     }
 
@@ -9443,16 +9771,19 @@ pub struct FileSearchCall {
 
 impl FileSearchCall {
     /// Creates a file-search call without results.
+    ///
+    /// `status` takes the pinned five-value [`FileSearchToolCallStatus`];
+    /// decoding keeps the shared open [`ResponseItemStatus`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
-        status: ResponseItemStatus,
+        status: FileSearchToolCallStatus,
         queries: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         Self {
             kind: FileSearchCallTag::FileSearchCall,
             id: id.into(),
-            status,
+            status: status.into(),
             queries: queries.into_iter().map(Into::into).collect(),
             results: Omittable::Omitted,
             extra: ExtraFields::new(),
@@ -10585,16 +10916,20 @@ pub struct WebSearchCall {
 
 impl WebSearchCall {
     /// Creates a web-search call from the official required fields.
+    ///
+    /// `status` takes the pinned four-value [`WebSearchToolCallStatus`]
+    /// (`in_progress`/`searching`/`completed`/`failed`); decoding keeps the
+    /// shared open [`ResponseItemStatus`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
-        status: ResponseItemStatus,
+        status: WebSearchToolCallStatus,
         action: impl Into<WebSearchAction>,
     ) -> Self {
         Self {
             kind: WebSearchCallTag::WebSearchCall,
             id: id.into(),
-            status,
+            status: status.into(),
             action: action.into(),
             extra: ExtraFields::new(),
         }
@@ -11220,12 +11555,16 @@ required_tagged_record!(
 
 impl ImageGenerationCall {
     /// Creates an image-generation call with official required `result: null`.
+    ///
+    /// `status` takes the pinned [`ImageGenToolCallStatus`] domain, which
+    /// carries `generating` but not `incomplete`; decoding keeps the shared
+    /// open [`ResponseItemStatus`].
     #[must_use]
-    pub fn new(id: impl Into<String>, status: ResponseItemStatus) -> Self {
+    pub fn new(id: impl Into<String>, status: ImageGenToolCallStatus) -> Self {
         Self {
             kind: ImageGenerationCallTag::ImageGenerationCall,
             id: id.into(),
-            status,
+            status: status.into(),
             result: Nullable::Null,
             extra: ExtraFields::new(),
         }
@@ -11366,16 +11705,20 @@ pub struct CodeInterpreterCall {
 
 impl CodeInterpreterCall {
     /// Creates a code-interpreter call with official required `code` / `outputs` nulls.
+    ///
+    /// `status` takes the pinned [`CodeInterpreterToolCallStatus`] domain,
+    /// which carries `interpreting`; decoding keeps the shared open
+    /// [`ResponseItemStatus`].
     #[must_use]
     pub fn new(
         id: impl Into<String>,
-        status: ResponseItemStatus,
+        status: CodeInterpreterToolCallStatus,
         container_id: impl Into<String>,
     ) -> Self {
         Self {
             kind: CodeInterpreterCallTag::CodeInterpreterCall,
             id: id.into(),
-            status,
+            status: status.into(),
             container_id: container_id.into(),
             code: Nullable::Null,
             outputs: Nullable::Null,
@@ -16133,6 +16476,14 @@ mod tests {
         assert_json_dto::<UnknownTaggedObject>();
         assert_json_dto::<ResponseStatus>();
         assert_json_dto::<ResponseItemStatus>();
+        assert_json_dto::<MessageStatus>();
+        assert_json_dto::<FunctionCallItemStatus>();
+        assert_json_dto::<McpToolCallStatus>();
+        assert_json_dto::<WebSearchToolCallStatus>();
+        assert_json_dto::<FileSearchToolCallStatus>();
+        assert_json_dto::<ImageGenToolCallStatus>();
+        assert_json_dto::<CodeInterpreterToolCallStatus>();
+        assert_json_dto::<CompactServiceTier>();
         assert_json_dto::<ProgramOutputStatus>();
         assert_json_dto::<ApplyPatchCallStatus>();
         assert_json_dto::<ApplyPatchCallOutputStatus>();
@@ -16150,8 +16501,10 @@ mod tests {
         assert_json_dto::<InputImageParam>();
         assert_json_dto::<InputFile>();
         assert_json_dto::<InputContent>();
+        assert_json_dto::<EasyInputContent>();
         assert_json_dto::<MessageContent>();
         assert_json_dto::<InputMessage>();
+        assert_json_dto::<EasyInputMessageRole>();
         assert_json_dto::<StoredInputMessageRole>();
         assert_json_dto::<StoredInputMessage>();
         assert_json_dto::<ResponseInput>();
@@ -16851,11 +17204,16 @@ mod tests {
             "critic"
         );
 
-        let input = InputMessage::new(MessageRole::Tool, "lookup result");
+        let input = InputMessage::new(EasyInputMessageRole::User, "lookup result");
         assert_eq!(
-            serde_json::to_value(&input).expect("serialize tool input role")["role"],
-            "tool"
+            serde_json::to_value(&input).expect("serialize easy input role")["role"],
+            "user"
         );
+        assert_eq!(
+            InputMessage::assistant("draft").role(),
+            &MessageRole::Assistant
+        );
+        assert_eq!(InputMessage::system("policy").role(), &MessageRole::System);
     }
 
     #[test]
@@ -17176,7 +17534,7 @@ mod tests {
             "call_1",
             "weather",
             arguments,
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         );
         let parsed: WeatherArgs = call
             .arguments()
@@ -17321,7 +17679,7 @@ mod tests {
             serde_json::json!({ "city": "Hangzhou", "country": null })
                 .to_string()
                 .into(),
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         );
         let parsed: WeatherQuery = call.arguments_as().expect("parse arguments");
         assert_eq!(
@@ -17389,7 +17747,7 @@ mod tests {
             object: ResponseObjectTag::Response,
             output: vec![ResponseOutputItem::Message(OutputMessage::new(
                 "msg_1",
-                ResponseItemStatus::Completed,
+                MessageStatus::Completed,
                 vec![OutputContent::Text(OutputText::new(
                     "{\"temperature\":20.5,\"summary\":\"Cloudy\"}",
                 ))],
@@ -17439,7 +17797,7 @@ mod tests {
             object: ResponseObjectTag::Response,
             output: vec![ResponseOutputItem::Message(OutputMessage::new(
                 "msg_2",
-                ResponseItemStatus::Completed,
+                MessageStatus::Completed,
                 vec![OutputContent::Refusal(Refusal::new(
                     "Cannot assist with that request",
                 ))],
@@ -17822,6 +18180,427 @@ mod tests {
             serde_json::to_value(&search).expect("round-trip input execution")["execution"],
             "hybrid"
         );
+    }
+
+    #[test]
+    fn compact_service_tier_pins_the_five_official_values() {
+        // Pinned CompactResponseMethodPublicBody.service_tier references
+        // ServiceTierEnum: auto/default/fast/flex/priority. The create side
+        // keeps the wider seven-value ServiceTier domain (3-01).
+        const OFFICIAL_COMPACT_TIERS: [&str; 5] = ["auto", "default", "fast", "flex", "priority"];
+        for value in OFFICIAL_COMPACT_TIERS {
+            let decoded = CompactServiceTier::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official ServiceTierEnum value {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            let request =
+                CompactResponseRequest::new("gpt-5.6-sol", "compact me").service_tier(decoded);
+            assert_eq!(
+                serde_json::to_value(&request).expect("serialize compact tier")["service_tier"],
+                value
+            );
+        }
+        for create_only in ["scale", "ultrafast"] {
+            let decoded = CompactServiceTier::from_raw(create_only);
+            assert!(
+                !decoded.is_known(),
+                "{create_only} belongs to the create domain, not ServiceTierEnum"
+            );
+            assert_eq!(decoded.as_str(), create_only);
+            let round_tripped = serde_json::from_value::<CompactResponseRequest>(json!({
+                "model": "gpt-5.6-sol",
+                "service_tier": create_only
+            }))
+            .expect("unknown compact tiers stay lossless");
+            assert_eq!(
+                serde_json::to_value(&round_tripped).expect("re-encode")["service_tier"],
+                create_only
+            );
+        }
+        assert!(ServiceTier::from_raw("scale").is_known());
+        assert!(ServiceTier::from_raw("ultrafast").is_known());
+    }
+
+    #[test]
+    fn easy_input_message_role_pins_the_four_official_values() {
+        // Pinned EasyInputMessage.role: user/assistant/system/developer
+        // (python EasyInputMessageParam.role Literal). Multi-agent roles stay
+        // decode-only through the open MessageRole (D0137口径, 3-04).
+        const OFFICIAL_EASY_ROLES: [&str; 4] = ["user", "assistant", "system", "developer"];
+        for value in OFFICIAL_EASY_ROLES {
+            let decoded = EasyInputMessageRole::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official EasyInputMessage role {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            let message = InputMessage::new(decoded, "hello");
+            assert_eq!(message.role().as_str(), value);
+            assert_eq!(
+                serde_json::to_value(&message).expect("serialize easy role")["role"],
+                value
+            );
+        }
+        for decode_only in ["unknown", "critic", "discriminator", "tool"] {
+            let decoded = EasyInputMessageRole::from_raw(decode_only);
+            assert!(
+                !decoded.is_known(),
+                "{decode_only} is a decode-side MessageRole, not an easy-form role"
+            );
+        }
+        assert_eq!(
+            MessageRole::from(EasyInputMessageRole::Assistant),
+            MessageRole::Assistant
+        );
+        assert_eq!(
+            MessageRole::from(EasyInputMessageRole::from_raw("critic")),
+            MessageRole::Unknown("critic".into())
+        );
+        assert_eq!(
+            EasyInputMessageRole::from(StoredInputMessageRole::Developer),
+            EasyInputMessageRole::Developer
+        );
+
+        // Decoding keeps the open MessageRole: multi-agent roles echoed in an
+        // easy-form message remain lossless even though they cannot be built.
+        let decoded: InputMessage = serde_json::from_value(json!({
+            "role": "critic",
+            "content": "harsh feedback"
+        }))
+        .expect("easy-form decode keeps the open role domain");
+        assert_eq!(decoded.role(), &MessageRole::Critic);
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("round-trip critic role")["role"],
+            "critic"
+        );
+    }
+
+    #[test]
+    fn param_content_unions_exclude_computer_screenshot_outside_item_form() {
+        // Pinned request unions: EasyInputMessage.content ->
+        // InputMessageContentList -> InputContent {input_text, input_image,
+        // input_file}; FunctionCallOutputItemParam.output likewise. Only the
+        // item-form Message branch accepts ComputerScreenshotContent (3-05).
+        let item_form: StoredInputMessage = serde_json::from_value(json!({
+            "type": "message",
+            "role": "user",
+            "status": "completed",
+            "content": [
+                {"type": "computer_screenshot", "image_url": "https://example.test/s.png", "file_id": null, "detail": "auto"}
+            ]
+        }))
+        .expect("item-form message keeps the computer_screenshot branch");
+        assert!(matches!(
+            item_form.content()[0],
+            InputContent::ComputerScreenshot(_)
+        ));
+
+        let easy_form: InputMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [
+                {"type": "computer_screenshot", "image_url": "https://example.test/s.png", "file_id": null, "detail": "auto"}
+            ]
+        }))
+        .expect("easy-form decode stays lossless through Unknown retention");
+        let MessageContent::Parts(parts) = easy_form.content() else {
+            panic!("array content must decode as parts");
+        };
+        assert!(
+            !matches!(
+                parts[0],
+                EasyInputContent::Text(_) | EasyInputContent::Image(_) | EasyInputContent::File(_)
+            ),
+            "computer_screenshot is not a named easy-form branch"
+        );
+        assert_eq!(
+            serde_json::to_value(&easy_form).expect("round-trip easy-form part"),
+            json!({
+                "role": "user",
+                "content": [
+                    {"type": "computer_screenshot", "image_url": "https://example.test/s.png", "file_id": null, "detail": "auto"}
+                ]
+            })
+        );
+
+        let function_output: FunctionCallOutput = serde_json::from_value(json!({
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [
+                {"type": "computer_screenshot", "image_url": "https://example.test/s.png", "file_id": null, "detail": "auto"}
+            ]
+        }))
+        .expect("function output decode stays lossless through Unknown retention");
+        let FunctionCallOutputParamValue::Content(parts) = function_output.output() else {
+            panic!("array output must decode as content");
+        };
+        assert!(
+            !matches!(
+                parts[0],
+                FunctionCallOutputContent::Text(_)
+                    | FunctionCallOutputContent::Image(_)
+                    | FunctionCallOutputContent::File(_)
+            ),
+            "computer_screenshot is not a named function-output branch"
+        );
+        assert_eq!(
+            serde_json::to_value(&function_output).expect("round-trip function output part")["output"]
+                [0]["type"],
+            "computer_screenshot"
+        );
+
+        // The three-branch param unions stay isomorphic for legal parts.
+        let easy_parts = vec![EasyInputContent::from(InputText::new("done"))];
+        let converted: FunctionCallOutputParamValue = easy_parts.into();
+        assert!(matches!(
+            converted,
+            FunctionCallOutputParamValue::Content(parts)
+                if matches!(parts[0], FunctionCallOutputContent::Text(_))
+        ));
+        FunctionCallOutput::from_output(vec![EasyInputContent::from(InputImage::from_url(
+            "https://example.test/a.png",
+        ))])
+        .validate()
+        .expect("easy-form parts convert into valid function outputs");
+    }
+
+    #[test]
+    fn per_host_item_status_enums_pin_official_domains() {
+        // Pinned per-host domains (3-06): MessageStatus /
+        // FunctionCallItemStatus 3 values; MCPToolCallStatus adds
+        // calling/failed; WebSearchToolCall has searching+failed but no
+        // incomplete; FileSearchToolCall pins all five; ImageGenToolCall
+        // carries generating; CodeInterpreterToolCall carries interpreting.
+        let hosts: [(&str, Vec<&str>, Vec<&str>); 7] = [
+            (
+                "message",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+            (
+                "function_call",
+                vec!["in_progress", "completed", "incomplete"],
+                vec![
+                    "searching",
+                    "generating",
+                    "interpreting",
+                    "calling",
+                    "failed",
+                ],
+            ),
+            (
+                "mcp_call",
+                vec![
+                    "in_progress",
+                    "completed",
+                    "incomplete",
+                    "calling",
+                    "failed",
+                ],
+                vec!["searching", "generating", "interpreting"],
+            ),
+            (
+                "web_search_call",
+                vec!["in_progress", "searching", "completed", "failed"],
+                vec!["incomplete", "generating", "interpreting", "calling"],
+            ),
+            (
+                "file_search_call",
+                vec![
+                    "in_progress",
+                    "searching",
+                    "completed",
+                    "incomplete",
+                    "failed",
+                ],
+                vec!["generating", "interpreting", "calling"],
+            ),
+            (
+                "image_generation_call",
+                vec!["in_progress", "completed", "generating", "failed"],
+                vec!["searching", "incomplete", "interpreting", "calling"],
+            ),
+            (
+                "code_interpreter_call",
+                vec![
+                    "in_progress",
+                    "completed",
+                    "incomplete",
+                    "interpreting",
+                    "failed",
+                ],
+                vec!["searching", "generating", "calling"],
+            ),
+        ];
+        for (host, official, foreign) in hosts {
+            let narrow = |value: &str| -> (bool, String) {
+                match host {
+                    "message" => {
+                        let decoded = MessageStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    "function_call" => {
+                        let decoded = FunctionCallItemStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    "mcp_call" => {
+                        let decoded = McpToolCallStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    "web_search_call" => {
+                        let decoded = WebSearchToolCallStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    "file_search_call" => {
+                        let decoded = FileSearchToolCallStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    "image_generation_call" => {
+                        let decoded = ImageGenToolCallStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                    _ => {
+                        let decoded = CodeInterpreterToolCallStatus::from_raw(value);
+                        (decoded.is_known(), decoded.as_str().to_owned())
+                    }
+                }
+            };
+            for value in &official {
+                let (known, observed) = narrow(value);
+                assert!(ResponseItemStatus::from_raw(*value).is_known());
+                assert!(
+                    known,
+                    "{host} official status {value} must be a named variant"
+                );
+                assert_eq!(observed, *value, "{host} status {value} must round-trip");
+            }
+            for value in &foreign {
+                let (known, observed) = narrow(value);
+                assert!(!known, "{host} must not claim foreign status {value}");
+                assert_eq!(observed, *value, "{host} retains {value} verbatim");
+            }
+        }
+
+        // Narrow enums convert into the shared decode-side enum, including
+        // verbatim Unknown passthrough.
+        assert_eq!(
+            ResponseItemStatus::from(WebSearchToolCallStatus::Searching),
+            ResponseItemStatus::Searching
+        );
+        assert_eq!(
+            ResponseItemStatus::from(McpToolCallStatus::Calling),
+            ResponseItemStatus::Calling
+        );
+        assert_eq!(
+            ResponseItemStatus::from(CodeInterpreterToolCallStatus::Interpreting),
+            ResponseItemStatus::Interpreting
+        );
+        assert_eq!(
+            ResponseItemStatus::from(ImageGenToolCallStatus::Generating),
+            ResponseItemStatus::Generating
+        );
+        assert_eq!(
+            ResponseItemStatus::from(FileSearchToolCallStatus::from_raw("paused")),
+            ResponseItemStatus::Unknown("paused".into())
+        );
+
+        // Narrowed setters and constructors emit the pinned statuses.
+        assert_eq!(
+            serde_json::to_value(FileSearchCall::new(
+                "fs_1",
+                FileSearchToolCallStatus::Searching,
+                ["rust"]
+            ))
+            .expect("serialize file search")["status"],
+            "searching"
+        );
+        assert_eq!(
+            serde_json::to_value(WebSearchCall::new(
+                "ws_1",
+                WebSearchToolCallStatus::Searching,
+                WebSearchSearchAction::new().query("openai")
+            ))
+            .expect("serialize web search")["status"],
+            "searching"
+        );
+        assert_eq!(
+            serde_json::to_value(ImageGenerationCall::new(
+                "ig_1",
+                ImageGenToolCallStatus::Generating
+            ))
+            .expect("serialize image gen")["status"],
+            "generating"
+        );
+        assert_eq!(
+            serde_json::to_value(CodeInterpreterCall::new(
+                "ci_1",
+                CodeInterpreterToolCallStatus::Interpreting,
+                "cntr_1"
+            ))
+            .expect("serialize interpreter")["status"],
+            "interpreting"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                McpCall::new("mcp_1", "docs", "search", JsonText::from("{}"))
+                    .with_status(McpToolCallStatus::Calling)
+            )
+            .expect("serialize mcp call")["status"],
+            "calling"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                FunctionCallOutput::from_output("ok").status(FunctionCallItemStatus::Incomplete)
+            )
+            .expect("serialize function output")["status"],
+            "incomplete"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                FunctionCall::call("c1", "lookup", JsonText::from("{}"))
+                    .with_status(FunctionCallItemStatus::Completed)
+            )
+            .expect("serialize function call")["status"],
+            "completed"
+        );
+
+        // Decode side keeps the shared eight-value union: a status foreign to
+        // its host item stays lossless instead of failing the decode.
+        for (fixture, host) in [
+            (
+                json!({
+                    "type": "web_search_call",
+                    "id": "ws_2",
+                    "status": "incomplete",
+                    "action": {"type": "search", "query": "openai"}
+                }),
+                "web_search_call",
+            ),
+            (
+                json!({
+                    "type": "image_generation_call",
+                    "id": "ig_2",
+                    "status": "interpreting",
+                    "result": null
+                }),
+                "image_generation_call",
+            ),
+        ] {
+            let decoded: ResponseOutputItem =
+                serde_json::from_value(fixture.clone()).expect("decode keeps open statuses");
+            assert_eq!(
+                serde_json::to_value(&decoded).expect("round-trip open status"),
+                fixture,
+                "{host} must round-trip foreign statuses"
+            );
+        }
     }
 
     #[test]
@@ -19628,7 +20407,7 @@ mod tests {
 
         let output = OutputMessage::new(
             "msg_1",
-            ResponseItemStatus::Completed,
+            MessageStatus::Completed,
             [OutputContent::from(OutputText::new("done"))],
         )
         .phase(MessagePhase::FinalAnswer);
@@ -19641,7 +20420,7 @@ mod tests {
             serde_json::to_value(
                 OutputMessage::new(
                     "msg_2",
-                    ResponseItemStatus::Completed,
+                    MessageStatus::Completed,
                     [OutputContent::from(OutputText::new("done"))],
                 )
                 .phase_null()
@@ -20624,7 +21403,7 @@ mod tests {
             "c1",
             "lookup",
             JsonText::from("{}"),
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         )
         .namespace("ns")
         .caller(ToolCallCaller::program("prg_1"));
@@ -20633,9 +21412,11 @@ mod tests {
         assert_eq!(value["caller"]["type"], "program");
         assert_eq!(value["caller"]["caller_id"], "prg_1");
 
-        let custom =
-            CustomToolCallOutput::new("cust1", vec![InputContent::from(InputText::new("done"))])
-                .caller(ToolCallCaller::direct());
+        let custom = CustomToolCallOutput::new(
+            "cust1",
+            vec![EasyInputContent::from(InputText::new("done"))],
+        )
+        .caller(ToolCallCaller::direct());
         let value = serde_json::to_value(&custom).expect("serialize custom output");
         assert_eq!(value["output"][0]["type"], "input_text");
         assert_eq!(value["caller"]["type"], "direct");
@@ -20712,7 +21493,7 @@ mod tests {
 
     #[test]
     fn file_search_results_and_typed_stream_parts_match_openapi_inventory() {
-        let call = FileSearchCall::new("fs_1", ResponseItemStatus::Searching, ["rust sdk"])
+        let call = FileSearchCall::new("fs_1", FileSearchToolCallStatus::Searching, ["rust sdk"])
             .results(vec![
                 FileSearchResult::new()
                     .file_id("file-1")
@@ -21308,7 +22089,7 @@ mod tests {
             "c1",
             "lookup",
             JsonText::from("{}"),
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         )
         .caller_null();
         assert_eq!(
@@ -21423,7 +22204,7 @@ mod tests {
             "c1",
             "lookup",
             JsonText::from("{}"),
-            ResponseItemStatus::Completed,
+            FunctionCallItemStatus::Completed,
         )
         .caller(ToolCallCaller::program("x".repeat(65)));
         assert!(matches!(
@@ -21454,7 +22235,7 @@ mod tests {
         );
         let echoed = call
             .with_id("fc_1")
-            .with_status(ResponseItemStatus::Completed);
+            .with_status(FunctionCallItemStatus::Completed);
         let echoed_value = serde_json::to_value(&echoed).expect("serialize echoed function call");
         assert_eq!(echoed_value["id"], "fc_1");
         assert_eq!(echoed_value["status"], "completed");
@@ -21588,7 +22369,7 @@ mod tests {
 
         let search = WebSearchCall::new(
             "ws_1",
-            ResponseItemStatus::Completed,
+            WebSearchToolCallStatus::Completed,
             WebSearchSearchAction::new().query("openai"),
         );
         assert_eq!(
@@ -21596,7 +22377,7 @@ mod tests {
             "openai"
         );
 
-        let image = ImageGenerationCall::new("ig_1", ResponseItemStatus::InProgress);
+        let image = ImageGenerationCall::new("ig_1", ImageGenToolCallStatus::InProgress);
         assert_eq!(
             serde_json::to_value(&image).expect("serialize image-gen required null")["result"],
             Value::Null
@@ -21607,7 +22388,7 @@ mod tests {
         );
 
         let interpreter =
-            CodeInterpreterCall::new("ci_1", ResponseItemStatus::InProgress, "cntr_1");
+            CodeInterpreterCall::new("ci_1", CodeInterpreterToolCallStatus::InProgress, "cntr_1");
         let interpreter_value =
             serde_json::to_value(&interpreter).expect("serialize interpreter required nulls");
         assert_eq!(interpreter_value["code"], Value::Null);

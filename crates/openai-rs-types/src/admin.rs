@@ -169,9 +169,11 @@ crate::open_string_enum! {
 
 crate::open_string_enum! {
     /// Common administration list discriminator.
+    ///
+    /// Every pinned Administration list envelope pins `object` to the constant
+    /// `list`; the usage/costs `page` envelope has its own [`UsagePageTag`].
     pub enum AdminListObject {
-        List = "list",
-        Page = "page"
+        List = "list"
     }
 }
 
@@ -1479,17 +1481,18 @@ pub struct CreateGroupUserBody {
 
 crate::open_string_enum! {
     /// Assignment/deletion object discriminator.
+    ///
+    /// `group.user`/`group.role`/`user.role`/`group.user.deleted` are pinned
+    /// schema constants; `group.role.deleted`/`user.role.deleted` appear in the
+    /// pinned `DeletedRoleAssignmentResource.object` description ("such as …")
+    /// whose free-form string stays lossless through [`Unknown`].
     pub enum AssignmentObject {
         GroupUser = "group.user",
         GroupRole = "group.role",
         UserRole = "user.role",
         GroupUserDeleted = "group.user.deleted",
         GroupRoleDeleted = "group.role.deleted",
-        UserRoleDeleted = "user.role.deleted",
-        GroupUserAssignment = "organization.group.user.assignment",
-        GroupRoleAssignment = "organization.group.role.assignment",
-        UserRoleAssignment = "organization.user.role.assignment",
-        Deleted = "organization.role.assignment.deleted"
+        UserRoleDeleted = "user.role.deleted"
     }
 }
 
@@ -2617,6 +2620,31 @@ pub struct UsageDimensions {
     pub context_level: Omittable<Nullable<String>>,
 }
 
+crate::open_string_enum! {
+    /// Usage-query grouping dimension.
+    ///
+    /// Union of the per-endpoint `group_by` item enums across the pinned usage
+    /// routes: `completions` adds `batch`/`service_tier`, `images` adds
+    /// `size`/`source`, `file_search_calls` adds `vector_store_id`, and
+    /// `web_search_calls` adds `context_level` over the shared
+    /// `project_id`/`user_id`/`api_key_id`/`model` core. The field set equals
+    /// [`UsageDimensions`]. The costs-only `line_item` and any future value
+    /// decode as `Unknown`; construct via [`UsageGroupBy::from_raw`] when an
+    /// endpoint-scoped domain is required.
+    pub enum UsageGroupBy {
+        ProjectId = "project_id",
+        UserId = "user_id",
+        ApiKeyId = "api_key_id",
+        Model = "model",
+        Batch = "batch",
+        ServiceTier = "service_tier",
+        Source = "source",
+        Size = "size",
+        VectorStoreId = "vector_store_id",
+        ContextLevel = "context_level"
+    }
+}
+
 /// Shared query superset for Usage endpoints.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageQueryParams {
@@ -2644,7 +2672,7 @@ pub struct UsageQueryParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub context_levels: Omittable<Vec<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub group_by: Omittable<Vec<String>>,
+    pub group_by: Omittable<Vec<UsageGroupBy>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<u64>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -4540,6 +4568,91 @@ mod tests {
     }
 
     #[test]
+    fn usage_group_by_pins_the_ten_value_union_of_the_usage_endpoints() {
+        // Union of the pinned per-endpoint `group_by` item enums; the field
+        // set matches `UsageDimensions`, and the costs-only `line_item` stays
+        // outside this domain (it belongs to `UsageCostsGroupBy`).
+        const OFFICIAL_USAGE_GROUP_BY: [(&str, UsageGroupBy); 10] = [
+            ("project_id", UsageGroupBy::ProjectId),
+            ("user_id", UsageGroupBy::UserId),
+            ("api_key_id", UsageGroupBy::ApiKeyId),
+            ("model", UsageGroupBy::Model),
+            ("batch", UsageGroupBy::Batch),
+            ("service_tier", UsageGroupBy::ServiceTier),
+            ("source", UsageGroupBy::Source),
+            ("size", UsageGroupBy::Size),
+            ("vector_store_id", UsageGroupBy::VectorStoreId),
+            ("context_level", UsageGroupBy::ContextLevel),
+        ];
+        for (value, expected) in OFFICIAL_USAGE_GROUP_BY {
+            let decoded = UsageGroupBy::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official usage group_by {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+        }
+        for costs_only in ["line_item", "cost_center"] {
+            let decoded = UsageGroupBy::from_raw(costs_only);
+            assert!(
+                !decoded.is_known(),
+                "usage group_by `{costs_only}` is outside the pinned usage union"
+            );
+            assert_eq!(decoded.as_str(), costs_only);
+        }
+
+        let usage = UsageQueryParams {
+            group_by: Omittable::Value(vec![
+                UsageGroupBy::ProjectId,
+                UsageGroupBy::Model,
+                UsageGroupBy::ServiceTier,
+                UsageGroupBy::from_raw("future_dimension"),
+            ]),
+            ..UsageQueryParams::new(100)
+        };
+        assert_eq!(
+            ok(serde_json::to_value(&usage)),
+            json!({
+                "start_time": 100,
+                "group_by": ["project_id", "model", "service_tier", "future_dimension"]
+            })
+        );
+
+        // Decode stays lossless for known and future dimensions alike.
+        let decoded = ok(serde_json::from_value::<UsageQueryParams>(json!({
+            "start_time": 100,
+            "group_by": ["batch", "context_level", "line_item"]
+        })));
+        match decoded.group_by {
+            Omittable::Value(groups) => {
+                assert!(groups[0].is_known());
+                assert!(groups[1].is_known());
+                assert!(!groups[2].is_known());
+                assert_eq!(groups[2].as_str(), "line_item");
+            }
+            Omittable::Omitted => panic!("usage group_by must decode"),
+        }
+        assert!(
+            serde_json::from_value::<UsageQueryParams>(json!({
+                "start_time": 100,
+                "group_by": null
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn admin_list_object_pins_the_single_list_constant() {
+        assert_eq!(AdminListObject::from_raw("list"), AdminListObject::List);
+        // Every pinned Administration list envelope uses the `list` constant;
+        // the usage/costs `page` envelope is carried by `UsagePageTag`, so
+        // `page` must not be a named `AdminListObject` variant anymore.
+        assert!(!AdminListObject::from_raw("page").is_known());
+        assert_eq!(AdminListObject::from_raw("page").as_str(), "page");
+    }
+
+    #[test]
     fn usage_costs_query_pins_one_day_bucket_and_three_value_group_by() {
         assert!(serde_json::from_value::<UsageCostsQueryParams>(json!({})).is_err());
         let params = UsageCostsQueryParams::new(100);
@@ -5004,6 +5117,32 @@ mod tests {
             AssignmentObject::GroupUserDeleted.as_str(),
             "group.user.deleted"
         );
+        // The pinned `DeletedRoleAssignmentResource.object` description cites
+        // `group.role.deleted` / `user.role.deleted` as examples, so they stay
+        // named variants on the open enum.
+        assert_eq!(
+            AssignmentObject::GroupRoleDeleted.as_str(),
+            "group.role.deleted"
+        );
+        assert_eq!(
+            AssignmentObject::UserRoleDeleted.as_str(),
+            "user.role.deleted"
+        );
+        // The `organization.*.assignment` discriminators exist nowhere in the
+        // pin and were fabricated; they must decode as Unknown, losslessly.
+        for phantom in [
+            "organization.group.user.assignment",
+            "organization.group.role.assignment",
+            "organization.user.role.assignment",
+            "organization.role.assignment.deleted",
+        ] {
+            let decoded = AssignmentObject::from_raw(phantom);
+            assert!(
+                !decoded.is_known(),
+                "assignment object {phantom} has no baseline and must not be a named variant"
+            );
+            assert_eq!(decoded.as_str(), phantom);
+        }
     }
 
     #[test]
