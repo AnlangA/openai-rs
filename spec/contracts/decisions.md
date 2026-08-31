@@ -256,6 +256,35 @@ until a decision is recorded here and its fixtures pass.
 - Decision: decode integer or finite float numbers, expose `i64` (truncating toward zero), serialize integers.
 - Tests: `created_at: 1700000000.9` decodes as `1700000000`.
 
+## D0020 — Chat response tool_calls and function_call keep explicit null
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ChatResponseMessage` / `ChatCompletionStoreMessage` `tool_calls` and `function_call`
+- Sources: pinned `ChatCompletionList` x-oaiMeta example emits `"tool_calls": null, "function_call": null`; official Python/Node types are optional/nullable. Schema properties omit the null branch.
+- Decision: model both fields as `Omittable<Nullable<T>>` so omitted, explicit null, and value round-trip. Request-side `ChatAssistantMessage.function_call` already used this shape.
+- Tests: official-example-shaped message with both keys null.
+
+## D0021 — Responses audio SSE ghost response_id is not a typed field
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `response.audio.done`, `response.audio.transcript.delta`, `response.audio.transcript.done`
+- Sources: pinned schemas list `response_id` in `required` but omit it from `properties`; official Python/Node event types expose `sequence_number`/`type`/`delta` only. Schema examples still include `response_id`.
+- Decision: do not require typed `response_id`. If the key appears on the wire it is retained in `ExtraFields`. Same treatment as D0015.
+- Impact: override `OVR-0008`.
+- Tests: audio.done without `response_id`; extra-field preservation when present.
+
+## D0022 — LocalShellCallOutput ghost call_id is not a typed field
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `LocalShellCallOutput`
+- Sources: pinned `LocalShellToolCallOutput.required` includes `call_id` but `properties` omit it; official output shape is `{id, output, status?}`.
+- Decision: do not require typed `call_id`. If present it is retained in `ExtraFields`.
+- Impact: override `OVR-0009`.
+- Tests: output fixture without `call_id`.
+
 ## D0014 — GA Responses shares Chat/Beta prompt-cache and reasoning wire types
 
 - Status: accepted

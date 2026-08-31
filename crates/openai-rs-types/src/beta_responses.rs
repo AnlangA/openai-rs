@@ -86,6 +86,7 @@ crate::open_string_enum! {
     /// Response fields that can be explicitly expanded by the API.
     pub enum BetaResponseIncludable {
         WebSearchSources = "web_search_call.action.sources",
+        WebSearchResults = "web_search_call.results",
         CodeInterpreterOutputs = "code_interpreter_call.outputs",
         ComputerOutputImageUrl = "computer_call_output.output.image_url",
         FileSearchResults = "file_search_call.results",

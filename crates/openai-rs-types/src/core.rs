@@ -420,7 +420,11 @@ pub struct ModerationResult {
     /// Whether any category is flagged.
     pub flagged: bool,
     /// Category flags keyed by the service's open category names.
-    pub categories: BTreeMap<String, bool>,
+    ///
+    /// `illicit` and `illicit/violent` are officially `boolean | null`; other
+    /// known categories are booleans. The map stays open so future names and
+    /// the two nullable keys round-trip.
+    pub categories: BTreeMap<String, Nullable<bool>>,
     /// Category scores keyed by the service's open category names.
     pub category_scores: BTreeMap<String, f64>,
     /// Modalities that contributed to each category, when returned.
@@ -511,11 +515,46 @@ mod tests {
         });
         let decoded: CreateModerationResponse =
             serde_json::from_value(fixture.clone()).expect("decode");
-        assert!(decoded.results[0].categories["future/category"]);
+        assert_eq!(
+            decoded.results[0].categories["future/category"],
+            crate::Nullable::Value(true)
+        );
         assert!(
             decoded.results[0]
                 .extra()
                 .contains_key("future_result_field")
+        );
+        assert_eq!(serde_json::to_value(decoded).expect("re-encode"), fixture);
+    }
+
+    #[test]
+    fn moderation_categories_accept_null_illicit_flags() {
+        let fixture = json!({
+            "id": "modr_illicit",
+            "model": "omni-moderation-latest",
+            "results": [{
+                "flagged": false,
+                "categories": {
+                    "hate": false,
+                    "illicit": null,
+                    "illicit/violent": null
+                },
+                "category_scores": {
+                    "hate": 0.01,
+                    "illicit": 0.0,
+                    "illicit/violent": 0.0
+                }
+            }]
+        });
+        let decoded: CreateModerationResponse =
+            serde_json::from_value(fixture.clone()).expect("decode illicit nulls");
+        assert_eq!(
+            decoded.results[0].categories["illicit"],
+            crate::Nullable::Null
+        );
+        assert_eq!(
+            decoded.results[0].categories["illicit/violent"],
+            crate::Nullable::Null
         );
         assert_eq!(serde_json::to_value(decoded).expect("re-encode"), fixture);
     }

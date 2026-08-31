@@ -1117,7 +1117,7 @@ pub struct RealtimeSessionCreateRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub truncation: Omittable<RealtimeTruncation>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub prompt: Omittable<PromptReference>,
+    pub prompt: Omittable<Nullable<PromptReference>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1263,7 +1263,7 @@ pub struct RealtimeSession {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub truncation: Omittable<RealtimeTruncation>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub prompt: Omittable<PromptReference>,
+    pub prompt: Omittable<Nullable<PromptReference>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1968,9 +1968,9 @@ pub struct RealtimeResponseCreateParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub conversation: Omittable<RealtimeResponseConversation>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub metadata: Omittable<BTreeMap<String, String>>,
+    pub metadata: Omittable<Nullable<BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub prompt: Omittable<PromptReference>,
+    pub prompt: Omittable<Nullable<PromptReference>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input: Omittable<Vec<RealtimeConversationItem>>,
     #[serde(flatten)]
@@ -2087,7 +2087,7 @@ pub struct RealtimeResponse {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output: Omittable<Vec<RealtimeConversationItem>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub metadata: Omittable<BTreeMap<String, String>>,
+    pub metadata: Omittable<Nullable<BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeResponseAudio>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -4524,6 +4524,7 @@ mod tests {
                 "audio": {"input": {"turn_detection": {"type": "server_vad"}}}
             }),
             json!({"type": "realtime", "tracing": null}),
+            json!({"type": "realtime", "prompt": null}),
             json!({"type": "realtime", "tracing": "auto"}),
             json!({
                 "type": "realtime",
@@ -4538,6 +4539,7 @@ mod tests {
         let response_fixture = json!({
             "conversation_id": null,
             "max_output_tokens": null,
+            "metadata": null,
             "future": "retained"
         });
         let response: RealtimeResponse = serde_json::from_value(response_fixture.clone())

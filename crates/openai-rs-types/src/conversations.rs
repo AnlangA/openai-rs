@@ -516,6 +516,8 @@ pub struct ConversationInputImage {
     image_url: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     file_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_breakpoint: Omittable<responses::PromptCacheBreakpoint>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -529,6 +531,7 @@ impl ConversationInputImage {
             detail,
             image_url: Omittable::Value(Nullable::Value(url.into())),
             file_id: Omittable::Omitted,
+            prompt_cache_breakpoint: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -541,14 +544,23 @@ impl ConversationInputImage {
             detail,
             image_url: Omittable::Omitted,
             file_id: Omittable::Value(Nullable::Value(file_id.into())),
+            prompt_cache_breakpoint: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
+    }
+
+    /// Marks an explicit prompt-cache boundary after this part.
+    #[must_use]
+    pub fn prompt_cache_breakpoint(mut self) -> Self {
+        self.prompt_cache_breakpoint =
+            Omittable::Value(responses::PromptCacheBreakpoint::explicit());
+        self
     }
 
     fn to_response_content(
         &self,
     ) -> Result<responses::InputContent, ConversationItemConversionError> {
-        let value = match (&self.image_url, &self.file_id) {
+        let mut value = match (&self.image_url, &self.file_id) {
             (Omittable::Value(Nullable::Value(url)), _) => {
                 responses::InputImage::from_url(url.clone()).detail(self.detail.clone())
             }
@@ -557,6 +569,9 @@ impl ConversationInputImage {
             }
             _ => return Err(ConversationItemConversionError::ImageHasNoSource),
         };
+        if self.prompt_cache_breakpoint.is_value() {
+            value = value.prompt_cache_breakpoint();
+        }
         Ok(value.into())
     }
 
@@ -628,6 +643,8 @@ pub struct ConversationInputFile {
     file_url: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     detail: Omittable<responses::FileDetail>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_breakpoint: Omittable<responses::PromptCacheBreakpoint>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -641,6 +658,7 @@ impl ConversationInputFile {
             file_data: Omittable::Omitted,
             file_url: Omittable::Omitted,
             detail: Omittable::Omitted,
+            prompt_cache_breakpoint: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -677,6 +695,14 @@ impl ConversationInputFile {
         self
     }
 
+    /// Marks an explicit prompt-cache boundary after this part.
+    #[must_use]
+    pub fn prompt_cache_breakpoint(mut self) -> Self {
+        self.prompt_cache_breakpoint =
+            Omittable::Value(responses::PromptCacheBreakpoint::explicit());
+        self
+    }
+
     fn to_response_content(
         &self,
     ) -> Result<responses::InputContent, ConversationItemConversionError> {
@@ -697,10 +723,13 @@ impl ConversationInputFile {
             }
             _ => return Err(ConversationItemConversionError::FileHasNoSource),
         };
-        let value = match &self.detail {
+        let mut value = match &self.detail {
             Omittable::Value(detail) => value.detail(detail.clone()),
             Omittable::Omitted => value,
         };
+        if self.prompt_cache_breakpoint.is_value() {
+            value = value.prompt_cache_breakpoint();
+        }
         Ok(value.into())
     }
 
@@ -2016,5 +2045,26 @@ mod tests {
                 "include": ["reasoning.encrypted_content"]
             })
         );
+    }
+
+    #[test]
+    fn conversation_image_and_file_preserve_prompt_cache_breakpoint_on_conversion() {
+        let image = ConversationInputImage::from_url(
+            "https://example.com/a.png",
+            responses::ImageDetail::Auto,
+        )
+        .prompt_cache_breakpoint();
+        let converted = image.to_response_content().expect("convert image");
+        let responses::InputContent::Image(part) = converted else {
+            panic!("expected image content");
+        };
+        assert!(part.prompt_cache_breakpoint_ref().is_some());
+
+        let file = ConversationInputFile::from_file_id("file_1").prompt_cache_breakpoint();
+        let converted = file.to_response_content().expect("convert file");
+        let responses::InputContent::File(part) = converted else {
+            panic!("expected file content");
+        };
+        assert!(part.prompt_cache_breakpoint_ref().is_some());
     }
 }

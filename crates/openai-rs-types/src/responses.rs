@@ -1670,6 +1670,91 @@ impl McpListTools {
     }
 }
 
+literal_tag!(McpProtocolErrorTag, McpProtocolError, "mcp_protocol_error");
+literal_tag!(
+    McpToolExecutionErrorTag,
+    McpToolExecutionError,
+    "mcp_tool_execution_error"
+);
+literal_tag!(McpHttpErrorTag, HttpError, "http_error");
+
+/// An MCP protocol-level failure.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpProtocolError {
+    #[serde(rename = "type")]
+    kind: McpProtocolErrorTag,
+    code: i64,
+    message: String,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl McpProtocolError {
+    /// Returns the protocol error code.
+    #[must_use]
+    pub const fn code(&self) -> i64 {
+        self.code
+    }
+
+    /// Returns the protocol error message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+/// An MCP tool-execution failure.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpToolExecutionError {
+    #[serde(rename = "type")]
+    kind: McpToolExecutionErrorTag,
+    content: Value,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl McpToolExecutionError {
+    /// Returns the execution-error payload.
+    #[must_use]
+    pub const fn content(&self) -> &Value {
+        &self.content
+    }
+}
+
+/// An HTTP failure reported for an MCP call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpHttpError {
+    #[serde(rename = "type")]
+    kind: McpHttpErrorTag,
+    code: i64,
+    message: String,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl McpHttpError {
+    /// Returns the HTTP status code.
+    #[must_use]
+    pub const fn code(&self) -> i64 {
+        self.code
+    }
+
+    /// Returns the HTTP error message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+tagged_union! {
+    /// Typed MCP tool-call error reported by the service.
+    pub enum McpCallError {
+        Protocol(McpProtocolError) => "mcp_protocol_error",
+        ToolExecution(McpToolExecutionError) => "mcp_tool_execution_error",
+        Http(McpHttpError) => "http_error"
+    }
+}
+
 /// A native remote MCP tool invocation produced by the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McpCall {
@@ -1686,7 +1771,7 @@ pub struct McpCall {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     output: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    error: Omittable<Nullable<String>>,
+    error: Omittable<Nullable<McpCallError>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1714,6 +1799,15 @@ impl McpCall {
     #[must_use]
     pub const fn arguments(&self) -> &JsonText {
         &self.arguments
+    }
+
+    /// Returns the typed MCP error when present and non-null.
+    #[must_use]
+    pub fn error(&self) -> Option<&McpCallError> {
+        match &self.error {
+            Omittable::Value(Nullable::Value(error)) => Some(error),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
     }
 }
 
@@ -1901,6 +1995,61 @@ impl TopLogProb {
     #[must_use]
     pub const fn logprob(&self) -> f64 {
         self.logprob
+    }
+}
+
+/// Alternate token in an event-shaped logprob list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventTopLogProb {
+    token: String,
+    logprob: f64,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl EventTopLogProb {
+    /// Returns the token string.
+    #[must_use]
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    /// Returns the token log probability.
+    #[must_use]
+    pub const fn logprob(&self) -> f64 {
+        self.logprob
+    }
+}
+
+/// Event-shaped log probability. Unlike [`LogProb`], `bytes` is absent and
+/// `top_logprobs` is optional.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventLogProb {
+    token: String,
+    logprob: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    top_logprobs: Vec<EventTopLogProb>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl EventLogProb {
+    /// Returns the token string.
+    #[must_use]
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    /// Returns the token log probability.
+    #[must_use]
+    pub const fn logprob(&self) -> f64 {
+        self.logprob
+    }
+
+    /// Returns alternative tokens at this position.
+    #[must_use]
+    pub fn top_logprobs(&self) -> &[EventTopLogProb] {
+        &self.top_logprobs
     }
 }
 
@@ -3888,16 +4037,20 @@ impl ResponseError {
 /// Details explaining an incomplete response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IncompleteDetails {
-    reason: IncompleteReason,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    reason: Omittable<IncompleteReason>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
 
 impl IncompleteDetails {
-    /// Returns the incomplete reason.
+    /// Returns the incomplete reason when present.
     #[must_use]
-    pub const fn reason(&self) -> &IncompleteReason {
-        &self.reason
+    pub fn reason(&self) -> Option<&IncompleteReason> {
+        match &self.reason {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 }
 
@@ -4172,7 +4325,7 @@ impl Response {
         if matches!(self.status(), Some(ResponseStatus::Incomplete)) {
             let reason = self
                 .incomplete_details()
-                .map(|d| d.reason().as_str().to_owned());
+                .and_then(|details| details.reason().map(|reason| reason.as_str().to_owned()));
             return Err(OutputParseError::Incomplete(reason));
         }
         if let Some(refusal) = self.refusal() {
@@ -4234,6 +4387,7 @@ impl Response {
                         kind: ComputerCallOutputTag::ComputerCallOutput,
                         call_id: value.call_id.clone(),
                         output: value.output.clone(),
+                        acknowledged_safety_checks: value.acknowledged_safety_checks.clone(),
                         extra: value.extra.clone(),
                     })
                 }
@@ -4418,6 +4572,16 @@ pub struct CompactResponseRequest {
     instructions: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     previous_response_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_key: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_options: Omittable<Nullable<PromptCacheOptions>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_retention: Omittable<Nullable<PromptCacheRetention>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    service_tier: Omittable<Nullable<ServiceTier>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
 }
 
 impl CompactResponseRequest {
@@ -4435,6 +4599,11 @@ impl CompactResponseRequest {
             input: Omittable::Value(input.into()),
             instructions: Omittable::Omitted,
             previous_response_id: Omittable::Omitted,
+            prompt_cache_key: Omittable::Omitted,
+            prompt_cache_options: Omittable::Omitted,
+            prompt_cache_retention: Omittable::Omitted,
+            service_tier: Omittable::Omitted,
+            extra: ExtraFields::new(),
         }
     }
 
@@ -4464,6 +4633,40 @@ impl CompactResponseRequest {
     pub fn previous_response_id(mut self, id: impl Into<String>) -> Self {
         self.previous_response_id = Omittable::Value(Nullable::Value(id.into()));
         self
+    }
+
+    /// Sets a prompt-cache key.
+    #[must_use]
+    pub fn prompt_cache_key(mut self, key: impl Into<String>) -> Self {
+        self.prompt_cache_key = Omittable::Value(Nullable::Value(key.into()));
+        self
+    }
+
+    /// Sets prompt-cache options.
+    #[must_use]
+    pub fn prompt_cache_options(mut self, options: PromptCacheOptions) -> Self {
+        self.prompt_cache_options = Omittable::Value(Nullable::Value(options));
+        self
+    }
+
+    /// Sets prompt-cache retention.
+    #[must_use]
+    pub fn prompt_cache_retention(mut self, retention: impl Into<PromptCacheRetention>) -> Self {
+        self.prompt_cache_retention = Omittable::Value(Nullable::Value(retention.into()));
+        self
+    }
+
+    /// Sets the processing tier.
+    #[must_use]
+    pub fn service_tier(mut self, tier: impl Into<ServiceTier>) -> Self {
+        self.service_tier = Omittable::Value(Nullable::Value(tier.into()));
+        self
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -4959,7 +5162,7 @@ pub struct OutputTextDeltaEvent {
     delta: String,
     sequence_number: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    logprobs: Vec<LogProb>,
+    logprobs: Vec<EventLogProb>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -4997,7 +5200,7 @@ impl OutputTextDeltaEvent {
 
     /// Returns logprobs if included.
     #[must_use]
-    pub fn logprobs(&self) -> &[LogProb] {
+    pub fn logprobs(&self) -> &[EventLogProb] {
         &self.logprobs
     }
 }
@@ -5013,7 +5216,7 @@ pub struct OutputTextDoneEvent {
     text: String,
     sequence_number: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    logprobs: Vec<LogProb>,
+    logprobs: Vec<EventLogProb>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -5033,7 +5236,7 @@ impl OutputTextDoneEvent {
 
     /// Returns logprobs if included.
     #[must_use]
-    pub fn logprobs(&self) -> &[LogProb] {
+    pub fn logprobs(&self) -> &[EventLogProb] {
         &self.logprobs
     }
 }
@@ -5323,7 +5526,7 @@ literal_tag!(StreamErrorEventTag, Error, "error");
 pub struct StreamErrorEvent {
     #[serde(rename = "type")]
     kind: StreamErrorEventTag,
-    code: String,
+    code: Nullable<String>,
     message: String,
     param: Nullable<String>,
     sequence_number: u64,
@@ -5332,10 +5535,13 @@ pub struct StreamErrorEvent {
 }
 
 impl StreamErrorEvent {
-    /// Returns the machine-readable code.
+    /// Returns the machine-readable code when non-null.
     #[must_use]
-    pub fn code(&self) -> &str {
-        &self.code
+    pub fn code(&self) -> Option<&str> {
+        match &self.code {
+            Nullable::Value(code) => Some(code.as_str()),
+            Nullable::Null => None,
+        }
     }
 
     /// Returns the human-readable message.
@@ -5723,7 +5929,10 @@ impl ResponseAccumulator {
             }
             ResponseStreamEvent::Error(event) => {
                 return Err(ResponseAccumulatorError::Stream {
-                    code: event.code,
+                    code: match event.code {
+                        Nullable::Value(code) => Some(code),
+                        Nullable::Null => None,
+                    },
                     message: event.message,
                 });
             }
@@ -5985,7 +6194,7 @@ fn response_output_item_id(item: &ResponseOutputItem) -> Option<&str> {
         ResponseOutputItem::McpListTools(value) => Some(&value.id),
         ResponseOutputItem::McpApprovalRequest(value) => Some(&value.id),
         ResponseOutputItem::McpApprovalResponse(value) => Some(&value.id),
-        ResponseOutputItem::CustomToolCall(_) => None,
+        ResponseOutputItem::CustomToolCall(value) => value.id(),
         ResponseOutputItem::CustomToolCallOutput(value) => Some(&value.id),
         ResponseOutputItem::Unknown(value) => value.raw().get("id").and_then(Value::as_str),
     }
@@ -6039,10 +6248,10 @@ pub enum ResponseAccumulatorError {
         received: String,
     },
     /// The SSE protocol emitted its standalone error event.
-    #[error("Responses stream error `{code}`: {message}")]
+    #[error("Responses stream error `{}`: {message}", code.as_deref().unwrap_or("null"))]
     Stream {
-        /// Machine-readable service error code.
-        code: String,
+        /// Machine-readable service error code, when non-null.
+        code: Option<String>,
         /// Human-readable service message.
         message: String,
     },
@@ -6128,11 +6337,75 @@ required_tagged_record!(ProgramOutputItem, ProgramOutputItemTag, ProgramOutput, 
     result: String,
     status: String
 });
-required_tagged_record!(FileSearchCall, FileSearchCallTag, FileSearchCall, "file_search_call", {
+literal_tag!(FileSearchCallTag, FileSearchCall, "file_search_call");
+
+/// One file-search result when `include=file_search_call.results` is set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileSearchCallResult {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    file_id: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    filename: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    text: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    score: Omittable<f64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    attributes: Omittable<Value>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl FileSearchCallResult {
+    /// Returns the file id when present.
+    #[must_use]
+    pub fn file_id(&self) -> Option<&str> {
+        match &self.file_id {
+            Omittable::Value(value) => Some(value.as_str()),
+            Omittable::Omitted => None,
+        }
+    }
+
+    /// Returns the retrieved text when present.
+    #[must_use]
+    pub fn text(&self) -> Option<&str> {
+        match &self.text {
+            Omittable::Value(value) => Some(value.as_str()),
+            Omittable::Omitted => None,
+        }
+    }
+}
+
+/// A file-search tool invocation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileSearchCall {
+    #[serde(rename = "type")]
+    kind: FileSearchCallTag,
     id: String,
     status: ResponseItemStatus,
-    queries: Vec<String>
-});
+    queries: Vec<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    results: Omittable<Nullable<Vec<FileSearchCallResult>>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl FileSearchCall {
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+
+    /// Returns included file-search results when present and non-null.
+    #[must_use]
+    pub fn results(&self) -> Option<&[FileSearchCallResult]> {
+        match &self.results {
+            Omittable::Value(Nullable::Value(results)) => Some(results.as_slice()),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+}
 open_string_enum! {
     /// Mouse button used by a computer click action.
     pub enum ComputerClickButton {
@@ -6448,28 +6721,132 @@ impl ComputerCall {
         }
     }
 }
-required_tagged_record!(
-    ComputerCallOutput,
+literal_tag!(
     ComputerCallOutputTag,
     ComputerCallOutput,
-    "computer_call_output",
-    {
-        call_id: String,
-        output: Value
-    }
+    "computer_call_output"
 );
-required_tagged_record!(
-    ComputerCallOutputResource,
+literal_tag!(
     ComputerCallOutputResourceTag,
     ComputerCallOutputResource,
-    "computer_call_output",
-    {
-        id: String,
-        call_id: String,
-        output: Value,
-        status: ResponseItemStatus
-    }
+    "computer_call_output"
 );
+
+/// A safety check acknowledged by the developer for computer use.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComputerSafetyCheck {
+    id: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    code: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    message: Omittable<Nullable<String>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ComputerSafetyCheck {
+    /// Creates a safety-check acknowledgement from its id.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            code: Omittable::Omitted,
+            message: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Returns the safety-check id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// Computer-call output supplied on a follow-up request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComputerCallOutput {
+    #[serde(rename = "type")]
+    kind: ComputerCallOutputTag,
+    call_id: String,
+    output: Value,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    acknowledged_safety_checks: Omittable<Nullable<Vec<ComputerSafetyCheck>>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ComputerCallOutput {
+    /// Creates computer-call output for a follow-up request.
+    #[must_use]
+    pub fn new(call_id: impl Into<String>, output: Value) -> Self {
+        Self {
+            kind: ComputerCallOutputTag::ComputerCallOutput,
+            call_id: call_id.into(),
+            output,
+            acknowledged_safety_checks: Omittable::Omitted,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Attaches acknowledged safety checks.
+    #[must_use]
+    pub fn acknowledged_safety_checks(
+        mut self,
+        checks: impl IntoIterator<Item = ComputerSafetyCheck>,
+    ) -> Self {
+        self.acknowledged_safety_checks =
+            Omittable::Value(Nullable::Value(checks.into_iter().collect()));
+        self
+    }
+
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+
+    /// Returns acknowledged safety checks when present and non-null.
+    #[must_use]
+    pub fn acknowledged_safety_checks_ref(&self) -> Option<&[ComputerSafetyCheck]> {
+        match &self.acknowledged_safety_checks {
+            Omittable::Value(Nullable::Value(checks)) => Some(checks.as_slice()),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+}
+
+/// Computer-call output returned as a stored output item.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComputerCallOutputResource {
+    #[serde(rename = "type")]
+    kind: ComputerCallOutputResourceTag,
+    id: String,
+    call_id: String,
+    output: Value,
+    status: ResponseItemStatus,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    acknowledged_safety_checks: Omittable<Nullable<Vec<ComputerSafetyCheck>>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ComputerCallOutputResource {
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+
+    /// Returns acknowledged safety checks when present and non-null.
+    #[must_use]
+    pub fn acknowledged_safety_checks_ref(&self) -> Option<&[ComputerSafetyCheck]> {
+        match &self.acknowledged_safety_checks {
+            Omittable::Value(Nullable::Value(checks)) => Some(checks.as_slice()),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+}
 required_tagged_record!(WebSearchCall, WebSearchCallTag, WebSearchCall, "web_search_call", {
     id: String,
     status: ResponseItemStatus,
@@ -6554,10 +6931,50 @@ required_tagged_record!(AdditionalTools, AdditionalToolsTag, AdditionalTools, "a
     role: MessageRole,
     tools: Vec<ResponseTool>
 });
-required_tagged_record!(ReasoningItem, ReasoningItemTag, Reasoning, "reasoning", {
+literal_tag!(ReasoningItemTag, Reasoning, "reasoning");
+
+/// A reasoning item returned by the model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReasoningItem {
+    #[serde(rename = "type")]
+    kind: ReasoningItemTag,
     id: String,
-    summary: Vec<Value>
-});
+    summary: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    encrypted_content: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    content: Omittable<Vec<Value>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    status: Omittable<ItemProgressStatus>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ReasoningItem {
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+
+    /// Returns encrypted reasoning content when present and non-null.
+    #[must_use]
+    pub fn encrypted_content(&self) -> Option<&str> {
+        match &self.encrypted_content {
+            Omittable::Value(Nullable::Value(value)) => Some(value.as_str()),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
+    /// Returns reasoning content parts when present.
+    #[must_use]
+    pub fn content(&self) -> Option<&[Value]> {
+        match &self.content {
+            Omittable::Value(value) => Some(value.as_slice()),
+            Omittable::Omitted => None,
+        }
+    }
+}
 required_tagged_record!(
     CompactionSummaryInput,
     CompactionSummaryInputTag,
@@ -6599,17 +7016,32 @@ required_tagged_record!(LocalShellCall, LocalShellCallTag, LocalShellCall, "loca
     action: Value,
     status: ResponseItemStatus
 });
-required_tagged_record!(
-    LocalShellCallOutput,
+literal_tag!(
     LocalShellCallOutputTag,
     LocalShellCallOutput,
-    "local_shell_call_output",
-    {
-        id: String,
-        call_id: String,
-        output: String
-    }
+    "local_shell_call_output"
 );
+
+/// Output of a local-shell tool call. Ghost `call_id` is retained in extra.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LocalShellCallOutput {
+    #[serde(rename = "type")]
+    kind: LocalShellCallOutputTag,
+    id: String,
+    output: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    status: Omittable<Nullable<ItemProgressStatus>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl LocalShellCallOutput {
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
 required_tagged_record!(
     FunctionShellCallInput,
     FunctionShellCallInputTag,
@@ -6699,11 +7131,40 @@ required_tagged_record!(
         approve: bool
     }
 );
-required_tagged_record!(CustomToolCall, CustomToolCallTag, CustomToolCall, "custom_tool_call", {
+literal_tag!(CustomToolCallTag, CustomToolCall, "custom_tool_call");
+
+/// A custom-tool invocation. Output resources also carry `id` and `status`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomToolCall {
+    #[serde(rename = "type")]
+    kind: CustomToolCallTag,
     call_id: String,
     name: String,
-    input: String
-});
+    input: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    id: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    status: Omittable<ItemProgressStatus>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl CustomToolCall {
+    /// Returns future optional fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+
+    /// Returns the output-item id when present.
+    #[must_use]
+    pub fn id(&self) -> Option<&str> {
+        match &self.id {
+            Omittable::Value(value) => Some(value.as_str()),
+            Omittable::Omitted => None,
+        }
+    }
+}
 required_tagged_record!(
     CustomToolCallOutput,
     CustomToolCallOutputTag,
@@ -8348,25 +8809,26 @@ macro_rules! required_stream_event {
 required_stream_event!(AudioDeltaEvent, AudioDeltaEventTag, AudioDelta, "response.audio.delta", {
     delta: String
 });
-required_stream_event!(AudioDoneEvent, AudioDoneEventTag, AudioDone, "response.audio.done", {
-    response_id: String
-});
+required_stream_event!(
+    AudioDoneEvent,
+    AudioDoneEventTag,
+    AudioDone,
+    "response.audio.done",
+    {}
+);
 required_stream_event!(
     AudioTranscriptDeltaEvent,
     AudioTranscriptDeltaEventTag,
     AudioTranscriptDelta,
     "response.audio.transcript.delta",
-    {
-        response_id: String,
-        delta: String
-    }
+    { delta: String }
 );
 required_stream_event!(
     AudioTranscriptDoneEvent,
     AudioTranscriptDoneEventTag,
     AudioTranscriptDone,
     "response.audio.transcript.done",
-    { response_id: String }
+    {}
 );
 required_stream_event!(
     CodeInterpreterCodeDeltaEvent,
@@ -8486,6 +8948,107 @@ required_stream_event!(
         command: String
     }
 );
+/// Incremental stdout/stderr for a shell-call output content event.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShellCallOutputDelta {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    stdout: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    stderr: Omittable<String>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ShellCallOutputDelta {
+    /// Returns stdout when present.
+    #[must_use]
+    pub fn stdout(&self) -> Option<&str> {
+        match &self.stdout {
+            Omittable::Value(value) => Some(value.as_str()),
+            Omittable::Omitted => None,
+        }
+    }
+
+    /// Returns stderr when present.
+    #[must_use]
+    pub fn stderr(&self) -> Option<&str> {
+        match &self.stderr {
+            Omittable::Value(value) => Some(value.as_str()),
+            Omittable::Omitted => None,
+        }
+    }
+}
+
+literal_tag!(ShellCallOutputTimeoutTag, Timeout, "timeout");
+literal_tag!(ShellCallOutputExitTag, Exit, "exit");
+
+/// A shell command that timed out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShellCallOutputTimeout {
+    #[serde(rename = "type")]
+    kind: ShellCallOutputTimeoutTag,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+/// A shell command that exited.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShellCallOutputExit {
+    #[serde(rename = "type")]
+    kind: ShellCallOutputExitTag,
+    exit_code: i64,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ShellCallOutputExit {
+    /// Returns the process exit code.
+    #[must_use]
+    pub const fn exit_code(&self) -> i64 {
+        self.exit_code
+    }
+}
+
+tagged_union! {
+    /// How a shell command finished.
+    pub enum ShellCallOutputOutcome {
+        Timeout(ShellCallOutputTimeout) => "timeout",
+        Exit(ShellCallOutputExit) => "exit"
+    }
+}
+
+/// One finished shell output content item.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShellCallOutputContent {
+    stdout: String,
+    stderr: String,
+    outcome: ShellCallOutputOutcome,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    created_by: Omittable<String>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl ShellCallOutputContent {
+    /// Returns captured stdout.
+    #[must_use]
+    pub fn stdout(&self) -> &str {
+        &self.stdout
+    }
+
+    /// Returns captured stderr.
+    #[must_use]
+    pub fn stderr(&self) -> &str {
+        &self.stderr
+    }
+
+    /// Returns the command outcome.
+    #[must_use]
+    pub const fn outcome(&self) -> &ShellCallOutputOutcome {
+        &self.outcome
+    }
+}
+
 required_stream_event!(
     ShellOutputContentDeltaEvent,
     ShellOutputContentDeltaEventTag,
@@ -8495,7 +9058,7 @@ required_stream_event!(
         item_id: String,
         output_index: u64,
         command_index: u64,
-        delta: String
+        delta: ShellCallOutputDelta
     }
 );
 required_stream_event!(
@@ -8507,9 +9070,37 @@ required_stream_event!(
         item_id: String,
         output_index: u64,
         command_index: u64,
-        output: String
+        output: Vec<ShellCallOutputContent>
     }
 );
+
+impl ShellOutputContentDeltaEvent {
+    /// Returns the containing item id.
+    #[must_use]
+    pub fn item_id(&self) -> &str {
+        &self.item_id
+    }
+
+    /// Returns the incremental stdout/stderr payload.
+    #[must_use]
+    pub const fn delta(&self) -> &ShellCallOutputDelta {
+        &self.delta
+    }
+}
+
+impl ShellOutputContentDoneEvent {
+    /// Returns the containing item id.
+    #[must_use]
+    pub fn item_id(&self) -> &str {
+        &self.item_id
+    }
+
+    /// Returns the finished output content items.
+    #[must_use]
+    pub fn output(&self) -> &[ShellCallOutputContent] {
+        &self.output
+    }
+}
 required_stream_event!(
     ReasoningSummaryPartAddedEvent,
     ReasoningSummaryPartAddedEventTag,
@@ -8867,6 +9458,13 @@ mod tests {
         assert_json_dto::<McpListedTool>();
         assert_json_dto::<McpListTools>();
         assert_json_dto::<McpCall>();
+        assert_json_dto::<McpCallError>();
+        assert_json_dto::<McpProtocolError>();
+        assert_json_dto::<EventLogProb>();
+        assert_json_dto::<ShellCallOutputDelta>();
+        assert_json_dto::<ShellCallOutputContent>();
+        assert_json_dto::<FileSearchCallResult>();
+        assert_json_dto::<ComputerSafetyCheck>();
         assert_json_dto::<McpApprovalRequest>();
         assert_json_dto::<McpApprovalResponse>();
         assert_json_dto::<FunctionCallOutputValue>();
@@ -9933,7 +10531,7 @@ mod tests {
             created_at: UnixSeconds(1000),
             error: Nullable::Null,
             incomplete_details: Nullable::Value(IncompleteDetails {
-                reason: IncompleteReason::MaxOutputTokens,
+                reason: Omittable::Value(IncompleteReason::MaxOutputTokens),
                 extra: ExtraFields::new(),
             }),
             instructions: Nullable::Null,
@@ -10604,5 +11202,249 @@ mod tests {
         let decoded: Annotation = serde_json::from_value(citation.clone()).expect("decode");
         assert!(matches!(decoded, Annotation::UrlCitation(_)));
         assert_eq!(serde_json::to_value(&decoded).expect("serialize"), citation);
+    }
+
+    #[test]
+    fn stream_error_event_accepts_null_code() {
+        let fixture = json!({
+            "type": "error",
+            "code": null,
+            "message": "failed",
+            "param": null,
+            "sequence_number": 1
+        });
+        let decoded: StreamErrorEvent =
+            serde_json::from_value(fixture.clone()).expect("decode null code");
+        assert_eq!(decoded.code(), None);
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), fixture);
+    }
+
+    #[test]
+    fn audio_events_decode_without_ghost_response_id() {
+        let done = json!({"type": "response.audio.done", "sequence_number": 1});
+        let decoded: AudioDoneEvent =
+            serde_json::from_value(done.clone()).expect("decode audio done");
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), done);
+
+        let with_ghost = json!({
+            "type": "response.audio.done",
+            "sequence_number": 2,
+            "response_id": "resp_1"
+        });
+        let decoded: AudioDoneEvent =
+            serde_json::from_value(with_ghost.clone()).expect("preserve ghost response_id");
+        assert_eq!(
+            decoded.extra_fields().get("response_id"),
+            Some(&json!("resp_1"))
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("round trip ghost"),
+            with_ghost
+        );
+
+        let transcript = json!({
+            "type": "response.audio.transcript.delta",
+            "delta": "hi",
+            "sequence_number": 3
+        });
+        let decoded: AudioTranscriptDeltaEvent =
+            serde_json::from_value(transcript.clone()).expect("decode transcript delta");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("round trip transcript"),
+            transcript
+        );
+    }
+
+    #[test]
+    fn shell_output_content_events_use_object_payloads() {
+        let delta = json!({
+            "type": "response.shell_call_output_content.delta",
+            "item_id": "shell_1",
+            "output_index": 0,
+            "command_index": 0,
+            "delta": {"stdout": "hello", "stderr": ""},
+            "sequence_number": 4
+        });
+        let decoded: ShellOutputContentDeltaEvent =
+            serde_json::from_value(delta.clone()).expect("decode shell delta");
+        assert_eq!(decoded.delta().stdout(), Some("hello"));
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), delta);
+        assert!(
+            serde_json::from_value::<ShellOutputContentDeltaEvent>(json!({
+                "type": "response.shell_call_output_content.delta",
+                "item_id": "shell_1",
+                "output_index": 0,
+                "command_index": 0,
+                "delta": "hello",
+                "sequence_number": 4
+            }))
+            .is_err()
+        );
+
+        let done = json!({
+            "type": "response.shell_call_output_content.done",
+            "item_id": "shell_1",
+            "output_index": 0,
+            "command_index": 0,
+            "output": [{
+                "stdout": "hello",
+                "stderr": "",
+                "outcome": {"type": "exit", "exit_code": 0}
+            }],
+            "sequence_number": 5
+        });
+        let decoded: ShellOutputContentDoneEvent =
+            serde_json::from_value(done.clone()).expect("decode shell done");
+        assert_eq!(decoded.output().len(), 1);
+        assert!(matches!(
+            decoded.output()[0].outcome(),
+            ShellCallOutputOutcome::Exit(_)
+        ));
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), done);
+    }
+
+    #[test]
+    fn mcp_call_error_is_a_typed_union() {
+        let fixture = json!({
+            "type": "mcp_call",
+            "id": "mcp_1",
+            "server_label": "docs",
+            "name": "search",
+            "arguments": "{}",
+            "error": {
+                "type": "mcp_protocol_error",
+                "code": -32601,
+                "message": "missing"
+            }
+        });
+        let decoded: McpCall = serde_json::from_value(fixture.clone()).expect("decode mcp error");
+        assert!(matches!(decoded.error(), Some(McpCallError::Protocol(_))));
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), fixture);
+        assert!(
+            serde_json::from_value::<McpCall>(json!({
+                "type": "mcp_call",
+                "id": "mcp_1",
+                "server_label": "docs",
+                "name": "search",
+                "arguments": "{}",
+                "error": "missing"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn local_shell_output_and_custom_tool_call_drop_ghost_required_fields() {
+        let shell = json!({
+            "type": "local_shell_call_output",
+            "id": "lso_1",
+            "output": "ok"
+        });
+        let decoded: LocalShellCallOutput =
+            serde_json::from_value(shell.clone()).expect("decode without ghost call_id");
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), shell);
+
+        let custom = json!({
+            "type": "custom_tool_call",
+            "id": "ctc_1",
+            "status": "completed",
+            "call_id": "call_custom",
+            "name": "lookup",
+            "input": "{}"
+        });
+        let decoded: CustomToolCall =
+            serde_json::from_value(custom.clone()).expect("decode custom tool resource");
+        assert_eq!(decoded.id(), Some("ctc_1"));
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), custom);
+    }
+
+    #[test]
+    fn event_logprobs_omit_bytes_and_optional_top_logprobs() {
+        let fixture = json!({
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hi",
+            "sequence_number": 6,
+            "logprobs": [{"token": "Hi", "logprob": -0.1}]
+        });
+        let decoded: OutputTextDeltaEvent =
+            serde_json::from_value(fixture.clone()).expect("decode event logprobs");
+        assert_eq!(decoded.logprobs()[0].token(), "Hi");
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), fixture);
+    }
+
+    #[test]
+    fn incomplete_details_reason_is_optional() {
+        let fixture = json!({});
+        let decoded: IncompleteDetails =
+            serde_json::from_value(fixture.clone()).expect("decode empty incomplete details");
+        assert_eq!(decoded.reason(), None);
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), fixture);
+    }
+
+    #[test]
+    fn compact_request_keeps_prompt_cache_fields_and_extra() {
+        let fixture = json!({
+            "model": "gpt-test",
+            "prompt_cache_key": "cache-1",
+            "prompt_cache_retention": "24h",
+            "service_tier": "priority",
+            "future_compact": true
+        });
+        let decoded: CompactResponseRequest =
+            serde_json::from_value(fixture.clone()).expect("decode compact request");
+        assert!(decoded.extra_fields().contains_key("future_compact"));
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), fixture);
+    }
+
+    #[test]
+    fn reasoning_file_search_and_computer_output_expose_replay_fields() {
+        let reasoning = json!({
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "encrypted_content": "enc",
+            "status": "completed"
+        });
+        let decoded: ReasoningItem =
+            serde_json::from_value(reasoning.clone()).expect("decode reasoning");
+        assert_eq!(decoded.encrypted_content(), Some("enc"));
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("round trip"),
+            reasoning
+        );
+
+        let search = json!({
+            "type": "file_search_call",
+            "id": "fs_1",
+            "status": "completed",
+            "queries": ["docs"],
+            "results": [{"file_id": "file_1", "filename": "a.md", "score": 0.9, "text": "hit"}]
+        });
+        let decoded: FileSearchCall =
+            serde_json::from_value(search.clone()).expect("decode file search");
+        assert_eq!(
+            decoded.results().map(<[FileSearchCallResult]>::len),
+            Some(1)
+        );
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), search);
+
+        let output = json!({
+            "type": "computer_call_output",
+            "call_id": "call_cu",
+            "output": {"type": "computer_screenshot", "image_url": "https://example.com/s.png"},
+            "acknowledged_safety_checks": [{"id": "chk_1", "code": "malicious_instruction"}]
+        });
+        let decoded: ComputerCallOutput =
+            serde_json::from_value(output.clone()).expect("decode computer output");
+        assert_eq!(
+            decoded
+                .acknowledged_safety_checks_ref()
+                .map(<[ComputerSafetyCheck]>::len),
+            Some(1)
+        );
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), output);
     }
 }

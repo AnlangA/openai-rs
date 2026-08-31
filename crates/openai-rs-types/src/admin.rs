@@ -729,6 +729,23 @@ pub struct GroupResourceWithSuccess {
     extra: ExtraFields,
 }
 
+/// Group-list user row. Retrieve uses the fuller [`GroupMemberUser`] shape.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GroupUser {
+    pub id: String,
+    pub name: String,
+    pub email: Nullable<String>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl GroupUser {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupMemberUser {
     pub id: String,
@@ -739,6 +756,13 @@ pub struct GroupMemberUser {
     pub user_type: GroupUserType,
     #[serde(default, flatten)]
     extra: ExtraFields,
+}
+
+impl GroupMemberUser {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -756,10 +780,10 @@ pub struct CreateGroupUserBody {
 crate::open_string_enum! {
     /// Assignment/deletion object discriminator.
     pub enum AssignmentObject {
-        GroupUserAssignment = "organization.group.user.assignment",
-        GroupRoleAssignment = "organization.group.role.assignment",
-        UserRoleAssignment = "organization.user.role.assignment",
-        Deleted = "organization.role.assignment.deleted"
+        GroupUserAssignment = "group.user",
+        GroupRoleAssignment = "group.role",
+        UserRoleAssignment = "user.role",
+        Deleted = "group.user.deleted"
     }
 }
 
@@ -808,7 +832,7 @@ pub struct GroupUserDeletedResource {
 }
 
 pub type GroupListResource = AdminNextPage<GroupResponse>;
-pub type UserListResource = AdminNextPage<GroupMemberUser>;
+pub type UserListResource = AdminNextPage<GroupUser>;
 
 crate::open_string_enum! {
     /// Organization user object discriminator.
@@ -943,18 +967,25 @@ pub struct AssignedRoleDetails {
     pub resource_type: String,
     pub predefined_role: bool,
     pub description: Nullable<String>,
-    pub created_at: u64,
-    pub updated_at: u64,
-    pub created_by: String,
-    pub created_by_user_obj: AdminJsonObject,
-    pub metadata: AdminJsonObject,
-    pub assignment_sources: Vec<Value>,
+    pub created_at: Nullable<u64>,
+    pub updated_at: Nullable<u64>,
+    pub created_by: Nullable<String>,
+    pub created_by_user_obj: Nullable<AdminJsonObject>,
+    pub metadata: Nullable<AdminJsonObject>,
+    pub assignment_sources: Nullable<Vec<Value>>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+impl AssignedRoleDetails {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 pub type PublicRoleListResource = AdminNextPage<Role>;
-pub type RoleListResource = AdminNextPage<Role>;
+pub type RoleListResource = AdminNextPage<AssignedRoleDetails>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RoleDeletedResource {
@@ -1781,14 +1812,14 @@ simple_usage_result!(
 simple_usage_result!(
     UsageFileSearchCallsResult,
     UsageFileSearchTag,
-    "organization.usage.file_search_calls.result",
+    "organization.usage.file_searches.result",
     num_requests
 );
 
 literal_tag!(
     UsageWebSearchTag,
     Value,
-    "organization.usage.web_search_calls.result"
+    "organization.usage.web_searches.result"
 );
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1862,8 +1893,8 @@ strict_tagged_union! {
         AudioTranscriptions(UsageAudioTranscriptionsResult) = "organization.usage.audio_transcriptions.result",
         VectorStores(UsageVectorStoresResult) = "organization.usage.vector_stores.result",
         CodeInterpreterSessions(UsageCodeInterpreterSessionsResult) = "organization.usage.code_interpreter_sessions.result",
-        FileSearchCalls(UsageFileSearchCallsResult) = "organization.usage.file_search_calls.result",
-        WebSearchCalls(UsageWebSearchCallsResult) = "organization.usage.web_search_calls.result",
+        FileSearchCalls(UsageFileSearchCallsResult) = "organization.usage.file_searches.result",
+        WebSearchCalls(UsageWebSearchCallsResult) = "organization.usage.web_searches.result",
         Costs(CostsResult) = "organization.costs.result"
     }
 }
@@ -3144,5 +3175,109 @@ mod tests {
         assert!(serde_json::from_value::<UsageQueryParams>(json!({})).is_err());
         let params = UsageQueryParams::new(100);
         assert_eq!(ok(serde_json::to_value(params)), json!({"start_time": 100}));
+    }
+
+    #[test]
+    fn usage_file_and_web_search_results_use_searches_object_tags() {
+        let file_search = json!({
+            "object": "organization.usage.file_searches.result",
+            "num_requests": 2,
+            "project_id": null,
+            "vector_store_id": "vs_1"
+        });
+        let decoded = ok(serde_json::from_value::<UsageResult>(file_search.clone()));
+        assert!(matches!(decoded, UsageResult::FileSearchCalls(_)));
+        assert_eq!(ok(serde_json::to_value(decoded)), file_search);
+
+        let web_search = json!({
+            "object": "organization.usage.web_searches.result",
+            "num_model_requests": 1,
+            "num_requests": 2,
+            "context_level": "medium"
+        });
+        let decoded = ok(serde_json::from_value::<UsageResult>(web_search.clone()));
+        assert!(matches!(decoded, UsageResult::WebSearchCalls(_)));
+        assert_eq!(ok(serde_json::to_value(decoded)), web_search);
+
+        assert!(
+            serde_json::from_value::<UsageFileSearchCallsResult>(json!({
+                "object": "organization.usage.file_search_calls.result",
+                "num_requests": 1
+            }))
+            .is_err()
+        );
+        assert!(matches!(
+            ok(serde_json::from_value::<UsageResult>(json!({
+                "object": "organization.usage.file_search_calls.result",
+                "num_requests": 1
+            }))),
+            UsageResult::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn assigned_role_details_and_list_resources_accept_official_shapes() {
+        let assigned = json!({
+            "id": "role_1",
+            "name": "auditor",
+            "permissions": ["api.usage.read"],
+            "resource_type": "organization",
+            "predefined_role": false,
+            "description": null,
+            "created_at": null,
+            "updated_at": null,
+            "created_by": null,
+            "created_by_user_obj": null,
+            "metadata": null,
+            "assignment_sources": null
+        });
+        let decoded = ok(serde_json::from_value::<AssignedRoleDetails>(
+            assigned.clone(),
+        ));
+        assert!(decoded.assignment_sources.is_null());
+        assert_eq!(ok(serde_json::to_value(decoded)), assigned);
+
+        let roles = json!({
+            "object": "list",
+            "data": [assigned],
+            "has_more": false,
+            "next": null
+        });
+        let page = ok(serde_json::from_value::<RoleListResource>(roles.clone()));
+        assert_eq!(page.data.len(), 1);
+        assert_eq!(ok(serde_json::to_value(page)), roles);
+
+        let users = json!({
+            "object": "list",
+            "data": [{"id": "user_1", "name": "Ada", "email": null}],
+            "has_more": false,
+            "next": null
+        });
+        let page = ok(serde_json::from_value::<UserListResource>(users.clone()));
+        assert_eq!(page.data[0].id, "user_1");
+        assert_eq!(ok(serde_json::to_value(page)), users);
+
+        assert!(
+            serde_json::from_value::<GroupMemberUser>(json!({
+                "id": "user_1",
+                "name": "Ada",
+                "email": null
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn assignment_object_tags_match_pinned_wire_values() {
+        let assignment = json!({
+            "object": "group.user",
+            "user_id": "user_1",
+            "group_id": "grp_1"
+        });
+        let decoded = ok(serde_json::from_value::<GroupUserAssignment>(
+            assignment.clone(),
+        ));
+        assert_eq!(decoded.object, AssignmentObject::GroupUserAssignment);
+        assert_eq!(ok(serde_json::to_value(decoded)), assignment);
     }
 }
