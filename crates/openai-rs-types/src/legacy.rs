@@ -435,6 +435,9 @@ impl CreateCompletionRequest {
     }
 
     /// Sets server-side candidate count. This option cannot be streamed.
+    ///
+    /// The pinned description requires `best_of` to be greater than `n` when
+    /// both are set explicitly; see [`CreateCompletionRequest::validate`].
     #[must_use]
     pub fn best_of(mut self, best_of: u8) -> Self {
         self.best_of = Omittable::Value(Nullable::Value(best_of));
@@ -473,6 +476,12 @@ impl CreateCompletionRequest {
                 minimum: MIN_COMPLETION_BEST_OF,
                 maximum: MAX_COMPLETION_BEST_OF,
             });
+        }
+        if let (Omittable::Value(Nullable::Value(best_of)), Omittable::Value(Nullable::Value(n))) =
+            (self.best_of, self.body.n)
+            && u32::from(best_of) <= n
+        {
+            return Err(CreateCompletionConstraintError::BestOfNotGreaterThanN { best_of, n });
         }
         Ok(())
     }
@@ -586,6 +595,10 @@ pub enum CreateCompletionConstraintError {
         minimum: u8,
         maximum: u8,
     },
+    /// `best_of` is not greater than an explicitly set `n`. The pinned
+    /// `best_of` description states "`best_of` must be greater than `n`".
+    #[error("best_of must be greater than n when both are set, got best_of {best_of} and n {n}")]
+    BestOfNotGreaterThanN { best_of: u8, n: u32 },
     /// `stop` array length is outside `1..=4`.
     #[error("stop must contain {minimum}..={maximum} sequences, got {actual}")]
     StopSequences {
@@ -1120,7 +1133,7 @@ mod tests {
     fn completion_create_fields_match_python_and_openapi_inventory() {
         let request = CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "Say hello")
             .echo(true)
-            .best_of(1)
+            .best_of(2)
             .suffix("!")
             .max_tokens(16)
             .n(1)
@@ -1165,9 +1178,13 @@ mod tests {
             .top_p(1.0)
             .n(128)
             .logprobs(5)
-            .best_of(20)
             .validate()
             .expect("boundary values are accepted");
+        CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
+            .best_of(MAX_COMPLETION_BEST_OF)
+            .n(1)
+            .validate()
+            .expect("boundary best_of greater than n is accepted");
 
         assert!(matches!(
             CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
@@ -1236,5 +1253,56 @@ mod tests {
             unofficial.validate(),
             Err(CreateCompletionConstraintError::EmptyPromptTokenBatch { .. })
         ));
+    }
+
+    #[test]
+    fn completion_validate_enforces_best_of_greater_than_n() {
+        CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
+            .best_of(3)
+            .n(2)
+            .validate()
+            .expect("best_of greater than n is accepted");
+
+        CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
+            .best_of(1)
+            .validate()
+            .expect("relation only applies when both fields are explicit");
+        CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
+            .best_of_null()
+            .n(1)
+            .validate()
+            .expect("official best_of null skips the relation");
+        CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
+            .best_of(1)
+            .n_null()
+            .validate()
+            .expect("official n null skips the relation");
+
+        assert_eq!(
+            CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
+                .best_of(2)
+                .n(2)
+                .validate(),
+            Err(CreateCompletionConstraintError::BestOfNotGreaterThanN { best_of: 2, n: 2 })
+        );
+        assert_eq!(
+            CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "hello")
+                .best_of(1)
+                .n(128)
+                .validate(),
+            Err(CreateCompletionConstraintError::BestOfNotGreaterThanN { best_of: 1, n: 128 })
+        );
+
+        let unofficial = serde_json::from_value::<CreateCompletionRequest>(json!({
+            "model": "gpt-3.5-turbo-instruct",
+            "prompt": "hello",
+            "best_of": 1,
+            "n": 4
+        }))
+        .expect("serde remains lossless");
+        assert_eq!(
+            unofficial.validate(),
+            Err(CreateCompletionConstraintError::BestOfNotGreaterThanN { best_of: 1, n: 4 })
+        );
     }
 }

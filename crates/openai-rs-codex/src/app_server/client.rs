@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use url::Url;
 
 use super::codec::read_bounded_line;
 use crate::credentials::apply_credential;
@@ -678,9 +679,12 @@ impl AppServerClient<ManagedAppServerCredential> {
             login_id: response.login_id.ok_or_else(|| {
                 Error::UnexpectedResponse("browser login response omitted loginId".to_owned())
             })?,
-            auth_url: response.auth_url.ok_or_else(|| {
-                Error::UnexpectedResponse("browser login response omitted authUrl".to_owned())
-            })?,
+            auth_url: response
+                .auth_url
+                .ok_or_else(|| {
+                    Error::UnexpectedResponse("browser login response omitted authUrl".to_owned())
+                })
+                .and_then(|auth_url| parse_login_url("authUrl", auth_url))?,
         })
     }
 
@@ -709,11 +713,16 @@ impl AppServerClient<ManagedAppServerCredential> {
             login_id: response.login_id.ok_or_else(|| {
                 Error::UnexpectedResponse("device login response omitted loginId".to_owned())
             })?,
-            verification_url: response.verification_url.ok_or_else(|| {
-                Error::UnexpectedResponse(
-                    "device login response omitted verificationUrl".to_owned(),
-                )
-            })?,
+            verification_url: response
+                .verification_url
+                .ok_or_else(|| {
+                    Error::UnexpectedResponse(
+                        "device login response omitted verificationUrl".to_owned(),
+                    )
+                })
+                .and_then(|verification_url| {
+                    parse_login_url("verificationUrl", verification_url)
+                })?,
             user_code: response.user_code.ok_or_else(|| {
                 Error::UnexpectedResponse("device login response omitted userCode".to_owned())
             })?,
@@ -737,6 +746,22 @@ impl AppServerClient<ManagedAppServerCredential> {
         )
         .await
     }
+}
+
+/// Resolve a login URL from the wire DTO into the public [`Url`] type.
+///
+/// The pinned schema types `authUrl`/`verificationUrl` as plain strings with
+/// no `uri` constraint, so [`LoginAccountResponse`] keeps them unparsed and a
+/// single malformed field cannot fail the whole response at decode time. The
+/// parse happens here instead: a non-absolute or otherwise unparsable value is
+/// reported as [`Error::UnexpectedResponse`] naming the offending wire key,
+/// never silently replaced or passed through.
+fn parse_login_url(wire_key: &'static str, value: String) -> Result<Url, Error> {
+    Url::parse(&value).map_err(|error| {
+        Error::UnexpectedResponse(format!(
+            "login response {wire_key} {value:?} is not a parsable absolute URL: {error}"
+        ))
+    })
 }
 
 fn validate_config<C>(config: &AppServerConfig<C>) -> Result<(), Error>
@@ -1305,6 +1330,61 @@ mod tests {
                 other => return Err(format!("unexpected notification: {other:?}").into()),
             },
             other => return Err(format!("unexpected event: {other:?}").into()),
+        }
+
+        client.close().await?;
+        Ok(())
+    }
+
+    /// Non-absolute `authUrl`/`verificationUrl` values are pinned-legal wire
+    /// strings, so the DTO decodes them; the public login methods must then
+    /// fail with an explicit `UnexpectedResponse` naming the field instead of
+    /// a decode error or a silently mangled value.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn login_start_rejects_non_absolute_urls_with_explicit_errors()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 61
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 62
+            IFS= read -r browser || exit 63
+            printf '%s\n' '{"id":2,"result":{"type":"chatgpt","loginId":"login-browser","authUrl":"chatgpt.com/auth"}}'
+            IFS= read -r device || exit 64
+            printf '%s\n' '{"id":3,"result":{"type":"chatgptDeviceCode","loginId":"login-device","verificationUrl":"codex/device","userCode":"ABCD-1234"}}'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        match client
+            .account_login_browser(BrowserLoginOptions::default())
+            .await
+        {
+            Err(Error::UnexpectedResponse(message)) => {
+                assert!(message.contains("authUrl"), "unexpected message: {message}");
+                assert!(
+                    message.contains("chatgpt.com/auth"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => return Err(format!("unexpected browser login result: {other:?}").into()),
+        }
+        match client.account_login_device().await {
+            Err(Error::UnexpectedResponse(message)) => {
+                assert!(
+                    message.contains("verificationUrl"),
+                    "unexpected message: {message}"
+                );
+                assert!(
+                    message.contains("codex/device"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => return Err(format!("unexpected device login result: {other:?}").into()),
         }
 
         client.close().await?;

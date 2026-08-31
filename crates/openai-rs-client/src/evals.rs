@@ -111,6 +111,7 @@ impl Evals {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id().as_str()),
+                    page.data().last().map(|eval| eval.id().as_str()),
                     &mut seen,
                     "Eval",
                 )?;
@@ -196,6 +197,7 @@ impl EvalRuns {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id().as_str()),
+                    page.data().last().map(|run| run.id().as_str()),
                     &mut seen,
                     "Eval run",
                 )?;
@@ -317,6 +319,7 @@ impl EvalRunOutputItems {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id().as_str()),
+                    page.data().last().map(|item| item.id().as_str()),
                     &mut seen,
                     "Eval output-item",
                 )?;

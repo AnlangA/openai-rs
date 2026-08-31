@@ -88,6 +88,7 @@ impl Containers {
                 let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after(),
+                    page.data.last().map(|container| container.id.as_str()),
                     &mut seen,
                     "Container",
                 )?;
@@ -213,6 +214,7 @@ impl ContainerFiles {
                 let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after(),
+                    page.data.last().map(|file| file.id.as_str()),
                     &mut seen,
                     "Container File",
                 )?;

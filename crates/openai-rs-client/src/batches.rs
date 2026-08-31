@@ -90,6 +90,7 @@ impl Batches {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     page.last_id().map(|id| id.as_str()),
+                    page.data().last().map(|batch| batch.id().as_str()),
                     &mut seen,
                     "batch",
                 )?;
@@ -707,6 +708,32 @@ mod tests {
         assert!(query.contains(&("after".into(), "batch cursor".into())));
         assert!(query.contains(&("limit".into(), "2".into())));
         assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_batches_accepts_limits_above_documented_prose_ceiling() {
+        let (client, captured) = serve_once(
+            r#"{"object":"list","data":[],"first_id":"batch_first","last_id":"batch_last","has_more":false}"#,
+        )
+        .await;
+        // The pinned schema has no `maximum` for this query parameter and the
+        // official Python SDK forwards it unbounded, so a value above the
+        // documented prose ceiling of 100 must still be sendable.
+        let params = BatchListParams::new()
+            .with_limit(BatchListLimit::new(500).expect("no invented upper bound"));
+
+        let response = client
+            .batches()
+            .list(params)
+            .await
+            .expect("batch list response");
+        assert!(response.data().is_empty());
+
+        let captured = captured.await.expect("captured large-limit list request");
+        let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
+            .expect("captured large-limit batch list URL");
+        let query = url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("limit".into(), "500".into())));
     }
 
     #[tokio::test]

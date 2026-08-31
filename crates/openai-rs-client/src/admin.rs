@@ -146,6 +146,7 @@ admin_query!(
     AdminListParams,
     AuditLogListParams,
     UsageQueryParams,
+    UsageCostsQueryParams,
     ListFineTuningCheckpointPermissionsParams,
     CertificateGetParams,
     ProjectGroupGetParams,
@@ -2646,6 +2647,21 @@ impl AdminDataRetention {
             .send()
             .await
     }
+
+    /// Update a project's data-retention setting via
+    /// `POST /organization/projects/{project_id}/data_retention`.
+    pub async fn update_project(
+        &self,
+        project_id: &str,
+        request: UpdateProjectDataRetentionBody,
+    ) -> Result<ApiResponse<ProjectDataRetention>, Error> {
+        self.0
+            .request::<operations::OpUpdateProjectDataRetention>()
+            .path_parameter(project_id)?
+            .body(request)
+            .send()
+            .await
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -3045,7 +3061,22 @@ impl AdminUsage {
     );
     usage_method!(file_search_calls, operations::OpUsageFileSearchCalls);
     usage_method!(web_search_calls, operations::OpUsageWebSearchCalls);
-    usage_method!(costs, operations::OpUsageCosts);
+
+    /// Query costs with the pinned `GET /organization/costs` parameters.
+    ///
+    /// Unlike the shared [`UsageQueryParams`] used by the usage endpoints,
+    /// [`UsageCostsQueryParams`] pins `bucket_width` to `1d` and `group_by` to
+    /// `project_id`/`line_item`/`api_key_id`.
+    pub async fn costs(
+        &self,
+        params: &UsageCostsQueryParams,
+    ) -> Result<ApiResponse<UsageResponse>, Error> {
+        self.0
+            .request::<operations::OpUsageCosts>()
+            .query(params)?
+            .send()
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -3141,6 +3172,14 @@ mod tests {
                                 (
                                     StatusCode::OK,
                                     r#"{"id":"perm/1","object":"checkpoint.permission","deleted":true}"#,
+                                )
+                            } else if method == Method::POST
+                                && path_and_query
+                                    == "/v1/organization/projects/proj_1/data_retention"
+                            {
+                                (
+                                    StatusCode::OK,
+                                    r#"{"object":"project.data_retention","type":"none"}"#,
                                 )
                             } else if path_and_query.starts_with("/v1/organization/users") {
                                 (
@@ -3404,6 +3443,65 @@ mod tests {
             serde_json::json!(["proj_1"])
         );
         assert!(captured[2].body.is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn data_retention_update_project_posts_pinned_route_and_six_value_domain() {
+        let (base_url, captured, task) = spawn_server().await;
+        let client = AdminClient::builder(key())
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("build admin client");
+
+        for value in [
+            "organization_default",
+            "none",
+            "zero_data_retention",
+            "modified_abuse_monitoring",
+            "enhanced_zero_data_retention",
+            "enhanced_modified_abuse_monitoring",
+        ] {
+            let updated = client
+                .data_retention()
+                .update_project(
+                    "proj_1",
+                    UpdateProjectDataRetentionBody {
+                        retention_type: DataRetentionType::from_raw(value),
+                    },
+                )
+                .await
+                .expect("update project data retention");
+            assert_eq!(updated.retention_type.as_str(), "none");
+        }
+
+        let captured = captured.lock().expect("capture lock");
+        assert_eq!(captured.len(), 6);
+        for (index, request) in captured.iter().enumerate() {
+            assert_eq!(request.method, Method::POST, "request {index} must be POST");
+            assert_eq!(
+                request.path_and_query, "/v1/organization/projects/proj_1/data_retention",
+                "request {index} must use the pinned project data-retention route"
+            );
+            assert_eq!(
+                request.authorization.as_deref(),
+                Some("Bearer admin-test-placeholder-key")
+            );
+        }
+        for (request, value) in captured.iter().zip([
+            "organization_default",
+            "none",
+            "zero_data_retention",
+            "modified_abuse_monitoring",
+            "enhanced_zero_data_retention",
+            "enhanced_modified_abuse_monitoring",
+        ]) {
+            assert_eq!(
+                serde_json::from_slice::<Value>(&request.body).expect("data-retention JSON"),
+                serde_json::json!({ "retention_type": value })
+            );
+        }
         task.abort();
     }
 

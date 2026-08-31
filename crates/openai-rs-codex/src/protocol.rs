@@ -131,10 +131,15 @@ pub(crate) struct LoginAccountResponse {
     pub kind: String,
     #[serde(default)]
     pub login_id: Option<String>,
+    /// The pinned schema types this as a plain string with no `uri`
+    /// constraint, so a non-absolute value must not fail the whole login
+    /// response at decode time. Consumers resolve it with [`url::Url::parse`]
+    /// and surface an explicit error on malformed values.
     #[serde(default)]
-    pub auth_url: Option<Url>,
+    pub auth_url: Option<String>,
+    /// Plain string for the same reason as [`LoginAccountResponse::auth_url`].
     #[serde(default)]
-    pub verification_url: Option<Url>,
+    pub verification_url: Option<String>,
     #[serde(default)]
     pub user_code: Option<String>,
     #[serde(default, flatten)]
@@ -607,8 +612,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ClientInfo, InitializeCapabilities, InitializeParams, Notification, Nullable, Omittable,
-        TurnStartParams, UserInput, decode_notification,
+        ByteRange, ClientInfo, InitializeCapabilities, InitializeParams, LoginAccountResponse,
+        Notification, Nullable, Omittable, TextElement, TurnStartParams, UserInput,
+        decode_notification,
     };
 
     #[test]
@@ -622,6 +628,58 @@ mod tests {
                 "input": [{"type": "text", "text": "hello"}]
             })
         );
+        Ok(())
+    }
+
+    /// The pinned `v2/UserInput` schema names this property `text_elements`
+    /// even though every neighbouring property of the Text variant is
+    /// camelCase. The enum-level `rename_all` only renames variant tags, so
+    /// the field keeps its snake_case Rust name; this test locks that wire key
+    /// so a future `rename_all_fields`/variant-level `rename_all` cannot break
+    /// it silently.
+    #[test]
+    fn text_input_elements_keep_the_pinned_snake_case_wire_key() -> Result<(), serde_json::Error> {
+        let input = UserInput::Text {
+            text: "see @file".to_owned(),
+            text_elements: vec![TextElement {
+                byte_range: ByteRange { start: 4, end: 10 },
+                placeholder: Some("@file".to_owned()),
+            }],
+        };
+        let encoded = serde_json::to_value(&input)?;
+        assert_eq!(
+            encoded,
+            json!({
+                "type": "text",
+                "text": "see @file",
+                "text_elements": [{
+                    "byteRange": {"start": 4, "end": 10},
+                    "placeholder": "@file",
+                }]
+            })
+        );
+        assert!(encoded.get("text_elements").is_some());
+        assert!(encoded.get("textElements").is_none());
+
+        let decoded: UserInput = serde_json::from_value(encoded)?;
+        assert_eq!(decoded, input);
+        Ok(())
+    }
+
+    /// `authUrl`/`verificationUrl` are pinned as plain strings without a `uri`
+    /// constraint; decoding must accept values that are not absolute URLs and
+    /// leave the parse decision to the consuming login methods.
+    #[test]
+    fn login_account_response_accepts_non_absolute_urls() -> Result<(), serde_json::Error> {
+        let response: LoginAccountResponse = serde_json::from_value(json!({
+            "type": "chatgpt",
+            "loginId": "login-1",
+            "authUrl": "chatgpt.com/auth",
+            "futureField": 7,
+        }))?;
+        assert_eq!(response.login_id.as_deref(), Some("login-1"));
+        assert_eq!(response.auth_url.as_deref(), Some("chatgpt.com/auth"));
+        assert_eq!(response.verification_url, None);
         Ok(())
     }
 

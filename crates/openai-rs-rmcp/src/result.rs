@@ -14,8 +14,11 @@ pub enum ResultEncoding {
     #[default]
     LosslessEnvelope,
     /// For successful results, prefer `structuredContent`, then a single text
-    /// block. Results containing rich content or any tool error still use the
-    /// lossless envelope.
+    /// block. `structuredContent` replaces the envelope only when the content
+    /// array is empty or entirely text blocks; results pairing it with rich
+    /// blocks (image, audio, resource, resource link), multi-block text
+    /// without `structuredContent`, and any tool error keep the lossless
+    /// envelope.
     CompactWhenPossible,
 }
 
@@ -81,6 +84,24 @@ impl EncodedToolResult {
     }
 }
 
+/// Borrow the `structuredContent` that may safely replace the whole result.
+///
+/// The MCP spec pairs `structuredContent` with a redundant text
+/// serialization, so dropping an empty or text-only content array loses
+/// nothing. Any rich block alongside it must survive in the envelope.
+fn flattenable_structured_content(envelope: &ToolResultEnvelope) -> Option<&Value> {
+    let structured = envelope.structured_content()?;
+    if envelope
+        .content()
+        .iter()
+        .all(|block| matches!(block, ContentBlock::Text(_)))
+    {
+        Some(structured)
+    } else {
+        None
+    }
+}
+
 /// Encode one RMCP tool result according to `policy`.
 pub fn encode_tool_result(
     result: &CallToolResult,
@@ -91,7 +112,7 @@ pub fn encode_tool_result(
 
     let output = match policy {
         ResultEncoding::CompactWhenPossible if !is_error => {
-            if let Some(structured) = envelope.structured_content() {
+            if let Some(structured) = flattenable_structured_content(&envelope) {
                 serde_json::to_string(structured)
                     .map_err(|source| BridgeError::SerializeOutput { source })?
             } else if let [ContentBlock::Text(text)] = envelope.content() {
@@ -174,5 +195,47 @@ mod tests {
             .expect("tool errors must encode");
         assert_ne!(encoded.output(), "failed");
         assert!(encoded.is_error());
+    }
+
+    #[test]
+    fn compact_policy_flattens_structured_content_only_when_content_is_text_only() {
+        let mut text_only = CallToolResult::success(vec![ContentBlock::text(r#"{"answer":42}"#)]);
+        text_only.structured_content = Some(json!({"answer": 42}));
+        let encoded = encode_tool_result(&text_only, ResultEncoding::CompactWhenPossible)
+            .expect("text-only structured result must encode");
+        assert_eq!(
+            serde_json::from_str::<Value>(encoded.output()).expect("flattened JSON"),
+            json!({"answer": 42})
+        );
+
+        let mut empty_content = CallToolResult::success(Vec::new());
+        empty_content.structured_content = Some(json!({"answer": 42}));
+        let encoded = encode_tool_result(&empty_content, ResultEncoding::CompactWhenPossible)
+            .expect("empty-content structured result must encode");
+        assert_eq!(
+            serde_json::from_str::<Value>(encoded.output()).expect("flattened JSON"),
+            json!({"answer": 42})
+        );
+    }
+
+    #[test]
+    fn compact_policy_keeps_envelope_when_structured_content_pairs_with_rich_blocks() {
+        let mut rich = CallToolResult::success(vec![
+            ContentBlock::text("see image"),
+            ContentBlock::image("aW1hZ2U=", "image/png"),
+        ]);
+        rich.structured_content = Some(json!({"answer": 42}));
+        let encoded = encode_tool_result(&rich, ResultEncoding::CompactWhenPossible)
+            .expect("rich structured result must encode");
+        assert!(!encoded.is_error());
+
+        let value: Value =
+            serde_json::from_str(encoded.output()).expect("encoded envelope must be JSON");
+        assert_eq!(value["isError"], false);
+        assert_eq!(value["structuredContent"]["answer"], 42);
+        assert_eq!(value["content"][0]["type"], "text");
+        assert_eq!(value["content"][1]["type"], "image");
+        assert_eq!(value["content"][1]["data"], "aW1hZ2U=");
+        assert_eq!(value["content"].as_array().map(Vec::len), Some(2));
     }
 }

@@ -131,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tool = FunctionTool::for_type::<WeatherArgs>("get_weather", "Return current weather")?;
 
-    let request = CreateResponseRequest::new("gpt-5.6", "What is the weather in Shenzhen?")
+    let request = CreateResponseRequest::new("gpt-5.6-sol", "What is the weather in Shenzhen?")
         .with_tool(tool);
 
     let response = client.responses().create(request).await?;

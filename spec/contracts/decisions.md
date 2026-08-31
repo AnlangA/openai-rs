@@ -3286,3 +3286,351 @@ until a decision is recorded here and its fixtures pass.
 - Overrides: none
 - Tests: `crates/openai-rs/tests/facade_reexports.rs` (4 compile-level checks).
 
+## D0136 — Required empty arrays survive the decode→encode round trip
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `OutputText.annotations/logprobs`, `OutputTextDeltaEvent.logprobs`, `OutputTextDoneEvent.logprobs`, `BetaMultiAgentOutputText.annotations/logprobs`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`OutputTextContent` and `ResponseTextDeltaEvent`/`ResponseTextDoneEvent` (GA+Beta) list `annotations`/`logprobs` in `required`; the service always emits `[]`).
+- Decision: drop `skip_serializing_if="Vec::is_empty"` on those fields while keeping `#[serde(default)]`, so a missing key still decodes but an empty array re-encodes as `[]`.
+- Reason: `to_input_items()` replay and event re-encoding previously dropped pin-required keys.
+- Impact: `openai-rs-types` Responses/beta Responses DTOs; encoded JSON gains the empty-array keys.
+- Overrides: none
+- Tests: `output_text_required_empty_arrays_survive_decode_encode_round_trip`, `multi_agent_output_text_empty_required_arrays_round_trip`, updated `to_input_items_converts_all_output_items`.
+
+## D0137 — Stored input-message role decodes through the open MessageRole
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `StoredInputMessage.role`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`ItemField`/`BetaItemField` Message branch accepts any `MessageRole`; compaction targets are multi-agent conversations whose stored items echo `critic`/`tool`/`discriminator` roles).
+- Decision: widen the decode-side field to the open `MessageRole` (unknown values verbatim); keep `StoredInputMessageRole` as the request-construction domain via `From`; add a `role()` getter.
+- Reason: the closed three-value decode failed whole compact 200 bodies carrying multi-agent roles.
+- Impact: `openai-rs-types` Responses DTO (additive; constructor unchanged).
+- Overrides: none
+- Tests: `compact_output_stored_messages_decode_multi_agent_roles_losslessly`, `beta_compact_output_stored_messages_decode_multi_agent_roles_losslessly`.
+
+## D0138 — HostedToolType pins the eight ToolChoiceTypes values
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `HostedToolType`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`ToolChoiceTypes.type`/`BetaToolChoiceTypes.type` enumerate eight values; `web_search` and `web_search_2025_08_26` exist only on `WebSearchTool.type`); openai-python `tool_choice_types_param.py` and openai-node agree.
+- Decision: remove the two tool-only variants; the open-enum `Unknown` still decodes any string with unchanged Hosted routing.
+- Reason: the send domain was wider than the pin and could emit tool_choice values the pin rejects.
+- Impact: `openai-rs-types` Responses tool-choice DTO (breaking: two variants removed).
+- Overrides: none
+- Tests: `hosted_tool_choice_type_pins_the_eight_official_values`.
+
+## D0139 — Code-interpreter allowlist domains enforce minItems 1 (extends D0117)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CodeInterpreterNetworkAllowlist.allowed_domains`
+- Sources: pinned `ContainerNetworkPolicyAllowlistParam.allowed_domains` (required, minItems 1); containers-side `CreateContainerConstraintError::EmptyAllowedDomains`.
+- Decision: `validate()` rejects an empty allowlist via new `CreateResponseConstraintError::EmptyAllowedDomains`; serde stays lossless.
+- Reason: D0117 wired only `domain_secrets`; the sibling minItems was missing.
+- Impact: `openai-rs-types` Responses code-interpreter validation (opt-in).
+- Overrides: none
+- Tests: updated `code_interpreter_allowlist_domain_secrets_serialize_and_validate`.
+
+## D0140 — Beta compact service_tier uses the pinned five-value BetaServiceTierEnum
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BetaCompactResponseRequest.service_tier`
+- Sources: pinned `BetaCompactResponseMethodPublicBody.service_tier` → `BetaServiceTierEnum` (auto/default/fast/flex/priority); create/echo sides stay `BetaServiceTierResponses`.
+- Decision: new open enum `BetaCompactServiceTier`; create side unchanged.
+- Reason: reusing the seven-value `BetaServiceTier` let the compact request send pin-external `scale`/`ultrafast`.
+- Impact: `openai-rs-types` beta Responses compact builder (breaking: setter type changed).
+- Overrides: none
+- Tests: `compact_service_tier_pins_the_five_official_values`.
+
+## D0141 — Multi-agent call_id is validated as 1..=64 characters
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BetaMultiAgentCallParam.call_id`, `BetaMultiAgentCallOutputParam.call_id`
+- Sources: pinned `BetaMultiAgentCallItemParam.call_id` / `BetaMultiAgentCallOutputItemParam.call_id` (minLength 1, maxLength 64); D0049 opt-in pattern.
+- Decision: `validate()` on both Param types plus `MIN/MAX_MULTI_AGENT_CALL_ID_CHARS`, reusing `CreateResponseConstraintError::CallId`, wired through `validate_beta_response_input_item`.
+- Reason: the pinned bound was unchecked before sending.
+- Impact: `openai-rs-types` beta Responses validation (opt-in only).
+- Overrides: none
+- Tests: `multi_agent_call_id_validate_enforces_pinned_bounds`.
+
+## D0142 — Beta agent items split into Param and Resource shapes (closes round-1 item 1-D1)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BetaAgentMessage*`, `BetaMultiAgentCall*`, `BetaMultiAgentCallOutput*`, `BetaResponseInputItem`/`BetaResponseOutputItem` agent branches
+- Sources: pinned `BetaAgentMessageItemParam`/`BetaMultiAgentCallItemParam`/`BetaMultiAgentCallOutputItemParam` (id/agent optional-nullable) vs `BetaAgentMessage`/`BetaMultiAgentCall`/`BetaMultiAgentCallOutput` (id required, agent non-nullable); openai-python and openai-node both generate separate Param/resource classes.
+- Decision: three request-side Param types and three resource types; resources take a required `id` in `new()`, keep `agent: Omittable<BetaAgent>` with `id()`/`agent_ref()` getters and lose the null setters; `From<Resource> for Param` ×3 preserves the wire shape; the input union carries Params and the output union carries resources. Compact output and input-item listings deliberately keep the input union as a loose bridge over the resource-shaped `BetaItemField` (a decoded resource satisfies the Param shape losslessly).
+- Reason: one dual-use type could not represent "id required on echo, optional on request" and silently accepted id-less resources.
+- Impact: `openai-rs-types` beta Responses (breaking: `new()` signatures and removed resource-side null setters); `openai-rs-client` tests adapted.
+- Overrides: none
+- Tests: `beta_agent_items_split_param_and_resource_shapes`, `multi_agent_call_id_validate_enforces_pinned_bounds`, updated `multi_agent_items_encode_arguments_without_manual_json_formatting`, `create_and_count_requests_keep_beta_only_fields_typed`, `websocket_inject_events_are_structurally_routed`, `beta_item_official_nulls_match_openapi`, `official_beta_agent_message_param_omits_image_detail`.
+
+## D0143 — Strict schema inlining detects reference cycles and rejects root/self and non-string `$ref`s (extends D0129)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `normalize` / `normalize_object` / `StructuredError`
+- Sources: schemars 1.2.2 emits `{"$ref":"#/$defs/X","description":"…"}` for doc-commented nested recursive types; D0129's inlining recursed without bound on them (reproduced `fatal runtime error: stack overflow, aborting`); RFC 8259 requires `$ref` values to be strings; `"#"` is the document-root self reference.
+- Decision: inlining propagates an active-reference chain (root→node) and returns the new catchable `StructuredError::RecursiveReference { path, reference }` when the chain repeats — chain length is bounded by the document's distinct references, guaranteeing termination. `$ref:"#"` (bare or with siblings) reports `RecursiveReference` instead of `ExternalReference`; non-string `$ref` values return `UnresolvableRef` with a path instead of passing through. D0129's behavior (bare sole-key `$ref` passthrough, sibling-key-precedence inlining, `~0`/`~1` escapes, dangling pointers) is unchanged.
+- Reason: an abort cannot be caught and violates the module's error-not-silence contract; the root self reference is recursion, not an external reference; a non-string `$ref` is invalid input that must not reach the API.
+- Impact: `openai-rs-types` structured output; new error variant `RecursiveReference` (enum already `#[non_exhaustive]`).
+- Overrides: none
+- Tests: `recursive_sibling_refs_error_instead_of_overflowing`, `transitive_ref_cycles_are_detected_through_the_chain`, `root_self_reference_reports_recursion_not_external`, `non_string_refs_are_rejected_with_path`; D0129's six tests still pass.
+
+## D0144 — SSE default line limit matches the event limit (32 MiB)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `DEFAULT_MAX_SSE_LINE_BYTES`, `SseLimits`
+- Sources: openai-python `_streaming.py` and openai-node `core/streaming.ts` both document decoding "without imposing a line or event size limit"; Responses SSE payloads are single physical `data:` lines and `response.image_generation_call.partial_image` base64 can reach several MiB.
+- Decision: raise the default single-line cap from 1 MiB to 32 MiB, equal to `DEFAULT_MAX_SSE_EVENT_BYTES`; the event-level bound remains the DoS guard.
+- Reason: the 1 MiB line cap could fail an entire official stream on one large partial-image or snapshot event.
+- Impact: `openai-rs-client` SSE defaults; configurable via `SseLimits` as before.
+- Overrides: none
+- Tests: `default_line_limit_matches_the_event_limit`, `decodes_a_single_data_line_above_one_mebibyte`.
+
+## D0145 — Query parameters drop explicit null and empty-string values
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `append_query`/`query_scalar` (`transport.rs`), stored Chat completions metadata query, fine-tuning jobs metadata query
+- Sources: openai-python `_qs.py::_stringify_item` yields no item when the serialized primitive is empty, so both `None` and `""` produce no query parameter (`_base_client.py` request building); `0`/`false` still serialize.
+- Decision: `Value::Null` and `Value::String("")` skip the query key entirely; other falsy scalars encode as before; a request whose keys are all skipped produces no trailing `?`. The stored-Chat null-metadata error branch and the fine-tuning `metadata=` empty-string encoding were removed in favor of omission (both now equivalent to Python's `metadata=None`).
+- Reason: the previous behavior was inconsistent across call sites (one errored, one emitted `metadata=`, Python dropped the key).
+- Impact: `openai-rs-client` query encoding; no DTO change.
+- Overrides: none
+- Tests: `null_and_empty_string_query_values_are_omitted`, `stored_list_omits_explicit_null_metadata_and_empty_after`, `jobs_list_omits_null_metadata_and_empty_after_query_keys`.
+
+## D0146 — Multipart retry-after-ms short-circuits like the JSON transport
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `multipart.rs::retry_delay`
+- Sources: openai-python `_parse_retry_after_header` returns the `retry-after-ms` value as soon as it parses; openai-node `retryRequest` skips the `retry-after` branch whenever a millisecond timeout exists; `transport.rs::server_retry_delay` (D0131) already short-circuits.
+- Decision: when `retry-after-ms` parses (including over-cap, non-finite, or non-positive values), the multipart copy resolves the delay from that branch alone (local backoff fallback) and never falls back to reading `Retry-After`; unparseable values still fall back, mirroring the transport copy.
+- Reason: the divergent fallback could sleep a different duration than the JSON transport for the same headers.
+- Impact: `openai-rs-client` multipart retry path only.
+- Overrides: none
+- Tests: `retry_after_ms_short_circuits_and_never_falls_back_to_retry_after`.
+
+## D0147 — Auto-pagination cursor falls back to the last item id
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `pagination::next_cursor` and its callers
+- Sources: openai-python `pagination.py::SyncCursorPage.next_page_info` uses `data[-1].id` as the `after` cursor whenever data is non-empty, independent of the envelope `last_id`; several official list envelopes (ChatKit threads, skills, admin cursor pages) type `last_id` as nullable.
+- Decision: cursor resolution order is envelope `last_id` (non-empty) → caller-supplied last item id (non-empty) → fail-closed; duplicate/missing-with-empty-data behavior unchanged; the getter and stream paths share the rule. Tagged-union item pages (ChatKit items, conversation items, Responses/Beta input items) keep fail-closed until a uniform id accessor exists in the types crate.
+- Reason: a schema-legal `{"has_more": true, "last_id": null}` page previously aborted `list_pages` streams that official SDKs page through.
+- Impact: `openai-rs-client` pagination and per-resource callers.
+- Overrides: none
+- Tests: `next_cursor_falls_back_to_the_last_item_id`, `checkpoint_pages_fall_back_to_the_last_item_id_when_last_id_is_null`, `checkpoint_pages_fail_closed_when_last_id_is_null_and_data_is_empty`.
+
+## D0148 — Realtime WebSockets rely on tungstenite's automatic Pong reply
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `RealtimeWebSocket::recv` (`realtime.rs`), Responses WebSocket `recv` (`responses_websocket.rs`)
+- Sources: tungstenite 0.29 queues the RFC 6455 Pong while reading a Ping and flushes it on the next poll; `set_additional` replaces a pending Pong, so the explicit reply coalesced rather than duplicated on the wire.
+- Decision: neither recv loop writes an explicit Pong; inbound-frame policy for Realtime is centralized in a unit-locked classification helper. (The audit's "double Pong" was not wire-reproducible on 0.29; the explicit branch was still a redundant write path that surfaced write failures as spurious recv errors.)
+- Reason: removes a redundant write path and documents the automatic-reply dependency.
+- Impact: no wire behavior change (single Pong per Ping before and after).
+- Overrides: none
+- Tests: `websocket_answers_one_ping_with_exactly_one_pong`, `realtime_recv_does_not_explicitly_pong_inbound_pings`.
+
+## D0149 — Realtime PCM rate is a typed single-value enum plus opt-in validate
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `RealtimePcmAudioFormat.rate`
+- Sources: pinned `RealtimeAudioFormats` PCM branch pins `rate` to `enum: [24000]` ("Only a 24kHz sample rate is supported").
+- Decision: `rate: Omittable<RealtimePcmRate>` with known `Rate24000` and lossless `Unknown(i64)`; decode stays lossless, while session/transcription/client-secret `validate()` rejects present non-24000 PCM rates with `CreateRealtimeSessionConstraintError::PcmRate`.
+- Reason: the bare `Omittable<i64>` field could send `rate: 16000`, which the pinned endpoint rejects.
+- Impact: `openai-rs-types` Realtime (breaking: field type changed; no in-repo callers).
+- Overrides: none
+- Tests: `realtime_pcm_rate_pins_24000_and_keeps_unknown_rates_lossless`, `realtime_pcm_rate_validate_rejects_non_pinned_rates`.
+
+## D0150 — Costs query pins the one-day bucket and three-value group_by
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `UsageCostsQueryParams` / `UsageCostsBucketWidth` / `UsageCostsGroupBy` / `AdminUsage::costs`
+- Sources: pinned `GET /organization/costs` (`bucket_width enum ["1d"]`, `group_by` items enum of three values, exactly eight query parameters); openai-python `usage_costs_params.py` and openai-node `UsageCostsParams` agree.
+- Decision: costs uses its own `UsageCostsQueryParams` with the pinned eight parameters and typed single-value/three-value open enums; the other ten usage endpoints keep the shared superset `UsageQueryParams`; the frozen operation manifest label tracks the new parameter type with an unchanged DTO projection.
+- Reason: the shared superset could send `1m`/`1h` buckets and usage-side group_by dimensions the costs endpoint does not define.
+- Impact: `openai-rs-types`/`openai-rs-client` (breaking: `AdminUsage::costs` parameter type changed).
+- Overrides: none
+- Tests: `usage_costs_query_pins_one_day_bucket_and_three_value_group_by`.
+
+## D0151 — Project data-retention update is wired through the facade
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `AdminDataRetention::update_project`
+- Sources: pinned `POST /organization/projects/{project_id}/data_retention` (body `$ref UpdateProjectDataRetentionBody`); the body type split out by D0128 previously had no caller.
+- Decision: add `update_project(project_id, UpdateProjectDataRetentionBody) -> ApiResponse<ProjectDataRetention>`, wiring the already-frozen `OpUpdateProjectDataRetention` after the adjacent `update_organization` pattern.
+- Reason: the operation contract and request body existed but the endpoint was unreachable.
+- Impact: `openai-rs-client` admin facade (pure addition).
+- Overrides: none
+- Tests: `data_retention_update_project_posts_pinned_route_and_six_value_domain`.
+
+## D0152 — Project service-account update role is member/owner only
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `UpdateProjectServiceAccountBody.role` / `ProjectServiceAccountUpdateRole`
+- Sources: pinned `UpdateProjectServiceAccountBody.role enum ["member","owner"]`; openai-python and openai-node agree; `none` exists only on the resource enums.
+- Decision: the update body uses a two-value open enum; resource and create-response enums keep `ProjectServiceAccountRole`.
+- Reason: the update body could send the resource-only `none` (D0127 pattern).
+- Impact: `openai-rs-types` Admin (breaking: field type changed).
+- Overrides: none
+- Tests: `project_service_account_update_role_pins_member_and_owner`.
+
+## D0153 — Vector-store and Batch metadata limits are opt-in validate; decode stays lossless
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `VectorStoreMetadata`, `BatchMetadata`, `BatchCustomId`, `StaticChunkingStrategy`, `CreateVectorStoreRequest::validate`, `UpdateVectorStoreRequest::validate`, `CreateBatchRequest::validate`
+- Sources: pinned `Metadata` carries no `maxProperties`/`maxLength` (the 16/64/512 limits live in descriptions); `StaticChunkingStrategy.chunk_overlap_tokens` has no schema constraint (only `max_chunk_size_tokens` 100..=4096 does); openai-python decodes `Dict[str, str]` without validation; D0015/D0016/D0017 established the opt-in pattern; batch output files echo the caller's `custom_id`, and only input lines carry the non-empty rule.
+- Decision: metadata maps decode as lossless pass-throughs; 16/64/512 stay in `insert()` while the overlap rule moves to `validate()` only (constructors keep just the schema-backed `100..=4096` range); new request-level `validate()` hooks cover metadata and chunking; `max_chunk_size_tokens` remains decode-enforced (schema-backed); `BatchCustomId` accepts empty echoes while `new()` keeps rejecting empty input lines.
+- Reason: a server-echoed oversized (but schema-legal) metadata map previously failed the whole Batch/VectorStore decode, and the chunking prose rule fired during decode.
+- Impact: `openai-rs-types` Vector Stores/Batches DTOs and validation surface.
+- Overrides: none
+- Tests: `oversized_metadata_decodes_and_request_validate_rejects`, `oversized_batch_metadata_decodes_and_request_validate_rejects`, `chunking_schema_range_is_decode_enforced_and_overlap_is_opt_in`, `batch_custom_id_decode_is_lossless_while_input_construction_rejects_empty`.
+
+## D0154 — File/Batch list limits enforce only the schema-backed lower bound
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `FileListLimit`, `BatchListLimit`
+- Sources: pinned `/files` and `/batches` `limit` parameters carry only `default` (no `maximum`; the ceilings exist in descriptive prose); openai-python passes unbounded integers.
+- Decision: drop the invented 10,000/100 ceilings and keep `>= 1`; the default constants (10000/20) stay.
+- Reason: the client previously rejected values the pinned endpoints accept.
+- Impact: `openai-rs-types` Files/Batches query types (breaking: public constants `MAX_FILE_LIST_LIMIT`/`MAX_BATCH_LIST_LIMIT` removed, as are the identical no-caller predicates `is_create_file_purpose`/`is_create_upload_purpose`).
+- Overrides: none
+- Tests: `file_list_limit_requires_at_least_one`, `batch_list_limit_requires_at_least_one`, `list_files_accepts_limits_above_documented_prose_ceiling`, `list_batches_accepts_limits_above_documented_prose_ceiling`.
+
+## D0155 — Batch input-line envelope and VS file-batch per-file form follow the pinned schema
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BatchLine`, `CreateVectorStoreFileBatchRequest`
+- Sources: pinned `CreateVectorStoreFileBatchRequest` anyOf requires exactly one of `file_ids`/`files`; `files` plus global `attributes`/`chunking_strategy` satisfies the schema (the description only notes the global fields are ignored); batch output lines already retain unknown envelope fields via ExtraFields.
+- Decision: `BatchLine` gains a flatten `ExtraFields` (matching output lines); decoding accepts `files` + global fields while builders reject that combination with the new `VectorStoreValidationError::GlobalFieldsWithPerFileBatch` (clear copy instead of the misleading "exactly one of" message); the `file_ids` XOR `files` decode rejection stays.
+- Reason: the decoder rejected schema-legal input and the error message misattributed the cause; the input envelope was stricter than the output envelope without cause.
+- Impact: `openai-rs-types` Batches/Vector Stores DTOs.
+- Overrides: none
+- Tests: `batch_line_retains_unknown_envelope_fields`, `per_file_batch_with_global_fields_decodes_but_builders_reject`.
+
+## D0156 — Legacy best_of must exceed an explicit n
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CreateCompletionRequest::validate()`, `CreateCompletionConstraintError`
+- Sources: pinned `CreateCompletionRequest.best_of` description ("`best_of` must be greater than `n`"); openai-python performs no client-side check.
+- Decision: opt-in `validate()` rejects `best_of <= n` only when both fields carry explicit non-null values (new `BestOfNotGreaterThanN`); omitted or official-null values skip the relation; serde decode stays lossless.
+- Reason: the pinned constraint was expressible but unvalidated.
+- Impact: `openai-rs-types` legacy Completions validate surface (additive variant).
+- Overrides: none
+- Tests: `completion_validate_enforces_best_of_greater_than_n`.
+
+## D0157 — Eval sampling params split per host
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `EvalCompletionsSamplingParams`, `EvalResponsesSamplingParams`, `EvalGraderSamplingParams`, run data sources, `ScoreModelGrader.sampling_params`
+- Sources: pinned `CreateEvalCompletionsRunDataSource.sampling_params` / `CreateEvalResponsesRunDataSource.sampling_params` (all properties non-null; completions carries `response_format`, responses carries `text`) and `GraderScoreModel.sampling_params` (four nullable fields plus `max_completions_tokens`); openai-python models three independent SamplingParams TypedDicts.
+- Decision: replace the merged union with three host-specific types; run hosts are non-null (no null setters, decode rejects inner nulls), the grader host keeps official null setters and the minimum-1 `validate()`; `From` conversions carry shared fields and rename the token-cap spelling.
+- Reason: the merged union let run hosts send grader-only fields, both token spellings, `text` + `response_format` together, and explicit nulls the pinned run schemas do not allow.
+- Impact: `openai-rs-types` Evals API (breaking: type split replaces `EvalSamplingParams`).
+- Overrides: none
+- Tests: `run_sampling_params_hosts_are_non_null_and_convert_to_grader_params`, `grader_sampling_params_sends_official_nulls_and_enforces_pin_limits`, `run_data_sources_enforce_nested_tag_sets_and_build_typed_requests`.
+
+## D0158 — Alpha grader union uses threshold-free Param forms
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `Grader`, `MultiGraderMember`, `PythonGraderParam`, `ScoreModelGraderParam`, `TextSimilarityGrader`
+- Sources: pinned `GraderPython`/`GraderScoreModel`/`GraderTextSimilarity` carry no `pass_threshold` (it exists only on the `EvalGrader*` allOf extensions); openai-python uses `*GraderParam` unions for alpha run/validate and adds the threshold only on `TestingCriterion`.
+- Decision: the alpha union and multi members use grader-side forms — `TextSimilarityGrader` drops its optional threshold, new `PythonGraderParam`/`ScoreModelGraderParam` mirror the base schemas; `TestingCriterion` keeps the threshold-bearing types; bidirectional `From` conversions drop/omit the threshold.
+- Reason: shared DTOs let alpha-only requests emit the Eval-resource-only `pass_threshold` key.
+- Impact: `openai-rs-types` Evals alpha API (breaking: variant types changed, one field removed).
+- Overrides: none
+- Tests: `alpha_grader_unions_carry_no_pass_threshold`, `grader_param_forms_convert_with_and_without_pass_threshold`.
+
+## D0159 — Codex login URL fields keep the pinned string on the wire and parse at the consumer
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `LoginAccountResponse.auth_url/verification_url`, `BrowserLogin`/`DeviceCodeLogin`
+- Sources: pinned Codex 0.144.5 `v2/LoginAccountResponse` types both fields as plain strings (no `uri` format).
+- Decision: the DTO keeps `Option<String>` so a non-absolute value cannot fail the whole login response; the public types keep `url::Url` and parse at the consumption site, returning an `UnexpectedResponse` that names the wire key on failure.
+- Reason: the `Url` decode was stricter than the pinned schema.
+- Impact: `openai-rs-codex` protocol/client (public API unchanged).
+- Overrides: none
+- Tests: `login_account_response_accepts_non_absolute_urls`, `login_start_rejects_non_absolute_urls_with_explicit_errors`.
+
+## D0160 — RMCP compact policy flattens only text-only content
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ResultEncoding::CompactWhenPossible` (`openai-rs-rmcp` `result.rs`)
+- Sources: MCP 2025-06-18 Tools defines the text block beside `structuredContent` as a redundant serialization (dropping it is permitted); image/audio/resource/resource_link blocks carry information the spec does not define as redundant.
+- Decision: `structuredContent` replaces the envelope only when `content` is empty or entirely text blocks; rich-block combinations keep the lossless envelope; the policy docs state the rule.
+- Reason: the previous unconditional flatten silently dropped rich content blocks, contradicting the module's own documentation.
+- Impact: `openai-rs-rmcp` result encoding.
+- Overrides: none
+- Tests: `compact_policy_keeps_envelope_when_structured_content_pairs_with_rich_blocks`, `compact_policy_flattens_structured_content_only_when_content_is_text_only`.
+
+## D0161 — Webhook tolerance compares whole seconds; minimum accepted window is one second
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `WebhookVerifier::with_tolerance`
+- Sources: the window comparison uses `Duration::as_secs()`; official verifiers express tolerance in whole seconds (python int, node timestamp parsed as integer).
+- Decision: `with_tolerance` rejects Durations below one second via the existing `InvalidTolerance` error instead of truncating sub-second values to a zero window.
+- Reason: `from_millis(500)` previously passed validation but behaved identically to a rejected zero tolerance.
+- Impact: `openai-rs-client` webhook verification configuration.
+- Overrides: none
+- Tests: `sub_second_tolerances_are_rejected_instead_of_truncating_to_zero`.
+
+## D0162 — Blank function arguments decode to an empty object
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `parse_function_arguments` (`openai-rs-rmcp` `arguments.rs`)
+- Sources: MCP treats omitted arguments as "no arguments"; tools exposed through the catalog are deliberately non-strict, and non-strict tools may return an empty string for zero-argument calls.
+- Decision: empty or whitespace-only argument strings map to an empty `JsonObject`; other invalid inputs keep their error path.
+- Reason: zero-argument dispatch previously failed instead of calling the tool.
+- Impact: `openai-rs-rmcp` argument decoding.
+- Overrides: none
+- Tests: `blank_arguments_decode_to_an_empty_object`.
+
+## D0163 — Round-2 recorded positions (no code change)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: multipart empty strings; connect timeouts; `Response`/`BetaResponse.created_at`; redirect policy; transport-error retry scope; `TypedFunction` output schema normalization
+- Sources: openai-python `_qs.py` drops empty serialized primitives while openai-node `addFormValue` sends empty strings verbatim (the two official SDKs disagree; the pinned OpenAPI is silent — only the JSON image-edit `prompt` carries `minLength: 1`); python `DEFAULT_TIMEOUT` is 600s overall with a 5s connect budget while node's SDK-level timeout is 10 minutes with no SDK connect timeout (undici's default 10s applies); the pinned spec types 120 of 122 unixtime fields as `integer` and only `Response`/`BetaResponse.created_at` as `number`; official SDKs follow redirects by default; openai-python retries every transport `Exception` while this crate retries connect/timeout classes; the pinned `FunctionToolParam.output_schema` describes any JSON value.
+- Decision: multipart empty-string metadata fields keep being sent verbatim (null fields are dropped per D0126 — closes round-1 item 1-D2); connect timeouts stay 10s (HTTP) / 30s (WebSocket) and are documented as a deliberate middle ground (closes 1-D3); `created_at` stays `i64` under the integral-seconds assumption the service observes (decimal-second echoes would fail the decode); redirects stay disabled so credentials never cross origins; the transport-error retry scope stays connect/timeout; `TypedFunction` keeps normalizing `output_schema` with strict rules and an object root, matching the strict tool validator's expectations.
+- Reason: each position either splits the official baselines (choosing the least destructive side), matches the only realistic wire behavior, or follows an explicit repository security posture already stated in `docs/architecture.md`.
+- Impact: none (documentation of current behavior).
+- Overrides: none
+- Tests: D0126's multipart null tests; existing timeout/redirect/retry tests.
+
+## D0164 — Facade re-exports keep pace with client-root additions (round 2)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `openai-rs-sdk` facade (`RealtimeConnectTarget`, `AdminCheckpointPermissions`)
+- Sources: both types are public at the client root (`connect_target`/`connect_target_with` are the only `call_id`-attach entry points; `AdminClient::checkpoint_permissions()` returns the resource client), continuing the D0135 pattern.
+- Decision: re-export `RealtimeConnectTarget` under the realtime gate and `AdminCheckpointPermissions` under the admin gate; compile-level nameability tests lock both paths.
+- Reason: facade-only users could not name the connect-target enum or the checkpoint-permissions client type.
+- Impact: facade crate only; no wire behavior change.
+- Overrides: none
+- Tests: `realtime_connect_target_is_nameable_through_the_facade`, `admin_checkpoint_permissions_is_nameable_through_the_facade`.
+

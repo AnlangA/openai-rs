@@ -86,8 +86,9 @@ pub use openai_rs_client::{
 
 #[cfg(all(feature = "client", feature = "realtime"))]
 pub use openai_rs_client::{
-    Realtime, RealtimeCallCreated, RealtimeWebSocket, RealtimeWebSocketConfig, ResponsesWebSocket,
-    ResponsesWebSocketConfig, WebSocketReconnectPolicy,
+    Realtime, RealtimeCallCreated, RealtimeConnectTarget, RealtimeWebSocket,
+    RealtimeWebSocketConfig, ResponsesWebSocket, ResponsesWebSocketConfig,
+    WebSocketReconnectPolicy,
 };
 
 #[cfg(all(feature = "client", feature = "webhook-verification"))]
@@ -105,8 +106,9 @@ pub use openai_rs_client::{
 pub mod admin {
     pub use openai_rs_client::{
         AdminApiKey, AdminApiKeyError, AdminApiKeys, AdminAuditLogs, AdminCertificates,
-        AdminClient, AdminClientBuilder, AdminDataRetention, AdminGroups, AdminInvites,
-        AdminProjects, AdminRequest, AdminRoles, AdminUsage, AdminUsers, operations,
+        AdminCheckpointPermissions, AdminClient, AdminClientBuilder, AdminDataRetention,
+        AdminGroups, AdminInvites, AdminProjects, AdminRequest, AdminRoles, AdminUsage, AdminUsers,
+        operations,
     };
     pub use openai_rs_types::admin::*;
 }

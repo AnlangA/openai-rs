@@ -2073,6 +2073,19 @@ crate::open_string_enum! {
 }
 
 crate::open_string_enum! {
+    /// Service-account role accepted by the update body.
+    ///
+    /// The pinned `UpdateProjectServiceAccountBody.role` enumerates exactly
+    /// `member`/`owner` (openai-python and openai-node agree); the
+    /// resource-side [`ProjectServiceAccountRole`] additionally carries `none`,
+    /// which decodes as `Unknown` here.
+    pub enum ProjectServiceAccountUpdateRole {
+        Member = "member",
+        Owner = "owner"
+    }
+}
+
+crate::open_string_enum! {
     /// Project service-account discriminator.
     pub enum ProjectServiceAccountObject {
         Account = "organization.project.service_account"
@@ -2102,7 +2115,7 @@ pub struct UpdateProjectServiceAccountBody {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub role: Omittable<ProjectServiceAccountRole>,
+    pub role: Omittable<ProjectServiceAccountUpdateRole>,
 }
 
 crate::open_string_enum! {
@@ -2555,6 +2568,30 @@ crate::open_string_enum! {
     }
 }
 
+crate::open_string_enum! {
+    /// Cost-query bucket width.
+    ///
+    /// The pinned `GET /organization/costs` `bucket_width` enumerates only `1d`
+    /// (openai-python and openai-node both use `Literal["1d"]`); the usage-side
+    /// `1m`/`1h` widths decode as `Unknown` here.
+    pub enum UsageCostsBucketWidth {
+        Day = "1d"
+    }
+}
+
+crate::open_string_enum! {
+    /// Cost-query grouping dimension.
+    ///
+    /// The pinned `GET /organization/costs` `group_by` items enumerate exactly
+    /// these three values; the usage-side dimensions (`user_id`, `model`,
+    /// `batch`, `service_tier`, ...) decode as `Unknown` here.
+    pub enum UsageCostsGroupBy {
+        ProjectId = "project_id",
+        LineItem = "line_item",
+        ApiKeyId = "api_key_id"
+    }
+}
+
 /// Superset of stable dimensions returned when usage endpoints group results.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UsageDimensions {
@@ -2631,6 +2668,50 @@ impl UsageQueryParams {
             sizes: Omittable::Omitted,
             vector_store_ids: Omittable::Omitted,
             context_levels: Omittable::Omitted,
+            group_by: Omittable::Omitted,
+            limit: Omittable::Omitted,
+            page: Omittable::Omitted,
+        }
+    }
+}
+
+/// Query parameters for `GET /organization/costs`.
+///
+/// Distinct from [`UsageQueryParams`] because the pinned costs route accepts
+/// only these eight parameters: `bucket_width` supports `1d` alone and
+/// `group_by` enumerates `project_id`/`line_item`/`api_key_id`. The usage-side
+/// filters (`user_ids`, `models`, `batch`, `sources`, `sizes`,
+/// `vector_store_ids`, `context_levels`) are not defined for costs and are
+/// absent here.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UsageCostsQueryParams {
+    pub start_time: u64,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub end_time: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub bucket_width: Omittable<UsageCostsBucketWidth>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub project_ids: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub api_key_ids: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub group_by: Omittable<Vec<UsageCostsGroupBy>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub limit: Omittable<u64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub page: Omittable<String>,
+}
+
+impl UsageCostsQueryParams {
+    /// Construct the required inclusive start timestamp.
+    #[must_use]
+    pub fn new(start_time: u64) -> Self {
+        Self {
+            start_time,
+            end_time: Omittable::Omitted,
+            bucket_width: Omittable::Omitted,
+            project_ids: Omittable::Omitted,
+            api_key_ids: Omittable::Omitted,
             group_by: Omittable::Omitted,
             limit: Omittable::Omitted,
             page: Omittable::Omitted,
@@ -2958,6 +3039,9 @@ macro_rules! admin_op {
         admin_op!($id, $method, $path, "()", $response)
     };
     ($id:literal, $method:literal, $path:literal, "UsageQueryParams", $response:literal) => {
+        admin_op!($id, $method, $path, "()", $response)
+    };
+    ($id:literal, $method:literal, $path:literal, "UsageCostsQueryParams", $response:literal) => {
         admin_op!($id, $method, $path, "()", $response)
     };
     ($id:literal, $method:literal, $path:literal, "()", $response:literal) => {
@@ -3792,7 +3876,7 @@ pub const ADMIN_OPERATION_MANIFEST: &[AdminOperationDto] = &[
         "usage-costs",
         "GET",
         "/organization/costs",
-        "UsageQueryParams",
+        "UsageCostsQueryParams",
         "UsageResponse"
     ),
     admin_op!(
@@ -4364,7 +4448,7 @@ mod tests {
             serde_json::from_value::<ProjectRateLimit>(json!({
                 "object": "project.rate_limit",
                 "id": "rl_1",
-                "model": "gpt-5.6",
+                "model": "gpt-5.6-sol",
                 "max_requests_per_1_minute": 10
             }))
             .is_err()
@@ -4453,6 +4537,103 @@ mod tests {
         assert!(serde_json::from_value::<UsageQueryParams>(json!({})).is_err());
         let params = UsageQueryParams::new(100);
         assert_eq!(ok(serde_json::to_value(params)), json!({"start_time": 100}));
+    }
+
+    #[test]
+    fn usage_costs_query_pins_one_day_bucket_and_three_value_group_by() {
+        assert!(serde_json::from_value::<UsageCostsQueryParams>(json!({})).is_err());
+        let params = UsageCostsQueryParams::new(100);
+        assert_eq!(ok(serde_json::to_value(params)), json!({"start_time": 100}));
+
+        // GET /organization/costs supports only `1d`; the usage-side 1m/1h
+        // widths fall to Unknown on the costs domain but stay known on the
+        // shared usage domain.
+        assert!(UsageCostsBucketWidth::from_raw("1d").is_known());
+        for usage_only in ["1m", "1h"] {
+            assert!(
+                !UsageCostsBucketWidth::from_raw(usage_only).is_known(),
+                "costs bucket width `{usage_only}` belongs to the usage endpoints only"
+            );
+            assert!(UsageBucketWidth::from_raw(usage_only).is_known());
+        }
+
+        const OFFICIAL_COSTS_GROUP_BY: [(&str, UsageCostsGroupBy); 3] = [
+            ("project_id", UsageCostsGroupBy::ProjectId),
+            ("line_item", UsageCostsGroupBy::LineItem),
+            ("api_key_id", UsageCostsGroupBy::ApiKeyId),
+        ];
+        for (value, expected) in OFFICIAL_COSTS_GROUP_BY {
+            let decoded = UsageCostsGroupBy::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official costs group_by {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+        }
+        for usage_only in ["user_id", "model", "batch", "service_tier"] {
+            assert!(
+                !UsageCostsGroupBy::from_raw(usage_only).is_known(),
+                "costs group_by `{usage_only}` belongs to the usage endpoints only"
+            );
+        }
+
+        let costs = UsageCostsQueryParams {
+            start_time: 100,
+            end_time: Omittable::Value(200),
+            bucket_width: Omittable::Value(UsageCostsBucketWidth::Day),
+            project_ids: Omittable::Value(vec!["proj_1".to_owned()]),
+            api_key_ids: Omittable::Value(vec!["key_1".to_owned()]),
+            group_by: Omittable::Value(vec![
+                UsageCostsGroupBy::ProjectId,
+                UsageCostsGroupBy::LineItem,
+                UsageCostsGroupBy::ApiKeyId,
+            ]),
+            limit: Omittable::Value(7),
+            page: Omittable::Value("cursor_1".to_owned()),
+        };
+        assert_eq!(
+            ok(serde_json::to_value(&costs)),
+            json!({
+                "start_time": 100,
+                "end_time": 200,
+                "bucket_width": "1d",
+                "project_ids": ["proj_1"],
+                "api_key_ids": ["key_1"],
+                "group_by": ["project_id", "line_item", "api_key_id"],
+                "limit": 7,
+                "page": "cursor_1"
+            })
+        );
+        assert!(
+            serde_json::from_value::<UsageCostsQueryParams>(json!({
+                "start_time": 100,
+                "group_by": null
+            }))
+            .is_err()
+        );
+
+        // Future service values still decode losslessly through the open enums.
+        let future = ok(serde_json::from_value::<UsageCostsQueryParams>(json!({
+            "start_time": 100,
+            "bucket_width": "1w",
+            "group_by": ["cost_center"]
+        })));
+        match future.bucket_width {
+            Omittable::Value(width) => {
+                assert!(!width.is_known());
+                assert_eq!(width.as_str(), "1w");
+            }
+            _ => panic!("costs bucket width must decode"),
+        }
+        match future.group_by {
+            Omittable::Value(groups) => {
+                assert_eq!(groups.len(), 1);
+                assert!(!groups[0].is_known());
+                assert_eq!(groups[0].as_str(), "cost_center");
+            }
+            _ => panic!("costs group_by must decode"),
+        }
     }
 
     #[test]
@@ -5011,6 +5192,59 @@ mod tests {
             project.retention_type,
             DataRetentionType::OrganizationDefault
         );
+    }
+
+    #[test]
+    fn project_service_account_update_role_pins_member_and_owner() {
+        const OFFICIAL_UPDATE_ROLES: [(&str, ProjectServiceAccountUpdateRole); 2] = [
+            ("member", ProjectServiceAccountUpdateRole::Member),
+            ("owner", ProjectServiceAccountUpdateRole::Owner),
+        ];
+        for (value, expected) in OFFICIAL_UPDATE_ROLES {
+            let decoded = ProjectServiceAccountUpdateRole::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official update role {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+        }
+
+        // `none` exists only on the resource side: the update body has no
+        // named variant for it and cannot ask for it.
+        let resource_only = ProjectServiceAccountUpdateRole::from_raw("none");
+        assert!(
+            !resource_only.is_known(),
+            "update role `none` is resource-side only"
+        );
+        assert_eq!(resource_only.as_str(), "none");
+
+        let body = UpdateProjectServiceAccountBody {
+            name: Omittable::Omitted,
+            role: Omittable::Value(ProjectServiceAccountUpdateRole::Member),
+        };
+        assert_eq!(ok(serde_json::to_value(&body)), json!({"role": "member"}));
+
+        // The resource and create-response sides keep the three-value superset.
+        let account = ok(serde_json::from_value::<ProjectServiceAccount>(json!({
+            "object": "organization.project.service_account",
+            "id": "sa_1",
+            "name": "bot",
+            "role": "none",
+            "created_at": 1
+        })));
+        assert_eq!(account.role, ProjectServiceAccountRole::None);
+        let created = ok(
+            serde_json::from_value::<ProjectServiceAccountCreateResponse>(json!({
+                "object": "organization.project.service_account",
+                "id": "sa_1",
+                "name": "bot",
+                "role": "owner",
+                "created_at": 1,
+                "api_key": null
+            })),
+        );
+        assert_eq!(created.role, ProjectServiceAccountRole::Owner);
     }
 
     #[test]

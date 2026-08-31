@@ -529,6 +529,9 @@ pub enum CreateResponseConstraintError {
         "code_interpreter allowlist domain_secrets must contain at least one secret when present"
     )]
     EmptyDomainSecrets,
+    /// Code-interpreter allowlist `allowed_domains` is empty (`minItems: 1`).
+    #[error("code_interpreter allowlist allowed_domains must contain at least one domain")]
+    EmptyAllowedDomains,
     /// Code-interpreter domain-secret `domain` is empty (`minLength` 1).
     #[error("code_interpreter domain_secret domain has {actual} characters; minimum is {minimum}")]
     DomainSecretDomain {
@@ -1530,7 +1533,8 @@ impl InputMessage {
     }
 }
 
-/// Role accepted by the stored `InputMessage` schema.
+/// Role accepted by the stored `InputMessage` schema when constructing
+/// requests (`user` / `system` / `developer`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StoredInputMessageRole {
@@ -1542,11 +1546,23 @@ pub enum StoredInputMessageRole {
     Developer,
 }
 
+impl From<StoredInputMessageRole> for MessageRole {
+    fn from(value: StoredInputMessageRole) -> Self {
+        match value {
+            StoredInputMessageRole::User => Self::User,
+            StoredInputMessageRole::System => Self::System,
+            StoredInputMessageRole::Developer => Self::Developer,
+        }
+    }
+}
+
 /// The item-form input message used inside the expanded `Item` union.
 ///
 /// This differs from [`InputMessage`]'s ergonomic schema: content is always an
 /// array, assistant is not an accepted role, and a returned item may carry a
-/// status.
+/// status. Decoding keeps the role as the open [`MessageRole`]: compacted and
+/// listed items echo multi-agent roles such as `critic` or `tool` that the
+/// request-side constructor intentionally cannot produce.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredInputMessage {
     #[serde(
@@ -1555,7 +1571,7 @@ pub struct StoredInputMessage {
         skip_serializing_if = "Omittable::is_omitted"
     )]
     kind: Omittable<InputMessageTag>,
-    role: StoredInputMessageRole,
+    role: MessageRole,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     status: Omittable<ResponseItemStatus>,
     content: Vec<InputContent>,
@@ -1572,11 +1588,21 @@ impl StoredInputMessage {
     ) -> Self {
         Self {
             kind: Omittable::Value(InputMessageTag::Message),
-            role,
+            role: role.into(),
             status: Omittable::Omitted,
             content: content.into_iter().map(Into::into).collect(),
             extra: ExtraFields::new(),
         }
+    }
+
+    /// Returns the role exactly as observed on the wire.
+    ///
+    /// Stored items decode through the open [`MessageRole`], so multi-agent
+    /// roles such as `critic` or `tool` are preserved verbatim instead of
+    /// failing the decode.
+    #[must_use]
+    pub const fn role(&self) -> &MessageRole {
+        &self.role
     }
 
     /// Sets the returned item status.
@@ -3948,9 +3974,9 @@ pub struct OutputText {
     #[serde(rename = "type")]
     kind: OutputTextTag,
     text: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     annotations: Vec<Annotation>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     logprobs: Vec<LogProb>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -7950,7 +7976,7 @@ pub struct OutputTextDeltaEvent {
     content_index: u64,
     delta: String,
     sequence_number: u64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     logprobs: Vec<EventLogProb>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -8004,7 +8030,7 @@ pub struct OutputTextDoneEvent {
     content_index: u64,
     text: String,
     sequence_number: u64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     logprobs: Vec<EventLogProb>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -14645,9 +14671,10 @@ impl CodeInterpreterDomainSecret {
 
 /// Allow outbound access only to listed domains.
 ///
-/// `domain_secrets` mirrors the pinned
-/// `ContainerNetworkPolicyAllowlistParam.domain_secrets` (minItems 1,
-/// elements of `ContainerNetworkPolicyDomainSecretParam`).
+/// `allowed_domains` mirrors the pinned
+/// `ContainerNetworkPolicyAllowlistParam.allowed_domains` (minItems 1) and
+/// `domain_secrets` mirrors its `domain_secrets` (minItems 1, elements of
+/// `ContainerNetworkPolicyDomainSecretParam`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CodeInterpreterNetworkAllowlist {
     #[serde(rename = "type")]
@@ -14697,6 +14724,9 @@ impl CodeInterpreterNetworkAllowlist {
     }
 
     fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        if self.allowed_domains.is_empty() {
+            return Err(CreateResponseConstraintError::EmptyAllowedDomains);
+        }
         if let Omittable::Value(secrets) = &self.domain_secrets {
             if secrets.is_empty() {
                 return Err(CreateResponseConstraintError::EmptyDomainSecrets);
@@ -15354,10 +15384,13 @@ impl AllowedToolsChoice {
 
 open_string_enum! {
     /// Hosted tool types accepted by the tool-choice object branch.
+    ///
+    /// Members match the pinned `ToolChoiceTypes.type` domain exactly. The
+    /// tool-type strings `web_search` / `web_search_2025_08_26` name request
+    /// tools, not tool-choice values, and are therefore only reachable through
+    /// the open-enum `Unknown` escape hatch, which still decodes any string.
     pub enum HostedToolType {
         FileSearch = "file_search",
-        WebSearch = "web_search",
-        WebSearch20250826 = "web_search_2025_08_26",
         WebSearchPreview = "web_search_preview",
         Computer = "computer",
         ComputerUsePreview = "computer_use_preview",
@@ -16636,7 +16669,8 @@ mod tests {
             "output_index": 0,
             "content_index": 0,
             "delta": "Hi",
-            "sequence_number": 1
+            "sequence_number": 1,
+            "logprobs": []
         });
         let server: ResponsesServerEvent =
             serde_json::from_value(server_fixture.clone()).expect("decode WS server event");
@@ -16892,11 +16926,15 @@ mod tests {
                         {
                             "type": "output_text",
                             "text": "Hello ",
+                            "annotations": [],
+                            "logprobs": [],
                             "future_part_field": 1
                         },
                         {
                             "type": "output_text",
-                            "text": "world"
+                            "text": "world",
+                            "annotations": [],
+                            "logprobs": []
                         }
                     ],
                     "future_message_field": {"ok": true}
@@ -17347,7 +17385,7 @@ mod tests {
             incomplete_details: Nullable::Null,
             instructions: Nullable::Null,
             metadata: Nullable::Null,
-            model: "gpt-5.6".into(),
+            model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: vec![ResponseOutputItem::Message(OutputMessage::new(
                 "msg_1",
@@ -17397,7 +17435,7 @@ mod tests {
             incomplete_details: Nullable::Null,
             instructions: Nullable::Null,
             metadata: Nullable::Null,
-            model: "gpt-5.6".into(),
+            model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: vec![ResponseOutputItem::Message(OutputMessage::new(
                 "msg_2",
@@ -17450,7 +17488,7 @@ mod tests {
             }),
             instructions: Nullable::Null,
             metadata: Nullable::Null,
-            model: "gpt-5.6".into(),
+            model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: vec![],
             parallel_tool_calls: false,
@@ -17529,6 +17567,65 @@ mod tests {
     }
 
     #[test]
+    fn output_text_required_empty_arrays_survive_decode_encode_round_trip() {
+        // Pinned OutputTextContent lists annotations and logprobs in
+        // `required` (the service always emits `[]`), so re-encoding a
+        // decoded value must keep both keys even when they are empty. A
+        // missing key still decodes through `#[serde(default)]` tolerance.
+        let official = json!({
+            "type": "output_text",
+            "text": "Hello, world!",
+            "annotations": [],
+            "logprobs": []
+        });
+        let decoded: OutputText =
+            serde_json::from_value(official.clone()).expect("decode official empty arrays");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode keeps required keys"),
+            official
+        );
+
+        let tolerant: OutputText = serde_json::from_value(json!({
+            "type": "output_text",
+            "text": "Hello, world!"
+        }))
+        .expect("missing keys still decode");
+        let encoded = serde_json::to_value(&tolerant).expect("re-encode fills required keys");
+        assert_eq!(encoded["annotations"], json!([]));
+        assert_eq!(encoded["logprobs"], json!([]));
+
+        let delta: OutputTextDeltaEvent = serde_json::from_value(json!({
+            "type": "response.output_text.delta",
+            "item_id": "item_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hello",
+            "sequence_number": 1,
+            "logprobs": []
+        }))
+        .expect("decode official delta empty logprobs");
+        assert_eq!(
+            serde_json::to_value(&delta).expect("re-encode delta")["logprobs"],
+            json!([])
+        );
+
+        let done: OutputTextDoneEvent = serde_json::from_value(json!({
+            "type": "response.output_text.done",
+            "item_id": "item_1",
+            "output_index": 0,
+            "content_index": 0,
+            "text": "Hello, world!",
+            "sequence_number": 2,
+            "logprobs": []
+        }))
+        .expect("decode official done empty logprobs");
+        assert_eq!(
+            serde_json::to_value(&done).expect("re-encode done")["logprobs"],
+            json!([])
+        );
+    }
+
+    #[test]
     fn to_input_items_converts_all_output_items() {
         let output_json = json!([
             {"type": "message", "id": "m1", "role": "assistant", "status": "completed", "content": [{"type": "output_text", "text": "hi"}]},
@@ -17573,7 +17670,7 @@ mod tests {
             incomplete_details: Nullable::Null,
             instructions: Nullable::Null,
             metadata: Nullable::Null,
-            model: "gpt-5.6".into(),
+            model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: outputs,
             parallel_tool_calls: false,
@@ -17620,6 +17717,19 @@ mod tests {
                 .expect("serialized input items must be an array")
                 .len(),
             29
+        );
+        // The replayed assistant message keeps the pin-required
+        // `annotations`/`logprobs` keys on its output_text part even when
+        // the decoded arrays are empty.
+        assert_eq!(
+            serialized_inputs[0]["content"][0]["annotations"],
+            json!([]),
+            "replayed output_text must keep the required annotations key"
+        );
+        assert_eq!(
+            serialized_inputs[0]["content"][0]["logprobs"],
+            json!([]),
+            "replayed output_text must keep the required logprobs key"
         );
     }
 
@@ -17880,7 +17990,7 @@ mod tests {
 
     #[test]
     fn create_request_sends_typed_context_moderation_and_explicit_nulls() {
-        let request = CreateResponseRequest::new("gpt-5.6", "hello")
+        let request = CreateResponseRequest::new("gpt-5.6-sol", "hello")
             .context_management(ContextManagement::compaction().compact_threshold(8_000))
             .moderation(ModerationConfig::new("omni-moderation-latest"))
             .safety_identifier_null()
@@ -18017,7 +18127,7 @@ mod tests {
         assert!(cleared_value.get("prompt_cache_options").is_none());
         assert!(
             serde_json::from_value::<CreateResponseRequest>(json!({
-                "model": "gpt-5.6",
+                "model": "gpt-5.6-sol",
                 "input": "hello",
                 "prompt_cache_options": null
             }))
@@ -18039,7 +18149,7 @@ mod tests {
 
     #[test]
     fn follow_up_from_copies_stable_prefix_fields() {
-        let previous = CreateResponseRequest::new("gpt-5.6", "first")
+        let previous = CreateResponseRequest::new("gpt-5.6-sol", "first")
             .instructions("Stay concise.")
             .tool(FunctionTool::new("lookup"));
         let response = Response {
@@ -18049,7 +18159,7 @@ mod tests {
             incomplete_details: Nullable::Null,
             instructions: Nullable::Null,
             metadata: Nullable::Null,
-            model: "gpt-5.6".into(),
+            model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: vec![],
             parallel_tool_calls: false,
@@ -18088,7 +18198,7 @@ mod tests {
 
         assert!(
             serde_json::from_value::<CreateResponseRequest>(json!({
-                "model": "gpt-5.6",
+                "model": "gpt-5.6-sol",
                 "input": "hello",
                 "instructions": [{"type": "message", "role": "developer", "content": "no"}]
             }))
@@ -18097,7 +18207,7 @@ mod tests {
         );
         assert!(
             serde_json::from_value::<CompactResponseRequest>(json!({
-                "model": "gpt-5.6",
+                "model": "gpt-5.6-sol",
                 "instructions": [{"type": "message", "role": "developer", "content": "no"}]
             }))
             .is_err(),
@@ -18151,7 +18261,7 @@ mod tests {
             "incomplete_details": null,
             "instructions": null,
             "metadata": null,
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "output": [],
             "parallel_tool_calls": true,
             "temperature": 1.0,
@@ -18220,7 +18330,7 @@ mod tests {
             "incomplete_details": null,
             "instructions": null,
             "metadata": null,
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "output": [],
             "parallel_tool_calls": true,
             "temperature": 1.0,
@@ -18244,7 +18354,7 @@ mod tests {
             "incomplete_details": null,
             "instructions": null,
             "metadata": null,
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "output": [],
             "parallel_tool_calls": true,
             "temperature": 1.0,
@@ -18263,7 +18373,7 @@ mod tests {
 
     #[test]
     fn create_request_service_tier_null_matches_openapi() {
-        let request = CreateResponseRequest::new("gpt-5.6", "hello").service_tier_null();
+        let request = CreateResponseRequest::new("gpt-5.6-sol", "hello").service_tier_null();
         let value = serde_json::to_value(&request).expect("serialize");
         assert_eq!(value["service_tier"], Value::Null);
         request.validate().expect("null service_tier is in range");
@@ -18271,7 +18381,7 @@ mod tests {
 
     #[test]
     fn create_request_validate_enforces_pinned_limits() {
-        let ok = CreateResponseRequest::new("gpt-5.6", "hello")
+        let ok = CreateResponseRequest::new("gpt-5.6-sol", "hello")
             .temperature(0.0)
             .top_p(1.0)
             .top_logprobs(20)
@@ -18281,49 +18391,49 @@ mod tests {
         ok.validate().expect("boundary values are accepted");
 
         assert!(matches!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .temperature(2.1)
                 .validate(),
             Err(CreateResponseConstraintError::Temperature { .. })
         ));
         assert!(matches!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .top_p(-0.1)
                 .validate(),
             Err(CreateResponseConstraintError::TopP { .. })
         ));
         assert!(matches!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .top_logprobs(21)
                 .validate(),
             Err(CreateResponseConstraintError::TopLogprobs { actual: 21, .. })
         ));
         assert!(matches!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .max_output_tokens(15)
                 .validate(),
             Err(CreateResponseConstraintError::MaxOutputTokens { actual: 15, .. })
         ));
         assert!(matches!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .safety_identifier("a".repeat(65))
                 .validate(),
             Err(CreateResponseConstraintError::SafetyIdentifier { actual: 65, .. })
         ));
-        CreateResponseRequest::new("gpt-5.6", "hello")
+        CreateResponseRequest::new("gpt-5.6-sol", "hello")
             .context_management(
                 ContextManagement::compaction().compact_threshold(MIN_COMPACT_THRESHOLD),
             )
             .validate()
             .expect("compact_threshold 1000 is accepted");
         assert!(matches!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .context_management(ContextManagement::compaction().compact_threshold(999))
                 .validate(),
             Err(CreateResponseConstraintError::CompactThreshold { actual: 999, .. })
         ));
         let decoded = serde_json::from_value::<CreateResponseRequest>(json!({
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "input": "hello",
             "context_management": [{ "type": "compaction", "compact_threshold": 1 }]
         }))
@@ -18332,7 +18442,7 @@ mod tests {
             decoded.validate(),
             Err(CreateResponseConstraintError::CompactThreshold { actual: 1, .. })
         ));
-        CreateResponseRequest::new("gpt-5.6", "hello")
+        CreateResponseRequest::new("gpt-5.6-sol", "hello")
             .context_management(ContextManagement::compaction().compact_threshold_null())
             .validate()
             .expect("official compact_threshold null skips the numeric bound");
@@ -18354,7 +18464,7 @@ mod tests {
             .validate()
             .expect("short input_text is accepted");
         CreateResponseRequest::new(
-            "gpt-5.6",
+            "gpt-5.6-sol",
             ResponseInput::items([InputMessage::user(MessageContent::Parts(vec![
                 InputText::new("hello").into(),
             ]))]),
@@ -18421,7 +18531,7 @@ mod tests {
             .validate()
             .expect("official image_url null skips the length bound");
         CreateResponseRequest::new(
-            "gpt-5.6",
+            "gpt-5.6-sol",
             ResponseInput::items([InputMessage::user(MessageContent::Parts(vec![
                 InputImage::from_url("https://example.test/a.png").into(),
             ]))]),
@@ -18451,7 +18561,7 @@ mod tests {
             .expect("official file_data null skips the length bound");
 
         let file_request = CreateResponseRequest::new(
-            "gpt-5.6",
+            "gpt-5.6-sol",
             ResponseInput::items([InputMessage::user(MessageContent::Parts(vec![
                 InputFile::from_base64("Zg==", "note.txt").into(),
             ]))]),
@@ -18481,7 +18591,7 @@ mod tests {
         ));
 
         let empty_inline =
-            CreateResponseRequest::new("gpt-5.6", "hello").tools([FunctionShellTool::new()
+            CreateResponseRequest::new("gpt-5.6-sol", "hello").tools([FunctionShellTool::new()
                 .environment(FunctionShellEnvironment::ContainerAuto(
                     FunctionShellContainerAuto::new().skills(vec![ContainerSkill::Inline(
                         InlineSkill::new("lint", "Run lints", InlineSkillSource::zip("")),
@@ -18491,7 +18601,7 @@ mod tests {
             empty_inline.validate(),
             Err(CreateResponseConstraintError::InlineSkillSourceData { actual: 0, .. })
         ));
-        CreateResponseRequest::new("gpt-5.6", "hello")
+        CreateResponseRequest::new("gpt-5.6-sol", "hello")
             .tools([
                 FunctionShellTool::new().environment(FunctionShellEnvironment::ContainerAuto(
                     FunctionShellContainerAuto::new().skills(vec![ContainerSkill::Inline(
@@ -18503,7 +18613,7 @@ mod tests {
             .expect("documented inline skill zip data is accepted");
 
         let decoded = serde_json::from_value::<CreateResponseRequest>(json!({
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "input": [{
                 "type": "message",
                 "role": "user",
@@ -18541,15 +18651,15 @@ mod tests {
             Err(CreateResponseConstraintError::StreamId { actual: 7, .. })
         ));
 
-        ResponsesCreateEvent::new("gpt-5.6", "hello")
+        ResponsesCreateEvent::new("gpt-5.6-sol", "hello")
             .validate()
             .expect("omitted stream_id skips the bound");
-        ResponsesCreateEvent::new("gpt-5.6", "hello")
+        ResponsesCreateEvent::new("gpt-5.6-sol", "hello")
             .stream_id("agent_1")
             .validate()
             .expect("documented create-event stream_id is accepted");
         assert!(matches!(
-            ResponsesCreateEvent::new("gpt-5.6", "hello")
+            ResponsesCreateEvent::new("gpt-5.6-sol", "hello")
                 .stream_id("agent/1")
                 .validate(),
             Err(CreateResponseConstraintError::StreamId { .. })
@@ -18557,7 +18667,7 @@ mod tests {
         let decoded = serde_json::from_value::<ResponsesCreateEvent>(json!({
             "type": "response.create",
             "stream_id": "bad id",
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "input": "hello"
         }))
         .expect("serde remains lossless for unofficial stream_id");
@@ -18569,7 +18679,7 @@ mod tests {
 
     #[test]
     fn create_response_fields_match_python_and_openapi_inventory() {
-        let request = CreateResponseRequest::new("gpt-5.6", "hello")
+        let request = CreateResponseRequest::new("gpt-5.6-sol", "hello")
             .instructions("Stay concise.")
             .background(true)
             .conversation("conv_1")
@@ -18626,7 +18736,7 @@ mod tests {
 
     #[test]
     fn compact_request_fields_match_python_and_openapi_inventory() {
-        let request = CompactResponseRequest::new("gpt-5.6", "compact me")
+        let request = CompactResponseRequest::new("gpt-5.6-sol", "compact me")
             .instructions("Keep the gist.")
             .previous_response_id("resp_1")
             .prompt_cache_key("cache")
@@ -18705,19 +18815,19 @@ mod tests {
 
     #[test]
     fn compact_request_validate_enforces_prompt_cache_key_limit() {
-        CompactResponseRequest::new("gpt-5.6", "hello")
+        CompactResponseRequest::new("gpt-5.6-sol", "hello")
             .prompt_cache_key("a".repeat(MAX_PROMPT_CACHE_KEY_CHARS))
             .validate()
             .expect("64-character key is accepted");
         assert!(matches!(
-            CompactResponseRequest::new("gpt-5.6", "hello")
+            CompactResponseRequest::new("gpt-5.6-sol", "hello")
                 .prompt_cache_key("a".repeat(MAX_PROMPT_CACHE_KEY_CHARS + 1))
                 .validate(),
             Err(CompactResponseConstraintError::PromptCacheKey { actual: 65, .. })
         ));
 
         let decoded = serde_json::from_value::<CompactResponseRequest>(json!({
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "input": null,
             "prompt_cache_key": "a".repeat(65),
             "service_tier": null
@@ -18742,7 +18852,7 @@ mod tests {
         ));
         assert!(
             CreateResponseRequest::new(
-                "gpt-5.6",
+                "gpt-5.6-sol",
                 vec![ResponseInputItem::AdditionalTools(extra_tools.clone())]
             )
             .validate()
@@ -18756,7 +18866,7 @@ mod tests {
         ));
         assert!(
             CreateResponseRequest::new(
-                "gpt-5.6",
+                "gpt-5.6-sol",
                 vec![ResponseInputItem::ToolSearchOutput(search.clone())]
             )
             .validate()
@@ -18765,7 +18875,7 @@ mod tests {
 
         assert!(matches!(
             CompactResponseRequest::new(
-                "gpt-5.6",
+                "gpt-5.6-sol",
                 vec![ResponseInputItem::AdditionalTools(extra_tools)]
             )
             .validate(),
@@ -18783,7 +18893,7 @@ mod tests {
         ));
         assert!(matches!(
             CountInputTokensRequest::new(
-                "gpt-5.6",
+                "gpt-5.6-sol",
                 vec![ResponseInputItem::ToolSearchOutput(search)]
             )
             .validate(),
@@ -18791,10 +18901,10 @@ mod tests {
                 CreateResponseConstraintError::EmptyAllowedCallers
             ))
         ));
-        CompactResponseRequest::new("gpt-5.6", "hello")
+        CompactResponseRequest::new("gpt-5.6-sol", "hello")
             .validate()
             .expect("text input stays in range");
-        CountInputTokensRequest::new("gpt-5.6", "hello")
+        CountInputTokensRequest::new("gpt-5.6-sol", "hello")
             .tool(FunctionTool::new("lookup"))
             .validate()
             .expect("in-range tools stay accepted");
@@ -19013,6 +19123,66 @@ mod tests {
     }
 
     #[test]
+    fn compact_output_stored_messages_decode_multi_agent_roles_losslessly() {
+        // Compaction can echo multi-agent roles (critic/tool/discriminator)
+        // in stored messages. The pinned ItemField Message branch accepts any
+        // MessageRole, so decoding must keep unknown roles verbatim instead
+        // of failing the 200 body; request construction still only exposes
+        // the three StoredInputMessageRole values.
+        let fixture = json!({
+            "id": "resp_roles",
+            "object": "response.compaction",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "critic",
+                    "content": [{"type": "input_text", "text": "critique"}]
+                },
+                {
+                    "type": "message",
+                    "role": "tool",
+                    "content": [{"type": "input_text", "text": "tool output"}]
+                },
+                {
+                    "type": "message",
+                    "role": "future_role",
+                    "content": [{"type": "input_text", "text": "forward compatible"}]
+                },
+                {"type": "compaction", "id": "cmp_2", "encrypted_content": "enc"}
+            ],
+            "created_at": 1731459200,
+            "usage": {
+                "input_tokens": 1,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                "output_tokens": 1,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 2
+            }
+        });
+        let compacted: CompactedResponse =
+            serde_json::from_value(fixture.clone()).expect("multi-agent stored roles decode");
+        let output = compacted.output();
+        for (item, expected) in output.iter().zip(["critic", "tool", "future_role"]) {
+            let ResponseInputItem::StoredMessage(message) = item else {
+                panic!("role-bearing item must decode as a stored message: {item:?}");
+            };
+            assert_eq!(message.role().as_str(), expected);
+        }
+        assert_eq!(
+            serde_json::to_value(&compacted).expect("round-trip keeps roles verbatim"),
+            fixture
+        );
+        assert_eq!(
+            serde_json::to_value(StoredInputMessage::new(
+                StoredInputMessageRole::Developer,
+                [InputText::new("instructions")],
+            ))
+            .expect("request construction keeps the pinned role domain")["role"],
+            "developer"
+        );
+    }
+
+    #[test]
     fn official_response_item_list_requires_cursor_ids() {
         assert!(
             serde_json::from_value::<ResponseInputItemList>(json!({
@@ -19066,11 +19236,11 @@ mod tests {
             Value::Null
         );
         let official = serde_json::from_value::<CompactResponseRequest>(json!({
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "input": "compact me"
         }))
         .expect("official compact request");
-        assert_eq!(official.model, Nullable::Value("gpt-5.6".into()));
+        assert_eq!(official.model, Nullable::Value("gpt-5.6-sol".into()));
     }
 
     #[test]
@@ -19550,7 +19720,7 @@ mod tests {
         .expect("serde remains lossless");
         assert!(decoded.validate().is_err());
         assert!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .tool(decoded)
                 .validate()
                 .is_err()
@@ -19639,13 +19809,18 @@ mod tests {
             }
             other => panic!("dated web search must stay typed, got {other:?}"),
         }
+        // `web_search_2025_08_26` is a valid request-tool type but is outside
+        // the pinned ToolChoiceTypes.type domain, so it decodes through the
+        // open-enum Unknown branch instead of a named HostedToolType variant.
         let choice: ToolChoice = serde_json::from_value(json!({
             "type": "web_search_2025_08_26"
         }))
-        .expect("official dated hosted tool_choice");
+        .expect("unofficial dated hosted tool_choice stays lossless");
         match choice {
             ToolChoice::Hosted(hosted) => {
-                assert_eq!(hosted.kind(), &HostedToolType::WebSearch20250826);
+                assert_eq!(hosted.kind().unknown_value(), Some("web_search_2025_08_26"));
+                assert!(!hosted.kind().is_known());
+                assert_eq!(hosted.kind().as_str(), "web_search_2025_08_26");
             }
             other => panic!("dated web search choice must stay hosted, got {other:?}"),
         }
@@ -19727,6 +19902,45 @@ mod tests {
     }
 
     #[test]
+    fn hosted_tool_choice_type_pins_the_eight_official_values() {
+        // Pinned ToolChoiceTypes.type enum: exactly the eight values below.
+        // `web_search` / `web_search_2025_08_26` are request-tool types, not
+        // tool-choice values, so they fall back to the open Unknown branch.
+        const OFFICIAL_HOSTED_TOOL_TYPES: [&str; 8] = [
+            "file_search",
+            "web_search_preview",
+            "computer",
+            "computer_use_preview",
+            "computer_use",
+            "web_search_preview_2025_03_11",
+            "image_generation",
+            "code_interpreter",
+        ];
+        for value in OFFICIAL_HOSTED_TOOL_TYPES {
+            let decoded = HostedToolType::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official ToolChoiceTypes value {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            let choice: ToolChoice =
+                serde_json::from_value(json!({ "type": value })).expect("decode hosted choice");
+            assert!(
+                matches!(choice, ToolChoice::Hosted(hosted) if hosted.kind().as_str() == value),
+                "official hosted choice {value} must stay routed to the Hosted branch"
+            );
+        }
+        for tool_only in ["web_search", "web_search_2025_08_26"] {
+            let decoded = HostedToolType::from_raw(tool_only);
+            assert!(
+                !decoded.is_known(),
+                "{tool_only} names a request tool, not a pinned tool_choice value"
+            );
+            assert_eq!(decoded.as_str(), tool_only);
+        }
+    }
+
+    #[test]
     fn image_generation_tool_validate_enforces_pinned_limits() {
         let decoded: ImageGenerationTool = serde_json::from_value(json!({
             "type": "image_generation",
@@ -19739,7 +19953,7 @@ mod tests {
             Err(CreateResponseConstraintError::ImageGenerationCompression { actual: 101, .. })
         ));
         assert!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .tool(ImageGenerationTool::new().partial_images(4))
                 .validate()
                 .is_err()
@@ -20023,6 +20237,35 @@ mod tests {
             serde_json::to_value(CodeInterpreterNetworkAllowlist::new(["a.example.test"]))
                 .expect("serialize without secrets");
         assert!(omitted.get("domain_secrets").is_none());
+
+        // Pinned ContainerNetworkPolicyAllowlistParam.allowed_domains is
+        // minItems 1: an empty allowlist is rejected by validate() without
+        // sending the request (mirrors the containers-side
+        // EmptyAllowedDomains semantics).
+        assert!(matches!(
+            CodeInterpreterTool::auto(AutoCodeInterpreterContainer::new().network_policy(
+                CodeInterpreterNetworkPolicy::Allowlist(CodeInterpreterNetworkAllowlist::new(
+                    Vec::<String>::new()
+                ))
+            ))
+            .validate(),
+            Err(CreateResponseConstraintError::EmptyAllowedDomains)
+        ));
+        let decoded_empty = serde_json::from_value::<CodeInterpreterTool>(json!({
+            "type": "code_interpreter",
+            "container": {
+                "type": "auto",
+                "network_policy": {
+                    "type": "allowlist",
+                    "allowed_domains": []
+                }
+            }
+        }))
+        .expect("serde remains lossless for an empty allowlist");
+        assert!(matches!(
+            decoded_empty.validate(),
+            Err(CreateResponseConstraintError::EmptyAllowedDomains)
+        ));
 
         let mut empty_secrets = CodeInterpreterNetworkAllowlist::new(["api.example.test"]);
         empty_secrets.domain_secrets = Omittable::Value(Vec::new());
@@ -20705,7 +20948,7 @@ mod tests {
         .expect("serde remains lossless");
         assert!(decoded.validate().is_err());
         assert!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .tool(decoded)
                 .validate()
                 .is_err()
@@ -20861,7 +21104,7 @@ mod tests {
             "incomplete_details": null,
             "instructions": null,
             "metadata": null,
-            "model": "gpt-5.6",
+            "model": "gpt-5.6-sol",
             "object": "response",
             "output": [{
                 "type": "function_call_output",
@@ -21127,7 +21370,7 @@ mod tests {
         ));
         assert!(
             CreateResponseRequest::new(
-                "gpt-5.6",
+                "gpt-5.6-sol",
                 vec![ResponseInputItem::Program(illegal_program)]
             )
             .validate()
@@ -21189,7 +21432,7 @@ mod tests {
         ));
         assert!(
             CreateResponseRequest::new(
-                "gpt-5.6",
+                "gpt-5.6-sol",
                 vec![ResponseInputItem::FunctionCall(illegal_caller)]
             )
             .validate()
@@ -21436,7 +21679,7 @@ mod tests {
             Err(CreateResponseConstraintError::FunctionToolName { actual: 8, .. })
         ));
         assert!(
-            CreateResponseRequest::new("gpt-5.6", "hello")
+            CreateResponseRequest::new("gpt-5.6-sol", "hello")
                 .tool(illegal)
                 .validate()
                 .is_err()

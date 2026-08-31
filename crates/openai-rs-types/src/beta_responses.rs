@@ -31,6 +31,27 @@ use crate::{
 /// Inclusive minimum for `multi_agent.max_concurrent_subagents`.
 pub const MIN_CONCURRENT_SUBAGENTS: u32 = 1;
 
+/// Inclusive minimum for multi-agent `call_id`.
+///
+/// Mirrors the pinned `BetaMultiAgentCallItemParam.call_id` /
+/// `BetaMultiAgentCallOutputItemParam.call_id` `minLength`/`maxLength`.
+pub const MIN_MULTI_AGENT_CALL_ID_CHARS: usize = 1;
+/// Inclusive maximum for multi-agent `call_id`.
+pub const MAX_MULTI_AGENT_CALL_ID_CHARS: usize = 64;
+
+/// Checks the pinned multi-agent `call_id` `1..=64` character range.
+fn validate_multi_agent_call_id(call_id: &str) -> Result<(), CreateResponseConstraintError> {
+    let actual = call_id.chars().count();
+    if !(MIN_MULTI_AGENT_CALL_ID_CHARS..=MAX_MULTI_AGENT_CALL_ID_CHARS).contains(&actual) {
+        return Err(CreateResponseConstraintError::CallId {
+            actual,
+            minimum: MIN_MULTI_AGENT_CALL_ID_CHARS,
+            maximum: MAX_MULTI_AGENT_CALL_ID_CHARS,
+        });
+    }
+    Ok(())
+}
+
 macro_rules! impl_tagged_content {
     ($name:ident { $($variant:ident($ty:ty) => $wire:literal),+ $(,)? }) => {
         impl Serialize for $name {
@@ -124,6 +145,21 @@ crate::open_string_enum! {
         Priority = "priority",
         Fast = "fast",
         Ultrafast = "ultrafast",
+    }
+}
+
+crate::open_string_enum! {
+    /// Processing tier accepted by the beta compact request.
+    ///
+    /// Members match the pinned `BetaServiceTierEnum` (auto/default/fast/
+    /// flex/priority) exactly; the create/response-echo side keeps the wider
+    /// [`BetaServiceTier`] domain.
+    pub enum BetaCompactServiceTier {
+        Auto = "auto",
+        Default = "default",
+        Fast = "fast",
+        Flex = "flex",
+        Priority = "priority",
     }
 }
 
@@ -994,9 +1030,15 @@ impl From<InputFile> for BetaAgentMessageContent {
 
 literal_tag!(AgentMessageTag, AgentMessage, "agent_message");
 
-/// A message routed from one named agent to another.
+/// A message routed from one named agent, in request shape.
+///
+/// Mirrors the pinned `BetaAgentMessageItemParam`: `author`, `recipient`, and
+/// `content` are required, while the platform `id` and owning `agent` stay
+/// optional and nullable. Decode also accepts the resource shape (whose `id`
+/// is required), which is why compact output and input-item listings keep
+/// using this input union.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BetaAgentMessage {
+pub struct BetaAgentMessageParam {
     author: String,
     content: Vec<BetaAgentMessageContent>,
     recipient: String,
@@ -1008,8 +1050,8 @@ pub struct BetaAgentMessage {
     agent: Omittable<Nullable<BetaAgent>>,
 }
 
-impl BetaAgentMessage {
-    /// Creates a typed inter-agent message.
+impl BetaAgentMessageParam {
+    /// Creates a typed inter-agent message for a request.
     #[must_use]
     pub fn new(
         author: impl Into<String>,
@@ -1040,14 +1082,14 @@ impl BetaAgentMessage {
         self
     }
 
-    /// Sends official `id: null`.
+    /// Sends official Param `id: null`.
     #[must_use]
     pub fn id_null(mut self) -> Self {
         self.id = Omittable::Value(Nullable::Null);
         self
     }
 
-    /// Sends official `agent: null`.
+    /// Sends official Param `agent: null`.
     #[must_use]
     pub fn agent_null(mut self) -> Self {
         self.agent = Omittable::Value(Nullable::Null);
@@ -1070,6 +1112,12 @@ impl BetaAgentMessage {
     #[must_use]
     pub fn content(&self) -> &[BetaAgentMessageContent] {
         &self.content
+    }
+
+    /// Returns the platform item id when present and non-null.
+    #[must_use]
+    pub fn id_ref(&self) -> Option<&str> {
+        non_null(&self.id).map(String::as_str)
     }
 
     /// Returns the owning agent when present and non-null.
@@ -1099,11 +1147,106 @@ impl BetaAgentMessage {
     }
 }
 
+/// A message routed between named agents, in resource shape.
+///
+/// Mirrors the pinned `BetaAgentMessage`: the platform `id` is required and
+/// `agent` is optional but not nullable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaAgentMessage {
+    id: String,
+    author: String,
+    content: Vec<BetaAgentMessageContent>,
+    recipient: String,
+    #[serde(rename = "type")]
+    kind: AgentMessageTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    agent: Omittable<BetaAgent>,
+}
+
+impl BetaAgentMessage {
+    /// Creates a returned inter-agent message.
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        author: impl Into<String>,
+        recipient: impl Into<String>,
+        content: impl IntoIterator<Item = impl Into<BetaAgentMessageContent>>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            author: author.into(),
+            content: content.into_iter().map(Into::into).collect(),
+            recipient: recipient.into(),
+            kind: AgentMessageTag::AgentMessage,
+            agent: Omittable::Omitted,
+        }
+    }
+
+    /// Returns the platform item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the sending agent identity.
+    #[must_use]
+    pub fn author(&self) -> &str {
+        &self.author
+    }
+
+    /// Returns the destination agent identity.
+    #[must_use]
+    pub fn recipient(&self) -> &str {
+        &self.recipient
+    }
+
+    /// Returns message content in wire order.
+    #[must_use]
+    pub fn content(&self) -> &[BetaAgentMessageContent] {
+        &self.content
+    }
+
+    /// Attaches owning-agent metadata.
+    #[must_use]
+    pub fn agent(mut self, agent: BetaAgent) -> Self {
+        self.agent = Omittable::Value(agent);
+        self
+    }
+
+    /// Returns the owning agent when present.
+    #[must_use]
+    pub fn agent_ref(&self) -> Option<&BetaAgent> {
+        omitted_ref(&self.agent)
+    }
+}
+
+impl From<BetaAgentMessage> for BetaAgentMessageParam {
+    fn from(value: BetaAgentMessage) -> Self {
+        Self {
+            author: value.author,
+            content: value.content,
+            recipient: value.recipient,
+            kind: value.kind,
+            id: Omittable::Value(Nullable::Value(value.id)),
+            agent: match value.agent {
+                Omittable::Value(agent) => Omittable::Value(Nullable::Value(agent)),
+                Omittable::Omitted => Omittable::Omitted,
+            },
+        }
+    }
+}
+
 literal_tag!(MultiAgentCallTag, MultiAgentCall, "multi_agent_call");
 
-/// A model request to perform one multi-agent runtime action.
+/// A model request to perform one multi-agent runtime action, in request
+/// shape.
+///
+/// Mirrors the pinned `BetaMultiAgentCallItemParam`: `call_id` (pinned
+/// `1..=64` characters, checked by [`Self::validate`]), `action`, and
+/// `arguments` are required, while the platform `id` and owning `agent` stay
+/// optional and nullable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BetaMultiAgentCall {
+pub struct BetaMultiAgentCallParam {
     action: BetaMultiAgentAction,
     arguments: JsonText,
     call_id: String,
@@ -1115,7 +1258,7 @@ pub struct BetaMultiAgentCall {
     agent: Omittable<Nullable<BetaAgent>>,
 }
 
-impl BetaMultiAgentCall {
+impl BetaMultiAgentCallParam {
     /// Creates a call from automatically serialized action arguments.
     pub fn from_serializable<T: Serialize>(
         action: BetaMultiAgentAction,
@@ -1167,6 +1310,12 @@ impl BetaMultiAgentCall {
         &self.action
     }
 
+    /// Returns the platform item id when present and non-null.
+    #[must_use]
+    pub fn id_ref(&self) -> Option<&str> {
+        non_null(&self.id).map(String::as_str)
+    }
+
     /// Returns the owning agent when present and non-null.
     #[must_use]
     pub fn agent(&self) -> Option<&BetaAgent> {
@@ -1187,18 +1336,131 @@ impl BetaMultiAgentCall {
         self
     }
 
-    /// Sends official `id: null`.
+    /// Sends official Param `id: null`.
     #[must_use]
     pub fn id_null(mut self) -> Self {
         self.id = Omittable::Value(Nullable::Null);
         self
     }
 
-    /// Sends official `agent: null`.
+    /// Sends official Param `agent: null`.
     #[must_use]
     pub fn agent_null(mut self) -> Self {
         self.agent = Omittable::Value(Nullable::Null);
         self
+    }
+
+    /// Checks the pinned `call_id` `1..=64` character range without sending
+    /// the request.
+    pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        validate_multi_agent_call_id(&self.call_id)
+    }
+}
+
+/// A model request to perform one multi-agent runtime action, in resource
+/// shape.
+///
+/// Mirrors the pinned `BetaMultiAgentCall`: the platform `id` is required and
+/// `agent` is optional but not nullable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaMultiAgentCall {
+    action: BetaMultiAgentAction,
+    arguments: JsonText,
+    call_id: String,
+    id: String,
+    #[serde(rename = "type")]
+    kind: MultiAgentCallTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    agent: Omittable<BetaAgent>,
+}
+
+impl BetaMultiAgentCall {
+    /// Creates a returned multi-agent call.
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        action: BetaMultiAgentAction,
+        call_id: impl Into<String>,
+        arguments: impl Into<Box<str>>,
+    ) -> Self {
+        Self {
+            action,
+            arguments: JsonText::from_raw(arguments),
+            call_id: call_id.into(),
+            id: id.into(),
+            kind: MultiAgentCallTag::MultiAgentCall,
+            agent: Omittable::Omitted,
+        }
+    }
+
+    /// Creates a returned call from automatically serialized arguments.
+    pub fn from_serializable<T: Serialize>(
+        id: impl Into<String>,
+        action: BetaMultiAgentAction,
+        call_id: impl Into<String>,
+        arguments: &T,
+    ) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            action,
+            arguments: JsonText::from_serializable(arguments)?.cast(),
+            call_id: call_id.into(),
+            id: id.into(),
+            kind: MultiAgentCallTag::MultiAgentCall,
+            agent: Omittable::Omitted,
+        })
+    }
+
+    /// Returns the lazily parsed action arguments.
+    #[must_use]
+    pub const fn arguments(&self) -> &JsonText {
+        &self.arguments
+    }
+
+    /// Returns the call id used to correlate the output.
+    #[must_use]
+    pub fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    /// Returns the requested runtime action.
+    #[must_use]
+    pub const fn action(&self) -> &BetaMultiAgentAction {
+        &self.action
+    }
+
+    /// Returns the platform item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Attaches owning-agent metadata.
+    #[must_use]
+    pub fn with_agent(mut self, agent: BetaAgent) -> Self {
+        self.agent = Omittable::Value(agent);
+        self
+    }
+
+    /// Returns the owning agent when present.
+    #[must_use]
+    pub fn agent_ref(&self) -> Option<&BetaAgent> {
+        omitted_ref(&self.agent)
+    }
+}
+
+impl From<BetaMultiAgentCall> for BetaMultiAgentCallParam {
+    fn from(value: BetaMultiAgentCall) -> Self {
+        Self {
+            action: value.action,
+            arguments: value.arguments,
+            call_id: value.call_id,
+            kind: value.kind,
+            id: Omittable::Value(Nullable::Value(value.id)),
+            agent: match value.agent {
+                Omittable::Value(agent) => Omittable::Value(Nullable::Value(agent)),
+                Omittable::Omitted => Omittable::Omitted,
+            },
+        }
     }
 }
 
@@ -1216,9 +1478,9 @@ pub struct BetaMultiAgentOutputText {
     text: String,
     #[serde(rename = "type")]
     kind: OutputTextTag,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     annotations: Vec<BetaMultiAgentAnnotation>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     logprobs: Vec<LogProb>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -1275,9 +1537,14 @@ literal_tag!(
     "multi_agent_call_output"
 );
 
-/// Output correlated with a multi-agent runtime call.
+/// Output correlated with a multi-agent runtime call, in request shape.
+///
+/// Mirrors the pinned `BetaMultiAgentCallOutputItemParam`: `call_id` (pinned
+/// `1..=64` characters, checked by [`Self::validate`]), `action`, and `output`
+/// are required, while the platform `id` and owning `agent` stay optional and
+/// nullable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BetaMultiAgentCallOutput {
+pub struct BetaMultiAgentCallOutputParam {
     action: BetaMultiAgentAction,
     call_id: String,
     output: Vec<BetaMultiAgentOutputText>,
@@ -1289,7 +1556,7 @@ pub struct BetaMultiAgentCallOutput {
     agent: Omittable<Nullable<BetaAgent>>,
 }
 
-impl BetaMultiAgentCallOutput {
+impl BetaMultiAgentCallOutputParam {
     /// Creates an output for one multi-agent action.
     #[must_use]
     pub fn new(
@@ -1325,6 +1592,12 @@ impl BetaMultiAgentCallOutput {
         &self.action
     }
 
+    /// Returns the platform item id when present and non-null.
+    #[must_use]
+    pub fn id_ref(&self) -> Option<&str> {
+        non_null(&self.id).map(String::as_str)
+    }
+
     /// Returns the owning agent when present and non-null.
     #[must_use]
     pub fn agent(&self) -> Option<&BetaAgent> {
@@ -1345,18 +1618,113 @@ impl BetaMultiAgentCallOutput {
         self
     }
 
-    /// Sends official `id: null`.
+    /// Sends official Param `id: null`.
     #[must_use]
     pub fn id_null(mut self) -> Self {
         self.id = Omittable::Value(Nullable::Null);
         self
     }
 
-    /// Sends official `agent: null`.
+    /// Sends official Param `agent: null`.
     #[must_use]
     pub fn agent_null(mut self) -> Self {
         self.agent = Omittable::Value(Nullable::Null);
         self
+    }
+
+    /// Checks the pinned `call_id` `1..=64` character range without sending
+    /// the request.
+    pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        validate_multi_agent_call_id(&self.call_id)
+    }
+}
+
+/// Output correlated with a multi-agent runtime call, in resource shape.
+///
+/// Mirrors the pinned `BetaMultiAgentCallOutput`: the platform `id` is
+/// required and `agent` is optional but not nullable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaMultiAgentCallOutput {
+    action: BetaMultiAgentAction,
+    call_id: String,
+    id: String,
+    output: Vec<BetaMultiAgentOutputText>,
+    #[serde(rename = "type")]
+    kind: MultiAgentCallOutputTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    agent: Omittable<BetaAgent>,
+}
+
+impl BetaMultiAgentCallOutput {
+    /// Creates a returned output for one multi-agent action.
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        action: BetaMultiAgentAction,
+        call_id: impl Into<String>,
+        output: impl IntoIterator<Item = BetaMultiAgentOutputText>,
+    ) -> Self {
+        Self {
+            action,
+            call_id: call_id.into(),
+            id: id.into(),
+            output: output.into_iter().collect(),
+            kind: MultiAgentCallOutputTag::MultiAgentCallOutput,
+            agent: Omittable::Omitted,
+        }
+    }
+
+    /// Returns the call id being answered.
+    #[must_use]
+    pub fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    /// Returns the ordered output blocks.
+    #[must_use]
+    pub fn output(&self) -> &[BetaMultiAgentOutputText] {
+        &self.output
+    }
+
+    /// Returns the runtime action that produced this output.
+    #[must_use]
+    pub const fn action(&self) -> &BetaMultiAgentAction {
+        &self.action
+    }
+
+    /// Returns the platform item id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Attaches owning-agent metadata.
+    #[must_use]
+    pub fn with_agent(mut self, agent: BetaAgent) -> Self {
+        self.agent = Omittable::Value(agent);
+        self
+    }
+
+    /// Returns the owning agent when present.
+    #[must_use]
+    pub fn agent_ref(&self) -> Option<&BetaAgent> {
+        omitted_ref(&self.agent)
+    }
+}
+
+impl From<BetaMultiAgentCallOutput> for BetaMultiAgentCallOutputParam {
+    fn from(value: BetaMultiAgentCallOutput) -> Self {
+        Self {
+            action: value.action,
+            call_id: value.call_id,
+            output: value.output,
+            kind: value.kind,
+            id: Omittable::Value(Nullable::Value(value.id)),
+            agent: match value.agent {
+                Omittable::Value(agent) => Omittable::Value(Nullable::Value(agent)),
+                Omittable::Omitted => Omittable::Omitted,
+            },
+        }
     }
 }
 
@@ -1472,11 +1840,11 @@ pub enum BetaResponseInputItem {
     /// A shared message branch with typed prompt-cache boundaries.
     PromptCachedMessage(Box<BetaPromptCachedInputMessage>),
     /// A message routed between named agents.
-    AgentMessage(BetaAgentMessage),
+    AgentMessage(BetaAgentMessageParam),
     /// A request to the server-hosted agent runtime.
-    MultiAgentCall(BetaMultiAgentCall),
+    MultiAgentCall(BetaMultiAgentCallParam),
     /// The result of a server-hosted agent action.
-    MultiAgentCallOutput(BetaMultiAgentCallOutput),
+    MultiAgentCallOutput(BetaMultiAgentCallOutputParam),
 }
 
 impl Serialize for BetaResponseInputItem {
@@ -1536,21 +1904,39 @@ impl From<BetaPromptCachedInputMessage> for BetaResponseInputItem {
     }
 }
 
+impl From<BetaAgentMessageParam> for BetaResponseInputItem {
+    fn from(value: BetaAgentMessageParam) -> Self {
+        Self::AgentMessage(value)
+    }
+}
+
+impl From<BetaMultiAgentCallParam> for BetaResponseInputItem {
+    fn from(value: BetaMultiAgentCallParam) -> Self {
+        Self::MultiAgentCall(value)
+    }
+}
+
+impl From<BetaMultiAgentCallOutputParam> for BetaResponseInputItem {
+    fn from(value: BetaMultiAgentCallOutputParam) -> Self {
+        Self::MultiAgentCallOutput(value)
+    }
+}
+
 impl From<BetaAgentMessage> for BetaResponseInputItem {
     fn from(value: BetaAgentMessage) -> Self {
-        Self::AgentMessage(value)
+        Self::AgentMessage(value.into())
     }
 }
 
 impl From<BetaMultiAgentCall> for BetaResponseInputItem {
     fn from(value: BetaMultiAgentCall) -> Self {
-        Self::MultiAgentCall(value)
+        Self::MultiAgentCall(value.into())
     }
 }
 
 impl From<BetaMultiAgentCallOutput> for BetaResponseInputItem {
     fn from(value: BetaMultiAgentCallOutput) -> Self {
-        Self::MultiAgentCallOutput(value)
+        Self::MultiAgentCallOutput(value.into())
     }
 }
 
@@ -1732,8 +2118,8 @@ fn validate_beta_response_input_item(
             Ok(())
         }
         BetaResponseInputItem::AgentMessage(item) => item.validate(),
-        BetaResponseInputItem::MultiAgentCall(_)
-        | BetaResponseInputItem::MultiAgentCallOutput(_) => Ok(()),
+        BetaResponseInputItem::MultiAgentCall(item) => item.validate(),
+        BetaResponseInputItem::MultiAgentCallOutput(item) => item.validate(),
     }
 }
 
@@ -2673,7 +3059,7 @@ pub struct BetaCompactResponseRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     prompt_cache_retention: Omittable<Nullable<BetaPromptCacheRetention>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    service_tier: Omittable<Nullable<BetaServiceTier>>,
+    service_tier: Omittable<Nullable<BetaCompactServiceTier>>,
 }
 
 impl BetaCompactResponseRequest {
@@ -2805,9 +3191,10 @@ impl BetaCompactResponseRequest {
         self
     }
 
-    /// Sets the requested service tier.
+    /// Sets the requested service tier from the pinned five-value
+    /// `BetaServiceTierEnum` compact domain.
     #[must_use]
-    pub fn service_tier(mut self, tier: BetaServiceTier) -> Self {
+    pub fn service_tier(mut self, tier: BetaCompactServiceTier) -> Self {
         self.service_tier = Omittable::Value(Nullable::Value(tier));
         self
     }
@@ -4049,6 +4436,12 @@ mod tests {
         assert_json_dto::<BetaResponseStreamEvent>();
         assert_json_dto::<BetaResponsesClientEvent>();
         assert_json_dto::<BetaResponsesServerEvent>();
+        assert_json_dto::<BetaAgentMessageParam>();
+        assert_json_dto::<BetaMultiAgentCallParam>();
+        assert_json_dto::<BetaMultiAgentCallOutputParam>();
+        assert_json_dto::<BetaAgentMessage>();
+        assert_json_dto::<BetaMultiAgentCall>();
+        assert_json_dto::<BetaMultiAgentCallOutput>();
         assert_impl_all!(BetaResponsesClientEvent: Send, Sync);
         assert_impl_all!(BetaResponsesServerEvent: Send, Sync);
     }
@@ -4086,7 +4479,7 @@ mod tests {
             message: &'a str,
         }
 
-        let call = BetaMultiAgentCall::from_serializable(
+        let call = BetaMultiAgentCallParam::from_serializable(
             BetaMultiAgentAction::SpawnAgent,
             "call_1",
             &Spawn {
@@ -4169,7 +4562,7 @@ mod tests {
 
     #[test]
     fn create_and_count_requests_keep_beta_only_fields_typed() {
-        let routed = BetaAgentMessage::new(
+        let routed = BetaAgentMessageParam::new(
             "root",
             "root/research",
             [BetaAgentInputText::new("please inspect")],
@@ -4297,11 +4690,13 @@ mod tests {
     fn websocket_inject_events_are_structurally_routed() {
         let inject = BetaResponsesClientEvent::inject(BetaResponseInjectEvent::new(
             "resp_beta_1",
-            [BetaResponseInputItem::from(BetaMultiAgentCallOutput::new(
-                BetaMultiAgentAction::WaitAgent,
-                "call_3",
-                [BetaMultiAgentOutputText::new("done")],
-            ))],
+            [BetaResponseInputItem::from(
+                BetaMultiAgentCallOutputParam::new(
+                    BetaMultiAgentAction::WaitAgent,
+                    "call_3",
+                    [BetaMultiAgentOutputText::new("done")],
+                ),
+            )],
         ));
         let inject_value = serde_json::to_value(&inject).expect("serialize inject");
         assert_eq!(inject_value["type"], "response.inject");
@@ -4335,6 +4730,206 @@ mod tests {
             websocket_error,
             BetaResponsesServerEvent::WebSocketError(_)
         ));
+    }
+
+    #[test]
+    fn beta_agent_items_split_param_and_resource_shapes() {
+        // Param side (BetaAgentMessageItemParam &c.): id/agent stay optional
+        // and nullable, and are omitted by default.
+        let param_value = serde_json::to_value(BetaAgentMessageParam::new(
+            "root",
+            "child",
+            [BetaAgentInputText::new("hi")],
+        ))
+        .expect("serialize param");
+        assert_eq!(param_value["type"], "agent_message");
+        assert!(param_value.get("id").is_none(), "Param omits id by default");
+        assert!(
+            param_value.get("agent").is_none(),
+            "Param omits agent by default"
+        );
+        let decoded_param: BetaAgentMessageParam =
+            serde_json::from_value(param_value.clone()).expect("param round trip");
+        assert_eq!(decoded_param.id_ref(), None);
+
+        // Resource side (BetaAgentMessage &c.): id is required, agent is
+        // optional but not nullable, and both expose getters.
+        let resource =
+            BetaAgentMessage::new("amsg_1", "root", "child", [BetaAgentInputText::new("hi")])
+                .agent(BetaAgent::new("root/owner"));
+        assert_eq!(resource.id(), "amsg_1");
+        assert_eq!(
+            resource.agent_ref().map(BetaAgent::agent_name),
+            Some("root/owner")
+        );
+        let resource_value = serde_json::to_value(&resource).expect("serialize resource");
+        assert_eq!(resource_value["id"], "amsg_1");
+        assert_eq!(resource_value["agent"]["agent_name"], "root/owner");
+
+        // From<Resource> for Param keeps the wire shape byte-for-byte.
+        let bridged: BetaAgentMessageParam = resource.into();
+        assert_eq!(bridged.id_ref(), Some("amsg_1"));
+        assert_eq!(
+            serde_json::to_value(&bridged).expect("bridge fidelity"),
+            resource_value
+        );
+
+        let call_resource =
+            BetaMultiAgentCall::new("mac_1", BetaMultiAgentAction::ListAgents, "call_1", "{}");
+        assert_eq!(call_resource.id(), "mac_1");
+        assert_eq!(call_resource.agent_ref(), None);
+        let call_param: BetaMultiAgentCallParam = call_resource.into();
+        assert_eq!(
+            serde_json::to_value(&call_param).expect("call bridge fidelity")["id"],
+            "mac_1"
+        );
+
+        let output_resource = BetaMultiAgentCallOutput::new(
+            "maco_1",
+            BetaMultiAgentAction::WaitAgent,
+            "call_1",
+            [BetaMultiAgentOutputText::new("done")],
+        );
+        assert_eq!(output_resource.id(), "maco_1");
+        let output_param: BetaMultiAgentCallOutputParam = output_resource.into();
+        assert_eq!(
+            serde_json::to_value(&output_param).expect("output bridge fidelity")["id"],
+            "maco_1"
+        );
+
+        // Resources reject a missing or null id/agent; the output union keeps
+        // the resource codec, while the input union (used by compact output
+        // and input-item listings) keeps tolerating the Param shape.
+        for (fixture, description) in [
+            (
+                json!({
+                    "type": "agent_message",
+                    "author": "root",
+                    "recipient": "child",
+                    "content": [{"type": "input_text", "text": "hi"}]
+                }),
+                "agent_message resource without id",
+            ),
+            (
+                json!({
+                    "type": "multi_agent_call",
+                    "action": "list_agents",
+                    "arguments": "{}",
+                    "call_id": "call_1"
+                }),
+                "multi_agent_call resource without id",
+            ),
+            (
+                json!({
+                    "type": "multi_agent_call_output",
+                    "action": "wait_agent",
+                    "call_id": "call_1",
+                    "output": [{"type": "output_text", "text": "done"}]
+                }),
+                "multi_agent_call_output resource without id",
+            ),
+        ] {
+            assert!(
+                serde_json::from_value::<BetaResponseOutputItem>(fixture.clone()).is_err(),
+                "{description} must fail the resource decode"
+            );
+            assert!(
+                serde_json::from_value::<BetaResponseInputItem>(fixture).is_ok(),
+                "{description} stays accepted by the input-side Param union"
+            );
+        }
+        assert!(
+            serde_json::from_value::<BetaAgentMessage>(json!({
+                "type": "agent_message",
+                "id": "amsg_2",
+                "author": "root",
+                "recipient": "child",
+                "content": [{"type": "input_text", "text": "hi"}],
+                "agent": null
+            }))
+            .is_err(),
+            "resource agent is not nullable in the pin"
+        );
+    }
+
+    #[test]
+    fn multi_agent_call_id_validate_enforces_pinned_bounds() {
+        // Pinned BetaMultiAgentCallItemParam.call_id and
+        // BetaMultiAgentCallOutputItemParam.call_id: minLength 1, maxLength 64.
+        assert_eq!(MIN_MULTI_AGENT_CALL_ID_CHARS, 1);
+        assert_eq!(MAX_MULTI_AGENT_CALL_ID_CHARS, 64);
+        let longest = "c".repeat(MAX_MULTI_AGENT_CALL_ID_CHARS);
+        for call_id in ["c", longest.as_str()] {
+            BetaMultiAgentCallParam::from_raw(BetaMultiAgentAction::ListAgents, call_id, "{}")
+                .validate()
+                .unwrap_or_else(|error| panic!("in-range call_id must pass: {error}"));
+            BetaMultiAgentCallOutputParam::new(
+                BetaMultiAgentAction::WaitAgent,
+                call_id,
+                [BetaMultiAgentOutputText::new("done")],
+            )
+            .validate()
+            .unwrap_or_else(|error| panic!("in-range output call_id must pass: {error}"));
+        }
+        let oversized = "c".repeat(MAX_MULTI_AGENT_CALL_ID_CHARS + 1);
+        for (call_id, actual) in [("", 0_usize), (oversized.as_str(), 65)] {
+            assert!(matches!(
+                BetaMultiAgentCallParam::from_raw(
+                    BetaMultiAgentAction::ListAgents,
+                    call_id,
+                    "{}"
+                )
+                .validate(),
+                Err(CreateResponseConstraintError::CallId {
+                    actual: observed,
+                    minimum: 1,
+                    maximum: 64
+                }) if observed == actual
+            ));
+            assert!(matches!(
+                BetaMultiAgentCallOutputParam::new(
+                    BetaMultiAgentAction::WaitAgent,
+                    call_id,
+                    [BetaMultiAgentOutputText::new("done")],
+                )
+                .validate(),
+                Err(CreateResponseConstraintError::CallId { actual: observed, .. })
+                    if observed == actual
+            ));
+        }
+
+        // The bound is reachable through the request builders that walk the
+        // input union.
+        assert!(
+            BetaCreateResponseRequest::new(
+                "gpt-test",
+                vec![BetaResponseInputItem::from(
+                    BetaMultiAgentCallParam::from_raw(
+                        BetaMultiAgentAction::ListAgents,
+                        "c".repeat(65),
+                        "{}"
+                    )
+                )],
+            )
+            .validate()
+            .is_err(),
+            "create request validate must enforce the multi-agent call_id bound"
+        );
+        assert!(
+            serde_json::from_value::<BetaCompactResponseRequest>(json!({
+                "model": "gpt-5.6-sol",
+                "input": [{
+                    "type": "multi_agent_call",
+                    "action": "list_agents",
+                    "arguments": "{}",
+                    "call_id": ""
+                }]
+            }))
+            .expect("serde remains lossless")
+            .validate()
+            .is_err(),
+            "compact request validate must enforce the multi-agent call_id bound"
+        );
     }
 
     #[test]
@@ -4373,13 +4968,13 @@ mod tests {
             "omitting model is unofficial even when input is present"
         );
 
-        BetaCompactResponseRequest::new("gpt-5.6")
+        BetaCompactResponseRequest::new("gpt-5.6-sol")
             .input("hello")
             .prompt_cache_key("a".repeat(MAX_PROMPT_CACHE_KEY_CHARS))
             .validate()
             .expect("64-character key is accepted");
         assert!(matches!(
-            BetaCompactResponseRequest::new("gpt-5.6")
+            BetaCompactResponseRequest::new("gpt-5.6-sol")
                 .input("hello")
                 .prompt_cache_key("a".repeat(MAX_PROMPT_CACHE_KEY_CHARS + 1))
                 .validate(),
@@ -4399,7 +4994,7 @@ mod tests {
             ),
         ]);
         assert!(matches!(
-            BetaCompactResponseRequest::new("gpt-5.6")
+            BetaCompactResponseRequest::new("gpt-5.6-sol")
                 .input(vec![ResponseInputItem::AdditionalTools(extra_tools).into()])
                 .validate(),
             Err(CompactResponseConstraintError::Input(
@@ -4417,6 +5012,46 @@ mod tests {
                 CreateResponseConstraintError::EmptyAllowedCallers
             ))
         ));
+    }
+
+    #[test]
+    fn compact_service_tier_pins_the_five_official_values() {
+        // Pinned BetaCompactResponseMethodPublicBody.service_tier references
+        // BetaServiceTierEnum: auto/default/fast/flex/priority. The create
+        // side keeps the wider seven-value BetaServiceTier domain.
+        const OFFICIAL_COMPACT_TIERS: [&str; 5] = ["auto", "default", "fast", "flex", "priority"];
+        for value in OFFICIAL_COMPACT_TIERS {
+            let decoded = BetaCompactServiceTier::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official BetaServiceTierEnum value {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+            let request = BetaCompactResponseRequest::new("gpt-5.6-sol").service_tier(decoded);
+            assert_eq!(
+                serde_json::to_value(&request).expect("serialize compact tier")["service_tier"],
+                value
+            );
+        }
+        for create_only in ["scale", "ultrafast"] {
+            let decoded = BetaCompactServiceTier::from_raw(create_only);
+            assert!(
+                !decoded.is_known(),
+                "{create_only} belongs to the beta create domain, not BetaServiceTierEnum"
+            );
+            assert_eq!(decoded.as_str(), create_only);
+            let round_tripped = serde_json::from_value::<BetaCompactResponseRequest>(json!({
+                "model": "gpt-5.6-sol",
+                "service_tier": create_only
+            }))
+            .expect("unknown compact tiers stay lossless");
+            assert_eq!(
+                serde_json::to_value(&round_tripped).expect("re-encode")["service_tier"],
+                create_only
+            );
+        }
+        assert!(BetaServiceTier::from_raw("scale").is_known());
+        assert!(BetaServiceTier::from_raw("ultrafast").is_known());
     }
 
     #[test]
@@ -4467,6 +5102,52 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&compacted).expect("round-trip official example"),
             official
+        );
+    }
+
+    #[test]
+    fn beta_compact_output_stored_messages_decode_multi_agent_roles_losslessly() {
+        // Beta compaction echoes multi-agent roles (critic/tool) in stored
+        // messages; the shared ItemField-equivalent codec keeps them verbatim.
+        let fixture = json!({
+            "id": "resp_beta_roles",
+            "object": "response.compaction",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "critic",
+                    "content": [{"type": "input_text", "text": "critique"}]
+                },
+                {
+                    "type": "message",
+                    "role": "tool",
+                    "content": [{"type": "input_text", "text": "tool output"}]
+                },
+                {"type": "compaction", "id": "cmp_3", "encrypted_content": "enc"}
+            ],
+            "created_at": 1731459200,
+            "usage": {
+                "input_tokens": 1,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                "output_tokens": 1,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 2
+            }
+        });
+        let compacted: BetaCompactedResponse =
+            serde_json::from_value(fixture.clone()).expect("beta multi-agent roles decode");
+        for (item, expected) in compacted.output().iter().zip(["critic", "tool"]) {
+            let BetaResponseInputItem::Stable(item) = item else {
+                panic!("role-bearing beta item must reuse the stable codec: {item:?}");
+            };
+            assert_eq!(
+                serde_json::to_value(item).expect("re-encode stored message")["role"],
+                expected
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(&compacted).expect("round-trip keeps roles verbatim"),
+            fixture
         );
     }
 
@@ -4534,7 +5215,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(
-                BetaAgentMessage::new("root", "child", [BetaAgentInputText::new("hi")])
+                BetaAgentMessageParam::new("root", "child", [BetaAgentInputText::new("hi")])
                     .id_null()
                     .agent_null()
             )
@@ -4543,7 +5224,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(
-                BetaMultiAgentCall::from_raw(BetaMultiAgentAction::ListAgents, "call_1", "{}")
+                BetaMultiAgentCallParam::from_raw(BetaMultiAgentAction::ListAgents, "call_1", "{}")
                     .id_null()
                     .agent_null()
             )
@@ -4552,7 +5233,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(
-                BetaMultiAgentCallOutput::new(
+                BetaMultiAgentCallOutputParam::new(
                     BetaMultiAgentAction::WaitAgent,
                     "call_1",
                     [BetaMultiAgentOutputText::new("done")],
@@ -4563,6 +5244,33 @@ mod tests {
             .expect("serialize multi-agent output nulls")["agent"],
             Value::Null
         );
+    }
+
+    #[test]
+    fn multi_agent_output_text_empty_required_arrays_round_trip() {
+        // Pinned BetaOutputTextContent lists annotations and logprobs in
+        // `required`, so a decoded empty array must survive re-encoding.
+        let official = json!({
+            "type": "output_text",
+            "text": "done",
+            "annotations": [],
+            "logprobs": []
+        });
+        let decoded: BetaMultiAgentOutputText =
+            serde_json::from_value(official.clone()).expect("decode empty required arrays");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode keeps required keys"),
+            official
+        );
+
+        let tolerant: BetaMultiAgentOutputText = serde_json::from_value(json!({
+            "type": "output_text",
+            "text": "done"
+        }))
+        .expect("missing keys still decode");
+        let encoded = serde_json::to_value(&tolerant).expect("re-encode fills required keys");
+        assert_eq!(encoded["annotations"], json!([]));
+        assert_eq!(encoded["logprobs"], json!([]));
     }
 
     #[test]
@@ -4902,7 +5610,7 @@ mod tests {
                 "image_url": "https://example.test/a.png"
             }]
         });
-        let decoded: BetaAgentMessage = serde_json::from_value(official)
+        let decoded: BetaAgentMessageParam = serde_json::from_value(official)
             .expect("official BetaAgentMessageItemParam image omits detail");
         match &decoded.content()[0] {
             BetaAgentMessageContent::Image(image) => {
@@ -4924,7 +5632,7 @@ mod tests {
             .get("detail"),
             None
         );
-        let with_null = serde_json::from_value::<BetaAgentMessage>(json!({
+        let with_null = serde_json::from_value::<BetaAgentMessageParam>(json!({
             "type": "agent_message",
             "author": "root",
             "recipient": "child",

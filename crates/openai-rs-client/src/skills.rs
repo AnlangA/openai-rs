@@ -102,6 +102,7 @@ impl Skills {
                 let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after(),
+                    page.data.last().map(|skill| skill.id.as_str()),
                     &mut seen,
                     "Skill",
                 )?;
@@ -233,6 +234,7 @@ impl SkillVersions {
                 let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after(),
+                    page.data.last().map(|version| version.id.as_str()),
                     &mut seen,
                     "Skill Version",
                 )?;

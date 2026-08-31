@@ -17,7 +17,9 @@ use openai_rs_types::realtime::{
 };
 use openai_rs_types::{ModelId, Omittable};
 use reqwest::multipart::{Form, Part};
-use tokio_tungstenite::tungstenite::{Message, protocol::WebSocketConfig as TungsteniteConfig};
+use tokio_tungstenite::tungstenite::{
+    Message, Utf8Bytes, protocol::WebSocketConfig as TungsteniteConfig,
+};
 use url::Url;
 
 use crate::{
@@ -548,8 +550,8 @@ impl RealtimeWebSocket {
                 self.closed = true;
                 return Ok(None);
             };
-            match message.map_err(map_websocket_error)? {
-                Message::Text(text) => {
+            match classify_realtime_inbound(message.map_err(map_websocket_error)?) {
+                RealtimeInbound::Event(text) => {
                     if text.len() > self.max_message_bytes {
                         return Err(Error::WebSocketProtocol(
                             "incoming Realtime event exceeds the configured message limit",
@@ -565,26 +567,12 @@ impl RealtimeWebSocket {
                         })?;
                     return Ok(Some(event));
                 }
-                Message::Ping(payload) => self
-                    .socket
-                    .send(Message::Pong(payload))
-                    .await
-                    .map_err(map_websocket_error)?,
-                Message::Pong(_) => {}
-                Message::Close(_) => {
+                RealtimeInbound::Ignore => {}
+                RealtimeInbound::Closed => {
                     self.closed = true;
                     return Ok(None);
                 }
-                Message::Binary(_) => {
-                    return Err(Error::WebSocketProtocol(
-                        "Realtime WebSocket sent a binary data message",
-                    ));
-                }
-                Message::Frame(_) => {
-                    return Err(Error::WebSocketProtocol(
-                        "Realtime WebSocket exposed an unexpected raw frame",
-                    ));
-                }
+                RealtimeInbound::Reject(reason) => return Err(Error::WebSocketProtocol(reason)),
             }
         }
     }
@@ -606,6 +594,41 @@ impl fmt::Debug for RealtimeWebSocket {
             .field("max_message_bytes", &self.max_message_bytes)
             .field("closed", &self.closed)
             .finish_non_exhaustive()
+    }
+}
+
+/// What [`RealtimeWebSocket::recv`] does with one inbound WebSocket message.
+#[derive(Debug, PartialEq, Eq)]
+enum RealtimeInbound {
+    /// A JSON text frame to decode into a typed server event.
+    Event(Utf8Bytes),
+    /// Ignore the frame and keep reading.
+    Ignore,
+    /// The peer completed its close handshake.
+    Closed,
+    /// The frame violates the Realtime event-transport contract.
+    Reject(&'static str),
+}
+
+/// Classifies one inbound WebSocket message for the `recv` loop.
+///
+/// `Ping` (and the unsolicited `Pong` echo) classify as [`RealtimeInbound::Ignore`]
+/// because tungstenite 0.29 already answers pings itself: reading the Ping
+/// frame (`read_message_frame`) queues the automatic RFC 6455 Pong, and the
+/// next poll or write flushes it to the wire. Sending an explicit Pong from
+/// `recv` would only add a redundant second reply path on top of the automatic
+/// one, so the receive loop deliberately performs no write for pings.
+fn classify_realtime_inbound(message: Message) -> RealtimeInbound {
+    match message {
+        Message::Text(text) => RealtimeInbound::Event(text),
+        Message::Ping(_) | Message::Pong(_) => RealtimeInbound::Ignore,
+        Message::Close(_) => RealtimeInbound::Closed,
+        Message::Binary(_) => {
+            RealtimeInbound::Reject("Realtime WebSocket sent a binary data message")
+        }
+        Message::Frame(_) => {
+            RealtimeInbound::Reject("Realtime WebSocket exposed an unexpected raw frame")
+        }
     }
 }
 
@@ -804,7 +827,10 @@ mod tests {
     };
     use serde_json::{Value, json};
     use tokio::{net::TcpListener, sync::oneshot};
-    use tokio_tungstenite::{accept_hdr_async, tungstenite::handshake::server};
+    use tokio_tungstenite::{
+        accept_hdr_async,
+        tungstenite::{handshake::server, protocol::frame::Frame},
+    };
 
     use super::*;
     use crate::ApiKey;
@@ -1025,6 +1051,111 @@ mod tests {
         assert_eq!(events[1]["type"], "response.cancel");
         assert_eq!(events[1]["response_id"], "resp_1");
         assert_eq!(events[2]["closed"], true);
+    }
+
+    #[tokio::test]
+    async fn websocket_answers_one_ping_with_exactly_one_pong() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ping-count server");
+        let address = listener.local_addr().expect("ping-count server address");
+        let (pongs_sender, pongs_receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept ping-count socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("ping-count server handshake");
+            socket
+                .send(Message::Ping(Bytes::from_static(b"realtime-keepalive")))
+                .await
+                .expect("send Realtime ping");
+            socket
+                .send(Message::text(
+                    json!({
+                        "type": "future.server.event",
+                        "event_id": "evt_after_ping",
+                        "payload": {"ok": true}
+                    })
+                    .to_string(),
+                ))
+                .await
+                .expect("send event after ping");
+            let mut pongs = Vec::new();
+            while let Some(message) = socket.next().await {
+                match message.expect("valid ping-count frame") {
+                    Message::Pong(payload) => pongs.push(payload),
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+            let _ = pongs_sender.send(pongs);
+        });
+
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("ping-count client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("ping-count client");
+        let mut socket = client
+            .realtime()
+            .connect("gpt-realtime/test")
+            .await
+            .expect("connect Realtime WebSocket");
+        let event = socket
+            .recv()
+            .await
+            .expect("receive event after ping")
+            .expect("one event after ping");
+        assert_eq!(event.event_type(), "future.server.event");
+        socket.close().await.expect("close Realtime socket");
+
+        let pongs = pongs_receiver.await.expect("captured Realtime pongs");
+        assert_eq!(
+            pongs,
+            vec![Bytes::from_static(b"realtime-keepalive")],
+            "tungstenite's automatic reply must be the only Pong per Ping"
+        );
+    }
+
+    /// A received Ping must classify as "ignore and keep reading": tungstenite
+    /// 0.29 queues the automatic Pong while the Ping frame is read, so `recv`
+    /// must not write an explicit Pong of its own. This locks the branch that
+    /// the wire-level test above cannot isolate, because tungstenite coalesces
+    /// a user Pong with the pending automatic one (`set_additional` replaces a
+    /// queued Pong instead of appending).
+    #[test]
+    fn realtime_recv_does_not_explicitly_pong_inbound_pings() {
+        assert_eq!(
+            classify_realtime_inbound(Message::Ping(Bytes::from_static(b"keepalive"))),
+            RealtimeInbound::Ignore
+        );
+        assert_eq!(
+            classify_realtime_inbound(Message::Pong(Bytes::from_static(b"keepalive"))),
+            RealtimeInbound::Ignore
+        );
+        assert!(matches!(
+            classify_realtime_inbound(Message::text("{}")),
+            RealtimeInbound::Event(_)
+        ));
+        assert_eq!(
+            classify_realtime_inbound(Message::Close(None)),
+            RealtimeInbound::Closed
+        );
+        assert_eq!(
+            classify_realtime_inbound(Message::Binary(Bytes::from_static(b"[]"))),
+            RealtimeInbound::Reject("Realtime WebSocket sent a binary data message")
+        );
+        assert_eq!(
+            classify_realtime_inbound(Message::Frame(Frame::ping(Bytes::new()))),
+            RealtimeInbound::Reject("Realtime WebSocket exposed an unexpected raw frame")
+        );
     }
 
     #[test]

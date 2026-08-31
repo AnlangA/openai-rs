@@ -8,6 +8,15 @@
 //! `description` that a field doc comment produces), so such references are
 //! resolved against the document and inlined with the sibling keys taking
 //! priority; a reference that cannot be resolved locally is an error.
+//!
+//! Recursive types are not representable in strict mode: inlining tracks the
+//! chain of references it is currently expanding, and a reference that
+//! recurses into a definition on that chain - including a self-reference to
+//! the document root, `$ref: "#"` - can never flatten into a finite schema,
+//! so it fails with [`StructuredError::RecursiveReference`] instead of
+//! expanding without bound. A `$ref` that is not a string is likewise
+//! rejected instead of being silently passed through.
+//!
 //! `additionalProperties` is defaulted to `false` only when the key is
 //! missing - a pre-existing non-`false` value (for example the map shape that
 //! a `HashMap` field produces) is reported instead of overwritten.
@@ -49,6 +58,18 @@ pub enum StructuredError {
         /// JSON Pointer-like location of the reference.
         path: String,
         /// Reference that could not be resolved within the document.
+        reference: String,
+    },
+    /// The generated schema contains a reference that recurses into a
+    /// definition that is already being inlined, which no finite strict
+    /// schema can represent.
+    #[error(
+        "recursive JSON Schema reference `{reference}` at {path} cannot be represented in strict mode"
+    )]
+    RecursiveReference {
+        /// JSON Pointer-like location of the reference.
+        path: String,
+        /// Reference that recursed into a definition already being inlined.
         reference: String,
     },
     /// A generated schema was not an object schema.
@@ -428,9 +449,10 @@ impl ToolRegistry {
 /// Converts a schemars document to OpenAI's strict object-schema convention.
 pub fn normalize_strict_schema(schema: &mut Value) -> Result<(), StructuredError> {
     // `$ref`s are resolved against a pristine snapshot of the document so
-    // inlining never observes this pass's intermediate mutations.
+    // inlining never observes this pass's intermediate mutations.  Inlining
+    // starts with an empty chain of actively expanded references.
     let base = schema.clone();
-    normalize(schema, "#", &base)?;
+    normalize(schema, "#", &base, &[])?;
     let is_object = schema.as_object().is_some_and(schema_is_object);
     if !is_object {
         return Err(StructuredError::RootMustBeObject);
@@ -451,7 +473,19 @@ fn validate_name(name: &str) -> Result<(), StructuredError> {
     }
 }
 
-fn normalize(value: &mut Value, path: &str, base: &Value) -> Result<(), StructuredError> {
+/// `chain` lists the local references whose definitions are currently being
+/// inlined on the path from the document root to this node.  Every inlined
+/// schema re-enters normalization with the resolved reference appended, so a
+/// cycle is detected before it is expanded; because inlining only ever
+/// introduces references that already exist in the pristine `base` snapshot,
+/// the chain length - and with it the recursion depth - stays bounded by the
+/// number of distinct references in the document.
+fn normalize(
+    value: &mut Value,
+    path: &str,
+    base: &Value,
+    chain: &[String],
+) -> Result<(), StructuredError> {
     let Some(object) = value.as_object_mut() else {
         return Ok(());
     };
@@ -486,24 +520,10 @@ fn normalize(value: &mut Value, path: &str, base: &Value) -> Result<(), Structur
         }
     }
 
-    if let Some(Value::String(reference)) = object.get("$ref")
-        && !reference.starts_with("#/")
-    {
-        return Err(StructuredError::ExternalReference {
-            path: format!("{path}/$ref"),
-            reference: reference.clone(),
-        });
-    }
-
-    // Strict mode rejects a `$ref` that keeps sibling keys, e.g.
-    // `{"$ref": "#/$defs/X", "description": "..."}` produced by a doc
-    // comment on a nested custom-type field.  Mirror the official client:
-    // resolve the reference within the document, inline the target with the
-    // sibling keys taking priority, then re-run normalization on the merged
-    // schema.
-    if object.len() > 1
-        && let Some(node) = object.get("$ref")
-    {
+    // Classify `$ref` before anything else: a pointer that leaves the
+    // document is external, `#` points back at the document root and so
+    // always recurses, and a non-string `$ref` is never passed through.
+    if let Some(node) = object.get("$ref") {
         let reference = match node {
             Value::String(reference) => reference.clone(),
             other => {
@@ -513,12 +533,43 @@ fn normalize(value: &mut Value, path: &str, base: &Value) -> Result<(), Structur
                 });
             }
         };
+        if reference == "#" {
+            return Err(StructuredError::RecursiveReference {
+                path: format!("{path}/$ref"),
+                reference,
+            });
+        }
+        if !reference.starts_with("#/") {
+            return Err(StructuredError::ExternalReference {
+                path: format!("{path}/$ref"),
+                reference,
+            });
+        }
+        if object.len() == 1 {
+            // A bare sole-key `$ref` is legal strict output and passes
+            // through untouched.
+            return Ok(());
+        }
+        if chain.contains(&reference) {
+            return Err(StructuredError::RecursiveReference {
+                path: format!("{path}/$ref"),
+                reference,
+            });
+        }
+        // Strict mode rejects a `$ref` that keeps sibling keys, e.g.
+        // `{"$ref": "#/$defs/X", "description": "..."}` produced by a doc
+        // comment on a nested custom-type field.  Mirror the official client:
+        // resolve the reference within the document, inline the target with
+        // the sibling keys taking priority, then re-run normalization on the
+        // merged schema with this reference added to the active chain.
         let Some(resolved) = resolve_ref(base, &reference).and_then(Value::as_object) else {
             return Err(StructuredError::UnresolvableRef {
                 path: format!("{path}/$ref"),
                 reference,
             });
         };
+        let mut chain = chain.to_vec();
+        chain.push(reference);
         let mut merged = resolved.clone();
         merged.remove("$ref");
         for (key, sibling) in object.iter() {
@@ -527,11 +578,11 @@ fn normalize(value: &mut Value, path: &str, base: &Value) -> Result<(), Structur
             }
         }
         *value = Value::Object(merged);
-        return normalize(value, path, base);
+        return normalize(value, path, base, &chain);
     }
 
     if schema_is_object(object) {
-        normalize_object(object, path, base)?;
+        normalize_object(object, path, base, chain)?;
     }
 
     for (key, child) in object.iter_mut() {
@@ -542,16 +593,17 @@ fn normalize(value: &mut Value, path: &str, base: &Value) -> Result<(), Structur
                         schema,
                         &format!("{path}/{}/{}", escape_pointer(key), escape_pointer(name)),
                         base,
+                        chain,
                     )?;
                 }
             }
             Value::Array(children) if key == "anyOf" => {
                 for (index, schema) in children.iter_mut().enumerate() {
-                    normalize(schema, &format!("{path}/{key}/{index}"), base)?;
+                    normalize(schema, &format!("{path}/{key}/{index}"), base, chain)?;
                 }
             }
             Value::Object(_) | Value::Bool(_) if key == "items" => {
-                normalize(child, &format!("{path}/{key}"), base)?;
+                normalize(child, &format!("{path}/{key}"), base, chain)?;
             }
             _ => {}
         }
@@ -563,6 +615,7 @@ fn normalize_object(
     object: &mut Map<String, Value>,
     path: &str,
     base: &Value,
+    chain: &[String],
 ) -> Result<(), StructuredError> {
     // Only default `additionalProperties` to `false` when the key is absent.
     // A non-`false` value (for example the map shape of a `HashMap` field)
@@ -600,6 +653,7 @@ fn normalize_object(
                 property,
                 &format!("{path}/properties/{}", escape_pointer(name)),
                 base,
+                chain,
             )?;
             required.push(Value::String(name.clone()));
         }
@@ -715,6 +769,22 @@ mod tests {
         tags: std::collections::HashMap<String, String>,
     }
 
+    /// Recursive definition whose field doc comment makes schemars keep the
+    /// self-`$ref` wrapped with a sibling `description` key.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    struct TreeBranch {
+        label: String,
+        /// Doc comment on the recursive field, so the self-`$ref` keeps a
+        /// sibling key once inlined.
+        child: Box<TreeBranch>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    struct RecursiveRoot {
+        /// Doc comment that forces schemars to emit `$ref` with a sibling key.
+        tree: TreeBranch,
+    }
+
     fn assert_no_ref_with_siblings(value: &serde_json::Value) {
         match value {
             serde_json::Value::Object(object) => {
@@ -826,6 +896,110 @@ mod tests {
             schema["properties"]["field"],
             json!({ "$ref": "#/$defs/Inner" })
         );
+    }
+
+    #[test]
+    fn recursive_sibling_refs_error_instead_of_overflowing() {
+        // Regression for the D0129 stack overflow: schemars keeps the doc
+        // comment as a sibling of the self-`$ref`, and unbounded inlining
+        // used to abort the process.  It must return a catchable error.
+        let error = StructuredOutput::<RecursiveRoot>::new("tree")
+            .expect_err("recursive schema must fail, not overflow");
+        assert!(
+            matches!(
+                &error,
+                StructuredError::RecursiveReference { path, reference }
+                    if reference == "#/$defs/TreeBranch"
+                        && path == "#/properties/tree/properties/child/$ref"
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn transitive_ref_cycles_are_detected_through_the_chain() {
+        let mut schema = json!({
+            "type": "object",
+            "required": ["a"],
+            "properties": {
+                "a": { "$ref": "#/$defs/A", "description": "entry point" }
+            },
+            "$defs": {
+                "A": {
+                    "type": "object",
+                    "required": ["b"],
+                    "properties": {
+                        "b": { "$ref": "#/$defs/B", "description": "to B" }
+                    }
+                },
+                "B": {
+                    "type": "object",
+                    "required": ["a"],
+                    "properties": {
+                        "a": { "$ref": "#/$defs/A", "description": "back to A" }
+                    }
+                }
+            }
+        });
+        let error = normalize_strict_schema(&mut schema).expect_err("cycle must fail");
+        assert!(matches!(
+            &error,
+            StructuredError::RecursiveReference { path, reference }
+                if reference == "#/$defs/A"
+                    && path == "#/properties/a/properties/b/properties/a/$ref"
+        ));
+    }
+
+    #[test]
+    fn root_self_reference_reports_recursion_not_external() {
+        let mut schema = json!({
+            "type": "object",
+            "required": ["self"],
+            "properties": {
+                "self": { "$ref": "#" },
+                "sibling": { "$ref": "#", "description": "self with sibling" }
+            }
+        });
+        let error =
+            normalize_strict_schema(&mut schema).expect_err("root self-reference must fail");
+        assert!(
+            matches!(
+                &error,
+                StructuredError::RecursiveReference { path, reference }
+                    if reference == "#" && path == "#/properties/self/$ref"
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn non_string_refs_are_rejected_with_path() {
+        let mut bare = json!({
+            "type": "object",
+            "required": ["count"],
+            "properties": { "count": { "$ref": 42 } }
+        });
+        let error = normalize_strict_schema(&mut bare).expect_err("non-string bare ref must fail");
+        assert!(matches!(
+            &error,
+            StructuredError::UnresolvableRef { path, reference }
+                if path == "#/properties/count/$ref" && reference == "42"
+        ));
+
+        let mut sibling = json!({
+            "type": "object",
+            "required": ["flag"],
+            "properties": {
+                "flag": { "$ref": true, "description": "not a pointer" }
+            }
+        });
+        let error =
+            normalize_strict_schema(&mut sibling).expect_err("non-string sibling ref must fail");
+        assert!(matches!(
+            &error,
+            StructuredError::UnresolvableRef { path, reference }
+                if path == "#/properties/flag/$ref" && reference == "true"
+        ));
     }
 
     #[test]

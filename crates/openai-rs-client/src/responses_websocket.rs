@@ -321,12 +321,10 @@ impl ResponsesWebSocket {
                         })?;
                     return Ok(Some(event));
                 }
-                Message::Ping(payload) => {
-                    self.socket
-                        .send(Message::Pong(payload))
-                        .await
-                        .map_err(map_websocket_error)?;
-                }
+                // tungstenite queues the RFC 6455 Pong while reading the Ping
+                // and flushes it on the next poll; an explicit reply here only
+                // adds a redundant write path.
+                Message::Ping(_) => {}
                 Message::Pong(_) => {}
                 Message::Close(_) => {
                     self.closed = true;

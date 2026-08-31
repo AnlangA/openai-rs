@@ -168,6 +168,7 @@ impl VoiceConsents {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     page.last_id().map(|id| id.as_str()),
+                    page.data().last().map(|consent| consent.id().as_str()),
                     &mut seen,
                     "voice-consent",
                 )?;

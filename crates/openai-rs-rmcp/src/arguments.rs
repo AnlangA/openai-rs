@@ -6,10 +6,16 @@ use crate::BridgeError;
 /// Parse the JSON string carried by an OpenAI function call into the object
 /// required by MCP `tools/call`.
 ///
-/// The raw string is not included in the returned diagnostic. Streaming code
-/// should call this only after receiving the completed arguments event; a
-/// partial delta is not required to be valid JSON.
+/// An empty or all-whitespace string decodes to an empty object: zero-input
+/// tools may surface as `""` (matching MCP, where a missing `arguments` field
+/// means "no arguments") rather than a literal `"{}"`. The raw string is not
+/// included in the returned diagnostic. Streaming code should call this only
+/// after receiving the completed arguments event; a partial delta is not
+/// required to be valid JSON.
 pub fn parse_function_arguments(arguments: &str) -> Result<JsonObject, BridgeError> {
+    if arguments.trim().is_empty() {
+        return Ok(JsonObject::new());
+    }
     let value = serde_json::from_str::<Value>(arguments)
         .map_err(|source| BridgeError::InvalidArguments { source })?;
     match value {
@@ -51,5 +57,22 @@ mod tests {
             Ok(_) => String::new(),
         };
         assert!(!message.contains(secret));
+    }
+
+    #[test]
+    fn blank_arguments_decode_to_an_empty_object() {
+        for blank in ["", " ", "\t\r\n"] {
+            let parsed =
+                parse_function_arguments(blank).expect("blank arguments mean no arguments");
+            assert!(
+                parsed.is_empty(),
+                "blank {blank:?} must map to no arguments"
+            );
+        }
+        let explicit = parse_function_arguments("{}").expect("literal empty object parses");
+        assert!(explicit.is_empty());
+        let padded =
+            parse_function_arguments("  {}  ").expect("padded empty object parses as itself");
+        assert!(padded.is_empty());
     }
 }

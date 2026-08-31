@@ -61,6 +61,7 @@ impl Files {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id().as_str()),
+                    page.data().last().map(|file| file.id().as_str()),
                     &mut seen,
                     "file",
                 )?;
@@ -540,6 +541,32 @@ mod tests {
         assert!(query.contains(&("order".into(), "asc".into())));
         assert!(query.contains(&("after".into(), "file cursor".into())));
         assert!(captured.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_files_accepts_limits_above_documented_prose_ceiling() {
+        let (client, captured) = serve_once(
+            r#"{"object":"list","data":[],"first_id":"","last_id":"","has_more":false}"#,
+        )
+        .await;
+        // The pinned schema has no `maximum` for this query parameter and the
+        // official Python SDK forwards it unbounded, so a value above the
+        // documented prose ceiling of 10,000 must still be sendable.
+        let params = FileListParams::new()
+            .with_limit(FileListLimit::new(20_000).expect("no invented upper bound"));
+
+        let response = client
+            .files()
+            .list(params)
+            .await
+            .expect("file list response");
+        assert!(response.data().is_empty());
+
+        let captured = captured.await.expect("captured large-limit list request");
+        let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
+            .expect("captured large-limit URL");
+        let query = url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("limit".into(), "20000".into())));
     }
 
     #[tokio::test]

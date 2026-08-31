@@ -44,8 +44,12 @@ impl WebhookVerifier {
     }
 
     /// Replaces the accepted clock-skew/replay window.
+    ///
+    /// The window is compared in whole seconds against the delivery
+    /// timestamp, so sub-second durations are rejected: `500ms` would
+    /// otherwise truncate to a zero window and reject valid deliveries.
     pub fn with_tolerance(mut self, tolerance: Duration) -> Result<Self, WebhookVerificationError> {
-        if tolerance.is_zero() {
+        if tolerance < Duration::from_secs(1) {
             return Err(WebhookVerificationError::InvalidTolerance);
         }
         self.tolerance = tolerance;
@@ -178,8 +182,8 @@ pub enum WebhookVerificationError {
     /// The configured signing secret was empty or malformed.
     #[error("invalid webhook secret")]
     InvalidSecret,
-    /// A zero replay window was requested.
-    #[error("webhook tolerance must be non-zero")]
+    /// A sub-second replay window was requested.
+    #[error("webhook tolerance must be at least one second")]
     InvalidTolerance,
     /// A zero body limit was requested.
     #[error("webhook payload limit must be non-zero")]
@@ -283,6 +287,8 @@ fn decode_secret(secret: &str) -> Result<Vec<u8>, WebhookVerificationError> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use hmac::{Hmac, Mac};
     use http::{HeaderMap, HeaderValue};
@@ -368,5 +374,37 @@ mod tests {
         let debug = format!("{verifier:?}");
         assert!(!debug.contains(&secret));
         assert!(debug.contains("REDACTED"));
+    }
+
+    #[test]
+    fn sub_second_tolerances_are_rejected_instead_of_truncating_to_zero() {
+        let verifier = WebhookVerifier::new("webhook-test-secret").expect("verifier");
+        assert!(matches!(
+            verifier.clone().with_tolerance(Duration::from_millis(500)),
+            Err(WebhookVerificationError::InvalidTolerance)
+        ));
+        assert!(matches!(
+            verifier.clone().with_tolerance(Duration::ZERO),
+            Err(WebhookVerificationError::InvalidTolerance)
+        ));
+
+        let one_second = verifier
+            .with_tolerance(Duration::from_secs(1))
+            .expect("one second is the smallest accepted window");
+        one_second
+            .verify_at(
+                PAYLOAD,
+                &headers(b"webhook-test-secret", NOW - 1, PAYLOAD),
+                NOW,
+            )
+            .expect("delivery one second old fits the one-second window");
+        assert!(matches!(
+            one_second.verify_at(
+                PAYLOAD,
+                &headers(b"webhook-test-secret", NOW - 2, PAYLOAD),
+                NOW
+            ),
+            Err(WebhookVerificationError::TimestampTooOld)
+        ));
     }
 }

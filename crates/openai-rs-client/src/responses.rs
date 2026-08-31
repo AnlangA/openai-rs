@@ -383,6 +383,9 @@ impl InputItems {
                 let next = crate::pagination::next_cursor(
                     page.has_more(),
                     Some(page.last_id()),
+                    // Response input items are a tagged union without a shared
+                    // id accessor, so no per-item fallback cursor is available.
+                    None,
                     &mut seen,
                     "response input item",
                 )?;

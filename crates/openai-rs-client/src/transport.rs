@@ -822,6 +822,14 @@ fn validate_operation_route(route: &str, path: &[PathSegment<'_>]) -> Result<(),
     Ok(())
 }
 
+/// Appends the serialized query object to `url`.
+///
+/// Mirrors openai-python's `_qs.py::_stringify_item`: an explicit `null` and
+/// an empty string both serialize to nothing, so the query key is omitted
+/// entirely rather than sent as `key=`. Other falsy scalars (`0`, `false`)
+/// still encode, because only the serialized string being empty drops the key.
+/// When every field is dropped this leaves the URL untouched, without a
+/// dangling `?`.
 fn append_query<T>(url: &mut Url, query: &T) -> Result<(), Error>
 where
     T: Serialize + ?Sized,
@@ -836,43 +844,55 @@ where
     if fields.is_empty() {
         return Ok(());
     }
-    let mut serializer = url.query_pairs_mut();
-    for (name, value) in fields {
-        match value {
-            serde_json::Value::Null => {
-                serializer.append_pair(&name, "");
-            }
-            serde_json::Value::Bool(value) => {
-                serializer.append_pair(&name, if value { "true" } else { "false" });
-            }
-            serde_json::Value::Number(value) => {
-                serializer.append_pair(&name, &value.to_string());
-            }
-            serde_json::Value::String(value) => {
-                serializer.append_pair(&name, &value);
-            }
-            serde_json::Value::Array(values) => {
-                for value in values {
-                    let value = query_scalar(&name, value)?;
-                    serializer.append_pair(&name, &value);
+    let mut appended = false;
+    {
+        let mut serializer = url.query_pairs_mut();
+        for (name, value) in fields {
+            match value {
+                serde_json::Value::Null => {}
+                serde_json::Value::Bool(value) => {
+                    serializer.append_pair(&name, if value { "true" } else { "false" });
+                    appended = true;
+                }
+                serde_json::Value::Number(value) => {
+                    serializer.append_pair(&name, &value.to_string());
+                    appended = true;
+                }
+                serde_json::Value::String(value) => {
+                    if !value.is_empty() {
+                        serializer.append_pair(&name, &value);
+                        appended = true;
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        if let Some(value) = query_scalar(&name, value)? {
+                            serializer.append_pair(&name, &value);
+                            appended = true;
+                        }
+                    }
+                }
+                serde_json::Value::Object(_) => {
+                    return Err(Error::EncodeQuery(
+                        format!("query field `{name}` requires an unsupported object encoding")
+                            .into(),
+                    ));
                 }
             }
-            serde_json::Value::Object(_) => {
-                return Err(Error::EncodeQuery(
-                    format!("query field `{name}` requires an unsupported object encoding").into(),
-                ));
-            }
         }
+    }
+    if !appended {
+        url.set_query(None);
     }
     Ok(())
 }
 
-fn query_scalar(name: &str, value: serde_json::Value) -> Result<String, Error> {
+fn query_scalar(name: &str, value: serde_json::Value) -> Result<Option<String>, Error> {
     match value {
-        serde_json::Value::Null => Ok(String::new()),
-        serde_json::Value::Bool(value) => Ok(value.to_string()),
-        serde_json::Value::Number(value) => Ok(value.to_string()),
-        serde_json::Value::String(value) => Ok(value),
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Bool(value) => Ok(Some(value.to_string())),
+        serde_json::Value::Number(value) => Ok(Some(value.to_string())),
+        serde_json::Value::String(value) => Ok((!value.is_empty()).then_some(value)),
         serde_json::Value::Array(_) | serde_json::Value::Object(_) => Err(Error::EncodeQuery(
             format!("query array field `{name}` contains a non-scalar value").into(),
         )),
@@ -938,6 +958,47 @@ mod tests {
             Url::parse("https://api.openai.com/v1/responses/resp_1").expect("test operation URL");
         append_query(&mut url, &serde_json::json!({})).expect("empty query");
         assert_eq!(url.as_str(), "https://api.openai.com/v1/responses/resp_1");
+        assert!(url.query().is_none());
+    }
+
+    #[test]
+    fn null_and_empty_string_query_values_are_omitted() {
+        // openai-python's `_stringify_item` drops a key whose serialized value
+        // is empty, so `None` and `""` both produce no query item while other
+        // falsy scalars still encode.
+        let mut url = Url::parse("https://api.openai.com/v1/files").expect("test query URL");
+        append_query(
+            &mut url,
+            &serde_json::json!({
+                "metadata": null,
+                "purpose": "",
+                "limit": 0,
+                "active": false,
+                "ids": [null, "", "file_1"],
+            }),
+        )
+        .expect("query encoding");
+        let pairs = url
+            .query_pairs()
+            .map(|(name, value)| (name.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            pairs,
+            vec![
+                ("limit".to_owned(), "0".to_owned()),
+                ("active".to_owned(), "false".to_owned()),
+                ("ids".to_owned(), "file_1".to_owned()),
+            ]
+        );
+
+        // Dropping every field must not leave a dangling `?` behind.
+        let mut url = Url::parse("https://api.openai.com/v1/files").expect("test query URL");
+        append_query(
+            &mut url,
+            &serde_json::json!({"purpose": "", "metadata": null}),
+        )
+        .expect("query encoding");
+        assert_eq!(url.as_str(), "https://api.openai.com/v1/files");
         assert!(url.query().is_none());
     }
 

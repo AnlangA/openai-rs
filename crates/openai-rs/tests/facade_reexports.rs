@@ -72,3 +72,50 @@ fn sse_module_is_nameable_through_the_facade() {
         Err(error) => panic!("unexpected SSE decode error: {error:?}"),
     }
 }
+
+/// `RealtimeConnectTarget` used to be reachable only by depending on
+/// `openai-rs-client` directly (issue 2-09): the facade's realtime gate kept
+/// the `?call_id=` sideband connection path unnameable. This test keeps all
+/// three connection targets constructible through the facade.
+#[cfg(feature = "realtime")]
+#[test]
+fn realtime_connect_target_is_nameable_through_the_facade() {
+    use openai_rs::RealtimeConnectTarget;
+    use openai_rs::types::ModelId;
+
+    let model = RealtimeConnectTarget::model("gpt-realtime");
+    let intent = RealtimeConnectTarget::TranscriptionIntent;
+    let call_id = RealtimeConnectTarget::call_id("call_123");
+
+    assert_eq!(format!("{model:?}"), r#"Model(ModelId("gpt-realtime"))"#);
+    assert_eq!(format!("{intent:?}"), "TranscriptionIntent");
+    assert_eq!(format!("{call_id:?}"), r#"CallId("call_123")"#);
+
+    assert_ne!(model, intent);
+    assert_ne!(intent, call_id);
+    assert_eq!(
+        RealtimeConnectTarget::from(ModelId::new("gpt-a")),
+        RealtimeConnectTarget::model("gpt-a")
+    );
+}
+
+/// `AdminCheckpointPermissions` used to be reachable only by depending on
+/// `openai-rs-client` directly (issue 2-34). The handle itself is constructed
+/// from an `AdminClient`, so the test keeps both the accessor and the method
+/// paths compile-checked through the facade.
+#[cfg(all(feature = "admin", any(feature = "rustls-tls", feature = "native-tls")))]
+#[test]
+fn admin_checkpoint_permissions_is_nameable_through_the_facade() {
+    use openai_rs::admin::{AdminApiKey, AdminCheckpointPermissions, AdminClient};
+
+    // Async methods cannot coerce to `fn` pointers; referencing the paths is
+    // enough to keep the facade re-export type-checked.
+    let _list = AdminCheckpointPermissions::list;
+    let _create = AdminCheckpointPermissions::create;
+    let _delete = AdminCheckpointPermissions::delete;
+
+    let api_key = AdminApiKey::new("admin-facade-reexport-check").expect("valid admin key");
+    let client = AdminClient::new(api_key).expect("admin client with secure defaults");
+    let permissions = client.checkpoint_permissions();
+    assert!(format!("{permissions:?}").contains("AdminCheckpointPermissions"));
+}

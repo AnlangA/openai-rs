@@ -118,6 +118,7 @@ impl ChatCompletions {
                 let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after(),
+                    page.data.last().map(|completion| completion.id.as_str()),
                     &mut seen,
                     "stored Chat",
                 )?;
@@ -233,6 +234,7 @@ impl ChatCompletionMessages {
                 let next = crate::pagination::next_cursor(
                     page.has_more,
                     page.next_after(),
+                    page.data.last().map(|message| message.id.as_str()),
                     &mut seen,
                     "stored Chat message",
                 )?;
@@ -268,17 +270,12 @@ impl Serialize for ChatCompletionListQuery<'_> {
     where
         S: serde::Serializer,
     {
-        use serde::ser::Error as _;
-
         let params = self.0;
+        // An explicit-null metadata filter is silently omitted, matching
+        // openai-python where `metadata=None` produces no query item.
         let metadata_len = match &params.metadata {
             Omittable::Value(Nullable::Value(metadata)) => metadata.len(),
-            Omittable::Value(Nullable::Null) => {
-                return Err(S::Error::custom(
-                    "stored Chat metadata query cannot be explicit null",
-                ));
-            }
-            Omittable::Omitted => 0,
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => 0,
             _ => 0,
         };
         let mut map = serializer.serialize_map(Some(4 + metadata_len))?;
@@ -673,6 +670,34 @@ mod tests {
             .list_pages(ChatCompletionListParams::default());
         assert!(pages.next().await.expect("one page").is_ok());
         assert!(pages.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn stored_list_omits_explicit_null_metadata_and_empty_after() {
+        let (client, captured) = serve_once(
+            "application/json",
+            r#"{"object":"list","data":[],"first_id":"chatcmpl_first","last_id":"chatcmpl_last","has_more":false}"#,
+        )
+        .await;
+        // `metadata=None` and an empty `after` cursor both produce no query
+        // item instead of `metadata=` / `after=` empty-value keys.
+        let params = ChatCompletionListParams {
+            model: Omittable::Omitted,
+            metadata: Omittable::Value(Nullable::Null),
+            after: Omittable::Value(String::new()),
+            limit: Omittable::Omitted,
+            order: Omittable::Omitted,
+        };
+        let page = client
+            .chat_completions()
+            .list(params)
+            .await
+            .expect("stored Chat page without null filters");
+        assert!(page.data.is_empty());
+
+        let captured = captured.await.expect("captured stored list request");
+        assert_eq!(captured.path_and_query, "/v1/chat/completions");
+        assert!(captured.body.is_none());
     }
 
     #[tokio::test]

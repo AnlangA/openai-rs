@@ -11,8 +11,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = ApiKey::new(std::env::var("OPENAI_API_KEY")?)?;
     let client = Client::new(api_key)?;
 
-    let request = CreateResponseRequest::new("gpt-5.6", "Write a haiku about Rust programming.")
-        .into_streaming();
+    let request =
+        CreateResponseRequest::new("gpt-5.6-sol", "Write a haiku about Rust programming.")
+            .into_streaming();
 
     let mut stream = client.responses().create_stream(request).await?;
     let mut accumulator = ResponseAccumulator::new();
