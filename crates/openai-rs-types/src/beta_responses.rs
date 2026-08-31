@@ -9,17 +9,26 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Value};
+use thiserror::Error;
 
 use crate::{
     ExtraFields, JsonText, Nullable, Omittable,
     responses::{
-        ConversationObjectReference, ConversationReference, IncompleteDetails, InputContent,
-        MessageRole, PromptReference, ResponseError, ResponseInputItem, ResponseInstructions,
+        CompactResponseConstraintError, ComputerScreenshot, ConversationObjectReference,
+        ConversationReference, CountInputTokensConstraintError, CreateResponseConstraintError,
+        IncompleteDetails, InputContent, InputFile, MAX_COMPACT_INPUT_CHARS, MAX_INPUT_TEXT_CHARS,
+        MAX_PROMPT_CACHE_KEY_CHARS, MessageRole, OutputText, PromptCacheRetention, PromptReference,
+        ReasoningTextContent, Refusal, ResponseError, ResponseInputItem, ResponseInstructions,
         ResponseItemStatus, ResponseOutputItem, ResponseStatus, ResponseStreamEvent,
-        ResponseStreamOptions, ResponseTextConfig, ResponseTool, ResponseUsage, ToolChoice,
-        TruncationStrategy, UnknownTaggedObject,
+        ResponseStreamOptions, ResponseTextConfig, ResponseTool, ResponseUsage, ServiceTier,
+        SummaryTextContent, ToolChoice, TruncationStrategy, UnknownTaggedObject,
+        validate_input_content, validate_input_image_url_chars, validate_input_text_chars,
+        validate_response_input_item, validate_response_tools, validate_websocket_stream_id,
     },
 };
+
+/// Inclusive minimum for `multi_agent.max_concurrent_subagents`.
+pub const MIN_CONCURRENT_SUBAGENTS: u32 = 1;
 
 macro_rules! impl_tagged_content {
     ($name:ident { $($variant:ident($ty:ty) => $wire:literal),+ $(,)? }) => {
@@ -85,14 +94,14 @@ crate::open_string_enum! {
 crate::open_string_enum! {
     /// Response fields that can be explicitly expanded by the API.
     pub enum BetaResponseIncludable {
-        WebSearchSources = "web_search_call.action.sources",
-        WebSearchResults = "web_search_call.results",
-        CodeInterpreterOutputs = "code_interpreter_call.outputs",
-        ComputerOutputImageUrl = "computer_call_output.output.image_url",
         FileSearchResults = "file_search_call.results",
+        WebSearchResults = "web_search_call.results",
+        WebSearchSources = "web_search_call.action.sources",
         InputImageUrl = "message.input_image.image_url",
-        OutputTextLogprobs = "message.output_text.logprobs",
+        ComputerOutputImageUrl = "computer_call_output.output.image_url",
+        CodeInterpreterOutputs = "code_interpreter_call.outputs",
         EncryptedReasoning = "reasoning.encrypted_content",
+        OutputTextLogprobs = "message.output_text.logprobs",
     }
 }
 
@@ -276,6 +285,21 @@ impl BetaItemMetadata {
         self.phase = Omittable::Value(Nullable::Value(phase));
         self
     }
+
+    fn with_agent_null(mut self) -> Self {
+        self.agent = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    fn with_caller_null(mut self) -> Self {
+        self.caller = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    fn with_phase_null(mut self) -> Self {
+        self.phase = Omittable::Value(Nullable::Null);
+        self
+    }
 }
 
 /// Configuration for server-hosted multi-agent execution.
@@ -308,6 +332,19 @@ impl BetaMultiAgentConfig {
     pub const fn is_enabled(&self) -> bool {
         self.enabled
     }
+
+    /// Checks pinned OpenAPI `max_concurrent_subagents` `minimum: 1`.
+    pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        if let Omittable::Value(actual) = self.max_concurrent_subagents
+            && actual < MIN_CONCURRENT_SUBAGENTS
+        {
+            return Err(CreateResponseConstraintError::ConcurrentSubagents {
+                actual,
+                minimum: MIN_CONCURRENT_SUBAGENTS,
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Shared with GA Responses; the pinned wire object is `{ "mode": "explicit" }`.
@@ -335,6 +372,13 @@ impl BetaPromptCachedInputContent {
     pub fn prompt_cache_breakpoint(mut self) -> Self {
         self.prompt_cache_breakpoint =
             Omittable::Value(Nullable::Value(BetaPromptCacheBreakpoint::explicit()));
+        self
+    }
+
+    /// Sends official `prompt_cache_breakpoint: null`.
+    #[must_use]
+    pub fn prompt_cache_breakpoint_null(mut self) -> Self {
+        self.prompt_cache_breakpoint = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -465,6 +509,48 @@ impl BetaPromptCachedInputMessage {
         self
     }
 
+    /// Adds the platform item id when replaying a returned item.
+    #[must_use]
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = Omittable::Value(Nullable::Value(id.into()));
+        self
+    }
+
+    /// Sets an item status when echoing a stored message.
+    #[must_use]
+    pub fn status(mut self, status: ResponseItemStatus) -> Self {
+        self.status = Omittable::Value(Nullable::Value(status));
+        self
+    }
+
+    /// Sends official `id: null`.
+    #[must_use]
+    pub fn id_null(mut self) -> Self {
+        self.id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `agent: null`.
+    #[must_use]
+    pub fn agent_null(mut self) -> Self {
+        self.agent = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `phase: null`.
+    #[must_use]
+    pub fn phase_null(mut self) -> Self {
+        self.phase = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `status: null`.
+    #[must_use]
+    pub fn status_null(mut self) -> Self {
+        self.status = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Returns content parts in wire order.
     #[must_use]
     pub fn content(&self) -> &[BetaPromptCachedInputContent] {
@@ -475,6 +561,7 @@ impl BetaPromptCachedInputMessage {
 literal_tag!(InputTextTag, InputText, "input_text");
 literal_tag!(InputImageTag, InputImage, "input_image");
 literal_tag!(EncryptedContentTag, EncryptedContent, "encrypted_content");
+literal_tag!(AgentTextTag, Text, "text");
 
 /// Text sent inside an inter-agent message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -505,16 +592,128 @@ impl BetaAgentInputText {
         self
     }
 
+    /// Sends official `prompt_cache_breakpoint: null`.
+    #[must_use]
+    pub fn prompt_cache_breakpoint_null(mut self) -> Self {
+        self.prompt_cache_breakpoint = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Returns the plaintext content.
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// Checks pinned OpenAPI `text` `maxLength` without sending the request.
+    pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        validate_input_text_chars(self.text.chars().count())
     }
 }
 
 /// Image sent inside an inter-agent message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BetaAgentInputImage {
+    #[serde(rename = "type")]
+    kind: InputImageTag,
+    detail: crate::responses::ImageDetail,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    file_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    image_url: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_breakpoint: Omittable<Nullable<BetaPromptCacheBreakpoint>>,
+}
+
+impl BetaAgentInputImage {
+    /// Creates image content from a URL or data URL.
+    ///
+    /// Official `BetaInputImageContent` requires `detail`; constructors send
+    /// the documented default `auto`.
+    #[must_use]
+    pub fn from_url(image_url: impl Into<String>) -> Self {
+        Self {
+            kind: InputImageTag::InputImage,
+            detail: crate::responses::ImageDetail::Auto,
+            file_id: Omittable::Omitted,
+            image_url: Omittable::Value(Nullable::Value(image_url.into())),
+            prompt_cache_breakpoint: Omittable::Omitted,
+        }
+    }
+
+    /// Creates image content from an uploaded file id.
+    ///
+    /// Official `BetaInputImageContent` requires `detail`; constructors send
+    /// the documented default `auto`.
+    #[must_use]
+    pub fn from_file_id(file_id: impl Into<String>) -> Self {
+        Self {
+            kind: InputImageTag::InputImage,
+            detail: crate::responses::ImageDetail::Auto,
+            file_id: Omittable::Value(Nullable::Value(file_id.into())),
+            image_url: Omittable::Omitted,
+            prompt_cache_breakpoint: Omittable::Omitted,
+        }
+    }
+
+    /// Sets requested image detail.
+    #[must_use]
+    pub fn detail(mut self, detail: crate::responses::ImageDetail) -> Self {
+        self.detail = detail;
+        self
+    }
+
+    /// Returns the official required detail level.
+    #[must_use]
+    pub const fn detail_ref(&self) -> &crate::responses::ImageDetail {
+        &self.detail
+    }
+
+    /// Marks the end of an explicitly reusable prefix.
+    #[must_use]
+    pub fn prompt_cache_breakpoint(mut self) -> Self {
+        self.prompt_cache_breakpoint =
+            Omittable::Value(Nullable::Value(BetaPromptCacheBreakpoint::explicit()));
+        self
+    }
+
+    /// Sends official `file_id: null`.
+    #[must_use]
+    pub fn file_id_null(mut self) -> Self {
+        self.file_id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `image_url: null`.
+    #[must_use]
+    pub fn image_url_null(mut self) -> Self {
+        self.image_url = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `prompt_cache_breakpoint: null`.
+    #[must_use]
+    pub fn prompt_cache_breakpoint_null(mut self) -> Self {
+        self.prompt_cache_breakpoint = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Checks pinned OpenAPI `image_url` `maxLength` without sending the request.
+    pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        if let Omittable::Value(Nullable::Value(image_url)) = &self.image_url {
+            validate_input_image_url_chars(image_url.chars().count())?;
+        }
+        Ok(())
+    }
+}
+
+/// Official `BetaInputImageContentParamAutoParam` used by
+/// `BetaAgentMessageItemParam` request content.
+///
+/// Official Param `required` is only `type`; `detail` is `anyOf` including
+/// null. Resource `BetaAgentMessage` images use [`BetaAgentInputImage`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaAgentInputImageParam {
     #[serde(rename = "type")]
     kind: InputImageTag,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -527,8 +726,8 @@ pub struct BetaAgentInputImage {
     prompt_cache_breakpoint: Omittable<Nullable<BetaPromptCacheBreakpoint>>,
 }
 
-impl BetaAgentInputImage {
-    /// Creates image content from a URL or data URL.
+impl BetaAgentInputImageParam {
+    /// Creates a Param image from a URL without sending `detail`.
     #[must_use]
     pub fn from_url(image_url: impl Into<String>) -> Self {
         Self {
@@ -540,7 +739,7 @@ impl BetaAgentInputImage {
         }
     }
 
-    /// Creates image content from an uploaded file id.
+    /// Creates a Param image from an uploaded file id without sending `detail`.
     #[must_use]
     pub fn from_file_id(file_id: impl Into<String>) -> Self {
         Self {
@@ -552,10 +751,17 @@ impl BetaAgentInputImage {
         }
     }
 
-    /// Sets requested image detail.
+    /// Sets the requested fidelity.
     #[must_use]
     pub fn detail(mut self, detail: crate::responses::ImageDetail) -> Self {
         self.detail = Omittable::Value(Nullable::Value(detail));
+        self
+    }
+
+    /// Sends official Param `detail: null`.
+    #[must_use]
+    pub fn detail_null(mut self) -> Self {
+        self.detail = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -565,6 +771,65 @@ impl BetaAgentInputImage {
         self.prompt_cache_breakpoint =
             Omittable::Value(Nullable::Value(BetaPromptCacheBreakpoint::explicit()));
         self
+    }
+
+    /// Sends official `file_id: null`.
+    #[must_use]
+    pub fn file_id_null(mut self) -> Self {
+        self.file_id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `image_url: null`.
+    #[must_use]
+    pub fn image_url_null(mut self) -> Self {
+        self.image_url = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `prompt_cache_breakpoint: null`.
+    #[must_use]
+    pub fn prompt_cache_breakpoint_null(mut self) -> Self {
+        self.prompt_cache_breakpoint = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Returns the image URL when present.
+    #[must_use]
+    pub fn image_url(&self) -> Option<&str> {
+        match &self.image_url {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
+    /// Returns the uploaded file id when present.
+    #[must_use]
+    pub fn file_id(&self) -> Option<&str> {
+        match &self.file_id {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
+    /// Checks pinned OpenAPI `image_url` `maxLength` without sending the request.
+    pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        if let Omittable::Value(Nullable::Value(image_url)) = &self.image_url {
+            validate_input_image_url_chars(image_url.chars().count())?;
+        }
+        Ok(())
+    }
+}
+
+impl From<BetaAgentInputImage> for BetaAgentInputImageParam {
+    fn from(value: BetaAgentInputImage) -> Self {
+        Self {
+            kind: value.kind,
+            detail: Omittable::Value(Nullable::Value(value.detail)),
+            file_id: value.file_id,
+            image_url: value.image_url,
+            prompt_cache_breakpoint: value.prompt_cache_breakpoint,
+        }
     }
 }
 
@@ -585,22 +850,79 @@ impl BetaAgentEncryptedContent {
             encrypted_content: encrypted_content.into(),
         }
     }
+
+    /// Checks pinned OpenAPI `encrypted_content` `maxLength` without sending the request.
+    pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        let actual = self.encrypted_content.chars().count();
+        if actual > MAX_INPUT_TEXT_CHARS {
+            return Err(CreateResponseConstraintError::AgentEncryptedContent {
+                actual,
+                maximum: MAX_INPUT_TEXT_CHARS,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Official `BetaTextContent` (`type: "text"`) on resource agent messages.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaAgentText {
+    #[serde(rename = "type")]
+    kind: AgentTextTag,
+    text: String,
+}
+
+impl BetaAgentText {
+    /// Creates generic resource text content.
+    #[must_use]
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            kind: AgentTextTag::Text,
+            text: text.into(),
+        }
+    }
+
+    /// Returns the text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
 }
 
 /// One typed content part sent between agents.
+///
+/// Request `BetaAgentMessageItemParam` images are Param-shaped
+/// ([`BetaAgentInputImageParam`]). Resource `BetaInputImageContent` stays on
+/// [`BetaAgentInputImage`]. Official `BetaAgentMessage` resource content also
+/// names output/reasoning/file/screenshot members so they do not decode only
+/// as [`UnknownTaggedObject`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum BetaAgentMessageContent {
     Text(BetaAgentInputText),
-    Image(BetaAgentInputImage),
+    Image(BetaAgentInputImageParam),
     Encrypted(BetaAgentEncryptedContent),
+    OutputText(OutputText),
+    PlainText(BetaAgentText),
+    SummaryText(SummaryTextContent),
+    ReasoningText(ReasoningTextContent),
+    Refusal(Refusal),
+    ComputerScreenshot(ComputerScreenshot),
+    File(InputFile),
     Unknown(UnknownTaggedObject),
 }
 
 impl_tagged_content!(BetaAgentMessageContent {
     Text(BetaAgentInputText) => "input_text",
-    Image(BetaAgentInputImage) => "input_image",
+    Image(BetaAgentInputImageParam) => "input_image",
     Encrypted(BetaAgentEncryptedContent) => "encrypted_content",
+    OutputText(OutputText) => "output_text",
+    PlainText(BetaAgentText) => "text",
+    SummaryText(SummaryTextContent) => "summary_text",
+    ReasoningText(ReasoningTextContent) => "reasoning_text",
+    Refusal(Refusal) => "refusal",
+    ComputerScreenshot(ComputerScreenshot) => "computer_screenshot",
+    File(InputFile) => "input_file",
 });
 
 impl From<BetaAgentInputText> for BetaAgentMessageContent {
@@ -609,15 +931,63 @@ impl From<BetaAgentInputText> for BetaAgentMessageContent {
     }
 }
 
+impl From<BetaAgentInputImageParam> for BetaAgentMessageContent {
+    fn from(value: BetaAgentInputImageParam) -> Self {
+        Self::Image(value)
+    }
+}
+
 impl From<BetaAgentInputImage> for BetaAgentMessageContent {
     fn from(value: BetaAgentInputImage) -> Self {
-        Self::Image(value)
+        Self::Image(value.into())
     }
 }
 
 impl From<BetaAgentEncryptedContent> for BetaAgentMessageContent {
     fn from(value: BetaAgentEncryptedContent) -> Self {
         Self::Encrypted(value)
+    }
+}
+
+impl From<OutputText> for BetaAgentMessageContent {
+    fn from(value: OutputText) -> Self {
+        Self::OutputText(value)
+    }
+}
+
+impl From<BetaAgentText> for BetaAgentMessageContent {
+    fn from(value: BetaAgentText) -> Self {
+        Self::PlainText(value)
+    }
+}
+
+impl From<SummaryTextContent> for BetaAgentMessageContent {
+    fn from(value: SummaryTextContent) -> Self {
+        Self::SummaryText(value)
+    }
+}
+
+impl From<ReasoningTextContent> for BetaAgentMessageContent {
+    fn from(value: ReasoningTextContent) -> Self {
+        Self::ReasoningText(value)
+    }
+}
+
+impl From<Refusal> for BetaAgentMessageContent {
+    fn from(value: Refusal) -> Self {
+        Self::Refusal(value)
+    }
+}
+
+impl From<ComputerScreenshot> for BetaAgentMessageContent {
+    fn from(value: ComputerScreenshot) -> Self {
+        Self::ComputerScreenshot(value)
+    }
+}
+
+impl From<InputFile> for BetaAgentMessageContent {
+    fn from(value: InputFile) -> Self {
+        Self::File(value)
     }
 }
 
@@ -669,6 +1039,20 @@ impl BetaAgentMessage {
         self
     }
 
+    /// Sends official `id: null`.
+    #[must_use]
+    pub fn id_null(mut self) -> Self {
+        self.id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `agent: null`.
+    #[must_use]
+    pub fn agent_null(mut self) -> Self {
+        self.agent = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Returns the sending agent identity.
     #[must_use]
     pub fn author(&self) -> &str {
@@ -691,6 +1075,26 @@ impl BetaAgentMessage {
     #[must_use]
     pub fn owning_agent(&self) -> Option<&BetaAgent> {
         non_null(&self.agent)
+    }
+
+    /// Checks pinned OpenAPI content payload limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        for part in &self.content {
+            match part {
+                BetaAgentMessageContent::Text(text) => text.validate()?,
+                BetaAgentMessageContent::Image(image) => image.validate()?,
+                BetaAgentMessageContent::Encrypted(encrypted) => encrypted.validate()?,
+                BetaAgentMessageContent::File(file) => file.validate()?,
+                BetaAgentMessageContent::OutputText(_)
+                | BetaAgentMessageContent::PlainText(_)
+                | BetaAgentMessageContent::SummaryText(_)
+                | BetaAgentMessageContent::ReasoningText(_)
+                | BetaAgentMessageContent::Refusal(_)
+                | BetaAgentMessageContent::ComputerScreenshot(_)
+                | BetaAgentMessageContent::Unknown(_) => {}
+            }
+        }
+        Ok(())
     }
 }
 
@@ -766,6 +1170,34 @@ impl BetaMultiAgentCall {
     #[must_use]
     pub fn agent(&self) -> Option<&BetaAgent> {
         non_null(&self.agent)
+    }
+
+    /// Adds the platform item id when replaying a returned item.
+    #[must_use]
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = Omittable::Value(Nullable::Value(id.into()));
+        self
+    }
+
+    /// Attaches owning-agent metadata.
+    #[must_use]
+    pub fn with_agent(mut self, agent: BetaAgent) -> Self {
+        self.agent = Omittable::Value(Nullable::Value(agent));
+        self
+    }
+
+    /// Sends official `id: null`.
+    #[must_use]
+    pub fn id_null(mut self) -> Self {
+        self.id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `agent: null`.
+    #[must_use]
+    pub fn agent_null(mut self) -> Self {
+        self.agent = Omittable::Value(Nullable::Null);
+        self
     }
 }
 
@@ -905,6 +1337,34 @@ impl BetaMultiAgentCallOutput {
     pub fn agent(&self) -> Option<&BetaAgent> {
         non_null(&self.agent)
     }
+
+    /// Adds the platform item id when replaying a returned item.
+    #[must_use]
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = Omittable::Value(Nullable::Value(id.into()));
+        self
+    }
+
+    /// Attaches owning-agent metadata.
+    #[must_use]
+    pub fn with_agent(mut self, agent: BetaAgent) -> Self {
+        self.agent = Omittable::Value(Nullable::Value(agent));
+        self
+    }
+
+    /// Sends official `id: null`.
+    #[must_use]
+    pub fn id_null(mut self) -> Self {
+        self.id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends official `agent: null`.
+    #[must_use]
+    pub fn agent_null(mut self) -> Self {
+        self.agent = Omittable::Value(Nullable::Null);
+        self
+    }
 }
 
 /// One stable input branch enriched with preview-only metadata.
@@ -949,6 +1409,27 @@ impl BetaStableInputItem {
     #[must_use]
     pub fn phase(mut self, phase: BetaMessagePhase) -> Self {
         self.metadata = self.metadata.with_phase(phase);
+        self
+    }
+
+    /// Sends official `agent: null`.
+    #[must_use]
+    pub fn agent_null(mut self) -> Self {
+        self.metadata = self.metadata.with_agent_null();
+        self
+    }
+
+    /// Sends official `caller: null`.
+    #[must_use]
+    pub fn caller_null(mut self) -> Self {
+        self.metadata = self.metadata.with_caller_null();
+        self
+    }
+
+    /// Sends official `phase: null`.
+    #[must_use]
+    pub fn phase_null(mut self) -> Self {
+        self.metadata = self.metadata.with_phase_null();
         self
     }
 
@@ -1232,6 +1713,37 @@ impl From<Vec<BetaResponseInputItem>> for BetaResponseInput {
     }
 }
 
+fn validate_beta_response_input(
+    input: &BetaResponseInput,
+) -> Result<(), CreateResponseConstraintError> {
+    match input {
+        BetaResponseInput::Text(_) => Ok(()),
+        BetaResponseInput::Items(items) => {
+            for item in items {
+                validate_beta_response_input_item(item)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_beta_response_input_item(
+    item: &BetaResponseInputItem,
+) -> Result<(), CreateResponseConstraintError> {
+    match item {
+        BetaResponseInputItem::Stable(item) => validate_response_input_item(item.core()),
+        BetaResponseInputItem::PromptCachedMessage(item) => {
+            for part in item.content() {
+                validate_input_content(part.core())?;
+            }
+            Ok(())
+        }
+        BetaResponseInputItem::AgentMessage(item) => item.validate(),
+        BetaResponseInputItem::MultiAgentCall(_)
+        | BetaResponseInputItem::MultiAgentCallOutput(_) => Ok(()),
+    }
+}
+
 /// Beta reasoning configuration, including preview-only context and mode.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BetaReasoningConfig {
@@ -1280,6 +1792,41 @@ impl BetaReasoningConfig {
         self
     }
 
+    /// Sends `context: null`.
+    #[must_use]
+    pub fn context_null(mut self) -> Self {
+        self.context = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends `effort: null`.
+    #[must_use]
+    pub fn effort_null(mut self) -> Self {
+        self.effort = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sets the deprecated `generate_summary` field. Prefer [`Self::summary`].
+    #[must_use]
+    pub fn generate_summary(mut self, summary: BetaReasoningSummary) -> Self {
+        self.generate_summary = Omittable::Value(Nullable::Value(summary));
+        self
+    }
+
+    /// Sends `generate_summary: null`.
+    #[must_use]
+    pub fn generate_summary_null(mut self) -> Self {
+        self.generate_summary = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Sends `summary: null`.
+    #[must_use]
+    pub fn summary_null(mut self) -> Self {
+        self.summary = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Returns the non-null reasoning context.
     #[must_use]
     pub fn context_ref(&self) -> Option<&BetaReasoningContext> {
@@ -1320,16 +1867,16 @@ pub use crate::responses::PromptCacheMode as BetaPromptCacheMode;
 /// Shared with GA Responses.
 pub use crate::responses::PromptCacheTtl as BetaPromptCacheTtl;
 
-/// Prompt-cache options for `gpt-5.6` and later beta models.
+/// Official create-request `BetaPromptCacheOptionsParam`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct BetaPromptCacheOptions {
+pub struct BetaPromptCacheOptionsParam {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     mode: Omittable<BetaPromptCacheMode>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     ttl: Omittable<BetaPromptCacheTtl>,
 }
 
-impl BetaPromptCacheOptions {
+impl BetaPromptCacheOptionsParam {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -1349,6 +1896,35 @@ impl BetaPromptCacheOptions {
     }
 }
 
+/// Official beta response-echo `BetaPromptCacheOptions`.
+///
+/// The pin requires both `ttl` and `mode` when this object is present.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaPromptCacheOptions {
+    mode: BetaPromptCacheMode,
+    ttl: BetaPromptCacheTtl,
+}
+
+impl BetaPromptCacheOptions {
+    /// Creates a complete official response-echo object.
+    #[must_use]
+    pub fn new(mode: BetaPromptCacheMode, ttl: BetaPromptCacheTtl) -> Self {
+        Self { mode, ttl }
+    }
+
+    /// Returns the applied prompt-cache mode.
+    #[must_use]
+    pub const fn mode(&self) -> &BetaPromptCacheMode {
+        &self.mode
+    }
+
+    /// Returns the applied prompt-cache TTL.
+    #[must_use]
+    pub const fn ttl(&self) -> &BetaPromptCacheTtl {
+        &self.ttl
+    }
+}
+
 /// Non-streaming `POST /responses?beta=true` body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BetaCreateResponseRequest {
@@ -1357,7 +1933,7 @@ pub struct BetaCreateResponseRequest {
     context_management: Omittable<Nullable<Vec<BetaContextManagement>>>,
     moderation: Omittable<Nullable<BetaModerationConfig>>,
     multi_agent: Omittable<Nullable<BetaMultiAgentConfig>>,
-    prompt_cache_options: Omittable<BetaPromptCacheOptions>,
+    prompt_cache_options: Omittable<BetaPromptCacheOptionsParam>,
     reasoning: Omittable<Nullable<BetaReasoningConfig>>,
 }
 
@@ -1404,8 +1980,29 @@ impl BetaCreateResponseRequest {
 
     /// Sets system or developer instructions.
     #[must_use]
-    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
+    pub fn instructions(mut self, instructions: impl Into<ResponseInstructions>) -> Self {
         self.base = self.base.instructions(instructions);
+        self
+    }
+
+    /// Sends `instructions: null`.
+    #[must_use]
+    pub fn instructions_null(mut self) -> Self {
+        self.base = self.base.instructions_null();
+        self
+    }
+
+    /// Associates the response with a conversation.
+    #[must_use]
+    pub fn conversation(mut self, conversation: impl Into<ConversationReference>) -> Self {
+        self.base = self.base.conversation(conversation);
+        self
+    }
+
+    /// Sends `conversation: null`.
+    #[must_use]
+    pub fn conversation_null(mut self) -> Self {
+        self.base = self.base.conversation_null();
         self
     }
 
@@ -1413,6 +2010,13 @@ impl BetaCreateResponseRequest {
     #[must_use]
     pub fn background(mut self, background: bool) -> Self {
         self.base = self.base.background(background);
+        self
+    }
+
+    /// Sends `background: null`.
+    #[must_use]
+    pub fn background_null(mut self) -> Self {
+        self.base = self.base.background_null();
         self
     }
 
@@ -1433,10 +2037,24 @@ impl BetaCreateResponseRequest {
         self
     }
 
+    /// Sends `context_management: null`.
+    #[must_use]
+    pub fn context_management_null(mut self) -> Self {
+        self.context_management = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Requests one optional expanded response field.
     #[must_use]
     pub fn include(mut self, include: BetaResponseIncludable) -> Self {
         self.base = self.base.include(include.as_str());
+        self
+    }
+
+    /// Sends `include: null`.
+    #[must_use]
+    pub fn include_null(mut self) -> Self {
+        self.base = self.base.include_null();
         self
     }
 
@@ -1447,10 +2065,24 @@ impl BetaCreateResponseRequest {
         self
     }
 
+    /// Sends `max_output_tokens: null`.
+    #[must_use]
+    pub fn max_output_tokens_null(mut self) -> Self {
+        self.base = self.base.max_output_tokens_null();
+        self
+    }
+
     /// Caps total built-in tool calls.
     #[must_use]
     pub fn max_tool_calls(mut self, maximum: u32) -> Self {
         self.base = self.base.max_tool_calls(maximum);
+        self
+    }
+
+    /// Sends `max_tool_calls: null`.
+    #[must_use]
+    pub fn max_tool_calls_null(mut self) -> Self {
+        self.base = self.base.max_tool_calls_null();
         self
     }
 
@@ -1461,10 +2093,24 @@ impl BetaCreateResponseRequest {
         self
     }
 
+    /// Sends `metadata: null`.
+    #[must_use]
+    pub fn metadata_null(mut self) -> Self {
+        self.base = self.base.metadata_null();
+        self
+    }
+
     /// Configures moderated completion handling.
     #[must_use]
     pub fn moderation(mut self, moderation: BetaModerationConfig) -> Self {
         self.moderation = Omittable::Value(Nullable::Value(moderation));
+        self
+    }
+
+    /// Sends `moderation: null`.
+    #[must_use]
+    pub fn moderation_null(mut self) -> Self {
+        self.moderation = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -1475,10 +2121,24 @@ impl BetaCreateResponseRequest {
         self
     }
 
+    /// Sends `multi_agent: null`.
+    #[must_use]
+    pub fn multi_agent_null(mut self) -> Self {
+        self.multi_agent = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Controls parallel tool calls.
     #[must_use]
     pub fn parallel_tool_calls(mut self, enabled: bool) -> Self {
         self.base = self.base.parallel_tool_calls(enabled);
+        self
+    }
+
+    /// Sends `parallel_tool_calls: null`.
+    #[must_use]
+    pub fn parallel_tool_calls_null(mut self) -> Self {
+        self.base = self.base.parallel_tool_calls_null();
         self
     }
 
@@ -1489,6 +2149,13 @@ impl BetaCreateResponseRequest {
         self
     }
 
+    /// Sends `previous_response_id: null`.
+    #[must_use]
+    pub fn previous_response_id_null(mut self) -> Self {
+        self.base = self.base.previous_response_id_null();
+        self
+    }
+
     /// Sets a prompt-cache key.
     #[must_use]
     pub fn prompt_cache_key(mut self, key: impl Into<String>) -> Self {
@@ -1496,9 +2163,93 @@ impl BetaCreateResponseRequest {
         self
     }
 
+    /// Sends `prompt_cache_key: null`.
+    #[must_use]
+    pub fn prompt_cache_key_null(mut self) -> Self {
+        self.base = self.base.prompt_cache_key_null();
+        self
+    }
+
+    /// Uses a reusable prompt template.
+    #[must_use]
+    pub fn prompt(mut self, prompt: PromptReference) -> Self {
+        self.base = self.base.prompt(prompt);
+        self
+    }
+
+    /// Sends `prompt: null`.
+    #[must_use]
+    pub fn prompt_null(mut self) -> Self {
+        self.base = self.base.prompt_null();
+        self
+    }
+
+    /// Sets the deprecated prompt-cache retention policy.
+    #[must_use]
+    pub fn prompt_cache_retention(mut self, retention: PromptCacheRetention) -> Self {
+        self.base = self.base.prompt_cache_retention(retention);
+        self
+    }
+
+    /// Sends `prompt_cache_retention: null`.
+    #[must_use]
+    pub fn prompt_cache_retention_null(mut self) -> Self {
+        self.base = self.base.prompt_cache_retention_null();
+        self
+    }
+
+    /// Sets an abuse-detection safety identifier.
+    #[must_use]
+    pub fn safety_identifier(mut self, identifier: impl Into<String>) -> Self {
+        self.base = self.base.safety_identifier(identifier);
+        self
+    }
+
+    /// Sends `safety_identifier: null`.
+    #[must_use]
+    pub fn safety_identifier_null(mut self) -> Self {
+        self.base = self.base.safety_identifier_null();
+        self
+    }
+
+    /// Requests a service tier.
+    #[must_use]
+    pub fn service_tier(mut self, service_tier: impl Into<ServiceTier>) -> Self {
+        self.base = self.base.service_tier(service_tier);
+        self
+    }
+
+    /// Sends `service_tier: null`.
+    #[must_use]
+    pub fn service_tier_null(mut self) -> Self {
+        self.base = self.base.service_tier_null();
+        self
+    }
+
+    /// Requests token log probabilities at each output position.
+    #[must_use]
+    pub fn top_logprobs(mut self, top_logprobs: u32) -> Self {
+        self.base = self.base.top_logprobs(top_logprobs);
+        self
+    }
+
+    /// Sends `top_logprobs: null`.
+    #[must_use]
+    pub fn top_logprobs_null(mut self) -> Self {
+        self.base = self.base.top_logprobs_null();
+        self
+    }
+
+    /// Sets the deprecated end-user identifier when required.
+    #[must_use]
+    pub fn user(mut self, user: impl Into<String>) -> Self {
+        self.base = self.base.user(user);
+        self
+    }
+
     /// Sets typed prompt-cache options.
     #[must_use]
-    pub fn prompt_cache_options(mut self, options: BetaPromptCacheOptions) -> Self {
+    pub fn prompt_cache_options(mut self, options: BetaPromptCacheOptionsParam) -> Self {
         self.prompt_cache_options = Omittable::Value(options);
         self
     }
@@ -1510,10 +2261,24 @@ impl BetaCreateResponseRequest {
         self
     }
 
+    /// Sends `reasoning: null`.
+    #[must_use]
+    pub fn reasoning_null(mut self) -> Self {
+        self.reasoning = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Controls response storage.
     #[must_use]
     pub fn store(mut self, store: bool) -> Self {
         self.base = self.base.store(store);
+        self
+    }
+
+    /// Sends `store: null`.
+    #[must_use]
+    pub fn store_null(mut self) -> Self {
+        self.base = self.base.store_null();
         self
     }
 
@@ -1545,10 +2310,24 @@ impl BetaCreateResponseRequest {
         self
     }
 
+    /// Sends `temperature: null`.
+    #[must_use]
+    pub fn temperature_null(mut self) -> Self {
+        self.base = self.base.temperature_null();
+        self
+    }
+
     /// Sets nucleus sampling probability.
     #[must_use]
     pub fn top_p(mut self, top_p: f64) -> Self {
         self.base = self.base.top_p(top_p);
+        self
+    }
+
+    /// Sends `top_p: null`.
+    #[must_use]
+    pub fn top_p_null(mut self) -> Self {
+        self.base = self.base.top_p_null();
         self
     }
 
@@ -1557,6 +2336,25 @@ impl BetaCreateResponseRequest {
     pub fn truncation(mut self, truncation: TruncationStrategy) -> Self {
         self.base = self.base.truncation(truncation);
         self
+    }
+
+    /// Sends `truncation: null`.
+    #[must_use]
+    pub fn truncation_null(mut self) -> Self {
+        self.base = self.base.truncation_null();
+        self
+    }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<&Self, CreateResponseConstraintError> {
+        self.base.validate()?;
+        if let Omittable::Value(input) = &self.input {
+            validate_beta_response_input(input)?;
+        }
+        if let Omittable::Value(Nullable::Value(multi_agent)) = &self.multi_agent {
+            multi_agent.validate()?;
+        }
+        Ok(self)
     }
 
     /// Converts the body to the streaming typestate.
@@ -1625,7 +2423,7 @@ impl<'de> Deserialize<'de> for BetaCreateResponseRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BetaCreateStreamingResponseRequest {
     request: BetaCreateResponseRequest,
-    stream_options: Omittable<ResponseStreamOptions>,
+    stream_options: Omittable<Nullable<ResponseStreamOptions>>,
 }
 
 impl BetaCreateStreamingResponseRequest {
@@ -1638,7 +2436,14 @@ impl BetaCreateStreamingResponseRequest {
     /// Sets SSE payload options.
     #[must_use]
     pub fn stream_options(mut self, options: ResponseStreamOptions) -> Self {
-        self.stream_options = Omittable::Value(options);
+        self.stream_options = Omittable::Value(Nullable::Value(options));
+        self
+    }
+
+    /// Sends `stream_options: null`.
+    #[must_use]
+    pub fn stream_options_null(mut self) -> Self {
+        self.stream_options = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -1789,9 +2594,9 @@ pub struct BetaResponse {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     truncation: Omittable<Nullable<TruncationStrategy>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    usage: Omittable<ResponseUsage>,
+    usage: Omittable<Nullable<ResponseUsage>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    user: Omittable<String>,
+    user: Omittable<Nullable<String>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1827,10 +2632,10 @@ impl BetaResponse {
         omitted_ref(&self.status)
     }
 
-    /// Returns usage when present.
+    /// Returns usage when present and non-null.
     #[must_use]
     pub fn usage(&self) -> Option<&ResponseUsage> {
-        omitted_ref(&self.usage)
+        non_null(&self.usage)
     }
 
     /// Returns preview reasoning configuration when present and non-null.
@@ -1861,7 +2666,7 @@ impl BetaResponse {
 /// Request body for `POST /responses/compact?beta=true`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BetaCompactResponseRequest {
-    model: String,
+    model: Nullable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     input: Omittable<Nullable<BetaResponseInput>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -1871,7 +2676,7 @@ pub struct BetaCompactResponseRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     prompt_cache_key: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    prompt_cache_options: Omittable<Nullable<BetaPromptCacheOptions>>,
+    prompt_cache_options: Omittable<Nullable<BetaPromptCacheOptionsParam>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     prompt_cache_retention: Omittable<Nullable<BetaPromptCacheRetention>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -1879,11 +2684,11 @@ pub struct BetaCompactResponseRequest {
 }
 
 impl BetaCompactResponseRequest {
-    /// Creates the required model-only compact request.
+    /// Creates a compact request that sends official required `model: null`.
     #[must_use]
-    pub fn new(model: impl Into<String>) -> Self {
+    pub fn empty() -> Self {
         Self {
-            model: model.into(),
+            model: Nullable::Null,
             input: Omittable::Omitted,
             instructions: Omittable::Omitted,
             previous_response_id: Omittable::Omitted,
@@ -1894,10 +2699,46 @@ impl BetaCompactResponseRequest {
         }
     }
 
+    /// Creates the required model-only compact request.
+    #[must_use]
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            model: Nullable::Value(model.into()),
+            input: Omittable::Omitted,
+            instructions: Omittable::Omitted,
+            previous_response_id: Omittable::Omitted,
+            prompt_cache_key: Omittable::Omitted,
+            prompt_cache_options: Omittable::Omitted,
+            prompt_cache_retention: Omittable::Omitted,
+            service_tier: Omittable::Omitted,
+        }
+    }
+
+    /// Sets the model id.
+    #[must_use]
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Nullable::Value(model.into());
+        self
+    }
+
+    /// Sends `model: null`.
+    #[must_use]
+    pub fn model_null(mut self) -> Self {
+        self.model = Nullable::Null;
+        self
+    }
+
     /// Sets input to compact.
     #[must_use]
     pub fn input(mut self, input: impl Into<BetaResponseInput>) -> Self {
         self.input = Omittable::Value(Nullable::Value(input.into()));
+        self
+    }
+
+    /// Sends `input: null`.
+    #[must_use]
+    pub fn input_null(mut self) -> Self {
+        self.input = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -1908,10 +2749,24 @@ impl BetaCompactResponseRequest {
         self
     }
 
+    /// Sends `instructions: null`.
+    #[must_use]
+    pub fn instructions_null(mut self) -> Self {
+        self.instructions = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Continues from one stored response.
     #[must_use]
     pub fn previous_response_id(mut self, id: impl Into<String>) -> Self {
         self.previous_response_id = Omittable::Value(Nullable::Value(id.into()));
+        self
+    }
+
+    /// Sends `previous_response_id: null`.
+    #[must_use]
+    pub fn previous_response_id_null(mut self) -> Self {
+        self.previous_response_id = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -1922,10 +2777,24 @@ impl BetaCompactResponseRequest {
         self
     }
 
+    /// Sends `prompt_cache_key: null`.
+    #[must_use]
+    pub fn prompt_cache_key_null(mut self) -> Self {
+        self.prompt_cache_key = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Sets prompt-cache options.
     #[must_use]
-    pub fn prompt_cache_options(mut self, options: BetaPromptCacheOptions) -> Self {
+    pub fn prompt_cache_options(mut self, options: BetaPromptCacheOptionsParam) -> Self {
         self.prompt_cache_options = Omittable::Value(Nullable::Value(options));
+        self
+    }
+
+    /// Sends `prompt_cache_options: null`.
+    #[must_use]
+    pub fn prompt_cache_options_null(mut self) -> Self {
+        self.prompt_cache_options = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -1936,11 +2805,51 @@ impl BetaCompactResponseRequest {
         self
     }
 
+    /// Sends `prompt_cache_retention: null`.
+    #[must_use]
+    pub fn prompt_cache_retention_null(mut self) -> Self {
+        self.prompt_cache_retention = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Sets the requested service tier.
     #[must_use]
     pub fn service_tier(mut self, tier: BetaServiceTier) -> Self {
         self.service_tier = Omittable::Value(Nullable::Value(tier));
         self
+    }
+
+    /// Sends `service_tier: null`.
+    #[must_use]
+    pub fn service_tier_null(mut self) -> Self {
+        self.service_tier = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CompactResponseConstraintError> {
+        if let Omittable::Value(Nullable::Value(key)) = &self.prompt_cache_key {
+            let actual = key.chars().count();
+            if actual > MAX_PROMPT_CACHE_KEY_CHARS {
+                return Err(CompactResponseConstraintError::PromptCacheKey {
+                    actual,
+                    maximum: MAX_PROMPT_CACHE_KEY_CHARS,
+                });
+            }
+        }
+        if let Omittable::Value(Nullable::Value(BetaResponseInput::Text(input))) = &self.input {
+            let actual = input.chars().count();
+            if actual > MAX_COMPACT_INPUT_CHARS {
+                return Err(CompactResponseConstraintError::InputLength {
+                    actual,
+                    maximum: MAX_COMPACT_INPUT_CHARS,
+                });
+            }
+        }
+        if let Omittable::Value(Nullable::Value(input)) = &self.input {
+            validate_beta_response_input(input)?;
+        }
+        Ok(())
     }
 }
 
@@ -2187,9 +3096,23 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sends `model: null`.
+    #[must_use]
+    pub fn model_null(mut self) -> Self {
+        self.model = Omittable::Value(Nullable::Null);
+        self
+    }
+
     #[must_use]
     pub fn input(mut self, input: impl Into<BetaResponseInput>) -> Self {
         self.input = Omittable::Value(Nullable::Value(input.into()));
+        self
+    }
+
+    /// Sends `input: null`.
+    #[must_use]
+    pub fn input_null(mut self) -> Self {
+        self.input = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -2199,15 +3122,36 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sends `instructions: null`.
+    #[must_use]
+    pub fn instructions_null(mut self) -> Self {
+        self.instructions = Omittable::Value(Nullable::Null);
+        self
+    }
+
     #[must_use]
     pub fn conversation(mut self, conversation: impl Into<ConversationReference>) -> Self {
         self.conversation = Omittable::Value(Nullable::Value(conversation.into()));
         self
     }
 
+    /// Sends `conversation: null`.
+    #[must_use]
+    pub fn conversation_null(mut self) -> Self {
+        self.conversation = Omittable::Value(Nullable::Null);
+        self
+    }
+
     #[must_use]
     pub fn parallel_tool_calls(mut self, enabled: bool) -> Self {
         self.parallel_tool_calls = Omittable::Value(Nullable::Value(enabled));
+        self
+    }
+
+    /// Sends `parallel_tool_calls: null`.
+    #[must_use]
+    pub fn parallel_tool_calls_null(mut self) -> Self {
+        self.parallel_tool_calls = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -2223,9 +3167,23 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sends `previous_response_id: null`.
+    #[must_use]
+    pub fn previous_response_id_null(mut self) -> Self {
+        self.previous_response_id = Omittable::Value(Nullable::Null);
+        self
+    }
+
     #[must_use]
     pub fn reasoning(mut self, reasoning: BetaReasoningConfig) -> Self {
         self.reasoning = Omittable::Value(Nullable::Value(reasoning));
+        self
+    }
+
+    /// Sends `reasoning: null`.
+    #[must_use]
+    pub fn reasoning_null(mut self) -> Self {
+        self.reasoning = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -2235,9 +3193,23 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sends `text: null`.
+    #[must_use]
+    pub fn text_null(mut self) -> Self {
+        self.text = Omittable::Value(Nullable::Null);
+        self
+    }
+
     #[must_use]
     pub fn tool_choice(mut self, choice: ToolChoice) -> Self {
         self.tool_choice = Omittable::Value(Nullable::Value(choice));
+        self
+    }
+
+    /// Sends `tool_choice: null`.
+    #[must_use]
+    pub fn tool_choice_null(mut self) -> Self {
+        self.tool_choice = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -2257,10 +3229,37 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sends `tools: null`.
+    #[must_use]
+    pub fn tools_null(mut self) -> Self {
+        self.tools = Omittable::Value(Nullable::Null);
+        self
+    }
+
     #[must_use]
     pub fn truncation(mut self, truncation: TruncationStrategy) -> Self {
         self.truncation = Omittable::Value(truncation);
         self
+    }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CountInputTokensConstraintError> {
+        if let Omittable::Value(Nullable::Value(BetaResponseInput::Text(input))) = &self.input {
+            let actual = input.chars().count();
+            if actual > MAX_COMPACT_INPUT_CHARS {
+                return Err(CountInputTokensConstraintError::InputLength {
+                    actual,
+                    maximum: MAX_COMPACT_INPUT_CHARS,
+                });
+            }
+        }
+        if let Omittable::Value(Nullable::Value(input)) = &self.input {
+            validate_beta_response_input(input)?;
+        }
+        if let Omittable::Value(Nullable::Value(tools)) = &self.tools {
+            validate_response_tools(tools)?;
+        }
+        Ok(())
     }
 }
 
@@ -2425,6 +3424,14 @@ impl BetaResponsesCreateEvent {
     pub fn stream_id_ref(&self) -> Option<&str> {
         omitted_ref(&self.stream_id).map(String::as_str)
     }
+
+    /// Checks pinned OpenAPI `stream_id` and create-body limits.
+    pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        if let Omittable::Value(stream_id) = &self.stream_id {
+            validate_websocket_stream_id(stream_id)?;
+        }
+        self.request.validate().map(|_| ())
+    }
 }
 
 impl Serialize for BetaResponsesCreateEvent {
@@ -2469,6 +3476,33 @@ impl<'de> Deserialize<'de> for BetaResponsesCreateEvent {
 
 literal_tag!(ResponseInjectTag, ResponseInject, "response.inject");
 
+/// Inclusive maximum for `response.inject` `input` items.
+pub const MAX_BETA_RESPONSE_INJECT_ITEMS: usize = 16_384;
+
+/// A `response.inject` value that violates a pinned OpenAPI constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum BetaResponseInjectConstraintError {
+    /// `input` lists more than 16,384 items.
+    #[error("response.inject input has {actual} items; maximum is {maximum}")]
+    InputItemCount {
+        /// Observed item count.
+        actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+}
+
+fn validate_inject_item_count(actual: usize) -> Result<(), BetaResponseInjectConstraintError> {
+    if actual > MAX_BETA_RESPONSE_INJECT_ITEMS {
+        return Err(BetaResponseInjectConstraintError::InputItemCount {
+            actual,
+            maximum: MAX_BETA_RESPONSE_INJECT_ITEMS,
+        });
+    }
+    Ok(())
+}
+
 /// Atomically injects client-owned tool outputs into an active response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BetaResponseInjectEvent {
@@ -2502,6 +3536,11 @@ impl BetaResponseInjectEvent {
     #[must_use]
     pub fn input(&self) -> &[BetaResponseInputItem] {
         &self.input
+    }
+
+    /// Checks pinned OpenAPI `input` `maxItems` without sending the event.
+    pub fn validate(&self) -> Result<(), BetaResponseInjectConstraintError> {
+        validate_inject_item_count(self.input.len())
     }
 }
 
@@ -3149,19 +4188,112 @@ mod tests {
         let value = serde_json::to_value(&request).expect("serialize create");
         assert_eq!(value["multi_agent"]["enabled"], true);
         assert_eq!(value["multi_agent"]["max_concurrent_subagents"], 4);
+        request
+            .validate()
+            .expect("official concurrent-subagent floor accepts 4");
+        assert_eq!(MIN_CONCURRENT_SUBAGENTS, 1);
+        BetaCreateResponseRequest::empty()
+            .multi_agent(BetaMultiAgentConfig::new(true).max_concurrent_subagents(1))
+            .validate()
+            .expect("official minimum concurrent subagents is accepted");
+        assert!(matches!(
+            BetaCreateResponseRequest::empty()
+                .multi_agent(BetaMultiAgentConfig::new(true).max_concurrent_subagents(0))
+                .validate(),
+            Err(CreateResponseConstraintError::ConcurrentSubagents {
+                actual: 0,
+                minimum: 1
+            })
+        ));
+        let decoded = serde_json::from_value::<BetaCreateResponseRequest>(json!({
+            "model": "gpt-test",
+            "multi_agent": {"enabled": true, "max_concurrent_subagents": 0}
+        }))
+        .expect("serde remains lossless");
+        assert!(decoded.validate().is_err());
         assert_eq!(value["input"][0]["type"], "agent_message");
         assert!(value.get("stream").is_none());
 
-        let streaming = request.into_streaming();
-        let streaming_value = serde_json::to_value(streaming).expect("serialize stream create");
+        let streaming = request.into_streaming().stream_options_null();
+        let streaming_value = serde_json::to_value(&streaming).expect("serialize stream create");
         assert_eq!(streaming_value["stream"], true);
+        assert_eq!(streaming_value["stream_options"], Value::Null);
+        let decoded_stream = serde_json::from_value::<BetaCreateStreamingResponseRequest>(json!({
+            "model": "gpt-test",
+            "input": "hello",
+            "stream": true,
+            "stream_options": null
+        }))
+        .expect("official stream_options null decodes");
+        assert_eq!(
+            serde_json::to_value(decoded_stream).expect("re-encode")["stream_options"],
+            Value::Null
+        );
+
+        let cleared = BetaCreateResponseRequest::empty()
+            .instructions_null()
+            .conversation_null()
+            .prompt_null()
+            .prompt_cache_retention_null()
+            .safety_identifier_null()
+            .service_tier_null()
+            .top_logprobs_null()
+            .reasoning(
+                BetaReasoningConfig::new()
+                    .effort_null()
+                    .generate_summary_null(),
+            );
+        let cleared_value = serde_json::to_value(&cleared).expect("serialize official nulls");
+        for key in [
+            "instructions",
+            "conversation",
+            "prompt",
+            "prompt_cache_retention",
+            "safety_identifier",
+            "service_tier",
+            "top_logprobs",
+        ] {
+            assert_eq!(cleared_value[key], Value::Null, "{key}");
+        }
+        assert_eq!(cleared_value["reasoning"]["effort"], Value::Null);
+        assert_eq!(cleared_value["reasoning"]["generate_summary"], Value::Null);
+        cleared.validate().expect("null fields stay in range");
 
         let count = BetaCountInputTokensRequest::new("gpt-test", "hello")
             .personality("friendly")
             .reasoning(BetaReasoningConfig::new().effort(BetaReasoningEffort::Max));
-        let count_value = serde_json::to_value(count).expect("serialize count");
+        let count_value = serde_json::to_value(&count).expect("serialize count");
         assert_eq!(count_value["personality"], "friendly");
         assert_eq!(count_value["reasoning"]["effort"], "max");
+        count.validate().expect("documented fields stay in range");
+
+        let cleared = BetaCountInputTokensRequest::empty()
+            .model_null()
+            .input_null()
+            .instructions_null()
+            .conversation_null()
+            .parallel_tool_calls_null()
+            .previous_response_id_null()
+            .reasoning_null()
+            .text_null()
+            .tool_choice_null()
+            .tools_null();
+        let cleared_value = serde_json::to_value(&cleared).expect("serialize official nulls");
+        for key in [
+            "model",
+            "input",
+            "instructions",
+            "conversation",
+            "parallel_tool_calls",
+            "previous_response_id",
+            "reasoning",
+            "text",
+            "tool_choice",
+            "tools",
+        ] {
+            assert_eq!(cleared_value[key], Value::Null, "{key}");
+        }
+        cleared.validate().expect("null fields stay in range");
     }
 
     #[test]
@@ -3209,6 +4341,88 @@ mod tests {
     }
 
     #[test]
+    fn compact_request_sends_official_nulls_and_enforces_pin_limits() {
+        let request = BetaCompactResponseRequest::empty()
+            .model_null()
+            .input_null()
+            .instructions_null()
+            .previous_response_id_null()
+            .prompt_cache_key_null()
+            .prompt_cache_options_null()
+            .prompt_cache_retention_null()
+            .service_tier_null();
+        let value = serde_json::to_value(&request).expect("serialize");
+        for key in [
+            "model",
+            "input",
+            "instructions",
+            "previous_response_id",
+            "prompt_cache_key",
+            "prompt_cache_options",
+            "prompt_cache_retention",
+            "service_tier",
+        ] {
+            assert_eq!(value[key], Value::Null, "{key}");
+        }
+        request.validate().expect("null fields stay in range");
+        assert_eq!(request.model, Nullable::Null);
+        assert!(
+            serde_json::from_value::<BetaCompactResponseRequest>(json!({})).is_err(),
+            "official BetaCompactResponseMethodPublicBody requires model"
+        );
+        assert!(
+            serde_json::from_value::<BetaCompactResponseRequest>(json!({ "input": "hello" }))
+                .is_err(),
+            "omitting model is unofficial even when input is present"
+        );
+
+        BetaCompactResponseRequest::new("gpt-5.6")
+            .input("hello")
+            .prompt_cache_key("a".repeat(MAX_PROMPT_CACHE_KEY_CHARS))
+            .validate()
+            .expect("64-character key is accepted");
+        assert!(matches!(
+            BetaCompactResponseRequest::new("gpt-5.6")
+                .input("hello")
+                .prompt_cache_key("a".repeat(MAX_PROMPT_CACHE_KEY_CHARS + 1))
+                .validate(),
+            Err(CompactResponseConstraintError::PromptCacheKey { actual: 65, .. })
+        ));
+        let decoded = serde_json::from_value::<BetaCompactResponseRequest>(json!({
+            "model": null,
+            "input": "hello",
+            "prompt_cache_key": "a".repeat(65)
+        }))
+        .expect("serde remains lossless");
+        assert!(decoded.validate().is_err());
+
+        let extra_tools = crate::responses::AdditionalToolsInput::new(vec![
+            crate::responses::ResponseTool::from(
+                crate::responses::FunctionTool::new("lookup").allowed_callers(Vec::<String>::new()),
+            ),
+        ]);
+        assert!(matches!(
+            BetaCompactResponseRequest::new("gpt-5.6")
+                .input(vec![ResponseInputItem::AdditionalTools(extra_tools).into()])
+                .validate(),
+            Err(CompactResponseConstraintError::Input(
+                CreateResponseConstraintError::EmptyAllowedCallers
+            ))
+        ));
+        assert!(matches!(
+            BetaCountInputTokensRequest::empty()
+                .tool(
+                    crate::responses::FunctionTool::new("lookup")
+                        .allowed_callers(Vec::<String>::new()),
+                )
+                .validate(),
+            Err(CountInputTokensConstraintError::Input(
+                CreateResponseConstraintError::EmptyAllowedCallers
+            ))
+        ));
+    }
+
+    #[test]
     fn future_stable_and_beta_tags_remain_lossless() {
         let fixture = json!({
             "type": "future_multi_agent_item",
@@ -3219,5 +4433,489 @@ mod tests {
         let item: BetaResponseInputItem =
             serde_json::from_value(fixture.clone()).expect("decode future input");
         assert_eq!(serde_json::to_value(item).expect("round trip"), fixture);
+    }
+
+    #[test]
+    fn beta_item_official_nulls_match_openapi() {
+        let core: ResponseInputItem = serde_json::from_value(json!({
+            "role": "user",
+            "content": "hello"
+        }))
+        .expect("decode easy input");
+        let stable = BetaStableInputItem::new(core)
+            .agent_null()
+            .caller_null()
+            .phase_null();
+        let stable_value = serde_json::to_value(&stable).expect("serialize stable nulls");
+        assert_eq!(stable_value["agent"], Value::Null);
+        assert_eq!(stable_value["caller"], Value::Null);
+        assert_eq!(stable_value["phase"], Value::Null);
+
+        let cached = BetaPromptCachedInputMessage::user([BetaPromptCachedInputContent::new(
+            crate::responses::InputText::new("hello"),
+        )
+        .prompt_cache_breakpoint_null()])
+        .id_null()
+        .agent_null()
+        .phase_null()
+        .status_null();
+        let cached_value = serde_json::to_value(&cached).expect("serialize cached nulls");
+        assert_eq!(cached_value["id"], Value::Null);
+        assert_eq!(cached_value["agent"], Value::Null);
+        assert_eq!(cached_value["phase"], Value::Null);
+        assert_eq!(cached_value["status"], Value::Null);
+        assert_eq!(
+            cached_value["content"][0]["prompt_cache_breakpoint"],
+            Value::Null
+        );
+
+        assert_eq!(
+            serde_json::to_value(&BetaAgentInputText::new("hi").prompt_cache_breakpoint_null())
+                .expect("serialize agent text breakpoint null")["prompt_cache_breakpoint"],
+            Value::Null
+        );
+        let image = BetaAgentInputImage::from_url("https://example.com/a.png")
+            .file_id_null()
+            .image_url_null()
+            .prompt_cache_breakpoint_null();
+        let image_value = serde_json::to_value(&image).expect("serialize agent image nulls");
+        assert_eq!(image_value["detail"], "auto");
+        assert_eq!(image_value["file_id"], Value::Null);
+        assert_eq!(image_value["image_url"], Value::Null);
+        assert_eq!(image_value["prompt_cache_breakpoint"], Value::Null);
+
+        assert_eq!(
+            serde_json::to_value(
+                &BetaAgentMessage::new("root", "child", [BetaAgentInputText::new("hi")])
+                    .id_null()
+                    .agent_null()
+            )
+            .expect("serialize agent message nulls")["agent"],
+            Value::Null
+        );
+        assert_eq!(
+            serde_json::to_value(
+                &BetaMultiAgentCall::from_raw(BetaMultiAgentAction::ListAgents, "call_1", "{}")
+                    .id_null()
+                    .agent_null()
+            )
+            .expect("serialize multi-agent call nulls")["id"],
+            Value::Null
+        );
+        assert_eq!(
+            serde_json::to_value(
+                &BetaMultiAgentCallOutput::new(
+                    BetaMultiAgentAction::WaitAgent,
+                    "call_1",
+                    [BetaMultiAgentOutputText::new("done")],
+                )
+                .id_null()
+                .agent_null()
+            )
+            .expect("serialize multi-agent output nulls")["agent"],
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn official_beta_output_text_annotation_null_decodes() {
+        let event: BetaResponseStreamEvent = serde_json::from_value(json!({
+            "type": "response.output_text.annotation.added",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "annotation_index": 0,
+            "sequence_number": 1,
+            "annotation": null,
+            "agent": null
+        }))
+        .expect("official beta annotation and agent nulls");
+        assert!(matches!(
+            event.core(),
+            ResponseStreamEvent::OutputTextAnnotationAdded(_)
+        ));
+        assert_eq!(event.agent(), None);
+        assert_eq!(
+            serde_json::to_value(&event).expect("re-encode")["annotation"],
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn official_beta_response_usage_and_user_nulls_decode() {
+        let created = serde_json::from_value::<BetaResponse>(json!({
+            "id": "resp_beta_1",
+            "created_at": 1,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-test",
+            "object": "response",
+            "output": [],
+            "parallel_tool_calls": true,
+            "temperature": null,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": null,
+            "completed_at": null,
+            "max_output_tokens": null,
+            "previous_response_id": null,
+            "usage": null,
+            "user": null
+        }))
+        .expect("official created-event usage/user nulls");
+        assert_eq!(created.usage(), None);
+        assert_eq!(
+            serde_json::to_value(&created).expect("re-encode")["usage"],
+            Value::Null
+        );
+        assert_eq!(
+            serde_json::to_value(&created).expect("re-encode")["user"],
+            Value::Null
+        );
+        assert!(
+            serde_json::from_value::<BetaResponse>(json!({
+                "id": "resp_beta_1",
+                "created_at": 1,
+                "error": null,
+                "incomplete_details": null,
+                "instructions": null,
+                "metadata": null,
+                "model": "gpt-test",
+                "object": "response",
+                "output": [],
+                "parallel_tool_calls": true,
+                "temperature": null,
+                "tool_choice": "auto",
+                "tools": [],
+                "top_p": null,
+                "usage": null,
+                "user": null,
+                "status": null
+            }))
+            .is_err(),
+            "unofficial status null still fails"
+        );
+    }
+
+    #[test]
+    fn official_beta_response_item_list_user_message_resource_decodes() {
+        let fixture = json!({
+            "object": "list",
+            "data": [{
+                "id": "msg_abc123",
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "Tell me a three sentence bedtime story about a unicorn."
+                }]
+            }],
+            "first_id": "msg_abc123",
+            "last_id": "msg_abc123",
+            "has_more": false
+        });
+        let decoded: BetaResponseItemList =
+            serde_json::from_value(fixture).expect("official BetaInputMessageResource list");
+        match &decoded.data()[0] {
+            BetaResponseInputItem::Stable(item) => {
+                assert!(
+                    matches!(item.core(), ResponseInputItem::StoredMessage(_)),
+                    "beta user message resources must not route to assistant OutputMessage"
+                );
+            }
+            other => panic!("expected stable stored input, got {other:?}"),
+        }
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode")["data"][0]["id"],
+            "msg_abc123"
+        );
+    }
+
+    #[test]
+    fn inject_event_validate_enforces_official_max_items() {
+        assert_eq!(MAX_BETA_RESPONSE_INJECT_ITEMS, 16_384);
+        validate_inject_item_count(0).expect("empty inject input is accepted");
+        validate_inject_item_count(MAX_BETA_RESPONSE_INJECT_ITEMS)
+            .expect("inject input at official maxItems is accepted");
+        assert!(matches!(
+            validate_inject_item_count(MAX_BETA_RESPONSE_INJECT_ITEMS + 1),
+            Err(BetaResponseInjectConstraintError::InputItemCount {
+                actual: 16_385,
+                maximum: 16_384
+            })
+        ));
+
+        let event = BetaResponseInjectEvent::new(
+            "resp_123",
+            [ResponseInputItem::from(crate::FunctionCallOutput::new(
+                "call_123",
+                "{\"temperature\":72}",
+            ))],
+        );
+        event.validate().expect("one inject item is accepted");
+        serde_json::from_value::<BetaResponseInjectEvent>(json!({
+            "type": "response.inject",
+            "response_id": "resp_123",
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_123",
+                "output": "{\"temperature\":72}"
+            }]
+        }))
+        .expect("serde remains lossless")
+        .validate()
+        .expect("decoded in-range inject input is accepted");
+    }
+
+    #[test]
+    fn create_event_validate_enforces_official_stream_id() {
+        BetaResponsesCreateEvent::from_request(BetaCreateResponseRequest::new("gpt-test", "hello"))
+            .stream_id("lane.1")
+            .validate()
+            .expect("documented beta stream_id is accepted");
+        assert!(matches!(
+            BetaResponsesCreateEvent::from_request(BetaCreateResponseRequest::new(
+                "gpt-test", "hello"
+            ))
+            .stream_id("lane 1")
+            .validate(),
+            Err(CreateResponseConstraintError::StreamId { .. })
+        ));
+    }
+
+    #[test]
+    fn create_request_validate_walks_official_input_text_and_agent_payloads() {
+        BetaCreateResponseRequest::new(
+            "gpt-test",
+            vec![BetaResponseInputItem::from(
+                crate::responses::ResponseInputItem::from(crate::responses::InputMessage::user(
+                    crate::responses::MessageContent::Parts(vec![
+                        crate::responses::InputText::new("hello").into(),
+                    ]),
+                )),
+            )],
+        )
+        .validate()
+        .expect("short beta input_text is accepted");
+        BetaAgentInputText::new("hello")
+            .validate()
+            .expect("short inter-agent text is accepted");
+        BetaAgentInputImage::from_url("https://example.test/a.png")
+            .validate()
+            .expect("short inter-agent image_url is accepted");
+        BetaAgentInputImage::from_file_id("file_1")
+            .image_url_null()
+            .validate()
+            .expect("official inter-agent image_url null skips the length bound");
+        BetaAgentInputImageParam::from_url("https://example.test/a.png")
+            .validate()
+            .expect("short Param inter-agent image_url is accepted");
+        BetaAgentInputImageParam::from_file_id("file_1")
+            .image_url_null()
+            .validate()
+            .expect("official Param image_url null skips the length bound");
+        BetaAgentEncryptedContent::new("enc")
+            .validate()
+            .expect("short inter-agent encrypted_content is accepted");
+        assert_eq!(MAX_INPUT_TEXT_CHARS, 10_485_760);
+        assert!(matches!(
+            validate_input_text_chars(MAX_INPUT_TEXT_CHARS + 1),
+            Err(CreateResponseConstraintError::InputText {
+                actual: 10_485_761,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn official_beta_include_enum_names_web_search_results() {
+        const OFFICIAL_BETA_INCLUDE: [&str; 8] = [
+            "file_search_call.results",
+            "web_search_call.results",
+            "web_search_call.action.sources",
+            "message.input_image.image_url",
+            "computer_call_output.output.image_url",
+            "code_interpreter_call.outputs",
+            "reasoning.encrypted_content",
+            "message.output_text.logprobs",
+        ];
+        for value in OFFICIAL_BETA_INCLUDE {
+            let decoded = BetaResponseIncludable::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official BetaIncludeEnum value {value} must be a named variant"
+            );
+            assert_eq!(decoded.as_str(), value);
+        }
+        assert_eq!(
+            BetaResponseIncludable::WebSearchResults.as_str(),
+            "web_search_call.results"
+        );
+        let retrieve =
+            BetaRetrieveResponseParams::new().include(BetaResponseIncludable::WebSearchResults);
+        assert_eq!(
+            serde_json::to_value(&retrieve).expect("serialize retrieve include"),
+            json!({"include": ["web_search_call.results"]})
+        );
+        let listed =
+            BetaListInputItemsParams::new().include(BetaResponseIncludable::WebSearchResults);
+        assert_eq!(
+            serde_json::to_value(&listed).expect("serialize list include"),
+            json!({"include": ["web_search_call.results"]})
+        );
+    }
+
+    #[test]
+    fn official_beta_input_image_content_requires_detail() {
+        let official = json!({
+            "type": "input_image",
+            "image_url": "https://example.test/a.png",
+            "detail": "high"
+        });
+        let decoded: BetaAgentInputImage =
+            serde_json::from_value(official).expect("official BetaInputImageContent");
+        assert_eq!(decoded.detail_ref(), &crate::responses::ImageDetail::High);
+        assert!(
+            serde_json::from_value::<BetaAgentInputImage>(json!({
+                "type": "input_image",
+                "image_url": "https://example.test/a.png"
+            }))
+            .is_err(),
+            "official BetaInputImageContent requires detail"
+        );
+        assert!(
+            serde_json::from_value::<BetaAgentInputImage>(json!({
+                "type": "input_image",
+                "image_url": "https://example.test/a.png",
+                "detail": null
+            }))
+            .is_err(),
+            "official BetaInputImageContent detail is not nullable"
+        );
+        assert_eq!(
+            serde_json::to_value(&BetaAgentInputImage::from_url("https://example.test/a.png"))
+                .expect("constructor sends documented default")["detail"],
+            "auto"
+        );
+    }
+
+    #[test]
+    fn official_beta_agent_message_param_omits_image_detail() {
+        let official = json!({
+            "type": "agent_message",
+            "author": "root",
+            "recipient": "child",
+            "content": [{
+                "type": "input_image",
+                "image_url": "https://example.test/a.png"
+            }]
+        });
+        let decoded: BetaAgentMessage = serde_json::from_value(official)
+            .expect("official BetaAgentMessageItemParam image omits detail");
+        match &decoded.content()[0] {
+            BetaAgentMessageContent::Image(image) => {
+                assert_eq!(image.image_url(), Some("https://example.test/a.png"));
+                assert_eq!(
+                    serde_json::to_value(image)
+                        .expect("re-encode param image")
+                        .get("detail"),
+                    None
+                );
+            }
+            other => panic!("expected BetaAgentInputImageParam, got {other:?}"),
+        }
+        assert_eq!(
+            serde_json::to_value(&BetaAgentInputImageParam::from_url(
+                "https://example.test/a.png"
+            ))
+            .expect("param constructor omits detail")
+            .get("detail"),
+            None
+        );
+        let with_null = serde_json::from_value::<BetaAgentMessage>(json!({
+            "type": "agent_message",
+            "author": "root",
+            "recipient": "child",
+            "content": [{
+                "type": "input_image",
+                "image_url": "https://example.test/a.png",
+                "detail": null
+            }]
+        }))
+        .expect("official Param detail null");
+        assert!(matches!(
+            &with_null.content()[0],
+            BetaAgentMessageContent::Image(_)
+        ));
+        assert!(
+            serde_json::from_value::<BetaAgentInputImage>(json!({
+                "type": "input_image",
+                "image_url": "https://example.test/a.png"
+            }))
+            .is_err(),
+            "resource BetaInputImageContent still requires detail"
+        );
+    }
+
+    #[test]
+    fn official_beta_agent_message_names_resource_content() {
+        const OFFICIAL_RESOURCE_TAGS: [&str; 10] = [
+            "input_text",
+            "output_text",
+            "text",
+            "summary_text",
+            "reasoning_text",
+            "refusal",
+            "input_image",
+            "computer_screenshot",
+            "input_file",
+            "encrypted_content",
+        ];
+        for tag in OFFICIAL_RESOURCE_TAGS {
+            let part = match tag {
+                "input_text" => json!({"type": "input_text", "text": "hi"}),
+                "output_text" => json!({
+                    "type": "output_text",
+                    "text": "done",
+                    "annotations": [],
+                    "logprobs": []
+                }),
+                "text" => json!({"type": "text", "text": "plain"}),
+                "summary_text" => json!({"type": "summary_text", "text": "sum"}),
+                "reasoning_text" => json!({"type": "reasoning_text", "text": "think"}),
+                "refusal" => json!({"type": "refusal", "refusal": "no"}),
+                "input_image" => json!({
+                    "type": "input_image",
+                    "image_url": "https://example.test/a.png",
+                    "detail": "high"
+                }),
+                "computer_screenshot" => json!({
+                    "type": "computer_screenshot",
+                    "image_url": "https://example.test/s.png",
+                    "file_id": null,
+                    "detail": "auto"
+                }),
+                "input_file" => json!({"type": "input_file", "file_id": "file_1"}),
+                "encrypted_content" => json!({
+                    "type": "encrypted_content",
+                    "encrypted_content": "enc"
+                }),
+                other => panic!("unhandled official tag {other}"),
+            };
+            let decoded: BetaAgentMessage = serde_json::from_value(json!({
+                "type": "agent_message",
+                "id": "amsg_1",
+                "author": "root",
+                "recipient": "child",
+                "content": [part]
+            }))
+            .unwrap_or_else(|error| panic!("official {tag} must decode: {error}"));
+            assert!(
+                !matches!(decoded.content()[0], BetaAgentMessageContent::Unknown(_)),
+                "official BetaAgentMessage {tag} must be a named member"
+            );
+        }
     }
 }

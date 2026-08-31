@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::{ExtraFields, ModelId, Nullable, Omittable, open_string_enum};
 
@@ -25,20 +26,20 @@ pub struct Model {
     pub object: ModelObject,
     /// Organization or system that owns the model.
     pub owned_by: String,
-    /// Date the model will shut down, when announced.
+    /// Announced shutdown date (`YYYY-MM-DD`) or explicit null.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    shutdown_date: Omittable<Nullable<String>>,
+    pub shutdown_date: Omittable<Nullable<String>>,
     /// Forward-compatible response properties.
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl Model {
-    /// Date the model will shut down, when present and non-null.
+    /// Returns the announced shutdown date when present and non-null.
     #[must_use]
     pub fn shutdown_date(&self) -> Option<&str> {
         match &self.shutdown_date {
-            Omittable::Value(Nullable::Value(value)) => Some(value.as_str()),
+            Omittable::Value(Nullable::Value(value)) => Some(value),
             Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
     }
@@ -196,6 +197,102 @@ impl CreateEmbeddingRequest {
         self.user = user.into().into();
         self
     }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateEmbeddingConstraintError> {
+        match &self.input {
+            EmbeddingInput::Text(text) if text.is_empty() => {
+                return Err(CreateEmbeddingConstraintError::EmptyInput);
+            }
+            EmbeddingInput::Texts(texts) => {
+                check_embedding_batch_len(texts.len())?;
+                for (index, text) in texts.iter().enumerate() {
+                    if text.is_empty() {
+                        return Err(CreateEmbeddingConstraintError::EmptyInputItem { index });
+                    }
+                }
+            }
+            EmbeddingInput::Tokens(tokens) => {
+                check_embedding_batch_len(tokens.len())?;
+            }
+            EmbeddingInput::TokenBatches(batches) => {
+                check_embedding_batch_len(batches.len())?;
+                for (index, tokens) in batches.iter().enumerate() {
+                    if tokens.is_empty() {
+                        return Err(CreateEmbeddingConstraintError::EmptyTokenBatch { index });
+                    }
+                }
+            }
+            EmbeddingInput::Text(_) => {}
+        }
+        if let Omittable::Value(dimensions) = self.dimensions
+            && dimensions < MIN_EMBEDDING_DIMENSIONS
+        {
+            return Err(CreateEmbeddingConstraintError::Dimensions {
+                actual: dimensions,
+                minimum: MIN_EMBEDDING_DIMENSIONS,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Inclusive minimum for `CreateEmbeddingRequest.dimensions`.
+pub const MIN_EMBEDDING_DIMENSIONS: u32 = 1;
+/// Inclusive minimum array length for embedding inputs.
+pub const MIN_EMBEDDING_BATCH_ITEMS: usize = 1;
+/// Inclusive maximum array length for embedding inputs.
+pub const MAX_EMBEDDING_BATCH_ITEMS: usize = 2048;
+
+fn check_embedding_batch_len(actual: usize) -> Result<(), CreateEmbeddingConstraintError> {
+    if (MIN_EMBEDDING_BATCH_ITEMS..=MAX_EMBEDDING_BATCH_ITEMS).contains(&actual) {
+        Ok(())
+    } else {
+        Err(CreateEmbeddingConstraintError::InputCount {
+            actual,
+            minimum: MIN_EMBEDDING_BATCH_ITEMS,
+            maximum: MAX_EMBEDDING_BATCH_ITEMS,
+        })
+    }
+}
+
+/// A create-request value that violates a pinned Embeddings constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CreateEmbeddingConstraintError {
+    /// A scalar string input is empty.
+    #[error("embedding input must not be an empty string")]
+    EmptyInput,
+    /// One string in a batch is empty.
+    #[error("embedding input[{index}] must not be an empty string")]
+    EmptyInputItem {
+        /// Zero-based index of the empty string.
+        index: usize,
+    },
+    /// One token array in a batch is empty.
+    #[error("embedding input[{index}] must contain at least one token")]
+    EmptyTokenBatch {
+        /// Zero-based index of the empty token array.
+        index: usize,
+    },
+    /// A string, token, or token-batch array is empty or longer than 2048.
+    #[error("embedding input must contain {minimum}..={maximum} items, got {actual}")]
+    InputCount {
+        /// Observed item count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// `dimensions` is below the pinned minimum of 1.
+    #[error("dimensions must be at least {minimum}, got {actual}")]
+    Dimensions {
+        /// Rejected value.
+        actual: u32,
+        /// Contract minimum.
+        minimum: u32,
+    },
 }
 
 open_string_enum! {
@@ -421,15 +518,16 @@ pub struct ModerationResult {
     pub flagged: bool,
     /// Category flags keyed by the service's open category names.
     ///
-    /// `illicit` and `illicit/violent` are officially `boolean | null`; other
-    /// known categories are booleans. The map stays open so future names and
-    /// the two nullable keys round-trip.
+    /// Official `illicit` and `illicit/violent` are `boolean | null`; other
+    /// known categories are booleans. The map stays open so those nulls and
+    /// future names round-trip.
     pub categories: BTreeMap<String, Nullable<bool>>,
     /// Category scores keyed by the service's open category names.
     pub category_scores: BTreeMap<String, f64>,
-    /// Modalities that contributed to each category, when returned.
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub category_applied_input_types: Omittable<BTreeMap<String, Vec<ModerationAppliedInputType>>>,
+    /// Modalities that contributed to each category.
+    ///
+    /// Official `CreateModerationResponse` results require this property.
+    pub category_applied_input_types: BTreeMap<String, Vec<ModerationAppliedInputType>>,
     /// Forward-compatible response properties.
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -469,9 +567,12 @@ impl CreateModerationResponse {
 mod tests {
     use serde_json::{Value, json};
 
+    use crate::{Nullable, Omittable};
+
     use super::{
-        CreateEmbeddingRequest, CreateModerationRequest, CreateModerationResponse,
-        EmbeddingEncodingFormat,
+        CreateEmbeddingConstraintError, CreateEmbeddingRequest, CreateModerationRequest,
+        CreateModerationResponse, EmbeddingEncodingFormat, EmbeddingInput,
+        MAX_EMBEDDING_BATCH_ITEMS, Model, ModelList, ModerationAppliedInputType,
     };
 
     #[test]
@@ -509,6 +610,7 @@ mod tests {
                 "flagged": false,
                 "categories": {"future/category": true},
                 "category_scores": {"future/category": 0.42},
+                "category_applied_input_types": {"future/category": ["text"]},
                 "future_result_field": {"nested": true}
             }],
             "future_top_level": "retained"
@@ -519,12 +621,30 @@ mod tests {
             decoded.results[0].categories["future/category"],
             crate::Nullable::Value(true)
         );
+        assert_eq!(
+            decoded.results[0].category_applied_input_types["future/category"],
+            vec![ModerationAppliedInputType::Text]
+        );
         assert!(
             decoded.results[0]
                 .extra()
                 .contains_key("future_result_field")
         );
         assert_eq!(serde_json::to_value(decoded).expect("re-encode"), fixture);
+
+        assert!(
+            serde_json::from_value::<CreateModerationResponse>(json!({
+                "id": "modr_123",
+                "model": "omni-moderation-latest",
+                "results": [{
+                    "flagged": false,
+                    "categories": {},
+                    "category_scores": {}
+                }]
+            }))
+            .is_err(),
+            "official required category_applied_input_types must not be omitted"
+        );
     }
 
     #[test]
@@ -543,6 +663,11 @@ mod tests {
                     "hate": 0.01,
                     "illicit": 0.0,
                     "illicit/violent": 0.0
+                },
+                "category_applied_input_types": {
+                    "hate": ["text"],
+                    "illicit": ["text"],
+                    "illicit/violent": ["text"]
                 }
             }]
         });
@@ -568,55 +693,138 @@ mod tests {
     }
 
     #[test]
-    fn model_shutdown_date_keeps_omitted_null_and_value() {
-        use super::Model;
+    fn embedding_create_fields_match_python_and_openapi_inventory() {
+        let request = CreateEmbeddingRequest::new("text-embedding-3-small", "hello")
+            .with_encoding_format(EmbeddingEncodingFormat::Float)
+            .with_dimensions(256)
+            .with_user("user-1");
+        let value = serde_json::to_value(&request).expect("serialize");
+        let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            ["dimensions", "encoding_format", "input", "model", "user"]
+        );
+        request.validate().expect("documented fields stay in range");
+    }
+
+    #[test]
+    fn embedding_create_validate_enforces_pinned_limits() {
+        CreateEmbeddingRequest::new("text-embedding-3-small", "hello")
+            .with_dimensions(1)
+            .validate()
+            .expect("boundary values are accepted");
+
+        let empty = CreateEmbeddingRequest::new("text-embedding-3-small", "");
+        assert!(matches!(
+            empty.validate(),
+            Err(CreateEmbeddingConstraintError::EmptyInput)
+        ));
+
+        let empty_item = CreateEmbeddingRequest::new(
+            "text-embedding-3-small",
+            EmbeddingInput::Texts(vec!["ok".into(), String::new()]),
+        );
+        assert!(matches!(
+            empty_item.validate(),
+            Err(CreateEmbeddingConstraintError::EmptyInputItem { index: 1 })
+        ));
+
+        let oversized = CreateEmbeddingRequest::new(
+            "text-embedding-3-small",
+            EmbeddingInput::Texts(vec!["x".into(); MAX_EMBEDDING_BATCH_ITEMS + 1]),
+        );
+        assert!(matches!(
+            oversized.validate(),
+            Err(CreateEmbeddingConstraintError::InputCount { actual: 2049, .. })
+        ));
+
+        let zero_dim =
+            CreateEmbeddingRequest::new("text-embedding-3-small", "hello").with_dimensions(0);
+        assert!(matches!(
+            zero_dim.validate(),
+            Err(CreateEmbeddingConstraintError::Dimensions { actual: 0, .. })
+        ));
+
+        let decoded: CreateEmbeddingRequest = serde_json::from_value(json!({
+            "model": "text-embedding-3-small",
+            "input": "",
+            "dimensions": 0
+        }))
+        .expect("serde remains lossless");
+        assert!(decoded.validate().is_err());
+    }
+
+    #[test]
+    fn model_decodes_python_and_openapi_shutdown_date() {
+        let announced: Model = serde_json::from_value(json!({
+            "id": "gpt-test",
+            "object": "model",
+            "created": 1686935002,
+            "owned_by": "openai",
+            "shutdown_date": "2026-10-23"
+        }))
+        .expect("decode announced date");
+        assert_eq!(announced.shutdown_date(), Some("2026-10-23"));
+        assert!(!announced.extra().contains_key("shutdown_date"));
+
+        let explicit_null: Model = serde_json::from_value(json!({
+            "id": "model-id-0",
+            "object": "model",
+            "created": 1686935002,
+            "owned_by": "organization-owner",
+            "shutdown_date": null
+        }))
+        .expect("decode explicit null");
+        assert_eq!(
+            explicit_null.shutdown_date,
+            Omittable::Value(Nullable::Null)
+        );
+        assert_eq!(explicit_null.shutdown_date(), None);
 
         let omitted: Model = serde_json::from_value(json!({
             "id": "gpt-test",
-            "created": 1,
             "object": "model",
+            "created": 1,
             "owned_by": "openai"
         }))
-        .expect("decode without shutdown_date");
-        assert_eq!(omitted.shutdown_date(), None);
+        .expect("decode omitted date");
+        assert_eq!(omitted.shutdown_date, Omittable::Omitted);
         assert_eq!(
-            serde_json::to_value(&omitted).expect("encode omitted"),
+            serde_json::to_value(&omitted).expect("re-encode omitted"),
             json!({
                 "id": "gpt-test",
-                "created": 1,
                 "object": "model",
+                "created": 1,
                 "owned_by": "openai"
             })
         );
+    }
 
-        let explicit_null: Model = serde_json::from_value(json!({
-            "id": "gpt-test",
-            "created": 1,
-            "object": "model",
-            "owned_by": "openai",
-            "shutdown_date": null
-        }))
-        .expect("decode null shutdown_date");
-        assert_eq!(explicit_null.shutdown_date(), None);
-        assert_eq!(
-            serde_json::to_value(&explicit_null).expect("encode null"),
-            json!({
-                "id": "gpt-test",
-                "created": 1,
-                "object": "model",
-                "owned_by": "openai",
-                "shutdown_date": null
-            })
-        );
-
-        let dated: Model = serde_json::from_value(json!({
-            "id": "gpt-test",
-            "created": 1,
-            "object": "model",
-            "owned_by": "openai",
-            "shutdown_date": "2026-12-01"
-        }))
-        .expect("decode shutdown_date");
-        assert_eq!(dated.shutdown_date(), Some("2026-12-01"));
+    #[test]
+    fn model_list_preserves_mixed_shutdown_dates() {
+        let fixture = json!({
+            "object": "list",
+            "data": [
+                {
+                    "id": "model-id-0",
+                    "object": "model",
+                    "created": 1686935002,
+                    "owned_by": "organization-owner",
+                    "shutdown_date": null
+                },
+                {
+                    "id": "model-id-2",
+                    "object": "model",
+                    "created": 1686935002,
+                    "owned_by": "openai",
+                    "shutdown_date": "2026-10-23"
+                }
+            ]
+        });
+        let decoded: ModelList = serde_json::from_value(fixture.clone()).expect("decode list");
+        assert_eq!(decoded.data[0].shutdown_date(), None);
+        assert_eq!(decoded.data[1].shutdown_date(), Some("2026-10-23"));
+        assert_eq!(serde_json::to_value(decoded).expect("re-encode"), fixture);
     }
 }

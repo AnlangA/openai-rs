@@ -1134,6 +1134,31 @@ mod tests {
     }
 
     #[test]
+    fn official_legacy_transcription_session_language_null_decodes() {
+        let fixture = json!({
+            "id": "sess_BBwZc7cFV3XizEyKGDCGL",
+            "object": "realtime.transcription_session",
+            "expires_at": 1_742_188_264_i64,
+            "modalities": ["audio", "text"],
+            "input_audio_format": "pcm16",
+            "input_audio_transcription": {
+                "model": "gpt-4o-transcribe",
+                "language": null,
+                "prompt": ""
+            },
+            "client_secret": null
+        });
+        let response: LegacyRealtimeTranscriptionSessionCreateResponse =
+            serde_json::from_value(fixture.clone())
+                .expect("official transcription-session language null");
+        assert!(response.client_secret().is_null());
+        assert_eq!(
+            serde_json::to_value(response).expect("round-trip official example"),
+            fixture
+        );
+    }
+
+    #[test]
     fn bounded_values_reject_out_of_range_and_non_finite_numbers() {
         assert!(LegacyRealtimeSpeed::new(0.24).is_err());
         assert!(LegacyRealtimeSpeed::new(f64::NAN).is_err());

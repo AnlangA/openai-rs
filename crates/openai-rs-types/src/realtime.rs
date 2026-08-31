@@ -11,9 +11,164 @@ use base64::Engine as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Value};
 
+use thiserror::Error;
+
 use crate::media::TranscriptionLanguage;
 use crate::responses::{McpTool, PromptReference};
 use crate::{ExtraFields, JsonText, Nullable, Omittable, WireSecret, open_string_enum};
+
+/// Inclusive minimum for Realtime `audio.output.speed`.
+pub const MIN_REALTIME_OUTPUT_SPEED: f64 = 0.25;
+/// Inclusive maximum for Realtime `audio.output.speed`.
+pub const MAX_REALTIME_OUTPUT_SPEED: f64 = 1.5;
+/// Inclusive minimum for Realtime client-secret `expires_after.seconds`.
+pub const MIN_REALTIME_CLIENT_SECRET_SECONDS: i64 = 10;
+/// Inclusive maximum for Realtime client-secret `expires_after.seconds`.
+pub const MAX_REALTIME_CLIENT_SECRET_SECONDS: i64 = 7_200;
+/// Inclusive minimum for Realtime `retention_ratio`.
+pub const MIN_REALTIME_RETENTION_RATIO: f64 = 0.0;
+/// Inclusive minimum for retention-ratio `token_limits.post_instructions`.
+pub const MIN_REALTIME_POST_INSTRUCTIONS: i64 = 0;
+/// Inclusive maximum for Realtime `retention_ratio`.
+pub const MAX_REALTIME_RETENTION_RATIO: f64 = 1.0;
+/// Inclusive minimum for Realtime Server VAD `idle_timeout_ms`.
+pub const MIN_REALTIME_IDLE_TIMEOUT_MS: i64 = 5_000;
+/// Inclusive maximum for Realtime Server VAD `idle_timeout_ms`.
+pub const MAX_REALTIME_IDLE_TIMEOUT_MS: i64 = 30_000;
+/// Inclusive maximum for official Realtime client `event_id` strings.
+pub const MAX_REALTIME_EVENT_ID_CHARS: usize = 512;
+
+/// A Realtime create-request value that violates a pinned OpenAPI constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CreateRealtimeSessionConstraintError {
+    /// `audio.output.speed` is non-finite or outside `0.25..=1.5`.
+    #[error("audio output speed must be finite and within {minimum}..={maximum}, got {value}")]
+    OutputSpeed {
+        /// Observed value.
+        value: String,
+        /// Contract minimum.
+        minimum: String,
+        /// Contract maximum.
+        maximum: String,
+    },
+    /// `truncation.retention_ratio` is non-finite or outside `0..=1`.
+    #[error("retention_ratio must be finite and within {minimum}..={maximum}, got {value}")]
+    RetentionRatio {
+        /// Observed value.
+        value: String,
+        /// Contract minimum.
+        minimum: String,
+        /// Contract maximum.
+        maximum: String,
+    },
+    /// `audio.input.turn_detection.idle_timeout_ms` is outside `5000..=30000`.
+    #[error("idle_timeout_ms must be within {minimum}..={maximum}, got {actual}")]
+    IdleTimeout {
+        /// Observed value.
+        actual: i64,
+        /// Contract minimum.
+        minimum: i64,
+        /// Contract maximum.
+        maximum: i64,
+    },
+    /// Present `audio.input.transcription.languages` is empty (`minItems: 1`).
+    #[error("transcription languages must contain at least one language")]
+    EmptyTranscriptionLanguages,
+    /// `expires_after.seconds` is outside `10..=7200`.
+    #[error(
+        "client secret expires_after.seconds must be within {minimum}..={maximum}, got {actual}"
+    )]
+    ClientSecretExpiration {
+        /// Observed value.
+        actual: i64,
+        /// Contract minimum.
+        minimum: i64,
+        /// Contract maximum.
+        maximum: i64,
+    },
+    /// Present client `event_id` exceeds 512 characters.
+    #[error("event_id has {actual} characters; maximum is {maximum}")]
+    EventId {
+        /// Observed character count.
+        actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// `truncation.token_limits.post_instructions` is below the pinned minimum of 0.
+    #[error("post_instructions must be at least {minimum}, got {actual}")]
+    PostInstructions {
+        /// Rejected value.
+        actual: i64,
+        /// Contract minimum.
+        minimum: i64,
+    },
+}
+
+fn validate_realtime_output_speed(speed: f64) -> Result<(), CreateRealtimeSessionConstraintError> {
+    if speed.is_finite() && (MIN_REALTIME_OUTPUT_SPEED..=MAX_REALTIME_OUTPUT_SPEED).contains(&speed)
+    {
+        return Ok(());
+    }
+    Err(CreateRealtimeSessionConstraintError::OutputSpeed {
+        value: speed.to_string(),
+        minimum: MIN_REALTIME_OUTPUT_SPEED.to_string(),
+        maximum: MAX_REALTIME_OUTPUT_SPEED.to_string(),
+    })
+}
+
+fn validate_realtime_retention_ratio(
+    ratio: f64,
+) -> Result<(), CreateRealtimeSessionConstraintError> {
+    if ratio.is_finite()
+        && (MIN_REALTIME_RETENTION_RATIO..=MAX_REALTIME_RETENTION_RATIO).contains(&ratio)
+    {
+        return Ok(());
+    }
+    Err(CreateRealtimeSessionConstraintError::RetentionRatio {
+        value: ratio.to_string(),
+        minimum: MIN_REALTIME_RETENTION_RATIO.to_string(),
+        maximum: MAX_REALTIME_RETENTION_RATIO.to_string(),
+    })
+}
+
+fn validate_omittable_event_id(
+    event_id: &Omittable<String>,
+) -> Result<(), CreateRealtimeSessionConstraintError> {
+    if let Omittable::Value(event_id) = event_id {
+        let actual = event_id.chars().count();
+        if actual > MAX_REALTIME_EVENT_ID_CHARS {
+            return Err(CreateRealtimeSessionConstraintError::EventId {
+                actual,
+                maximum: MAX_REALTIME_EVENT_ID_CHARS,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_realtime_audio_input(
+    input: &RealtimeAudioInputConfig,
+) -> Result<(), CreateRealtimeSessionConstraintError> {
+    if let Omittable::Value(Nullable::Value(transcription)) = &input.transcription
+        && let Omittable::Value(languages) = &transcription.languages
+        && languages.is_empty()
+    {
+        return Err(CreateRealtimeSessionConstraintError::EmptyTranscriptionLanguages);
+    }
+    if let Omittable::Value(Nullable::Value(RealtimeTurnDetection::ServerVad(vad))) =
+        &input.turn_detection
+        && let Omittable::Value(Nullable::Value(timeout)) = vad.idle_timeout_ms
+        && !(MIN_REALTIME_IDLE_TIMEOUT_MS..=MAX_REALTIME_IDLE_TIMEOUT_MS).contains(&timeout)
+    {
+        return Err(CreateRealtimeSessionConstraintError::IdleTimeout {
+            actual: timeout,
+            minimum: MIN_REALTIME_IDLE_TIMEOUT_MS,
+            maximum: MAX_REALTIME_IDLE_TIMEOUT_MS,
+        });
+    }
+    Ok(())
+}
 
 fn object_discriminator(value: &Value) -> Result<&str, &'static str> {
     value
@@ -462,7 +617,7 @@ pub struct RealtimeAudioTranscription {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub model: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub language: Omittable<String>,
+    pub language: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub languages: Omittable<Vec<TranscriptionLanguage>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -1122,6 +1277,35 @@ pub struct RealtimeSessionCreateRequest {
     extra: ExtraFields,
 }
 
+impl RealtimeSessionCreateRequest {
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
+        if let Omittable::Value(audio) = &self.audio {
+            if let Omittable::Value(input) = &audio.input {
+                validate_realtime_audio_input(input)?;
+            }
+            if let Omittable::Value(output) = &audio.output
+                && let Omittable::Value(speed) = output.speed
+            {
+                validate_realtime_output_speed(speed)?;
+            }
+        }
+        if let Omittable::Value(RealtimeTruncation::RetentionRatio(truncation)) = &self.truncation {
+            validate_realtime_retention_ratio(truncation.retention_ratio)?;
+            if let Omittable::Value(limits) = &truncation.token_limits
+                && let Omittable::Value(tokens) = limits.post_instructions
+                && tokens < MIN_REALTIME_POST_INSTRUCTIONS
+            {
+                return Err(CreateRealtimeSessionConstraintError::PostInstructions {
+                    actual: tokens,
+                    minimum: MIN_REALTIME_POST_INSTRUCTIONS,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Default for RealtimeSessionCreateRequest {
     fn default() -> Self {
         Self {
@@ -1165,6 +1349,18 @@ impl Default for RealtimeTranscriptionSessionCreateRequest {
             include: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
+    }
+}
+
+impl RealtimeTranscriptionSessionCreateRequest {
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
+        if let Omittable::Value(audio) = &self.audio
+            && let Omittable::Value(input) = &audio.input
+        {
+            validate_realtime_audio_input(input)?;
+        }
+        Ok(())
     }
 }
 
@@ -1224,6 +1420,17 @@ impl From<RealtimeTranscriptionSessionCreateRequest> for RealtimeSessionConfig {
     }
 }
 
+impl RealtimeSessionConfig {
+    /// Checks pinned OpenAPI limits on the nested session body.
+    pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
+        match self {
+            Self::Realtime(session) => session.validate(),
+            Self::Transcription(session) => session.validate(),
+            Self::Unknown(_) => Ok(()),
+        }
+    }
+}
+
 literal_tag!(RealtimeSessionObjectTag, Session, "realtime.session");
 
 /// Effective GA Realtime session returned by the server.
@@ -1249,7 +1456,7 @@ pub struct RealtimeSession {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeSessionAudioState>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub include: Omittable<Vec<String>>,
+    pub include: Omittable<Nullable<Vec<String>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tracing: Omittable<Nullable<RealtimeTracing>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -1278,7 +1485,7 @@ pub struct RealtimeTranscriptionSession {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub expires_at: Omittable<i64>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub include: Omittable<Vec<String>>,
+    pub include: Omittable<Nullable<Vec<String>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeTranscriptionAudio>,
     #[serde(flatten)]
@@ -1987,7 +2194,7 @@ pub struct RealtimeResponseFailure {
     )]
     pub kind: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub code: Omittable<String>,
+    pub code: Omittable<Nullable<String>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -2083,7 +2290,7 @@ pub struct RealtimeResponse {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub status: Omittable<RealtimeResponseStatus>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub status_details: Omittable<RealtimeResponseStatusDetails>,
+    pub status_details: Omittable<Nullable<RealtimeResponseStatusDetails>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output: Omittable<Vec<RealtimeConversationItem>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2091,7 +2298,7 @@ pub struct RealtimeResponse {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeResponseAudio>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub usage: Omittable<RealtimeResponseUsage>,
+    pub usage: Omittable<Nullable<RealtimeResponseUsage>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub conversation_id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2197,11 +2404,11 @@ pub struct RealtimeTranscriptionError {
     )]
     pub kind: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub code: Omittable<String>,
+    pub code: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub message: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub param: Omittable<String>,
+    pub param: Omittable<Nullable<String>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -2218,6 +2425,8 @@ pub struct RealtimeErrorDetails {
     pub param: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub event_id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub headers: Omittable<BTreeMap<String, String>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -2295,6 +2504,33 @@ pub struct RealtimeCreateClientSecretRequest {
     pub session: Omittable<RealtimeSessionConfig>,
     #[serde(flatten)]
     extra: ExtraFields,
+}
+
+impl RealtimeCreateClientSecretRequest {
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
+        if let Omittable::Value(expiration) = &self.expires_after
+            && let Omittable::Value(seconds) = expiration.seconds
+            && !(MIN_REALTIME_CLIENT_SECRET_SECONDS..=MAX_REALTIME_CLIENT_SECRET_SECONDS)
+                .contains(&seconds)
+        {
+            return Err(
+                CreateRealtimeSessionConstraintError::ClientSecretExpiration {
+                    actual: seconds,
+                    minimum: MIN_REALTIME_CLIENT_SECRET_SECONDS,
+                    maximum: MAX_REALTIME_CLIENT_SECRET_SECONDS,
+                },
+            );
+        }
+        match &self.session {
+            Omittable::Value(RealtimeSessionConfig::Realtime(session)) => session.validate()?,
+            Omittable::Value(RealtimeSessionConfig::Transcription(session)) => {
+                session.validate()?
+            }
+            Omittable::Omitted | Omittable::Value(RealtimeSessionConfig::Unknown(_)) => {}
+        }
+        Ok(())
+    }
 }
 
 /// Client secret and effective session returned by the service.
@@ -2601,6 +2837,36 @@ pub struct RealtimeTranslationSession {
 }
 
 impl RealtimeTranslationSession {
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Fields that can be updated on a translation session.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeTranslationSessionUpdateRequest {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub audio: Omittable<RealtimeTranslationAudio>,
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl RealtimeTranslationSessionUpdateRequest {
+    /// Creates an empty translation session update.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets translation audio configuration.
+    #[must_use]
+    pub fn with_audio(mut self, audio: RealtimeTranslationAudio) -> Self {
+        self.audio = Omittable::Value(audio);
+        self
+    }
+
+    /// Returns future fields retained while decoding.
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
@@ -3261,6 +3527,32 @@ pub const REALTIME_CLIENT_EVENT_BRANCHES: &[&str] = &[
     "RealtimeClientEventResponseCreate",
     "RealtimeClientEventSessionUpdate",
 ];
+
+impl RealtimeClientEvent {
+    /// Checks pinned OpenAPI `event_id` `maxLength` 512 where the pin declares it.
+    ///
+    /// `output_audio_buffer.clear` has no official `event_id` `maxLength` and is
+    /// skipped. Nested `session.update` bodies reuse session `validate()`.
+    pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
+        match self {
+            Self::ConversationItemCreate(event) => validate_omittable_event_id(&event.event_id),
+            Self::ConversationItemDelete(event) => validate_omittable_event_id(&event.event_id),
+            Self::ConversationItemRetrieve(event) => validate_omittable_event_id(&event.event_id),
+            Self::ConversationItemTruncate(event) => validate_omittable_event_id(&event.event_id),
+            Self::InputAudioBufferAppend(event) => validate_omittable_event_id(&event.event_id),
+            Self::InputAudioBufferClear(event) => validate_omittable_event_id(&event.event_id),
+            Self::InputAudioBufferCommit(event) => validate_omittable_event_id(&event.event_id),
+            Self::OutputAudioBufferClear(_) => Ok(()),
+            Self::ResponseCancel(event) => validate_omittable_event_id(&event.event_id),
+            Self::ResponseCreate(event) => validate_omittable_event_id(&event.event_id),
+            Self::SessionUpdate(event) => {
+                validate_omittable_event_id(&event.event_id)?;
+                event.session.validate()
+            }
+            Self::Unknown(_) => Ok(()),
+        }
+    }
+}
 
 macro_rules! server_event_struct {
     (
@@ -4036,6 +4328,218 @@ pub const REALTIME_SERVER_EVENT_TAGS: &[&str] = &[
     "session.updated",
 ];
 
+open_string_enum! {
+    /// Encoding of a translation output-audio delta.
+    pub enum RealtimeTranslationAudioFormat {
+        Pcm16 = "pcm16"
+    }
+}
+
+client_event_struct! {
+    /// Updates a Realtime translation session.
+    RealtimeTranslationClientEventSessionUpdate,
+    RealtimeTranslationClientSessionUpdateTag,
+    SessionUpdate,
+    "session.update",
+    { session: RealtimeTranslationSessionUpdateRequest, }
+}
+
+impl RealtimeTranslationClientEventSessionUpdate {
+    /// Creates a translation session update event.
+    #[must_use]
+    pub fn new(session: RealtimeTranslationSessionUpdateRequest) -> Self {
+        Self {
+            event_id: Omittable::Omitted,
+            kind: RealtimeTranslationClientSessionUpdateTag::SessionUpdate,
+            session,
+            extra: ExtraFields::new(),
+        }
+    }
+}
+
+client_event_struct! {
+    /// Appends PCM16 audio to a translation session.
+    RealtimeTranslationClientEventInputAudioBufferAppend,
+    RealtimeTranslationClientInputAudioAppendTag,
+    InputAudioBufferAppend,
+    "session.input_audio_buffer.append",
+    { audio: RealtimeAudio, }
+}
+
+impl RealtimeTranslationClientEventInputAudioBufferAppend {
+    /// Creates a translation audio-append event from raw bytes.
+    #[must_use]
+    pub fn new(audio: impl Into<Vec<u8>>) -> Self {
+        Self {
+            event_id: Omittable::Omitted,
+            kind: RealtimeTranslationClientInputAudioAppendTag::InputAudioBufferAppend,
+            audio: RealtimeAudio::new(audio),
+            extra: ExtraFields::new(),
+        }
+    }
+}
+
+client_event_struct! {
+    /// Gracefully closes a translation session.
+    RealtimeTranslationClientEventSessionClose,
+    RealtimeTranslationClientSessionCloseTag,
+    SessionClose,
+    "session.close",
+    {}
+}
+
+impl Default for RealtimeTranslationClientEventSessionClose {
+    fn default() -> Self {
+        Self {
+            event_id: Omittable::Omitted,
+            kind: RealtimeTranslationClientSessionCloseTag::SessionClose,
+            extra: ExtraFields::new(),
+        }
+    }
+}
+
+tagged_event_union! {
+    /// Events accepted by a Realtime translation WebSocket session.
+    pub enum RealtimeTranslationClientEvent {
+        SessionUpdate(RealtimeTranslationClientEventSessionUpdate) => "session.update",
+        InputAudioBufferAppend(RealtimeTranslationClientEventInputAudioBufferAppend) => "session.input_audio_buffer.append",
+        SessionClose(RealtimeTranslationClientEventSessionClose) => "session.close"
+    }
+}
+
+/// Schema branches in the pinned `RealtimeTranslationClientEvent` union.
+pub const REALTIME_TRANSLATION_CLIENT_EVENT_BRANCHES: &[&str] = &[
+    "RealtimeTranslationClientEventInputAudioBufferAppend",
+    "RealtimeTranslationClientEventSessionClose",
+    "RealtimeTranslationClientEventSessionUpdate",
+];
+
+impl RealtimeTranslationClientEvent {
+    /// Checks pinned OpenAPI translation client `event_id` `maxLength` 512.
+    pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
+        match self {
+            Self::SessionUpdate(event) => validate_omittable_event_id(&event.event_id),
+            Self::InputAudioBufferAppend(event) => validate_omittable_event_id(&event.event_id),
+            Self::SessionClose(event) => validate_omittable_event_id(&event.event_id),
+            Self::Unknown(_) => Ok(()),
+        }
+    }
+}
+
+/// Wire discriminators in the pinned translation client-event union.
+pub const REALTIME_TRANSLATION_CLIENT_EVENT_TAGS: &[&str] = &[
+    "session.close",
+    "session.input_audio_buffer.append",
+    "session.update",
+];
+
+server_event_struct! {
+    /// Translation session created with its effective configuration.
+    RealtimeTranslationServerEventSessionCreated,
+    RealtimeTranslationServerSessionCreatedTag,
+    SessionCreated,
+    "session.created",
+    { session: RealtimeTranslationSession, }
+}
+
+server_event_struct! {
+    /// Translation session updated after `session.update`.
+    RealtimeTranslationServerEventSessionUpdated,
+    RealtimeTranslationServerSessionUpdatedTag,
+    SessionUpdated,
+    "session.updated",
+    { session: RealtimeTranslationSession, }
+}
+
+server_event_struct! {
+    /// Translation session closed.
+    RealtimeTranslationServerEventSessionClosed,
+    RealtimeTranslationServerSessionClosedTag,
+    SessionClosed,
+    "session.closed",
+    {}
+}
+
+server_event_struct! {
+    /// Optional source-language transcript delta.
+    RealtimeTranslationServerEventSessionInputTranscriptDelta,
+    RealtimeTranslationServerInputTranscriptDeltaTag,
+    InputTranscriptDelta,
+    "session.input_transcript.delta",
+    {
+        delta: String,
+        #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+        elapsed_ms: Omittable<Nullable<u64>>,
+    }
+}
+
+server_event_struct! {
+    /// Translated transcript text delta.
+    RealtimeTranslationServerEventSessionOutputTranscriptDelta,
+    RealtimeTranslationServerOutputTranscriptDeltaTag,
+    OutputTranscriptDelta,
+    "session.output_transcript.delta",
+    {
+        delta: String,
+        #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+        elapsed_ms: Omittable<Nullable<u64>>,
+    }
+}
+
+server_event_struct! {
+    /// Translated PCM16 audio delta.
+    RealtimeTranslationServerEventSessionOutputAudioDelta,
+    RealtimeTranslationServerOutputAudioDeltaTag,
+    OutputAudioDelta,
+    "session.output_audio.delta",
+    {
+        delta: RealtimeAudio,
+        #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+        sample_rate: Omittable<u32>,
+        #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+        channels: Omittable<u32>,
+        #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+        format: Omittable<RealtimeTranslationAudioFormat>,
+        #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+        elapsed_ms: Omittable<Nullable<u64>>,
+    }
+}
+
+tagged_event_union! {
+    /// Events emitted by a Realtime translation WebSocket session.
+    pub enum RealtimeTranslationServerEvent {
+        Error(RealtimeServerEventError) => "error",
+        SessionCreated(RealtimeTranslationServerEventSessionCreated) => "session.created",
+        SessionUpdated(RealtimeTranslationServerEventSessionUpdated) => "session.updated",
+        SessionClosed(RealtimeTranslationServerEventSessionClosed) => "session.closed",
+        InputTranscriptDelta(RealtimeTranslationServerEventSessionInputTranscriptDelta) => "session.input_transcript.delta",
+        OutputTranscriptDelta(RealtimeTranslationServerEventSessionOutputTranscriptDelta) => "session.output_transcript.delta",
+        OutputAudioDelta(RealtimeTranslationServerEventSessionOutputAudioDelta) => "session.output_audio.delta"
+    }
+}
+
+/// Schema branches in the pinned `RealtimeTranslationServerEvent` union.
+pub const REALTIME_TRANSLATION_SERVER_EVENT_BRANCHES: &[&str] = &[
+    "RealtimeServerEventError",
+    "RealtimeTranslationServerEventSessionClosed",
+    "RealtimeTranslationServerEventSessionCreated",
+    "RealtimeTranslationServerEventSessionInputTranscriptDelta",
+    "RealtimeTranslationServerEventSessionOutputAudioDelta",
+    "RealtimeTranslationServerEventSessionOutputTranscriptDelta",
+    "RealtimeTranslationServerEventSessionUpdated",
+];
+
+/// Wire discriminators in the pinned translation server-event union.
+pub const REALTIME_TRANSLATION_SERVER_EVENT_TAGS: &[&str] = &[
+    "error",
+    "session.closed",
+    "session.created",
+    "session.input_transcript.delta",
+    "session.output_audio.delta",
+    "session.output_transcript.delta",
+    "session.updated",
+];
+
 macro_rules! impl_extra_fields {
     ($($ty:ty),+ $(,)?) => {
         $(
@@ -4134,6 +4638,8 @@ mod tests {
 
     assert_impl_all!(RealtimeClientEvent: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(RealtimeServerEvent: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(RealtimeTranslationClientEvent: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(RealtimeTranslationServerEvent: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(RealtimeConversationItem: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(RealtimeAudio: Serialize, DeserializeOwned, Send, Sync);
 
@@ -4404,6 +4910,16 @@ mod tests {
         assert_eq!(REALTIME_SERVER_EVENT_BRANCHES.len(), 46);
         assert_eq!(REALTIME_CLIENT_EVENT_TAGS.len(), 11);
         assert_eq!(REALTIME_SERVER_EVENT_TAGS.len(), 46);
+        assert_eq!(
+            manifest_branches("RealtimeTranslationClientEvent"),
+            REALTIME_TRANSLATION_CLIENT_EVENT_BRANCHES
+        );
+        assert_eq!(
+            manifest_branches("RealtimeTranslationServerEvent"),
+            REALTIME_TRANSLATION_SERVER_EVENT_BRANCHES
+        );
+        assert_eq!(REALTIME_TRANSLATION_CLIENT_EVENT_BRANCHES.len(), 3);
+        assert_eq!(REALTIME_TRANSLATION_SERVER_EVENT_BRANCHES.len(), 7);
 
         let mut expected_client_tags: Vec<String> = REALTIME_CLIENT_EVENT_TAGS
             .iter()
@@ -4529,6 +5045,11 @@ mod tests {
             json!({
                 "type": "realtime",
                 "tracing": {"workflow_name": "voice-agent", "future": true}
+            }),
+            json!({"type": "realtime", "prompt": null}),
+            json!({
+                "type": "realtime",
+                "prompt": {"id": "pmpt_weather"}
             }),
         ] {
             let decoded: RealtimeSessionCreateRequest =
@@ -4729,5 +5250,521 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    fn translation_session_fixture() -> Value {
+        json!({
+            "id": "sess_1",
+            "type": "translation",
+            "expires_at": 1_756_310_470_i64,
+            "model": "gpt-realtime-translate",
+            "audio": {
+                "input": {
+                    "transcription": {"model": "gpt-realtime-whisper"},
+                    "noise_reduction": null
+                },
+                "output": {"language": "es"}
+            }
+        })
+    }
+
+    #[test]
+    fn translation_events_match_python_and_openapi_inventory() {
+        let append = RealtimeTranslationClientEvent::from(
+            RealtimeTranslationClientEventInputAudioBufferAppend::new(vec![1, 2, 3]),
+        );
+        let value = serde_json::to_value(&append).expect("serialize append");
+        assert_eq!(value["type"], "session.input_audio_buffer.append");
+        assert_eq!(value["audio"], "AQID");
+
+        let update =
+            RealtimeTranslationClientEvent::from(RealtimeTranslationClientEventSessionUpdate::new(
+                RealtimeTranslationSessionUpdateRequest::new().with_audio(
+                    RealtimeTranslationAudio::default()
+                        .with_output(RealtimeTranslationAudioOutput::new("fr")),
+                ),
+            ));
+        let value = serde_json::to_value(&update).expect("serialize update");
+        assert_eq!(value["type"], "session.update");
+        assert_eq!(value["session"]["audio"]["output"]["language"], "fr");
+
+        let audio: RealtimeTranslationServerEvent = serde_json::from_value(json!({
+            "event_id": "event_123",
+            "type": "session.output_audio.delta",
+            "delta": "AQID",
+            "sample_rate": 24000,
+            "channels": 1,
+            "format": "pcm16",
+            "elapsed_ms": 1200
+        }))
+        .expect("decode audio delta");
+        let RealtimeTranslationServerEvent::OutputAudioDelta(event) = &audio else {
+            panic!("expected output audio delta");
+        };
+        assert_eq!(event.sample_rate, Omittable::Value(24000));
+        assert_eq!(event.channels, Omittable::Value(1));
+        assert_eq!(event.elapsed_ms, Omittable::Value(Nullable::Value(1200)));
+        assert_eq!(event.delta.as_bytes(), &[1, 2, 3]);
+
+        let transcript: RealtimeTranslationServerEvent = serde_json::from_value(json!({
+            "event_id": "event_124",
+            "type": "session.output_transcript.delta",
+            "delta": " escuch",
+            "elapsed_ms": 1200
+        }))
+        .expect("decode transcript delta");
+        let RealtimeTranslationServerEvent::OutputTranscriptDelta(event) = &transcript else {
+            panic!("expected output transcript delta");
+        };
+        assert_eq!(event.delta, " escuch");
+        assert_eq!(event.elapsed_ms, Omittable::Value(Nullable::Value(1200)));
+
+        let created: RealtimeTranslationServerEvent = serde_json::from_value(json!({
+            "event_id": "event_1",
+            "type": "session.created",
+            "session": translation_session_fixture()
+        }))
+        .expect("decode session created");
+        assert_eq!(created.event_type(), "session.created");
+        assert!(!matches!(
+            created,
+            RealtimeTranslationServerEvent::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn translation_event_unions_decode_every_pinned_tag() {
+        for tag in REALTIME_TRANSLATION_CLIENT_EVENT_TAGS {
+            let fixture = match *tag {
+                "session.close" => json!({"type": "session.close"}),
+                "session.input_audio_buffer.append" => json!({
+                    "type": "session.input_audio_buffer.append",
+                    "audio": "AQID"
+                }),
+                "session.update" => json!({
+                    "type": "session.update",
+                    "session": {"audio": {"output": {"language": "es"}}}
+                }),
+                other => panic!("missing translation client fixture for {other}"),
+            };
+            let decoded: RealtimeTranslationClientEvent =
+                serde_json::from_value(fixture.clone()).expect("known translation client decodes");
+            assert_eq!(decoded.event_type(), *tag);
+            assert!(!matches!(
+                decoded,
+                RealtimeTranslationClientEvent::Unknown(_)
+            ));
+        }
+
+        for tag in REALTIME_TRANSLATION_SERVER_EVENT_TAGS {
+            let fixture = match *tag {
+                "error" => json!({
+                    "event_id": "event_1",
+                    "type": "error",
+                    "error": {"type": "invalid_request_error", "message": "bad"}
+                }),
+                "session.closed" => json!({"event_id": "event_1", "type": "session.closed"}),
+                "session.created" | "session.updated" => json!({
+                    "event_id": "event_1",
+                    "type": tag,
+                    "session": translation_session_fixture()
+                }),
+                "session.input_transcript.delta" | "session.output_transcript.delta" => json!({
+                    "event_id": "event_1",
+                    "type": tag,
+                    "delta": "hi",
+                    "elapsed_ms": 200
+                }),
+                "session.output_audio.delta" => json!({
+                    "event_id": "event_1",
+                    "type": "session.output_audio.delta",
+                    "delta": "AQID",
+                    "sample_rate": 24000,
+                    "channels": 1,
+                    "format": "pcm16",
+                    "elapsed_ms": 200
+                }),
+                other => panic!("missing translation server fixture for {other}"),
+            };
+            let decoded: RealtimeTranslationServerEvent =
+                serde_json::from_value(fixture).expect("known translation server decodes");
+            assert_eq!(decoded.event_type(), *tag);
+            assert!(!matches!(
+                decoded,
+                RealtimeTranslationServerEvent::Unknown(_)
+            ));
+            assert!(
+                serde_json::from_value::<RealtimeTranslationServerEvent>(json!({"type": tag}))
+                    .is_err(),
+                "known malformed translation tag must fail: {tag}"
+            );
+        }
+    }
+
+    #[test]
+    fn realtime_prompt_null_and_output_speed_match_python_and_openapi_inventory() {
+        let session: RealtimeSessionCreateRequest = serde_json::from_value(json!({
+            "type": "realtime",
+            "prompt": null
+        }))
+        .expect("official Prompt anyOf includes null");
+        assert_eq!(session.prompt, Omittable::Value(Nullable::Null));
+
+        let params: RealtimeResponseCreateParams = serde_json::from_value(json!({
+            "prompt": null,
+            "metadata": null
+        }))
+        .expect("response.create prompt/metadata null");
+        assert_eq!(params.prompt, Omittable::Value(Nullable::Null));
+        assert_eq!(params.metadata, Omittable::Value(Nullable::Null));
+        let encoded = serde_json::to_value(&params).expect("encode");
+        assert_eq!(encoded["prompt"], Value::Null);
+        assert_eq!(encoded["metadata"], Value::Null);
+
+        let response: RealtimeResponse = serde_json::from_value(json!({
+            "object": "realtime.response",
+            "metadata": null
+        }))
+        .expect("official Metadata anyOf includes null");
+        assert_eq!(response.metadata, Omittable::Value(Nullable::Null));
+        assert_eq!(
+            serde_json::to_value(&response).expect("encode")["metadata"],
+            Value::Null
+        );
+
+        let mut ok = RealtimeSessionCreateRequest::default();
+        ok.audio = Omittable::Value(RealtimeSessionAudio {
+            output: Omittable::Value(RealtimeAudioOutputConfig {
+                speed: Omittable::Value(MIN_REALTIME_OUTPUT_SPEED),
+                ..RealtimeAudioOutputConfig::default()
+            }),
+            ..RealtimeSessionAudio::default()
+        });
+        ok.validate().expect("0.25 is accepted");
+
+        let mut over = RealtimeSessionCreateRequest::default();
+        over.audio = Omittable::Value(RealtimeSessionAudio {
+            output: Omittable::Value(RealtimeAudioOutputConfig {
+                speed: Omittable::Value(1.51),
+                ..RealtimeAudioOutputConfig::default()
+            }),
+            ..RealtimeSessionAudio::default()
+        });
+        assert!(matches!(
+            over.validate(),
+            Err(CreateRealtimeSessionConstraintError::OutputSpeed { .. })
+        ));
+        let decoded: RealtimeSessionCreateRequest = serde_json::from_value(json!({
+            "type": "realtime",
+            "audio": {"output": {"speed": 2.0}}
+        }))
+        .expect("serde remains lossless");
+        assert!(decoded.validate().is_err());
+
+        let mut ratio = RealtimeSessionCreateRequest::default();
+        ratio.truncation = Omittable::Value(RealtimeTruncation::RetentionRatio(
+            RealtimeRetentionRatioTruncation::new(1.0),
+        ));
+        ratio.validate().expect("retention_ratio 1.0 is accepted");
+        ratio.truncation = Omittable::Value(RealtimeTruncation::RetentionRatio(
+            RealtimeRetentionRatioTruncation::new(1.1),
+        ));
+        assert!(matches!(
+            ratio.validate(),
+            Err(CreateRealtimeSessionConstraintError::RetentionRatio { .. })
+        ));
+
+        let mut post_instructions = RealtimeRetentionRatioTruncation::new(0.8);
+        post_instructions.token_limits = Omittable::Value(RealtimeTruncationTokenLimits {
+            post_instructions: Omittable::Value(MIN_REALTIME_POST_INSTRUCTIONS),
+            extra: ExtraFields::new(),
+        });
+        let mut session = RealtimeSessionCreateRequest::default();
+        session.truncation =
+            Omittable::Value(RealtimeTruncation::RetentionRatio(post_instructions));
+        session
+            .validate()
+            .expect("official post_instructions 0 is accepted");
+        let decoded_post: RealtimeSessionCreateRequest = serde_json::from_value(json!({
+            "type": "realtime",
+            "truncation": {
+                "type": "retention_ratio",
+                "retention_ratio": 0.8,
+                "token_limits": {"post_instructions": -1}
+            }
+        }))
+        .expect("serde remains lossless");
+        assert!(matches!(
+            decoded_post.validate(),
+            Err(CreateRealtimeSessionConstraintError::PostInstructions {
+                actual: -1,
+                minimum: 0
+            })
+        ));
+
+        let mut idle = RealtimeSessionCreateRequest::default();
+        idle.audio = Omittable::Value(RealtimeSessionAudio {
+            input: Omittable::Value(RealtimeAudioInputConfig {
+                turn_detection: Omittable::Value(Nullable::Value(
+                    RealtimeTurnDetection::ServerVad(RealtimeServerVad {
+                        idle_timeout_ms: Omittable::Value(Nullable::Value(
+                            MIN_REALTIME_IDLE_TIMEOUT_MS,
+                        )),
+                        ..RealtimeServerVad::default()
+                    }),
+                )),
+                ..RealtimeAudioInputConfig::default()
+            }),
+            ..RealtimeSessionAudio::default()
+        });
+        idle.validate().expect("idle_timeout_ms 5000 is accepted");
+        let decoded_idle: RealtimeSessionCreateRequest = serde_json::from_value(json!({
+            "type": "realtime",
+            "audio": {
+                "input": {
+                    "turn_detection": {"type": "server_vad", "idle_timeout_ms": 4999}
+                }
+            }
+        }))
+        .expect("serde remains lossless");
+        assert!(matches!(
+            decoded_idle.validate(),
+            Err(CreateRealtimeSessionConstraintError::IdleTimeout { actual: 4999, .. })
+        ));
+
+        let mut languages = RealtimeSessionCreateRequest::default();
+        languages.audio = Omittable::Value(RealtimeSessionAudio {
+            input: Omittable::Value(RealtimeAudioInputConfig {
+                transcription: Omittable::Value(Nullable::Value(RealtimeAudioTranscription {
+                    languages: Omittable::Value(Vec::new()),
+                    ..RealtimeAudioTranscription::default()
+                })),
+                ..RealtimeAudioInputConfig::default()
+            }),
+            ..RealtimeSessionAudio::default()
+        });
+        assert!(matches!(
+            languages.validate(),
+            Err(CreateRealtimeSessionConstraintError::EmptyTranscriptionLanguages)
+        ));
+
+        let mut secret = RealtimeCreateClientSecretRequest::default();
+        secret.expires_after = Omittable::Value(RealtimeClientSecretExpiration {
+            seconds: Omittable::Value(MIN_REALTIME_CLIENT_SECRET_SECONDS),
+            ..RealtimeClientSecretExpiration::default()
+        });
+        secret.validate().expect("10-second secret is accepted");
+        secret.expires_after = Omittable::Value(RealtimeClientSecretExpiration {
+            seconds: Omittable::Value(7_201),
+            ..RealtimeClientSecretExpiration::default()
+        });
+        assert!(matches!(
+            secret.validate(),
+            Err(CreateRealtimeSessionConstraintError::ClientSecretExpiration { actual: 7201, .. })
+        ));
+    }
+
+    #[test]
+    fn realtime_client_event_validate_enforces_official_event_id() {
+        assert_eq!(MAX_REALTIME_EVENT_ID_CHARS, 512);
+        let ok_event = RealtimeClientEvent::from(
+            RealtimeClientEventResponseCancel::default()
+                .with_event_id("e".repeat(MAX_REALTIME_EVENT_ID_CHARS)),
+        );
+        ok_event
+            .validate()
+            .expect("official 512-character event_id is accepted");
+        let over_event = RealtimeClientEvent::from(
+            RealtimeClientEventResponseCancel::default()
+                .with_event_id("e".repeat(MAX_REALTIME_EVENT_ID_CHARS + 1)),
+        );
+        assert!(matches!(
+            over_event.validate(),
+            Err(CreateRealtimeSessionConstraintError::EventId {
+                actual: 513,
+                maximum: 512
+            })
+        ));
+        let decoded_over: RealtimeClientEvent = serde_json::from_value(json!({
+            "type": "response.cancel",
+            "event_id": "e".repeat(MAX_REALTIME_EVENT_ID_CHARS + 1)
+        }))
+        .expect("serde remains lossless");
+        assert!(decoded_over.validate().is_err());
+        RealtimeClientEvent::from(
+            RealtimeClientEventOutputAudioBufferClear::default()
+                .with_event_id("e".repeat(MAX_REALTIME_EVENT_ID_CHARS + 1)),
+        )
+        .validate()
+        .expect("output_audio_buffer.clear has no official event_id maxLength");
+        RealtimeTranslationClientEvent::from(
+            RealtimeTranslationClientEventSessionClose::default()
+                .with_event_id("e".repeat(MAX_REALTIME_EVENT_ID_CHARS)),
+        )
+        .validate()
+        .expect("translation event_id ceiling is accepted");
+        assert!(matches!(
+            RealtimeTranslationClientEvent::from(
+                RealtimeTranslationClientEventSessionClose::default()
+                    .with_event_id("e".repeat(MAX_REALTIME_EVENT_ID_CHARS + 1)),
+            )
+            .validate(),
+            Err(CreateRealtimeSessionConstraintError::EventId { actual: 513, .. })
+        ));
+    }
+
+    #[test]
+    fn official_realtime_documented_nulls_decode() {
+        let failed: RealtimeServerEvent = serde_json::from_value(json!({
+            "event_id": "event_2324",
+            "type": "conversation.item.input_audio_transcription.failed",
+            "item_id": "msg_003",
+            "content_index": 0,
+            "error": {
+                "type": "transcription_error",
+                "code": "audio_unintelligible",
+                "message": "The audio could not be transcribed.",
+                "param": null
+            }
+        }))
+        .expect("official transcription-failed example");
+        let RealtimeServerEvent::InputAudioTranscriptionFailed(event) = failed else {
+            panic!("expected transcription failed event");
+        };
+        assert_eq!(
+            event.error.code,
+            Omittable::Value(Nullable::Value("audio_unintelligible".into()))
+        );
+        assert_eq!(event.error.param, Omittable::Value(Nullable::Null));
+
+        let live: RealtimeServerEvent = serde_json::from_value(json!({
+            "event_id": "event_1",
+            "type": "conversation.item.input_audio_transcription.failed",
+            "item_id": "item_1",
+            "content_index": 0,
+            "error": {
+                "type": "server_error",
+                "code": null,
+                "message": "Input transcription failed",
+                "param": null
+            }
+        }))
+        .expect("live transcription-failed null code/param");
+        let RealtimeServerEvent::InputAudioTranscriptionFailed(live) = live else {
+            panic!("expected transcription failed event");
+        };
+        assert_eq!(live.error.code, Omittable::Value(Nullable::Null));
+        assert_eq!(live.error.param, Omittable::Value(Nullable::Null));
+        assert!(
+            serde_json::from_value::<RealtimeTranscriptionError>(json!({
+                "type": "server_error",
+                "code": null,
+                "message": null,
+                "param": null
+            }))
+            .is_err(),
+            "unofficial message null still fails"
+        );
+
+        let response: RealtimeResponse = serde_json::from_value(json!({
+            "object": "realtime.response",
+            "status": "in_progress",
+            "status_details": null,
+            "usage": null,
+            "metadata": null
+        }))
+        .expect("official response.created lifecycle nulls");
+        assert_eq!(response.status_details, Omittable::Value(Nullable::Null));
+        assert_eq!(response.usage, Omittable::Value(Nullable::Null));
+        assert_eq!(
+            serde_json::to_value(&response).expect("encode")["status_details"],
+            Value::Null
+        );
+
+        let failed_response: RealtimeResponse = serde_json::from_value(json!({
+            "object": "realtime.response",
+            "status": "failed",
+            "status_details": {
+                "type": "failed",
+                "error": {
+                    "type": "server_error",
+                    "code": null
+                }
+            }
+        }))
+        .expect("official-shaped failed status_details");
+        let Omittable::Value(Nullable::Value(details)) = &failed_response.status_details else {
+            panic!("expected populated status_details");
+        };
+        let Omittable::Value(error) = &details.error else {
+            panic!("expected failure error");
+        };
+        assert_eq!(error.code, Omittable::Value(Nullable::Null));
+
+        let session: RealtimeSession = serde_json::from_value(json!({
+            "type": "realtime",
+            "object": "realtime.session",
+            "id": "sess_1",
+            "include": null
+        }))
+        .expect("official client-secret include null");
+        assert_eq!(session.include, Omittable::Value(Nullable::Null));
+        assert_eq!(
+            serde_json::to_value(&session).expect("encode")["include"],
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn official_realtime_transcription_language_null_decodes() {
+        let transcription: RealtimeAudioTranscription = serde_json::from_value(json!({
+            "model": "gpt-4o-transcribe",
+            "language": null,
+            "prompt": ""
+        }))
+        .expect("official AudioTranscriptionResponse language null");
+        assert_eq!(transcription.language, Omittable::Value(Nullable::Null));
+        assert_eq!(transcription.prompt, Omittable::Value(String::new()));
+        assert_eq!(
+            serde_json::to_value(&transcription).expect("encode")["language"],
+            Value::Null
+        );
+        assert!(
+            serde_json::from_value::<RealtimeAudioTranscription>(json!({
+                "model": "gpt-4o-transcribe",
+                "language": null,
+                "prompt": null
+            }))
+            .is_err(),
+            "unofficial prompt null still fails"
+        );
+
+        let ga: RealtimeTranscriptionSession = serde_json::from_value(json!({
+            "id": "sess_BBwZc7cFV3XizEyKGDCGL",
+            "type": "transcription",
+            "object": "realtime.transcription_session",
+            "expires_at": 1_742_188_264_i64,
+            "audio": {
+                "input": {
+                    "transcription": {
+                        "model": "gpt-4o-transcribe",
+                        "language": null,
+                        "prompt": ""
+                    },
+                    "noise_reduction": null
+                }
+            }
+        }))
+        .expect("official GA nested transcription language null");
+        let Omittable::Value(audio) = &ga.audio else {
+            panic!("expected audio");
+        };
+        let Omittable::Value(input) = &audio.input else {
+            panic!("expected audio.input");
+        };
+        let Omittable::Value(Nullable::Value(nested)) = &input.transcription else {
+            panic!("expected transcription object");
+        };
+        assert_eq!(nested.language, Omittable::Value(Nullable::Null));
     }
 }

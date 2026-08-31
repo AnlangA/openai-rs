@@ -1716,6 +1716,32 @@ mod tests {
     }
 
     #[test]
+    fn create_session_fields_match_python_and_openapi_inventory() {
+        let request = CreateChatKitSessionRequest::new(
+            ChatKitWorkflowRequest::new("workflow_alpha"),
+            "user_789",
+        )
+        .expect("valid user")
+        .with_expiration(ChatKitExpiresAfterRequest::new(60).expect("valid expiration"))
+        .with_configuration(ChatKitConfigurationRequest::default());
+        let mut request = request;
+        request.rate_limits = Omittable::Value(ChatKitRateLimitsRequest::default());
+        let value = serde_json::to_value(&request).expect("serialize");
+        let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "chatkit_configuration",
+                "expires_after",
+                "rate_limits",
+                "user",
+                "workflow"
+            ]
+        );
+    }
+
+    #[test]
     fn page_cursors_are_required_nullable() {
         let value = json!({
             "object":"list","data":[],"first_id":null,"last_id":null,"has_more":false

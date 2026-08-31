@@ -9,8 +9,24 @@ use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Value};
+use thiserror::Error;
 
 use crate::{ExtraFields, ModelId, Nullable, Omittable, WireSecret};
+
+/// Inclusive minimum for `AdminApiKeyCreateRequest.expires_in_seconds`.
+pub const MIN_ADMIN_API_KEY_EXPIRES_IN_SECONDS: u64 = 1;
+/// Inclusive maximum for `AdminApiKeyCreateRequest.expires_in_seconds`.
+pub const MAX_ADMIN_API_KEY_EXPIRES_IN_SECONDS: u64 = 31_536_000;
+/// Inclusive minimum for organization group `name`.
+pub const MIN_ADMIN_GROUP_NAME_CHARS: usize = 1;
+/// Inclusive maximum for organization group `name`.
+pub const MAX_ADMIN_GROUP_NAME_CHARS: usize = 255;
+/// Inclusive minimum for `ToggleCertificatesRequest.certificate_ids`.
+pub const MIN_TOGGLE_CERTIFICATE_IDS: usize = 1;
+/// Inclusive maximum for `ToggleCertificatesRequest.certificate_ids`.
+pub const MAX_TOGGLE_CERTIFICATE_IDS: usize = 10;
+/// Inclusive minimum for spend-limit `threshold_amount`.
+pub const MIN_SPEND_LIMIT_THRESHOLD: u64 = 1;
 
 fn discriminator<'a>(value: &'a Value, field: &str) -> Result<&'a str, &'static str> {
     let Value::Object(object) = value else {
@@ -160,14 +176,29 @@ crate::open_string_enum! {
 }
 
 /// Query parameters used by cursor-based administration listings.
+///
+/// This is a shared send-side bag. Official list operations expose overlapping
+/// pagination plus a few operation-specific filters (`before`, `emails`,
+/// `include_archived`, `owner_project_access`). Omitted fields are not sent.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AdminListParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub after: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub before: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<u64>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub order: Omittable<AdminListOrder>,
+    /// Official `list-users` filter.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub emails: Omittable<Vec<String>>,
+    /// Official `list-projects` filter.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub include_archived: Omittable<bool>,
+    /// Official `list-project-api-keys` filter (`active` / `inactive` / `any`).
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub owner_project_access: Omittable<ProjectAccessFilter>,
 }
 
 /// Common `first_id`/`last_id` cursor page.
@@ -204,13 +235,13 @@ impl<T> AdminCursorPage<T> {
     }
 }
 
-/// Cursor page whose frozen schema requires non-null first/last IDs.
+/// Cursor page whose frozen schema requires first/last IDs that may be null.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdminRequiredCursorPage<T> {
     pub object: AdminListObject,
     pub data: Vec<T>,
-    pub first_id: String,
-    pub last_id: String,
+    pub first_id: Nullable<String>,
+    pub last_id: Nullable<String>,
     pub has_more: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -219,7 +250,13 @@ pub struct AdminRequiredCursorPage<T> {
 impl<T> AdminRequiredCursorPage<T> {
     #[must_use]
     pub fn next_after(&self) -> Option<&str> {
-        self.has_more.then_some(self.last_id.as_str())
+        if !self.has_more {
+            return None;
+        }
+        match &self.last_id {
+            Nullable::Value(id) => Some(id),
+            Nullable::Null => None,
+        }
     }
 
     #[must_use]
@@ -331,6 +368,65 @@ impl AdminApiKeyCreateRequest {
             expires_in_seconds: Omittable::Omitted,
         }
     }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), AdminConstraintError> {
+        if let Omittable::Value(actual) = self.expires_in_seconds
+            && !(MIN_ADMIN_API_KEY_EXPIRES_IN_SECONDS..=MAX_ADMIN_API_KEY_EXPIRES_IN_SECONDS)
+                .contains(&actual)
+        {
+            return Err(AdminConstraintError::ApiKeyExpiresInSeconds {
+                actual,
+                minimum: MIN_ADMIN_API_KEY_EXPIRES_IN_SECONDS,
+                maximum: MAX_ADMIN_API_KEY_EXPIRES_IN_SECONDS,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// An Administration create/update value that violates a pinned OpenAPI constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum AdminConstraintError {
+    /// `expires_in_seconds` is outside `1..=31536000`.
+    #[error("admin API key expires_in_seconds must be {minimum}..={maximum}, got {actual}")]
+    ApiKeyExpiresInSeconds {
+        /// Rejected value.
+        actual: u64,
+        /// Contract minimum.
+        minimum: u64,
+        /// Contract maximum.
+        maximum: u64,
+    },
+    /// Group `name` is empty or longer than 255 characters.
+    #[error("admin group name has {actual} characters; must be {minimum}..={maximum}")]
+    GroupName {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// `certificate_ids` length is outside `1..=10`.
+    #[error("certificate_ids must contain {minimum}..={maximum} entries, got {actual}")]
+    CertificateIds {
+        /// Observed count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// Spend-limit `threshold_amount` is less than 1.
+    #[error("spend-limit threshold_amount must be at least {minimum}, got {actual}")]
+    SpendThreshold {
+        /// Rejected value.
+        actual: u64,
+        /// Contract minimum.
+        minimum: u64,
+    },
 }
 
 /// Admin API key returned once with its unredacted value.
@@ -388,8 +484,11 @@ impl AdminApiKeyDeleteResponse {
 
 pub type ApiKeyList = AdminCursorPage<AdminApiKey>;
 
+mod admin_audit;
+pub use admin_audit::*;
+
 crate::open_string_enum! {
-    /// Audit event type. Unknown current/future tenant events remain lossless.
+    /// Official `AuditLogEventType`.
     pub enum AuditEventType {
         ApiKeyCreated = "api_key.created",
         ApiKeyUpdated = "api_key.updated",
@@ -397,24 +496,155 @@ crate::open_string_enum! {
         CertificateCreated = "certificate.created",
         CertificateUpdated = "certificate.updated",
         CertificateDeleted = "certificate.deleted",
+        CertificatesActivated = "certificates.activated",
+        CertificatesDeactivated = "certificates.deactivated",
+        CheckpointPermissionCreated = "checkpoint.permission.created",
+        CheckpointPermissionDeleted = "checkpoint.permission.deleted",
+        ExternalKeyRegistered = "external_key.registered",
+        ExternalKeyRemoved = "external_key.removed",
         GroupCreated = "group.created",
         GroupUpdated = "group.updated",
         GroupDeleted = "group.deleted",
         InviteSent = "invite.sent",
         InviteAccepted = "invite.accepted",
         InviteDeleted = "invite.deleted",
+        IpAllowlistCreated = "ip_allowlist.created",
+        IpAllowlistUpdated = "ip_allowlist.updated",
+        IpAllowlistDeleted = "ip_allowlist.deleted",
+        IpAllowlistConfigActivated = "ip_allowlist.config.activated",
+        IpAllowlistConfigDeactivated = "ip_allowlist.config.deactivated",
         LoginSucceeded = "login.succeeded",
         LoginFailed = "login.failed",
+        LogoutSucceeded = "logout.succeeded",
+        LogoutFailed = "logout.failed",
+        OrganizationUpdated = "organization.updated",
         ProjectCreated = "project.created",
         ProjectUpdated = "project.updated",
         ProjectArchived = "project.archived",
         ProjectDeleted = "project.deleted",
+        RateLimitUpdated = "rate_limit.updated",
+        RateLimitDeleted = "rate_limit.deleted",
+        ResourceDeleted = "resource.deleted",
+        TunnelCreated = "tunnel.created",
+        TunnelUpdated = "tunnel.updated",
+        TunnelDeleted = "tunnel.deleted",
+        WorkloadIdentityProviderCreated = "workload_identity_provider.created",
+        WorkloadIdentityProviderUpdated = "workload_identity_provider.updated",
+        WorkloadIdentityProviderDeleted = "workload_identity_provider.deleted",
+        WorkloadIdentityProviderMappingCreated = "workload_identity_provider_mapping.created",
+        WorkloadIdentityProviderMappingUpdated = "workload_identity_provider_mapping.updated",
+        WorkloadIdentityProviderMappingDeleted = "workload_identity_provider_mapping.deleted",
         RoleCreated = "role.created",
         RoleUpdated = "role.updated",
         RoleDeleted = "role.deleted",
+        RoleAssignmentCreated = "role.assignment.created",
+        RoleAssignmentDeleted = "role.assignment.deleted",
+        RoleBoundToResource = "role.bound_to_resource",
+        RoleUnboundFromResource = "role.unbound_from_resource",
+        ScimEnabled = "scim.enabled",
+        ScimDisabled = "scim.disabled",
+        ServiceAccountCreated = "service_account.created",
+        ServiceAccountUpdated = "service_account.updated",
+        ServiceAccountDeleted = "service_account.deleted",
         UserAdded = "user.added",
         UserUpdated = "user.updated",
-        UserDeleted = "user.deleted"
+        UserDeleted = "user.deleted",
+        TenantMetadataUpdated = "tenant.metadata.updated",
+        TenantMicrosoftEntraMappingUpserted = "tenant.microsoft_entra_mapping.upserted",
+        TenantMicrosoftEntraMappingDeleted = "tenant.microsoft_entra_mapping.deleted",
+        TenantWorkloadIdentityProviderCreated = "tenant.workload_identity.provider.created",
+        TenantWorkloadIdentityProviderUpdated = "tenant.workload_identity.provider.updated",
+        TenantWorkloadIdentityProviderArchived = "tenant.workload_identity.provider.archived",
+        TenantWorkloadIdentityMappingCreated = "tenant.workload_identity.mapping.created",
+        TenantWorkloadIdentityMappingUpdated = "tenant.workload_identity.mapping.updated",
+        TenantWorkloadIdentityMappingArchived = "tenant.workload_identity.mapping.archived",
+        TenantWorkloadIdentityBindingCreated = "tenant.workload_identity.binding.created",
+        TenantWorkloadIdentityPrincipalProvisioned = "tenant.workload_identity.principal.provisioned",
+        TenantWorkloadIdentityAccessTokenIssued = "tenant.workload_identity.access_token.issued",
+        TenantAdminApiKeyCreated = "tenant.admin_api_key.created",
+        TenantAdminApiKeyUpdated = "tenant.admin_api_key.updated",
+        TenantAdminApiKeyDeleted = "tenant.admin_api_key.deleted",
+        TenantProjectApiKeyCreated = "tenant.project_api_key.created",
+        TenantTrustedAccessBusinessVerificationStarted = "tenant.trusted_access.business_verification.started",
+        TenantTrustedAccessApplicationSubmitted = "tenant.trusted_access.application.submitted",
+        TenantChatgptAccessTokenRevoked = "tenant.chatgpt_access_token.revoked",
+        TenantMigrationCompleted = "tenant.migration.completed",
+        TenantSsoMigrated = "tenant.sso.migrated",
+        TenantDomainsMigrated = "tenant.domains.migrated",
+        TenantSsoConnectionCreated = "tenant.sso_connection.created",
+        TenantSsoConnectionUpdated = "tenant.sso_connection.updated",
+        TenantSsoConnectionDeleted = "tenant.sso_connection.deleted",
+        TenantSsoConnectionSetupStarted = "tenant.sso_connection.setup.started",
+        TenantPolicyCreated = "tenant.policy.created",
+        TenantPolicyUpdated = "tenant.policy.updated",
+        TenantPolicyDeleted = "tenant.policy.deleted",
+        TenantPolicyAttached = "tenant.policy.attached",
+        TenantPolicyDetached = "tenant.policy.detached",
+        TenantPrincipalAuthenticationPolicyResolved = "tenant.principal_authentication_policy.resolved",
+        TenantScimSetupStarted = "tenant.scim.setup.started",
+        TenantScimDeletionRequested = "tenant.scim.deletion.requested",
+        TenantScimDirectoryCreated = "tenant.scim.directory.created",
+        TenantProductAccessPolicyUpdated = "tenant.product_access_policy.updated",
+        TenantResourceShareGrantCreated = "tenant.resource_share_grant.created",
+        TenantResourceShareGrantUpdated = "tenant.resource_share_grant.updated",
+        TenantResourceShareGrantAccepted = "tenant.resource_share_grant.accepted",
+        TenantResourceShareGrantDeclined = "tenant.resource_share_grant.declined",
+        TenantResourceShareGrantRevoked = "tenant.resource_share_grant.revoked",
+        TenantResourceShareGrantDeleted = "tenant.resource_share_grant.deleted",
+        TenantServiceAccountUpdated = "tenant.service_account.updated",
+        TenantServiceAccountDeleted = "tenant.service_account.deleted",
+        TenantServiceAccountTokenRevoked = "tenant.service_account.token.revoked",
+        TenantBillingOverageLimitUpdated = "tenant.billing.overage_limit.updated",
+        TenantBillingAlertsUpdated = "tenant.billing.alerts.updated",
+        TenantBillingInfoUpdated = "tenant.billing.info.updated",
+        TenantUsageLimitWorkspaceUpdated = "tenant.usage_limit.workspace.updated",
+        TenantUsageLimitGroupUpdated = "tenant.usage_limit.group.updated",
+        TenantUsageLimitUserUpdated = "tenant.usage_limit.user.updated",
+        TenantUsageLimitIncreaseRequestUpdated = "tenant.usage_limit.increase_request.updated",
+        TenantUsageLimitIncreaseRequestResolved = "tenant.usage_limit.increase_request.resolved",
+        TenantGroupCreated = "tenant.group.created",
+        TenantGroupUpdated = "tenant.group.updated",
+        TenantGroupDeleted = "tenant.group.deleted",
+        TenantGroupMemberAdded = "tenant.group.member.added",
+        TenantGroupMemberRemoved = "tenant.group.member.removed",
+        TenantMigrationRolloutStatusUpdated = "tenant.migration_rollout.status.updated",
+        TenantMigrationRolloutTierUpdated = "tenant.migration_rollout.tier.updated",
+        TenantRoleMetadataUpdated = "tenant.role.metadata.updated",
+        TenantCustomRoleCreated = "tenant.custom_role.created",
+        TenantCustomRoleUpdated = "tenant.custom_role.updated",
+        TenantCustomRoleDeleted = "tenant.custom_role.deleted",
+        TenantRoleAssignmentCreated = "tenant.role_assignment.created",
+        TenantRoleAssignmentDeleted = "tenant.role_assignment.deleted",
+        TenantResourceRoleAssignmentCreated = "tenant.resource_role_assignment.created",
+        TenantResourceRoleAssignmentDeleted = "tenant.resource_role_assignment.deleted",
+        TenantResourceAccessUpdated = "tenant.resource_access.updated",
+        TenantResourceAccessDeleted = "tenant.resource_access.deleted",
+        TenantAdsAccountOnboardingRedemption = "tenant.ads_account.onboarding.redemption",
+        TenantSessionPolicyCreated = "tenant.session_policy.created",
+        TenantSessionPolicyUpdated = "tenant.session_policy.updated",
+        TenantSessionPolicyDeleted = "tenant.session_policy.deleted",
+        TenantSessionRevocationStarted = "tenant.session_revocation.started",
+        TenantThirdPartyAppPolicyUpdated = "tenant.third_party_app_policy.updated",
+        TenantUserAdded = "tenant.user.added",
+        TenantUserUpdated = "tenant.user.updated",
+        TenantUserRemoved = "tenant.user.removed",
+        TenantUserLookedUp = "tenant.user.looked_up",
+        TenantUserInvited = "tenant.user.invited",
+        TenantMembershipRevoked = "tenant.membership.revoked",
+        TenantApiOrganizationInviteUpserted = "tenant.api_organization_invite.upserted",
+        TenantApiOrganizationInviteDeleted = "tenant.api_organization_invite.deleted",
+        TenantChatgptWorkspaceInviteUpserted = "tenant.chatgpt_workspace_invite.upserted",
+        TenantMembershipAccepted = "tenant.membership.accepted",
+        TenantMembershipDeclined = "tenant.membership.declined",
+        TenantWorkspaceInviteEmailSettingsUpdated = "tenant.workspace_invite_email_settings.updated",
+    }
+}
+
+crate::open_string_enum! {
+    /// Official `AuditLogActorApiKey.type`.
+    pub enum AuditActorApiKeyType {
+        User = "user",
+        ServiceAccount = "service_account"
     }
 }
 
@@ -437,6 +667,13 @@ pub struct AuditActorUser {
     extra: ExtraFields,
 }
 
+impl AuditActorUser {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 /// Browser/session audit actor.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditActorSession {
@@ -448,6 +685,29 @@ pub struct AuditActorSession {
     extra: ExtraFields,
 }
 
+impl AuditActorSession {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Official `AuditLogActorServiceAccount`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AuditActorServiceAccount {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub id: Omittable<String>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl AuditActorServiceAccount {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 /// API key audit actor.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditActorApiKey {
@@ -456,15 +716,22 @@ pub struct AuditActorApiKey {
         rename = "type",
         skip_serializing_if = "Omittable::is_omitted"
     )]
-    pub kind: Omittable<String>,
+    pub kind: Omittable<AuditActorApiKeyType>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub user: Omittable<AuditActorUser>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub service_account: Omittable<AdminJsonObject>,
+    pub service_account: Omittable<AuditActorServiceAccount>,
     #[serde(default, flatten)]
     extra: ExtraFields,
+}
+
+impl AuditActorApiKey {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Actor that caused an audit event.
@@ -484,6 +751,13 @@ pub struct AuditLogActor {
     extra: ExtraFields,
 }
 
+impl AuditLogActor {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 /// Project summary on an audit event.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditProject {
@@ -495,10 +769,17 @@ pub struct AuditProject {
     extra: ExtraFields,
 }
 
+impl AuditProject {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 /// Organization audit log entry.
 ///
-/// Event-specific keys such as `project.created` are preserved in `extra` as
-/// immutable semantic objects; the stable common envelope remains typed.
+/// Official event-specific keys such as `api_key.created` are typed. Tenant
+/// events and future keys remain in `extra`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AuditLog {
     pub id: String,
@@ -509,12 +790,345 @@ pub struct AuditLog {
     pub project: Omittable<AuditProject>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub actor: Omittable<Nullable<AuditLogActor>>,
+    #[serde(
+        rename = "api_key.created",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub api_key_created: Omittable<AuditPayloadApiKeyCreated>,
+    #[serde(
+        rename = "api_key.updated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub api_key_updated: Omittable<AuditPayloadApiKeyUpdated>,
+    #[serde(
+        rename = "api_key.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub api_key_deleted: Omittable<AuditPayloadApiKeyDeleted>,
+    #[serde(
+        rename = "checkpoint.permission.created",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub checkpoint_permission_created: Omittable<AuditPayloadCheckpointPermissionCreated>,
+    #[serde(
+        rename = "checkpoint.permission.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub checkpoint_permission_deleted: Omittable<AuditPayloadCheckpointPermissionDeleted>,
+    #[serde(
+        rename = "external_key.registered",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub external_key_registered: Omittable<AuditPayloadExternalKeyRegistered>,
+    #[serde(
+        rename = "external_key.removed",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub external_key_removed: Omittable<AuditPayloadExternalKeyRemoved>,
+    #[serde(
+        rename = "group.created",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub group_created: Omittable<AuditPayloadGroupCreated>,
+    #[serde(
+        rename = "group.updated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub group_updated: Omittable<AuditPayloadGroupUpdated>,
+    #[serde(
+        rename = "group.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub group_deleted: Omittable<AuditPayloadGroupDeleted>,
+    #[serde(
+        rename = "scim.enabled",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub scim_enabled: Omittable<AuditPayloadScimEnabled>,
+    #[serde(
+        rename = "scim.disabled",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub scim_disabled: Omittable<AuditPayloadScimDisabled>,
+    #[serde(
+        rename = "invite.sent",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub invite_sent: Omittable<AuditPayloadInviteSent>,
+    #[serde(
+        rename = "invite.accepted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub invite_accepted: Omittable<AuditPayloadInviteAccepted>,
+    #[serde(
+        rename = "invite.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub invite_deleted: Omittable<AuditPayloadInviteDeleted>,
+    #[serde(
+        rename = "ip_allowlist.created",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub ip_allowlist_created: Omittable<AuditPayloadIpAllowlistCreated>,
+    #[serde(
+        rename = "ip_allowlist.updated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub ip_allowlist_updated: Omittable<AuditPayloadIpAllowlistUpdated>,
+    #[serde(
+        rename = "ip_allowlist.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub ip_allowlist_deleted: Omittable<AuditPayloadIpAllowlistDeleted>,
+    #[serde(
+        rename = "ip_allowlist.config.activated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub ip_allowlist_config_activated: Omittable<AuditPayloadIpAllowlistConfigActivated>,
+    #[serde(
+        rename = "ip_allowlist.config.deactivated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub ip_allowlist_config_deactivated: Omittable<AuditPayloadIpAllowlistConfigDeactivated>,
+    #[serde(
+        rename = "login.succeeded",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub login_succeeded: Omittable<AdminJsonObject>,
+    #[serde(
+        rename = "login.failed",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub login_failed: Omittable<AuditPayloadLoginFailed>,
+    #[serde(
+        rename = "logout.succeeded",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub logout_succeeded: Omittable<AdminJsonObject>,
+    #[serde(
+        rename = "logout.failed",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub logout_failed: Omittable<AuditPayloadLogoutFailed>,
+    #[serde(
+        rename = "organization.updated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub organization_updated: Omittable<AuditPayloadOrganizationUpdated>,
+    #[serde(
+        rename = "project.created",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub project_created: Omittable<AuditPayloadProjectCreated>,
+    #[serde(
+        rename = "project.updated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub project_updated: Omittable<AuditPayloadProjectUpdated>,
+    #[serde(
+        rename = "project.archived",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub project_archived: Omittable<AuditPayloadProjectArchived>,
+    #[serde(
+        rename = "project.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub project_deleted: Omittable<AuditPayloadProjectDeleted>,
+    #[serde(
+        rename = "rate_limit.updated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub rate_limit_updated: Omittable<AuditPayloadRateLimitUpdated>,
+    #[serde(
+        rename = "rate_limit.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub rate_limit_deleted: Omittable<AuditPayloadRateLimitDeleted>,
+    #[serde(
+        rename = "role.created",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub role_created: Omittable<AuditPayloadRoleCreated>,
+    #[serde(
+        rename = "role.updated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub role_updated: Omittable<AuditPayloadRoleUpdated>,
+    #[serde(
+        rename = "role.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub role_deleted: Omittable<AuditPayloadRoleDeleted>,
+    #[serde(
+        rename = "role.assignment.created",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub role_assignment_created: Omittable<AuditPayloadRoleAssignmentCreated>,
+    #[serde(
+        rename = "role.assignment.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub role_assignment_deleted: Omittable<AuditPayloadRoleAssignmentDeleted>,
+    #[serde(
+        rename = "role.bound_to_resource",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub role_bound_to_resource: Omittable<AuditPayloadRoleBoundToResource>,
+    #[serde(
+        rename = "role.unbound_from_resource",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub role_unbound_from_resource: Omittable<AuditPayloadRoleUnboundFromResource>,
+    #[serde(
+        rename = "service_account.created",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub service_account_created: Omittable<AuditPayloadServiceAccountCreated>,
+    #[serde(
+        rename = "service_account.updated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub service_account_updated: Omittable<AuditPayloadServiceAccountUpdated>,
+    #[serde(
+        rename = "service_account.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub service_account_deleted: Omittable<AuditPayloadServiceAccountDeleted>,
+    #[serde(
+        rename = "workload_identity_provider.created",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub workload_identity_provider_created: Omittable<AuditPayloadWorkloadIdentityProviderCreated>,
+    #[serde(
+        rename = "workload_identity_provider.updated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub workload_identity_provider_updated: Omittable<AuditPayloadWorkloadIdentityProviderUpdated>,
+    #[serde(
+        rename = "workload_identity_provider.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub workload_identity_provider_deleted: Omittable<AuditPayloadWorkloadIdentityProviderDeleted>,
+    #[serde(
+        rename = "workload_identity_provider_mapping.created",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub workload_identity_provider_mapping_created:
+        Omittable<AuditPayloadWorkloadIdentityProviderMappingCreated>,
+    #[serde(
+        rename = "workload_identity_provider_mapping.updated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub workload_identity_provider_mapping_updated:
+        Omittable<AuditPayloadWorkloadIdentityProviderMappingUpdated>,
+    #[serde(
+        rename = "workload_identity_provider_mapping.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub workload_identity_provider_mapping_deleted:
+        Omittable<AuditPayloadWorkloadIdentityProviderMappingDeleted>,
+    #[serde(
+        rename = "user.added",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub user_added: Omittable<AuditPayloadUserAdded>,
+    #[serde(
+        rename = "user.updated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub user_updated: Omittable<AuditPayloadUserUpdated>,
+    #[serde(
+        rename = "user.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub user_deleted: Omittable<AuditPayloadUserDeleted>,
+    #[serde(
+        rename = "certificate.created",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub certificate_created: Omittable<AuditPayloadCertificateCreated>,
+    #[serde(
+        rename = "certificate.updated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub certificate_updated: Omittable<AuditPayloadCertificateUpdated>,
+    #[serde(
+        rename = "certificate.deleted",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub certificate_deleted: Omittable<AuditPayloadCertificateDeleted>,
+    #[serde(
+        rename = "certificates.activated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub certificates_activated: Omittable<AuditPayloadCertificatesActivated>,
+    #[serde(
+        rename = "certificates.deactivated",
+        default,
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub certificates_deactivated: Omittable<AuditPayloadCertificatesDeactivated>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl AuditLog {
-    /// Event-specific and future fields.
+    /// Tenant events and other fields not named on the pinned `AuditLog` schema.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -534,6 +1148,12 @@ pub struct AuditLogListParams {
     pub event_types: Omittable<Vec<AuditEventType>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub actor_ids: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub actor_emails: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub resource_ids: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub tenant_only: Omittable<bool>,
     #[serde(flatten)]
     pub page: AdminListParams,
 }
@@ -593,6 +1213,20 @@ impl Certificate {
     }
 }
 
+crate::open_string_enum! {
+    /// Official `getCertificate` `include` query values.
+    pub enum CertificateInclude {
+        Content = "content"
+    }
+}
+
+/// Official `getCertificate` query parameters.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CertificateGetParams {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub include: Omittable<Vec<CertificateInclude>>,
+}
+
 /// Certificate upload request. Debug output never prints PEM content.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct UploadCertificateRequest {
@@ -622,9 +1256,34 @@ pub struct ToggleCertificatesRequest {
     pub certificate_ids: Vec<String>,
 }
 
+impl ToggleCertificatesRequest {
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), AdminConstraintError> {
+        let actual = self.certificate_ids.len();
+        if !(MIN_TOGGLE_CERTIFICATE_IDS..=MAX_TOGGLE_CERTIFICATE_IDS).contains(&actual) {
+            return Err(AdminConstraintError::CertificateIds {
+                actual,
+                minimum: MIN_TOGGLE_CERTIFICATE_IDS,
+                maximum: MAX_TOGGLE_CERTIFICATE_IDS,
+            });
+        }
+        Ok(())
+    }
+}
+
+crate::open_string_enum! {
+    /// Official certificate activate/deactivate result discriminator.
+    pub enum CertificateScopeObject {
+        OrganizationActivation = "organization.certificate.activation",
+        OrganizationDeactivation = "organization.certificate.deactivation",
+        ProjectActivation = "organization.project.certificate.activation",
+        ProjectDeactivation = "organization.project.certificate.deactivation"
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CertificateScopeResponse {
-    pub object: AdminListObject,
+    pub object: CertificateScopeObject,
     pub data: Vec<Certificate>,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -729,23 +1388,6 @@ pub struct GroupResourceWithSuccess {
     extra: ExtraFields,
 }
 
-/// Group-list user row. Retrieve uses the fuller [`GroupMemberUser`] shape.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct GroupUser {
-    pub id: String,
-    pub name: String,
-    pub email: Nullable<String>,
-    #[serde(default, flatten)]
-    extra: ExtraFields,
-}
-
-impl GroupUser {
-    #[must_use]
-    pub const fn extra(&self) -> &ExtraFields {
-        &self.extra
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupMemberUser {
     pub id: String,
@@ -765,9 +1407,41 @@ impl GroupMemberUser {
     }
 }
 
+/// Official `UserListResource` item (`list-group-users`). Retrieve uses [`GroupMemberUser`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GroupUser {
+    pub id: String,
+    pub name: String,
+    pub email: Nullable<String>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl GroupUser {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateGroupBody {
     pub name: String,
+}
+
+impl CreateGroupBody {
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), AdminConstraintError> {
+        let actual = self.name.chars().count();
+        if !(MIN_ADMIN_GROUP_NAME_CHARS..=MAX_ADMIN_GROUP_NAME_CHARS).contains(&actual) {
+            return Err(AdminConstraintError::GroupName {
+                actual,
+                minimum: MIN_ADMIN_GROUP_NAME_CHARS,
+                maximum: MAX_ADMIN_GROUP_NAME_CHARS,
+            });
+        }
+        Ok(())
+    }
 }
 
 pub type UpdateGroupBody = CreateGroupBody;
@@ -780,10 +1454,42 @@ pub struct CreateGroupUserBody {
 crate::open_string_enum! {
     /// Assignment/deletion object discriminator.
     pub enum AssignmentObject {
-        GroupUserAssignment = "group.user",
-        GroupRoleAssignment = "group.role",
-        UserRoleAssignment = "user.role",
-        Deleted = "group.user.deleted"
+        GroupUser = "group.user",
+        GroupRole = "group.role",
+        UserRole = "user.role",
+        GroupUserDeleted = "group.user.deleted",
+        GroupRoleDeleted = "group.role.deleted",
+        UserRoleDeleted = "user.role.deleted",
+        GroupUserAssignment = "organization.group.user.assignment",
+        GroupRoleAssignment = "organization.group.role.assignment",
+        UserRoleAssignment = "organization.user.role.assignment",
+        Deleted = "organization.role.assignment.deleted"
+    }
+}
+
+crate::open_string_enum! {
+    /// Official `Group.object` discriminator.
+    pub enum GroupObject {
+        Group = "group"
+    }
+}
+
+/// Official `Group` summary embedded in role-assignment responses.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GroupSummary {
+    pub object: GroupObject,
+    pub id: String,
+    pub name: String,
+    pub created_at: u64,
+    pub scim_managed: bool,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl GroupSummary {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -799,7 +1505,7 @@ pub struct GroupUserAssignment {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupRoleAssignment {
     pub object: AssignmentObject,
-    pub group: AdminJsonObject,
+    pub group: GroupSummary,
     pub role: Role,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -808,7 +1514,7 @@ pub struct GroupRoleAssignment {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UserRoleAssignment {
     pub object: AssignmentObject,
-    pub user: AdminJsonObject,
+    pub user: User,
     pub role: Role,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -842,6 +1548,77 @@ crate::open_string_enum! {
     }
 }
 
+crate::open_string_enum! {
+    /// Official nested `User.user.object` discriminator.
+    pub enum NestedUserObject {
+        User = "user"
+    }
+}
+
+/// Official nested `User.user` details.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NestedUserDetails {
+    pub object: NestedUserObject,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub email: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub name: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub picture: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub enabled: Omittable<Nullable<bool>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub banned: Omittable<Nullable<bool>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub banned_at: Omittable<Nullable<u64>>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl NestedUserDetails {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// One project listed on official `User.projects.data`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UserProjectListItem {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub id: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub name: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub role: Omittable<Nullable<String>>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl UserProjectListItem {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Official `User.projects` list envelope.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UserProjectList {
+    pub object: AdminListObject,
+    pub data: Vec<UserProjectListItem>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl UserProjectList {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 /// Organization user. The new dashboard fields are optional and lossless.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct User {
@@ -859,7 +1636,7 @@ pub struct User {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub created: Omittable<u64>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub user: Omittable<AdminJsonObject>,
+    pub user: Omittable<NestedUserDetails>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub is_service_account: Omittable<bool>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -873,7 +1650,7 @@ pub struct User {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub developer_persona: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub projects: Omittable<Nullable<AdminJsonObject>>,
+    pub projects: Omittable<Nullable<UserProjectList>>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
@@ -888,13 +1665,13 @@ impl User {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UserRoleUpdateRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub role: Omittable<String>,
+    pub role: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub role_id: Omittable<String>,
+    pub role_id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub technical_level: Omittable<String>,
+    pub technical_level: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub developer_persona: Omittable<String>,
+    pub developer_persona: Omittable<Nullable<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -941,15 +1718,15 @@ pub struct PublicCreateOrganizationRoleBody {
     pub role_name: String,
     pub permissions: Vec<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub description: Omittable<String>,
+    pub description: Omittable<Nullable<String>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PublicUpdateOrganizationRoleBody {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub role_name: Omittable<String>,
+    pub role_name: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub permissions: Omittable<Vec<String>>,
+    pub permissions: Omittable<Nullable<Vec<String>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub description: Omittable<Nullable<String>>,
 }
@@ -957,6 +1734,22 @@ pub struct PublicUpdateOrganizationRoleBody {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicAssignOrganizationGroupRoleBody {
     pub role_id: String,
+}
+
+/// Official `AssignedRoleDetails.assignment_sources` item.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RoleAssignmentSource {
+    pub principal_id: String,
+    pub principal_type: String,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl RoleAssignmentSource {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -972,16 +1765,9 @@ pub struct AssignedRoleDetails {
     pub created_by: Nullable<String>,
     pub created_by_user_obj: Nullable<AdminJsonObject>,
     pub metadata: Nullable<AdminJsonObject>,
-    pub assignment_sources: Nullable<Vec<Value>>,
+    pub assignment_sources: Nullable<Vec<RoleAssignmentSource>>,
     #[serde(default, flatten)]
     extra: ExtraFields,
-}
-
-impl AssignedRoleDetails {
-    #[must_use]
-    pub const fn extra(&self) -> &ExtraFields {
-        &self.extra
-    }
 }
 
 pub type PublicRoleListResource = AdminNextPage<Role>;
@@ -1029,6 +1815,30 @@ crate::open_string_enum! {
     }
 }
 
+crate::open_string_enum! {
+    /// Official invite-project membership role.
+    pub enum InviteProjectRole {
+        Member = "member",
+        Owner = "owner"
+    }
+}
+
+/// Official `Invite.projects[]` / `InviteRequest.projects[]` item.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InviteProjectMembership {
+    pub id: String,
+    pub role: InviteProjectRole,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl InviteProjectMembership {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Invite {
     pub object: InviteObject,
@@ -1037,7 +1847,7 @@ pub struct Invite {
     pub role: InviteRole,
     pub status: InviteStatus,
     pub created_at: u64,
-    pub projects: Vec<AdminJsonObject>,
+    pub projects: Vec<InviteProjectMembership>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub expires_at: Omittable<Nullable<u64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -1051,7 +1861,7 @@ pub struct InviteRequest {
     pub email: String,
     pub role: InviteRole,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub projects: Omittable<Vec<AdminJsonObject>>,
+    pub projects: Omittable<Vec<InviteProjectMembership>>,
 }
 
 pub type InviteListResponse = AdminCursorPage<Invite>;
@@ -1131,7 +1941,7 @@ pub struct ProjectCreateRequest {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectUpdateRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub name: Omittable<String>,
+    pub name: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub geography: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -1161,6 +1971,13 @@ pub struct ProjectGroup {
 }
 
 pub type ProjectGroupListResource = AdminNextPage<ProjectGroup>;
+
+/// Official `retrieve-project-group` query parameters.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProjectGroupGetParams {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub group_type: Omittable<GroupType>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InviteProjectGroupBody {
@@ -1203,7 +2020,7 @@ pub struct ProjectUserCreateRequest {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectUserUpdateRequest {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub role: Omittable<String>,
+    pub role: Omittable<Nullable<String>>,
 }
 
 pub type ProjectUserListResponse = AdminCursorPage<ProjectUser>;
@@ -1248,7 +2065,7 @@ pub struct ProjectServiceAccount {
 pub struct ProjectServiceAccountCreateRequest {
     pub name: String,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub create_service_account_only: Omittable<bool>,
+    pub create_service_account_only: Omittable<Nullable<bool>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1340,6 +2157,84 @@ crate::open_string_enum! {
     }
 }
 
+crate::open_string_enum! {
+    /// Official `list-project-api-keys` `owner_project_access` query filter.
+    pub enum ProjectAccessFilter {
+        Active = "active",
+        Inactive = "inactive",
+        Any = "any"
+    }
+}
+
+crate::open_string_enum! {
+    /// Official `ProjectApiKey.owner.type`.
+    pub enum ProjectApiKeyOwnerType {
+        User = "user",
+        ServiceAccount = "service_account"
+    }
+}
+
+/// Official `ProjectApiKeyOwnerUser`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectApiKeyOwnerUser {
+    pub id: String,
+    pub email: String,
+    pub name: String,
+    pub created_at: u64,
+    pub role: String,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ProjectApiKeyOwnerUser {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Official `ProjectApiKeyOwnerServiceAccount`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectApiKeyOwnerServiceAccount {
+    pub id: String,
+    pub name: String,
+    pub created_at: u64,
+    pub role: String,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ProjectApiKeyOwnerServiceAccount {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Official `ProjectApiKey.owner`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectApiKeyOwner {
+    #[serde(
+        default,
+        rename = "type",
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    pub kind: Omittable<ProjectApiKeyOwnerType>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub user: Omittable<ProjectApiKeyOwnerUser>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub service_account: Omittable<ProjectApiKeyOwnerServiceAccount>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ProjectApiKeyOwner {
+    #[must_use]
+    pub const fn extra(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectApiKey {
     pub object: String,
@@ -1349,7 +2244,7 @@ pub struct ProjectApiKey {
     pub last_used_at: Nullable<u64>,
     pub id: String,
     pub owner_project_access: ProjectAccessState,
-    pub owner: AdminJsonObject,
+    pub owner: ProjectApiKeyOwner,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
@@ -1595,6 +2490,19 @@ pub struct UpdateSpendLimitBody {
     pub interval: SpendInterval,
 }
 
+impl UpdateSpendLimitBody {
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), AdminConstraintError> {
+        if self.threshold_amount < MIN_SPEND_LIMIT_THRESHOLD {
+            return Err(AdminConstraintError::SpendThreshold {
+                actual: self.threshold_amount,
+                minimum: MIN_SPEND_LIMIT_THRESHOLD,
+            });
+        }
+        Ok(())
+    }
+}
+
 pub type UpdateOrganizationSpendLimitBody = UpdateSpendLimitBody;
 pub type UpdateProjectSpendLimitBody = UpdateSpendLimitBody;
 
@@ -1662,6 +2570,14 @@ pub struct UsageQueryParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub batch: Omittable<bool>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub sources: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub sizes: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub vector_store_ids: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub context_levels: Omittable<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub group_by: Omittable<Vec<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<u64>,
@@ -1682,6 +2598,10 @@ impl UsageQueryParams {
             api_key_ids: Omittable::Omitted,
             models: Omittable::Omitted,
             batch: Omittable::Omitted,
+            sources: Omittable::Omitted,
+            sizes: Omittable::Omitted,
+            vector_store_ids: Omittable::Omitted,
+            context_levels: Omittable::Omitted,
             group_by: Omittable::Omitted,
             limit: Omittable::Omitted,
             page: Omittable::Omitted,
@@ -2904,6 +3824,7 @@ mod tests {
     assert_impl_all!(AdminApiKeyCreateResponse: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(AuditLog: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(Certificate: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(CertificateScopeResponse: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(User: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(Role: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(Invite: Serialize, DeserializeOwned, Send, Sync);
@@ -3037,7 +3958,317 @@ mod tests {
         assert!(matches!(audit.actor, Omittable::Value(Nullable::Null)));
         assert!(audit.extra().contains_key("tenant.policy.updated"));
         assert!(audit.extra().contains_key("audit_future"));
+        assert!(matches!(audit.kind, AuditEventType::TenantPolicyUpdated));
+        assert!(audit.api_key_created.is_omitted());
         assert_eq!(ok(serde_json::to_value(audit)), fixture);
+    }
+
+    #[test]
+    fn admin_audit_event_payloads_match_openapi() {
+        const OFFICIAL_EVENT_TYPES: &[&str] = &[
+            "api_key.created",
+            "api_key.updated",
+            "api_key.deleted",
+            "certificate.created",
+            "certificate.updated",
+            "certificate.deleted",
+            "certificates.activated",
+            "certificates.deactivated",
+            "checkpoint.permission.created",
+            "checkpoint.permission.deleted",
+            "external_key.registered",
+            "external_key.removed",
+            "group.created",
+            "group.updated",
+            "group.deleted",
+            "invite.sent",
+            "invite.accepted",
+            "invite.deleted",
+            "ip_allowlist.created",
+            "ip_allowlist.updated",
+            "ip_allowlist.deleted",
+            "ip_allowlist.config.activated",
+            "ip_allowlist.config.deactivated",
+            "login.succeeded",
+            "login.failed",
+            "logout.succeeded",
+            "logout.failed",
+            "organization.updated",
+            "project.created",
+            "project.updated",
+            "project.archived",
+            "project.deleted",
+            "rate_limit.updated",
+            "rate_limit.deleted",
+            "resource.deleted",
+            "tunnel.created",
+            "tunnel.updated",
+            "tunnel.deleted",
+            "workload_identity_provider.created",
+            "workload_identity_provider.updated",
+            "workload_identity_provider.deleted",
+            "workload_identity_provider_mapping.created",
+            "workload_identity_provider_mapping.updated",
+            "workload_identity_provider_mapping.deleted",
+            "role.created",
+            "role.updated",
+            "role.deleted",
+            "role.assignment.created",
+            "role.assignment.deleted",
+            "role.bound_to_resource",
+            "role.unbound_from_resource",
+            "scim.enabled",
+            "scim.disabled",
+            "service_account.created",
+            "service_account.updated",
+            "service_account.deleted",
+            "user.added",
+            "user.updated",
+            "user.deleted",
+            "tenant.metadata.updated",
+            "tenant.microsoft_entra_mapping.upserted",
+            "tenant.microsoft_entra_mapping.deleted",
+            "tenant.workload_identity.provider.created",
+            "tenant.workload_identity.provider.updated",
+            "tenant.workload_identity.provider.archived",
+            "tenant.workload_identity.mapping.created",
+            "tenant.workload_identity.mapping.updated",
+            "tenant.workload_identity.mapping.archived",
+            "tenant.workload_identity.binding.created",
+            "tenant.workload_identity.principal.provisioned",
+            "tenant.workload_identity.access_token.issued",
+            "tenant.admin_api_key.created",
+            "tenant.admin_api_key.updated",
+            "tenant.admin_api_key.deleted",
+            "tenant.project_api_key.created",
+            "tenant.trusted_access.business_verification.started",
+            "tenant.trusted_access.application.submitted",
+            "tenant.chatgpt_access_token.revoked",
+            "tenant.migration.completed",
+            "tenant.sso.migrated",
+            "tenant.domains.migrated",
+            "tenant.sso_connection.created",
+            "tenant.sso_connection.updated",
+            "tenant.sso_connection.deleted",
+            "tenant.sso_connection.setup.started",
+            "tenant.policy.created",
+            "tenant.policy.updated",
+            "tenant.policy.deleted",
+            "tenant.policy.attached",
+            "tenant.policy.detached",
+            "tenant.principal_authentication_policy.resolved",
+            "tenant.scim.setup.started",
+            "tenant.scim.deletion.requested",
+            "tenant.scim.directory.created",
+            "tenant.product_access_policy.updated",
+            "tenant.resource_share_grant.created",
+            "tenant.resource_share_grant.updated",
+            "tenant.resource_share_grant.accepted",
+            "tenant.resource_share_grant.declined",
+            "tenant.resource_share_grant.revoked",
+            "tenant.resource_share_grant.deleted",
+            "tenant.service_account.updated",
+            "tenant.service_account.deleted",
+            "tenant.service_account.token.revoked",
+            "tenant.billing.overage_limit.updated",
+            "tenant.billing.alerts.updated",
+            "tenant.billing.info.updated",
+            "tenant.usage_limit.workspace.updated",
+            "tenant.usage_limit.group.updated",
+            "tenant.usage_limit.user.updated",
+            "tenant.usage_limit.increase_request.updated",
+            "tenant.usage_limit.increase_request.resolved",
+            "tenant.group.created",
+            "tenant.group.updated",
+            "tenant.group.deleted",
+            "tenant.group.member.added",
+            "tenant.group.member.removed",
+            "tenant.migration_rollout.status.updated",
+            "tenant.migration_rollout.tier.updated",
+            "tenant.role.metadata.updated",
+            "tenant.custom_role.created",
+            "tenant.custom_role.updated",
+            "tenant.custom_role.deleted",
+            "tenant.role_assignment.created",
+            "tenant.role_assignment.deleted",
+            "tenant.resource_role_assignment.created",
+            "tenant.resource_role_assignment.deleted",
+            "tenant.resource_access.updated",
+            "tenant.resource_access.deleted",
+            "tenant.ads_account.onboarding.redemption",
+            "tenant.session_policy.created",
+            "tenant.session_policy.updated",
+            "tenant.session_policy.deleted",
+            "tenant.session_revocation.started",
+            "tenant.third_party_app_policy.updated",
+            "tenant.user.added",
+            "tenant.user.updated",
+            "tenant.user.removed",
+            "tenant.user.looked_up",
+            "tenant.user.invited",
+            "tenant.membership.revoked",
+            "tenant.api_organization_invite.upserted",
+            "tenant.api_organization_invite.deleted",
+            "tenant.chatgpt_workspace_invite.upserted",
+            "tenant.membership.accepted",
+            "tenant.membership.declined",
+            "tenant.workspace_invite_email_settings.updated",
+        ];
+        assert_eq!(OFFICIAL_EVENT_TYPES.len(), 147);
+        for wire in OFFICIAL_EVENT_TYPES {
+            let parsed = AuditEventType::from_raw(*wire);
+            assert!(parsed.is_known(), "{wire} must be a known official type");
+            assert_eq!(parsed.as_str(), *wire);
+        }
+        assert!(!AuditEventType::from_raw("audit.future.event").is_known());
+
+        let fixture = json!({
+            "id": "req_xxx_20240101",
+            "type": "api_key.created",
+            "effective_at": 1_720_804_090,
+            "actor": {
+                "type": "session",
+                "session": {
+                    "user": {
+                        "id": "user-xxx",
+                        "email": "user@example.com"
+                    },
+                    "ip_address": "127.0.0.1",
+                    "user_agent": "Mozilla/5.0"
+                }
+            },
+            "api_key.created": {
+                "id": "key_xxxx",
+                "data": {
+                    "scopes": ["resource.operation"],
+                    "data_future": true
+                }
+            }
+        });
+        let audit = ok(serde_json::from_value::<AuditLog>(fixture.clone()));
+        assert!(matches!(audit.kind, AuditEventType::ApiKeyCreated));
+        match &audit.api_key_created {
+            Omittable::Value(payload) => {
+                assert_eq!(payload.id, Omittable::Value("key_xxxx".to_owned()));
+                match &payload.data {
+                    Omittable::Value(data) => {
+                        assert_eq!(
+                            data.scopes,
+                            Omittable::Value(vec!["resource.operation".to_owned()])
+                        );
+                        assert!(data.extra().contains_key("data_future"));
+                    }
+                    Omittable::Omitted => panic!("official api_key.created.data must decode"),
+                }
+            }
+            Omittable::Omitted => panic!("official api_key.created must be typed"),
+        }
+        match &audit.actor {
+            Omittable::Value(Nullable::Value(actor)) => match &actor.session {
+                Omittable::Value(session) => {
+                    assert!(session.extra().contains_key("user_agent"));
+                }
+                Omittable::Omitted => panic!("official session actor must decode"),
+            },
+            other => panic!("official actor must decode, got {other:?}"),
+        }
+        assert!(!audit.extra().contains_key("api_key.created"));
+        assert_eq!(ok(serde_json::to_value(&audit)), fixture);
+
+        let archived = ok(serde_json::from_value::<AuditLog>(json!({
+            "id": "audit_2",
+            "type": "project.archived",
+            "effective_at": 11,
+            "project.archived": {"id": "proj_1"}
+        })));
+        match archived.project_archived {
+            Omittable::Value(payload) => {
+                assert_eq!(payload.id, Omittable::Value("proj_1".to_owned()));
+            }
+            Omittable::Omitted => panic!("official project.archived must be typed"),
+        }
+
+        let bound = ok(serde_json::from_value::<AuditLog>(json!({
+            "id": "audit_3",
+            "type": "role.bound_to_resource",
+            "effective_at": 12,
+            "role.bound_to_resource": {
+                "source": "connector_publish",
+                "enabled": true
+            }
+        })));
+        match bound.role_bound_to_resource {
+            Omittable::Value(payload) => {
+                assert!(matches!(
+                    payload.source,
+                    Omittable::Value(AuditRoleBindingSource::ConnectorPublish)
+                ));
+                assert_eq!(payload.enabled, Omittable::Value(true));
+            }
+            Omittable::Omitted => panic!("official role.bound_to_resource must be typed"),
+        }
+
+        let deleted = ok(serde_json::from_value::<AuditLog>(json!({
+            "id": "audit_4",
+            "type": "certificate.deleted",
+            "effective_at": 13,
+            "certificate.deleted": {
+                "id": "cert_1",
+                "name": "leaf",
+                "certificate": "-----BEGIN CERTIFICATE----- secret"
+            }
+        })));
+        assert!(!format!("{deleted:?}").contains("secret"));
+        match &deleted.certificate_deleted {
+            Omittable::Value(payload) => match &payload.certificate {
+                Omittable::Value(pem) => {
+                    assert_eq!(
+                        pem.with_exposed(ToOwned::to_owned),
+                        "-----BEGIN CERTIFICATE----- secret"
+                    );
+                }
+                Omittable::Omitted => panic!("official PEM must decode"),
+            },
+            Omittable::Omitted => panic!("official certificate.deleted must be typed"),
+        }
+
+        assert!(
+            serde_json::from_value::<AuditLog>(json!({
+                "id": "audit_5",
+                "type": "api_key.created",
+                "effective_at": 14,
+                "api_key.created": {"id": null}
+            }))
+            .is_err(),
+            "official api_key.created.id is a non-null string"
+        );
+
+        let api_actor = ok(serde_json::from_value::<AuditLog>(json!({
+            "id": "audit_6",
+            "type": "login.succeeded",
+            "effective_at": 15,
+            "actor": {
+                "type": "api_key",
+                "api_key": {
+                    "type": "service_account",
+                    "id": "key_sa"
+                }
+            },
+            "login.succeeded": {}
+        })));
+        match api_actor.actor {
+            Omittable::Value(Nullable::Value(actor)) => match actor.api_key {
+                Omittable::Value(key) => {
+                    assert!(matches!(
+                        key.kind,
+                        Omittable::Value(AuditActorApiKeyType::ServiceAccount)
+                    ));
+                }
+                Omittable::Omitted => panic!("official api_key actor must decode"),
+            },
+            other => panic!("official actor must decode, got {other:?}"),
+        }
+        assert!(matches!(api_actor.login_succeeded, Omittable::Value(_)));
     }
 
     #[test]
@@ -3134,6 +4365,16 @@ mod tests {
                         "line_item": null
                     },
                     {
+                        "object": "organization.usage.file_searches.result",
+                        "num_requests": 2,
+                        "vector_store_id": null
+                    },
+                    {
+                        "object": "organization.usage.web_searches.result",
+                        "num_model_requests": 1,
+                        "num_requests": 3
+                    },
+                    {
                         "object": "organization.usage.future.result",
                         "units": 7
                     }
@@ -3151,7 +4392,15 @@ mod tests {
             UsageResult::Completions(_)
         ));
         assert!(matches!(page.data[0].results[1], UsageResult::Costs(_)));
-        match &page.data[0].results[2] {
+        assert!(matches!(
+            page.data[0].results[2],
+            UsageResult::FileSearchCalls(_)
+        ));
+        assert!(matches!(
+            page.data[0].results[3],
+            UsageResult::WebSearchCalls(_)
+        ));
+        match &page.data[0].results[4] {
             UsageResult::Unknown(value) => {
                 assert_eq!(value.discriminator(), "organization.usage.future.result");
             }
@@ -3178,49 +4427,221 @@ mod tests {
     }
 
     #[test]
-    fn usage_file_and_web_search_results_use_searches_object_tags() {
-        let file_search = json!({
-            "object": "organization.usage.file_searches.result",
-            "num_requests": 2,
-            "project_id": null,
-            "vector_store_id": "vs_1"
-        });
-        let decoded = ok(serde_json::from_value::<UsageResult>(file_search.clone()));
-        assert!(matches!(decoded, UsageResult::FileSearchCalls(_)));
-        assert_eq!(ok(serde_json::to_value(decoded)), file_search);
-
-        let web_search = json!({
-            "object": "organization.usage.web_searches.result",
-            "num_model_requests": 1,
-            "num_requests": 2,
-            "context_level": "medium"
-        });
-        let decoded = ok(serde_json::from_value::<UsageResult>(web_search.clone()));
-        assert!(matches!(decoded, UsageResult::WebSearchCalls(_)));
-        assert_eq!(ok(serde_json::to_value(decoded)), web_search);
-
+    fn admin_query_filters_match_openapi() {
+        let mut page = AdminListParams::default();
+        page.before = Omittable::Value("cursor_0".to_owned());
+        page.emails = Omittable::Value(vec!["user@example.com".to_owned()]);
+        page.include_archived = Omittable::Value(true);
+        page.owner_project_access = Omittable::Value(ProjectAccessFilter::Any);
+        let encoded = ok(serde_json::to_value(&page));
+        assert_eq!(
+            encoded,
+            json!({
+                "before": "cursor_0",
+                "emails": ["user@example.com"],
+                "include_archived": true,
+                "owner_project_access": "any"
+            })
+        );
+        assert_eq!(ProjectAccessFilter::Any.as_str(), "any");
+        assert!(serde_json::from_value::<AdminListParams>(json!({"before": null})).is_err());
+        assert!(serde_json::from_value::<AdminListParams>(json!({"emails": null})).is_err());
         assert!(
-            serde_json::from_value::<UsageFileSearchCallsResult>(json!({
-                "object": "organization.usage.file_search_calls.result",
-                "num_requests": 1
+            serde_json::from_value::<AdminListParams>(json!({"include_archived": null})).is_err()
+        );
+        assert!(
+            serde_json::from_value::<AdminListParams>(json!({"owner_project_access": null}))
+                .is_err()
+        );
+
+        let mut audit = AuditLogListParams::default();
+        audit.actor_emails = Omittable::Value(vec!["actor@example.com".to_owned()]);
+        audit.resource_ids = Omittable::Value(vec!["proj_1".to_owned()]);
+        audit.tenant_only = Omittable::Value(true);
+        let encoded = ok(serde_json::to_value(&audit));
+        assert_eq!(
+            encoded,
+            json!({
+                "actor_emails": ["actor@example.com"],
+                "resource_ids": ["proj_1"],
+                "tenant_only": true
+            })
+        );
+        assert!(
+            serde_json::from_value::<AuditLogListParams>(json!({"actor_emails": null})).is_err()
+        );
+        assert!(
+            serde_json::from_value::<AuditLogListParams>(json!({"resource_ids": null})).is_err()
+        );
+        assert!(
+            serde_json::from_value::<AuditLogListParams>(json!({"tenant_only": null})).is_err()
+        );
+
+        let mut usage = UsageQueryParams::new(100);
+        usage.sources = Omittable::Value(vec!["image.generation".to_owned()]);
+        usage.sizes = Omittable::Value(vec!["1024x1024".to_owned()]);
+        usage.vector_store_ids = Omittable::Value(vec!["vs_1".to_owned()]);
+        usage.context_levels = Omittable::Value(vec!["high".to_owned()]);
+        let encoded = ok(serde_json::to_value(&usage));
+        assert_eq!(encoded["start_time"], 100);
+        assert_eq!(encoded["sources"], json!(["image.generation"]));
+        assert_eq!(encoded["sizes"], json!(["1024x1024"]));
+        assert_eq!(encoded["vector_store_ids"], json!(["vs_1"]));
+        assert_eq!(encoded["context_levels"], json!(["high"]));
+        assert!(
+            serde_json::from_value::<UsageQueryParams>(json!({
+                "start_time": 100,
+                "sources": null
             }))
             .is_err()
         );
-        assert!(matches!(
-            ok(serde_json::from_value::<UsageResult>(json!({
-                "object": "organization.usage.file_search_calls.result",
-                "num_requests": 1
-            }))),
-            UsageResult::Unknown(_)
-        ));
+
+        let mut certificate = CertificateGetParams::default();
+        certificate.include = Omittable::Value(vec![CertificateInclude::Content]);
+        assert_eq!(
+            ok(serde_json::to_value(&certificate)),
+            json!({"include": ["content"]})
+        );
+        assert!(serde_json::from_value::<CertificateGetParams>(json!({"include": null})).is_err());
+
+        let mut group = ProjectGroupGetParams::default();
+        group.group_type = Omittable::Value(GroupType::TenantGroup);
+        assert_eq!(
+            ok(serde_json::to_value(&group)),
+            json!({"group_type": "tenant_group"})
+        );
+        assert!(
+            serde_json::from_value::<ProjectGroupGetParams>(json!({"group_type": null})).is_err()
+        );
     }
 
     #[test]
-    fn assigned_role_details_and_list_resources_accept_official_shapes() {
-        let assigned = json!({
+    fn admin_typed_objects_match_openapi() {
+        let owner = ok(serde_json::from_value::<ProjectApiKeyOwner>(json!({
+            "type": "user",
+            "user": {
+                "id": "user_1",
+                "email": "owner@example.com",
+                "name": "Owner",
+                "created_at": 1,
+                "role": "owner"
+            }
+        })));
+        match &owner.kind {
+            Omittable::Value(kind) => assert_eq!(kind.as_str(), "user"),
+            Omittable::Omitted => panic!("official owner.type must decode"),
+        }
+        match &owner.user {
+            Omittable::Value(user) => assert_eq!(user.email, "owner@example.com"),
+            Omittable::Omitted => panic!("official owner.user must decode"),
+        }
+        assert!(
+            serde_json::from_value::<ProjectApiKeyOwnerUser>(json!({
+                "id": "user_1",
+                "email": null,
+                "name": "Owner",
+                "created_at": 1,
+                "role": "owner"
+            }))
+            .is_err()
+        );
+
+        let invite = ok(serde_json::from_value::<Invite>(json!({
+            "object": "organization.invite",
+            "id": "inv_1",
+            "email": "user@example.com",
+            "role": "owner",
+            "status": "pending",
+            "created_at": 1,
+            "projects": [{"id": "proj_1", "role": "member"}]
+        })));
+        assert_eq!(invite.projects[0].id, "proj_1");
+        assert_eq!(invite.projects[0].role.as_str(), "member");
+
+        let request = InviteRequest {
+            email: "user@example.com".to_owned(),
+            role: InviteRole::Owner,
+            projects: Omittable::Value(vec![InviteProjectMembership {
+                id: "proj_1".to_owned(),
+                role: InviteProjectRole::Owner,
+                extra: ExtraFields::default(),
+            }]),
+        };
+        assert_eq!(
+            ok(serde_json::to_value(&request)),
+            json!({
+                "email": "user@example.com",
+                "role": "owner",
+                "projects": [{"id": "proj_1", "role": "owner"}]
+            })
+        );
+
+        let group = ok(serde_json::from_value::<GroupRoleAssignment>(json!({
+            "object": "group.role",
+            "group": {
+                "object": "group",
+                "id": "group_1",
+                "name": "Support",
+                "created_at": 1,
+                "scim_managed": false
+            },
+            "role": {
+                "object": "role",
+                "id": "role_1",
+                "name": "auditor",
+                "description": null,
+                "permissions": [],
+                "resource_type": "organization",
+                "predefined_role": false
+            }
+        })));
+        assert_eq!(group.object.as_str(), "group.role");
+        assert!(!group.group.scim_managed);
+
+        let user = ok(serde_json::from_value::<User>(json!({
+            "object": "organization.user",
+            "id": "user_1",
+            "added_at": 1,
+            "user": {
+                "object": "user",
+                "id": "nested_1",
+                "email": null,
+                "picture": null
+            },
+            "projects": {
+                "object": "list",
+                "data": [{"id": null, "name": "proj", "role": "member"}]
+            }
+        })));
+        match &user.user {
+            Omittable::Value(nested) => {
+                assert!(matches!(nested.email, Omittable::Value(Nullable::Null)));
+            }
+            Omittable::Omitted => panic!("official User.user must decode"),
+        }
+        match &user.projects {
+            Omittable::Value(Nullable::Value(projects)) => {
+                assert!(matches!(
+                    projects.data[0].id,
+                    Omittable::Value(Nullable::Null)
+                ));
+            }
+            _ => panic!("official User.projects list must decode"),
+        }
+        assert!(
+            serde_json::from_value::<User>(json!({
+                "object": "organization.user",
+                "id": "user_1",
+                "added_at": 1,
+                "user": {"object": "user", "id": "nested_1", "email": null, "email_future": true}
+            }))
+            .is_ok()
+        );
+
+        let details = ok(serde_json::from_value::<AssignedRoleDetails>(json!({
             "id": "role_1",
             "name": "auditor",
-            "permissions": ["api.usage.read"],
+            "permissions": [],
             "resource_type": "organization",
             "predefined_role": false,
             "description": null,
@@ -3230,54 +4651,261 @@ mod tests {
             "created_by_user_obj": null,
             "metadata": null,
             "assignment_sources": null
-        });
-        let decoded = ok(serde_json::from_value::<AssignedRoleDetails>(
-            assigned.clone(),
+        })));
+        assert!(matches!(details.created_at, Nullable::Null));
+        assert!(matches!(details.assignment_sources, Nullable::Null));
+
+        let listed_users = ok(serde_json::from_value::<UserListResource>(json!({
+            "object": "list",
+            "data": [{
+                "id": "user_abc123",
+                "name": "Ada Lovelace",
+                "email": "ada@example.com"
+            }],
+            "has_more": false,
+            "next": null
+        })));
+        assert_eq!(listed_users.data[0].id, "user_abc123");
+        assert!(matches!(
+            listed_users.data[0].email,
+            Nullable::Value(ref email) if email == "ada@example.com"
         ));
-        assert!(decoded.assignment_sources.is_null());
-        assert_eq!(ok(serde_json::to_value(decoded)), assigned);
-
-        let roles = json!({
-            "object": "list",
-            "data": [assigned],
-            "has_more": false,
-            "next": null
-        });
-        let page = ok(serde_json::from_value::<RoleListResource>(roles.clone()));
-        assert_eq!(page.data.len(), 1);
-        assert_eq!(ok(serde_json::to_value(page)), roles);
-
-        let users = json!({
-            "object": "list",
-            "data": [{"id": "user_1", "name": "Ada", "email": null}],
-            "has_more": false,
-            "next": null
-        });
-        let page = ok(serde_json::from_value::<UserListResource>(users.clone()));
-        assert_eq!(page.data[0].id, "user_1");
-        assert_eq!(ok(serde_json::to_value(page)), users);
-
+        assert!(
+            serde_json::from_value::<UserListResource>(json!({
+                "object": "list",
+                "data": [{
+                    "id": "user_abc123",
+                    "name": "Ada Lovelace",
+                    "email": null,
+                    "picture": null,
+                    "is_service_account": false,
+                    "user_type": "user"
+                }],
+                "has_more": false,
+                "next": null
+            }))
+            .is_ok(),
+            "official retrieve-only GroupMemberUser fields stay lossless extras on list items"
+        );
         assert!(
             serde_json::from_value::<GroupMemberUser>(json!({
-                "id": "user_1",
-                "name": "Ada",
-                "email": null
+                "id": "user_abc123",
+                "name": "Ada Lovelace",
+                "email": "ada@example.com"
+            }))
+            .is_err(),
+            "retrieve-group-user still requires official GroupMemberUser fields"
+        );
+
+        let assigned_roles = ok(serde_json::from_value::<RoleListResource>(json!({
+            "object": "list",
+            "data": [{
+                "id": "role_01J1F8ROLE01",
+                "name": "API Group Manager",
+                "permissions": ["api.groups.read", "api.groups.write"],
+                "resource_type": "api.organization",
+                "predefined_role": false,
+                "description": "Allows managing organization groups",
+                "created_at": 1711471533,
+                "updated_at": 1711472599,
+                "created_by": "user_abc123",
+                "created_by_user_obj": {
+                    "id": "user_abc123",
+                    "name": "Ada Lovelace",
+                    "email": "ada@example.com"
+                },
+                "metadata": {},
+                "assignment_sources": null
+            }],
+            "has_more": false,
+            "next": null
+        })));
+        assert_eq!(assigned_roles.data[0].id, "role_01J1F8ROLE01");
+        assert!(matches!(
+            assigned_roles.data[0].assignment_sources,
+            Nullable::Null
+        ));
+        assert!(
+            serde_json::from_value::<PublicRoleListResource>(json!({
+                "object": "list",
+                "data": [{
+                    "object": "role",
+                    "id": "role_01J1F8ROLE01",
+                    "name": "API Group Manager",
+                    "description": "Allows managing organization groups",
+                    "permissions": ["api.groups.read", "api.groups.write"],
+                    "resource_type": "api.organization",
+                    "predefined_role": false
+                }],
+                "has_more": false,
+                "next": null
+            }))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<PublicRoleListResource>(json!({
+                "object": "list",
+                "data": [{
+                    "id": "role_01J1F8ROLE01",
+                    "name": "API Group Manager",
+                    "permissions": ["api.groups.read", "api.groups.write"],
+                    "resource_type": "api.organization",
+                    "predefined_role": false,
+                    "description": "Allows managing organization groups",
+                    "created_at": 1711471533,
+                    "updated_at": 1711472599,
+                    "created_by": "user_abc123",
+                    "created_by_user_obj": null,
+                    "metadata": {},
+                    "assignment_sources": null
+                }],
+                "has_more": false,
+                "next": null
+            }))
+            .is_err(),
+            "public role lists still require official Role.object"
+        );
+
+        let actor = ok(serde_json::from_value::<AuditActorApiKey>(json!({
+            "type": "service_account",
+            "id": "key_1",
+            "service_account": {"id": "sa_1"}
+        })));
+        match &actor.service_account {
+            Omittable::Value(account) => match &account.id {
+                Omittable::Value(id) => assert_eq!(id, "sa_1"),
+                Omittable::Omitted => panic!("official service_account.id must decode"),
+            },
+            Omittable::Omitted => panic!("official service_account must decode"),
+        }
+
+        assert_eq!(AssignmentObject::GroupRole.as_str(), "group.role");
+        assert_eq!(AssignmentObject::UserRole.as_str(), "user.role");
+        assert_eq!(AssignmentObject::GroupUser.as_str(), "group.user");
+        assert_eq!(
+            AssignmentObject::GroupUserDeleted.as_str(),
+            "group.user.deleted"
+        );
+    }
+
+    #[test]
+    fn official_certificate_scope_object_names_all_pin_members() {
+        const OFFICIAL_SCOPE_OBJECTS: [(&str, CertificateScopeObject); 4] = [
+            (
+                "organization.certificate.activation",
+                CertificateScopeObject::OrganizationActivation,
+            ),
+            (
+                "organization.certificate.deactivation",
+                CertificateScopeObject::OrganizationDeactivation,
+            ),
+            (
+                "organization.project.certificate.activation",
+                CertificateScopeObject::ProjectActivation,
+            ),
+            (
+                "organization.project.certificate.deactivation",
+                CertificateScopeObject::ProjectDeactivation,
+            ),
+        ];
+        for (value, expected) in OFFICIAL_SCOPE_OBJECTS {
+            let decoded = CertificateScopeObject::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official certificate scope object {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+            assert!(
+                !AdminListObject::from_raw(value).is_known(),
+                "list-page object must not absorb official certificate scope discriminators"
+            );
+
+            let response = ok(serde_json::from_value::<CertificateScopeResponse>(json!({
+                "object": value,
+                "data": []
+            })));
+            assert_eq!(response.object, expected);
+            assert_eq!(ok(serde_json::to_value(&response))["object"], value);
+        }
+    }
+
+    #[test]
+    fn admin_required_cursor_page_accepts_official_null_ids() {
+        let fixture = json!({
+            "object": "list",
+            "data": [],
+            "first_id": null,
+            "last_id": null,
+            "has_more": false
+        });
+        let page = ok(serde_json::from_value::<ListCertificatesResponse>(
+            fixture.clone(),
+        ));
+        assert!(matches!(page.first_id, Nullable::Null));
+        assert!(matches!(page.last_id, Nullable::Null));
+        assert_eq!(page.next_after(), None);
+        assert_eq!(ok(serde_json::to_value(page)), fixture);
+        assert!(
+            serde_json::from_value::<ListCertificatesResponse>(json!({
+                "object": "list",
+                "data": [],
+                "has_more": false
             }))
             .is_err()
         );
     }
 
     #[test]
-    fn assignment_object_tags_match_pinned_wire_values() {
-        let assignment = json!({
-            "object": "group.user",
-            "user_id": "user_1",
-            "group_id": "grp_1"
-        });
-        let decoded = ok(serde_json::from_value::<GroupUserAssignment>(
-            assignment.clone(),
+    fn admin_request_nulls_and_limits_match_python_and_openapi_inventory() {
+        let project = ok(serde_json::from_value::<ProjectUpdateRequest>(json!({
+            "name": null
+        })));
+        assert!(matches!(project.name, Omittable::Value(Nullable::Null)));
+
+        let user = ok(serde_json::from_value::<UserRoleUpdateRequest>(json!({
+            "role": null,
+            "role_id": null,
+            "technical_level": null,
+            "developer_persona": null
+        })));
+        assert!(matches!(user.role, Omittable::Value(Nullable::Null)));
+
+        let service = ok(
+            serde_json::from_value::<ProjectServiceAccountCreateRequest>(json!({
+                "name": "bot",
+                "create_service_account_only": null
+            })),
+        );
+        assert!(matches!(
+            service.create_service_account_only,
+            Omittable::Value(Nullable::Null)
         ));
-        assert_eq!(decoded.object, AssignmentObject::GroupUserAssignment);
-        assert_eq!(ok(serde_json::to_value(decoded)), assignment);
+
+        AdminApiKeyCreateRequest::new("ops")
+            .validate()
+            .expect("omitted expiry is accepted");
+        let mut over_expiry = AdminApiKeyCreateRequest::new("ops");
+        over_expiry.expires_in_seconds = Omittable::Value(MAX_ADMIN_API_KEY_EXPIRES_IN_SECONDS + 1);
+        assert!(matches!(
+            over_expiry.validate(),
+            Err(AdminConstraintError::ApiKeyExpiresInSeconds { actual, .. })
+                if actual == MAX_ADMIN_API_KEY_EXPIRES_IN_SECONDS + 1
+        ));
+
+        assert!(matches!(
+            CreateGroupBody {
+                name: String::new()
+            }
+            .validate(),
+            Err(AdminConstraintError::GroupName { actual: 0, .. })
+        ));
+        assert!(matches!(
+            ToggleCertificatesRequest {
+                certificate_ids: Vec::new()
+            }
+            .validate(),
+            Err(AdminConstraintError::CertificateIds { actual: 0, .. })
+        ));
     }
 }

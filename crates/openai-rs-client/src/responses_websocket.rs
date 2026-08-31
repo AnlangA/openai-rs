@@ -355,8 +355,10 @@ impl ResponsesWebSocket {
         accumulator: &mut ResponseAccumulator,
     ) -> Result<Option<ResponsesServerEvent>, Error> {
         let event = self.recv().await?;
-        if let Some(event) = &event {
-            accumulator.push(event.event().clone())?;
+        if let Some(event) = &event
+            && let Some(stream_event) = event.event()
+        {
+            accumulator.push(stream_event.clone())?;
         }
         Ok(event)
     }
@@ -676,7 +678,9 @@ mod tests {
             .expect("one event");
         assert_eq!(event.stream_id(), Some("lane_1"));
         match event.event() {
-            ResponseStreamEvent::OutputTextDelta(delta) => assert_eq!(delta.delta(), "hello"),
+            Some(ResponseStreamEvent::OutputTextDelta(delta)) => {
+                assert_eq!(delta.delta(), "hello")
+            }
             other => panic!("unexpected server event: {other:?}"),
         }
         assert_eq!(accumulator.output_text(), "hello");

@@ -10,9 +10,12 @@ use std::{collections::BTreeMap, fmt, marker::PhantomData};
 use base64::Engine as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Value};
+use thiserror::Error;
 
 use crate::{
-    ExtraFields, FileId, JsonText, ModelId, Nullable, Omittable, responses::UnknownTaggedObject,
+    ExtraFields, FileId, JsonText, MAX_RESPONSE_METADATA_KEY_CHARS, MAX_RESPONSE_METADATA_PAIRS,
+    MAX_RESPONSE_METADATA_VALUE_CHARS, MAX_SAFETY_IDENTIFIER_CHARS, MAX_TOP_LOGPROBS, ModelId,
+    ModerationInputType, Nullable, Omittable, responses::UnknownTaggedObject,
 };
 
 macro_rules! strict_tagged_union {
@@ -255,7 +258,11 @@ crate::open_string_enum! {
 /// Shared with Responses; the pinned wire object is `{ "mode": "explicit" }`.
 pub use crate::responses::PromptCacheBreakpoint as ChatPromptCacheBreakpoint;
 
-/// Prompt-cache behavior for a Chat request.
+/// Chat create-request prompt-cache options.
+///
+/// Official `CreateChatCompletionRequest` `$ref`s `PromptCacheOptionsParam`
+/// (no required properties). Chat completions do not echo the response
+/// `PromptCacheOptions` object, which requires both `ttl` and `mode`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatPromptCacheOptions {
     /// Minimum cache lifetime.
@@ -2084,6 +2091,162 @@ impl ChatModerationConfig {
     }
 }
 
+/// Inclusive Chat Completions bounds from the pinned OpenAPI.
+pub const MIN_CHAT_CHOICES: u32 = 1;
+/// Inclusive maximum for `n`.
+pub const MAX_CHAT_CHOICES: u32 = 128;
+/// Inclusive minimum stop-sequence array length.
+pub const MIN_STOP_SEQUENCES: usize = 1;
+/// Inclusive maximum stop-sequence array length.
+pub const MAX_STOP_SEQUENCES: usize = 4;
+/// Inclusive minimum logit-bias value.
+pub const MIN_LOGIT_BIAS: i32 = -100;
+/// Inclusive maximum logit-bias value.
+pub const MAX_LOGIT_BIAS: i32 = 100;
+/// Inclusive minimum deprecated `functions` array length.
+pub const MIN_CHAT_FUNCTIONS: usize = 1;
+/// Inclusive maximum deprecated `functions` array length.
+pub const MAX_CHAT_FUNCTIONS: usize = 128;
+/// Official Chat message / prediction content-array `minItems`.
+pub const MIN_CHAT_CONTENT_PARTS: usize = 1;
+
+/// A Chat create-request value that violates a pinned OpenAPI constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CreateChatCompletionConstraintError {
+    /// `messages` is empty.
+    #[error("messages must contain at least one item")]
+    EmptyMessages,
+    /// A message `content` array is empty (`minItems: 1`).
+    #[error("message content must contain at least one part")]
+    EmptyMessageContent,
+    /// Predicted-output `content` array is empty (`minItems: 1`).
+    #[error("prediction content must contain at least one part")]
+    EmptyPredictionParts,
+    /// `temperature` is non-finite or outside `0..=2`.
+    #[error("temperature must be finite and within 0..=2, got {value}")]
+    Temperature { value: String },
+    /// `top_p` is non-finite or outside `0..=1`.
+    #[error("top_p must be finite and within 0..=1, got {value}")]
+    TopP { value: String },
+    /// `frequency_penalty` is non-finite or outside `-2..=2`.
+    #[error("frequency_penalty must be finite and within -2..=2, got {value}")]
+    FrequencyPenalty { value: String },
+    /// `presence_penalty` is non-finite or outside `-2..=2`.
+    #[error("presence_penalty must be finite and within -2..=2, got {value}")]
+    PresencePenalty { value: String },
+    /// `top_logprobs` is outside `0..=20`.
+    #[error("top_logprobs must be 0..={maximum}, got {actual}")]
+    TopLogprobs { actual: u8, maximum: u32 },
+    /// `n` is outside `1..=128`.
+    #[error("n must be {minimum}..={maximum}, got {actual}")]
+    Choices {
+        actual: u32,
+        minimum: u32,
+        maximum: u32,
+    },
+    /// `safety_identifier` exceeds 64 characters.
+    #[error("safety_identifier has {actual} characters; maximum is {maximum}")]
+    SafetyIdentifier { actual: usize, maximum: usize },
+    /// Metadata contains more than 16 pairs.
+    #[error("metadata contains {actual} pairs; maximum is {maximum}")]
+    MetadataPairCount { actual: usize, maximum: usize },
+    /// A metadata key exceeds 64 characters.
+    #[error("metadata key has {actual} characters; maximum is {maximum}")]
+    MetadataKey { actual: usize, maximum: usize },
+    /// A metadata value exceeds 512 characters.
+    #[error("metadata value has {actual} characters; maximum is {maximum}")]
+    MetadataValue { actual: usize, maximum: usize },
+    /// `stop` array length is outside `1..=4`.
+    #[error("stop must contain {minimum}..={maximum} sequences, got {actual}")]
+    StopSequences {
+        actual: usize,
+        minimum: usize,
+        maximum: usize,
+    },
+    /// A `logit_bias` value is outside `-100..=100`.
+    #[error("logit_bias[{token}] must be {minimum}..={maximum}, got {actual}")]
+    LogitBias {
+        token: String,
+        actual: i32,
+        minimum: i32,
+        maximum: i32,
+    },
+    /// Deprecated `functions` array length is outside `1..=128`.
+    #[error("functions must contain {minimum}..={maximum} entries, got {actual}")]
+    Functions {
+        actual: usize,
+        minimum: usize,
+        maximum: usize,
+    },
+}
+
+/// One successful classification inside a Chat moderation-results list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+#[non_exhaustive]
+pub enum ChatModerationClassification {
+    /// Successful classification for one input.
+    #[serde(rename = "moderation_result")]
+    Result {
+        /// Category name to flagged boolean.
+        categories: BTreeMap<String, bool>,
+        /// Category name to the input modalities that contributed to the score.
+        category_applied_input_types: BTreeMap<String, Vec<ModerationInputType>>,
+        /// Category name to raw score.
+        category_scores: BTreeMap<String, f64>,
+        /// Whether any category flagged the content.
+        flagged: bool,
+        /// Moderation model that produced the result.
+        model: String,
+    },
+}
+
+/// Successful result list or error for one Chat moderation direction.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+#[non_exhaustive]
+pub enum ChatCompletionModerationOutcome {
+    /// Successful classifications for one direction.
+    #[serde(rename = "moderation_results")]
+    Results {
+        /// Moderation model used for this direction.
+        model: String,
+        /// One result per moderated input.
+        results: Vec<ChatModerationClassification>,
+    },
+    /// Failure while moderating one direction.
+    #[serde(rename = "error")]
+    Error {
+        /// Service error code.
+        code: String,
+        /// Human-readable error message.
+        message: String,
+    },
+}
+
+/// Typed Chat Completions moderation echo (`moderation_results` list, not the
+/// Responses single-result shape).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionModeration {
+    input: ChatCompletionModerationOutcome,
+    output: ChatCompletionModerationOutcome,
+}
+
+impl ChatCompletionModeration {
+    /// Returns the input-side outcome.
+    #[must_use]
+    pub const fn input(&self) -> &ChatCompletionModerationOutcome {
+        &self.input
+    }
+
+    /// Returns the output-side outcome.
+    #[must_use]
+    pub const fn output(&self) -> &ChatCompletionModerationOutcome {
+        &self.output
+    }
+}
+
 crate::open_string_enum! {
     /// Deprecated function-selection mode.
     pub enum ChatLegacyFunctionChoiceMode {
@@ -2259,6 +2422,181 @@ impl ChatCompletionRequestBody {
             web_search_options: Omittable::Omitted,
         }
     }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateChatCompletionConstraintError> {
+        if self.messages.is_empty() {
+            return Err(CreateChatCompletionConstraintError::EmptyMessages);
+        }
+        for message in &self.messages {
+            validate_chat_message_content(message)?;
+        }
+        if let Omittable::Value(Nullable::Value(prediction)) = &self.prediction {
+            if let ChatPredictionValue::Parts(parts) = &prediction.content
+                && parts.len() < MIN_CHAT_CONTENT_PARTS
+            {
+                return Err(CreateChatCompletionConstraintError::EmptyPredictionParts);
+            }
+        }
+        if let Omittable::Value(Nullable::Value(temperature)) = self.temperature
+            && !(temperature.is_finite() && (0.0..=2.0).contains(&temperature))
+        {
+            return Err(CreateChatCompletionConstraintError::Temperature {
+                value: temperature.to_string(),
+            });
+        }
+        if let Omittable::Value(Nullable::Value(top_p)) = self.top_p
+            && !(top_p.is_finite() && (0.0..=1.0).contains(&top_p))
+        {
+            return Err(CreateChatCompletionConstraintError::TopP {
+                value: top_p.to_string(),
+            });
+        }
+        if let Omittable::Value(Nullable::Value(penalty)) = self.frequency_penalty
+            && !(penalty.is_finite() && (-2.0..=2.0).contains(&penalty))
+        {
+            return Err(CreateChatCompletionConstraintError::FrequencyPenalty {
+                value: penalty.to_string(),
+            });
+        }
+        if let Omittable::Value(Nullable::Value(penalty)) = self.presence_penalty
+            && !(penalty.is_finite() && (-2.0..=2.0).contains(&penalty))
+        {
+            return Err(CreateChatCompletionConstraintError::PresencePenalty {
+                value: penalty.to_string(),
+            });
+        }
+        if let Omittable::Value(Nullable::Value(top_logprobs)) = self.top_logprobs
+            && u32::from(top_logprobs) > MAX_TOP_LOGPROBS
+        {
+            return Err(CreateChatCompletionConstraintError::TopLogprobs {
+                actual: top_logprobs,
+                maximum: MAX_TOP_LOGPROBS,
+            });
+        }
+        if let Omittable::Value(Nullable::Value(n)) = self.n
+            && !(MIN_CHAT_CHOICES..=MAX_CHAT_CHOICES).contains(&n)
+        {
+            return Err(CreateChatCompletionConstraintError::Choices {
+                actual: n,
+                minimum: MIN_CHAT_CHOICES,
+                maximum: MAX_CHAT_CHOICES,
+            });
+        }
+        if let Omittable::Value(Nullable::Value(identifier)) = &self.safety_identifier {
+            let actual = identifier.chars().count();
+            if actual > MAX_SAFETY_IDENTIFIER_CHARS {
+                return Err(CreateChatCompletionConstraintError::SafetyIdentifier {
+                    actual,
+                    maximum: MAX_SAFETY_IDENTIFIER_CHARS,
+                });
+            }
+        }
+        if let Omittable::Value(Nullable::Value(metadata)) = &self.metadata {
+            if metadata.len() > MAX_RESPONSE_METADATA_PAIRS {
+                return Err(CreateChatCompletionConstraintError::MetadataPairCount {
+                    actual: metadata.len(),
+                    maximum: MAX_RESPONSE_METADATA_PAIRS,
+                });
+            }
+            for (key, value) in metadata {
+                let key_chars = key.chars().count();
+                if key_chars > MAX_RESPONSE_METADATA_KEY_CHARS {
+                    return Err(CreateChatCompletionConstraintError::MetadataKey {
+                        actual: key_chars,
+                        maximum: MAX_RESPONSE_METADATA_KEY_CHARS,
+                    });
+                }
+                let value_chars = value.chars().count();
+                if value_chars > MAX_RESPONSE_METADATA_VALUE_CHARS {
+                    return Err(CreateChatCompletionConstraintError::MetadataValue {
+                        actual: value_chars,
+                        maximum: MAX_RESPONSE_METADATA_VALUE_CHARS,
+                    });
+                }
+            }
+        }
+        if let Omittable::Value(Nullable::Value(ChatStop::Many(stops))) = &self.stop {
+            if !(MIN_STOP_SEQUENCES..=MAX_STOP_SEQUENCES).contains(&stops.len()) {
+                return Err(CreateChatCompletionConstraintError::StopSequences {
+                    actual: stops.len(),
+                    minimum: MIN_STOP_SEQUENCES,
+                    maximum: MAX_STOP_SEQUENCES,
+                });
+            }
+        }
+        if let Omittable::Value(Nullable::Value(bias)) = &self.logit_bias {
+            for (token, value) in bias {
+                if !(MIN_LOGIT_BIAS..=MAX_LOGIT_BIAS).contains(value) {
+                    return Err(CreateChatCompletionConstraintError::LogitBias {
+                        token: token.clone(),
+                        actual: *value,
+                        minimum: MIN_LOGIT_BIAS,
+                        maximum: MAX_LOGIT_BIAS,
+                    });
+                }
+            }
+        }
+        if let Omittable::Value(functions) = &self.functions
+            && !(MIN_CHAT_FUNCTIONS..=MAX_CHAT_FUNCTIONS).contains(&functions.len())
+        {
+            return Err(CreateChatCompletionConstraintError::Functions {
+                actual: functions.len(),
+                minimum: MIN_CHAT_FUNCTIONS,
+                maximum: MAX_CHAT_FUNCTIONS,
+            });
+        }
+        Ok(())
+    }
+}
+
+fn validate_chat_message_content(
+    message: &ChatMessage,
+) -> Result<(), CreateChatCompletionConstraintError> {
+    match message {
+        ChatMessage::Developer(message) => validate_instruction_content(&message.content),
+        ChatMessage::System(message) => validate_instruction_content(&message.content),
+        ChatMessage::User(message) => match &message.content {
+            ChatUserContent::Text(_) => Ok(()),
+            ChatUserContent::Parts(parts) => validate_chat_content_part_count(parts.len()),
+        },
+        ChatMessage::Assistant(message) => {
+            if let Omittable::Value(Nullable::Value(content)) = &message.content {
+                match content {
+                    ChatAssistantContent::Text(_) => Ok(()),
+                    ChatAssistantContent::Parts(parts) => {
+                        validate_chat_content_part_count(parts.len())
+                    }
+                }
+            } else {
+                Ok(())
+            }
+        }
+        ChatMessage::Tool(message) => match &message.content {
+            ChatToolContent::Text(_) => Ok(()),
+            ChatToolContent::Parts(parts) => validate_chat_content_part_count(parts.len()),
+        },
+        ChatMessage::Function(_) | ChatMessage::Unknown(_) => Ok(()),
+    }
+}
+
+fn validate_instruction_content(
+    content: &ChatInstructionContent,
+) -> Result<(), CreateChatCompletionConstraintError> {
+    match content {
+        ChatInstructionContent::Text(_) => Ok(()),
+        ChatInstructionContent::Parts(parts) => validate_chat_content_part_count(parts.len()),
+    }
+}
+
+fn validate_chat_content_part_count(
+    actual: usize,
+) -> Result<(), CreateChatCompletionConstraintError> {
+    if actual < MIN_CHAT_CONTENT_PARTS {
+        Err(CreateChatCompletionConstraintError::EmptyMessageContent)
+    } else {
+        Ok(())
+    }
 }
 
 /// Options emitted only for a streaming Chat request.
@@ -2404,6 +2742,13 @@ impl CreateChatCompletionRequest<ChatStreaming> {
         self
     }
 
+    /// Sends `stream_options: null`.
+    #[must_use]
+    pub fn with_stream_options_null(mut self) -> Self {
+        self.stream_options = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Return to the non-streaming typestate, removing all stream fields.
     #[must_use]
     pub fn into_non_streaming(self) -> CreateChatCompletionRequest<ChatNonStreaming> {
@@ -2473,6 +2818,12 @@ where
             self.body.top_logprobs = Omittable::Value(Nullable::Value(top_logprobs));
         }
         self
+    }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<&Self, CreateChatCompletionConstraintError> {
+        self.body.validate()?;
+        Ok(self)
     }
 }
 
@@ -2561,7 +2912,7 @@ pub struct ChatResponseMessage {
     /// Refusal text, explicit null, or omitted by OpenAI-compatible providers.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub refusal: Omittable<Nullable<String>>,
-    /// Tool calls generated by the model.
+    /// Tool calls generated by the model, or explicit null.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tool_calls: Omittable<Nullable<Vec<ChatToolCall>>>,
     /// Search and other annotations.
@@ -2569,7 +2920,7 @@ pub struct ChatResponseMessage {
     pub annotations: Omittable<Vec<ChatAnnotation>>,
     /// Role returned by the service. Future values are retained.
     pub role: ChatRole,
-    /// Deprecated single function call.
+    /// Deprecated single function call, or explicit null.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub function_call: Omittable<Nullable<ChatLegacyFunctionCall>>,
     /// Generated audio or explicit null.
@@ -2787,9 +3138,9 @@ pub struct ChatCompletion {
     /// Stored-object metadata or explicit null.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub metadata: Omittable<Nullable<BTreeMap<String, String>>>,
-    /// Moderation result, retained semantically.
+    /// Typed moderation outcomes when moderated completions were requested.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub moderation: Omittable<Nullable<Value>>,
+    pub moderation: Omittable<Nullable<ChatCompletionModeration>>,
     /// Effective service tier or explicit null.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub service_tier: Omittable<Nullable<ChatServiceTier>>,
@@ -2805,6 +3156,15 @@ pub struct ChatCompletion {
 }
 
 impl ChatCompletion {
+    /// Returns typed moderation outcomes when present and non-null.
+    #[must_use]
+    pub fn moderation(&self) -> Option<&ChatCompletionModeration> {
+        match &self.moderation {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
+    }
+
     /// Concatenate non-null text from all choices, separated by newlines.
     #[must_use]
     pub fn output_text(&self) -> String {
@@ -2982,9 +3342,9 @@ pub struct ChatCompletionChunk {
     /// usage chunk.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub usage: Omittable<Nullable<ChatCompletionUsage>>,
-    /// Moderation result, retained semantically.
+    /// Typed moderation outcomes when present on a stream chunk.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub moderation: Omittable<Nullable<Value>>,
+    pub moderation: Omittable<Nullable<ChatCompletionModeration>>,
     /// Future response fields.
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -3218,7 +3578,7 @@ pub struct ChatCompletionStoreMessage {
     /// Refusal text, explicit null, or omitted by OpenAI-compatible providers.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub refusal: Omittable<Nullable<String>>,
-    /// Tool calls generated by the model.
+    /// Tool calls generated by the model, or explicit null.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tool_calls: Omittable<Nullable<Vec<ChatToolCall>>>,
     /// Search and other annotations.
@@ -3226,7 +3586,7 @@ pub struct ChatCompletionStoreMessage {
     pub annotations: Omittable<Vec<ChatAnnotation>>,
     /// Message role. Future strings are retained.
     pub role: ChatRole,
-    /// Deprecated function call.
+    /// Deprecated function call, or explicit null.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub function_call: Omittable<Nullable<ChatLegacyFunctionCall>>,
     /// Generated audio or explicit null.
@@ -3282,6 +3642,8 @@ impl ChatCompletionMessageList {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use serde::{Deserialize, Serialize, de::DeserializeOwned};
     use serde_json::{Value, json};
     use static_assertions::assert_impl_all;
@@ -3555,6 +3917,24 @@ mod tests {
         let streaming_value = ok(serde_json::to_value(&streaming));
         assert_eq!(streaming_value["stream"], true);
         assert_eq!(streaming_value["stream_options"]["include_usage"], true);
+
+        let null_options = CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hi"))
+            .into_streaming()
+            .with_stream_options_null();
+        let null_value = ok(serde_json::to_value(&null_options));
+        assert_eq!(null_value["stream_options"], Value::Null);
+        let decoded_null = ok(serde_json::from_value::<
+            CreateChatCompletionRequest<ChatStreaming>,
+        >(json!({
+            "model": "gpt-5.6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true,
+            "stream_options": null
+        })));
+        assert_eq!(
+            ok(serde_json::to_value(decoded_null))["stream_options"],
+            Value::Null
+        );
         let decoded = ok(serde_json::from_value::<
             CreateChatCompletionRequest<ChatStreaming>,
         >(streaming_value.clone()));
@@ -3694,43 +4074,72 @@ mod tests {
     }
 
     #[test]
-    fn response_message_keeps_explicit_null_tool_and_function_calls() {
-        let fixture = json!({
+    fn official_chat_completion_list_message_nulls_decode() {
+        let message = ok(serde_json::from_value::<ChatResponseMessage>(json!({
             "role": "assistant",
-            "content": "hello",
+            "content": "Mind of circuits hum",
             "tool_calls": null,
             "function_call": null
-        });
-        let message = ok(serde_json::from_value::<ChatResponseMessage>(
-            fixture.clone(),
-        ));
-        assert!(matches!(
-            message.tool_calls,
-            Omittable::Value(Nullable::Null)
-        ));
-        assert!(matches!(
-            message.function_call,
-            Omittable::Value(Nullable::Null)
-        ));
-        assert_eq!(ok(serde_json::to_value(message)), fixture);
-
-        let stored = ok(serde_json::from_value::<ChatCompletionStoreMessage>(
-            json!({
-                "id": "msg_1",
+        })));
+        assert_eq!(message.tool_calls, Omittable::Value(Nullable::Null));
+        assert_eq!(message.function_call, Omittable::Value(Nullable::Null));
+        assert!(
+            serde_json::from_value::<ChatResponseMessage>(json!({
                 "role": "assistant",
                 "content": "hello",
                 "tool_calls": null,
-                "function_call": null
-            }),
-        ));
-        assert!(matches!(
-            stored.tool_calls,
+                "annotations": null
+            }))
+            .is_err(),
+            "unofficial annotations null still fails"
+        );
+
+        let list = ok(serde_json::from_value::<ChatCompletionList>(json!({
+            "object": "list",
+            "data": [{
+                "object": "chat.completion",
+                "id": "chatcmpl-AyPNinnUqUDYo9SAdA52NobMflmj2",
+                "model": "gpt-4o-2024-08-06",
+                "created": 1_738_960_610_u64,
+                "request_id": "req_ded8ab984ec4bf840f37566c1011c417",
+                "tool_choice": null,
+                "usage": {
+                    "total_tokens": 31,
+                    "completion_tokens": 18,
+                    "prompt_tokens": 13
+                },
+                "system_fingerprint": "fp_50cad350e4",
+                "input_user": null,
+                "service_tier": "default",
+                "tools": null,
+                "metadata": {},
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "content": "Mind of circuits hum",
+                        "role": "assistant",
+                        "tool_calls": null,
+                        "function_call": null
+                    },
+                    "finish_reason": "stop",
+                    "logprobs": null
+                }],
+                "response_format": null
+            }],
+            "first_id": "chatcmpl-AyPNinnUqUDYo9SAdA52NobMflmj2",
+            "last_id": "chatcmpl-AyPNinnUqUDYo9SAdA52NobMflmj2",
+            "has_more": false
+        })));
+        assert_eq!(
+            list.data[0].choices[0].message.tool_calls,
             Omittable::Value(Nullable::Null)
-        ));
-        assert!(matches!(
-            stored.function_call,
+        );
+        assert_eq!(
+            list.data[0].choices[0].message.function_call,
             Omittable::Value(Nullable::Null)
-        ));
+        );
+        assert_eq!(list.data[0].extra().get("tools"), Some(&Value::Null));
+        assert_eq!(list.data[0].extra().get("input_user"), Some(&Value::Null));
     }
 
     #[test]
@@ -3940,5 +4349,180 @@ mod tests {
             serde_json::to_value(&options).expect("ser"),
             json!({ "mode": "implicit", "ttl": "30m" })
         );
+    }
+
+    #[test]
+    fn chat_completion_decodes_python_moderation_results_list() {
+        let fixture = json!({
+            "id": "chatcmpl_1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-5.6",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "ok" },
+                "logprobs": null,
+                "finish_reason": "stop"
+            }],
+            "moderation": {
+                "input": {
+                    "type": "moderation_results",
+                    "model": "omni-moderation-latest",
+                    "results": [{
+                        "type": "moderation_result",
+                        "model": "omni-moderation-latest",
+                        "flagged": false,
+                        "categories": { "hate": false },
+                        "category_scores": { "hate": 0.01 },
+                        "category_applied_input_types": { "hate": ["text"] }
+                    }]
+                },
+                "output": {
+                    "type": "error",
+                    "code": "moderation_unavailable",
+                    "message": "output skipped"
+                }
+            }
+        });
+        let completion = ok(serde_json::from_value::<ChatCompletion>(fixture));
+        let moderation = completion.moderation().expect("typed chat moderation");
+        assert!(matches!(
+            moderation.input(),
+            ChatCompletionModerationOutcome::Results { results, .. } if results.len() == 1
+        ));
+        assert!(matches!(
+            moderation.output(),
+            ChatCompletionModerationOutcome::Error { code, .. } if code == "moderation_unavailable"
+        ));
+    }
+
+    #[test]
+    fn chat_create_validate_enforces_pinned_limits() {
+        let ok_request =
+            CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"))
+                .with_temperature(2.0)
+                .with_logprobs(Some(20));
+        ok_request.validate().expect("boundary values are accepted");
+
+        let mut over = CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+        over.body.frequency_penalty = Omittable::Value(Nullable::Value(2.1));
+        assert!(matches!(
+            over.validate(),
+            Err(CreateChatCompletionConstraintError::FrequencyPenalty { .. })
+        ));
+
+        let mut n = CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+        n.body.n = Omittable::Value(Nullable::Value(129));
+        assert!(matches!(
+            n.validate(),
+            Err(CreateChatCompletionConstraintError::Choices { actual: 129, .. })
+        ));
+
+        let mut stops = CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+        stops.body.stop = Omittable::Value(Nullable::Value(ChatStop::Many(vec![
+            "a".into(),
+            "b".into(),
+            "c".into(),
+            "d".into(),
+            "e".into(),
+        ])));
+        assert!(matches!(
+            stops.validate(),
+            Err(CreateChatCompletionConstraintError::StopSequences { actual: 5, .. })
+        ));
+
+        let mut bias = CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+        bias.body.logit_bias =
+            Omittable::Value(Nullable::Value(BTreeMap::from([("50256".into(), 101)])));
+        assert!(matches!(
+            bias.validate(),
+            Err(CreateChatCompletionConstraintError::LogitBias { actual: 101, .. })
+        ));
+
+        let mut empty_functions =
+            CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+        empty_functions.body.functions = Omittable::Value(Vec::new());
+        assert!(matches!(
+            empty_functions.validate(),
+            Err(CreateChatCompletionConstraintError::Functions { actual: 0, .. })
+        ));
+        let mut too_many =
+            CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+        too_many.body.functions = Omittable::Value(
+            (0..=MAX_CHAT_FUNCTIONS)
+                .map(|index| ChatFunctionDefinition::new(format!("fn_{index}")))
+                .collect(),
+        );
+        assert!(matches!(
+            too_many.validate(),
+            Err(CreateChatCompletionConstraintError::Functions { actual: 129, .. })
+        ));
+        let decoded = serde_json::from_value::<CreateChatCompletionRequest>(json!({
+            "model": "gpt-5.6",
+            "messages": [{"role": "user", "content": "hello"}],
+            "functions": []
+        }))
+        .expect("serde remains lossless");
+        assert!(decoded.validate().is_err());
+
+        let empty_user =
+            CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::parts(Vec::new()));
+        assert!(matches!(
+            empty_user.validate(),
+            Err(CreateChatCompletionConstraintError::EmptyMessageContent)
+        ));
+        let empty_developer = CreateChatCompletionRequest::new(
+            "gpt-5.6",
+            ChatDeveloperMessage::new(ChatInstructionContent::Parts(Vec::new())),
+        );
+        assert!(matches!(
+            empty_developer.validate(),
+            Err(CreateChatCompletionConstraintError::EmptyMessageContent)
+        ));
+        let mut empty_prediction =
+            CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
+        empty_prediction.body.prediction =
+            Omittable::Value(Nullable::Value(ChatPredictionContent::parts(Vec::new())));
+        assert!(matches!(
+            empty_prediction.validate(),
+            Err(CreateChatCompletionConstraintError::EmptyPredictionParts)
+        ));
+        let unofficial = serde_json::from_value::<CreateChatCompletionRequest>(json!({
+            "model": "gpt-5.6",
+            "messages": [{"role": "user", "content": []}],
+            "prediction": { "type": "content", "content": [] }
+        }))
+        .expect("serde remains lossless");
+        assert!(matches!(
+            unofficial.validate(),
+            Err(CreateChatCompletionConstraintError::EmptyMessageContent)
+        ));
+    }
+
+    #[test]
+    fn stored_chat_update_and_list_match_openapi_inventory() {
+        let update =
+            UpdateChatCompletionRequest::new(BTreeMap::from([("topic".into(), "demo".into())]));
+        let value = ok(serde_json::to_value(&update));
+        let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["metadata"]);
+
+        let list: ChatCompletionList = ok(serde_json::from_value(json!({
+            "object": "list",
+            "data": [],
+            "first_id": "",
+            "last_id": "",
+            "has_more": false
+        })));
+        let encoded = ok(serde_json::to_value(&list));
+        let mut keys: Vec<_> = encoded
+            .as_object()
+            .expect("object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        assert_eq!(keys, ["data", "first_id", "has_more", "last_id", "object"]);
     }
 }

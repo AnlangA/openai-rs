@@ -77,7 +77,7 @@ value = "input and output omit typed request_id; extra fields preserve it when p
 sources = [{ category = "raw_openapi", fixture_status = "captured", url = "https://raw.githubusercontent.com/openai/openai-openapi/690521b1753dce0c6d6b275f583d22537679cff9/openapi.json", sha256 = "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899", excerpt = "required contains request_id but properties does not define it." }, { category = "official_sdk", fixture_status = "captured", note = "Official Python McpApprovalResponse has approval_request_id only." }, { category = "wire_fixture", fixture_status = "captured", note = "Synthetic output testdata/fixtures/responses/mcp-approval/output.json retains request_id via ExtraFields. Live bidirectional capture remains optional." }]
 reviewed_at = "2026-08-31"
 reason = "The pinned schema contains a ghost required field. Official SDK and schema properties agree on approval_request_id; typed output must not require request_id."
-impact = ["MCPApprovalResponse request/output split", "schema anomaly manifest", "D0015"]
+impact = ["MCPApprovalResponse request/output split", "schema anomaly manifest", "D0111"]
 tests = ["input DTO does not require request_id", "output ExtraFields preserve request_id", "output decodes without request_id", "synthetic mcp-approval output fixture"]
 
 [[overrides]]
@@ -88,7 +88,7 @@ value = "audio SSE events omit typed response_id; extra fields preserve it when 
 sources = [{ category = "raw_openapi", fixture_status = "captured", url = "https://raw.githubusercontent.com/openai/openai-openapi/690521b1753dce0c6d6b275f583d22537679cff9/openapi.json", sha256 = "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899", excerpt = "required contains response_id but properties does not define it." }, { category = "official_sdk", fixture_status = "captured", note = "Official Python/Node audio SSE events expose type, sequence_number, and delta only." }]
 reviewed_at = "2026-08-31"
 reason = "Ghost required response_id would fail decode of official SDK-shaped audio events. ExtraFields retains the key when examples or live traffic include it."
-impact = ["ResponseAudioDoneEvent", "ResponseAudioTranscriptDeltaEvent", "ResponseAudioTranscriptDoneEvent", "D0021"]
+impact = ["ResponseAudioDoneEvent", "ResponseAudioTranscriptDeltaEvent", "ResponseAudioTranscriptDoneEvent", "D0109"]
 tests = ["audio.done decodes without response_id", "extra fields preserve response_id when present"]
 
 [[overrides]]
@@ -99,5 +99,5 @@ value = "output omits typed call_id; extra fields preserve it when present"
 sources = [{ category = "raw_openapi", fixture_status = "captured", url = "https://raw.githubusercontent.com/openai/openai-openapi/690521b1753dce0c6d6b275f583d22537679cff9/openapi.json", sha256 = "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899", excerpt = "required contains call_id but properties does not define it." }, { category = "official_sdk", fixture_status = "captured", note = "Official LocalShellCallOutput shape is id, output, optional status." }]
 reviewed_at = "2026-08-31"
 reason = "Ghost required call_id would fail decode of official SDK-shaped local-shell outputs."
-impact = ["LocalShellCallOutput", "D0022"]
+impact = ["LocalShellCallOutput", "D0110"]
 tests = ["local_shell_call_output decodes without call_id"]

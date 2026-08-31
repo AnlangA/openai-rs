@@ -505,7 +505,7 @@ mod tests {
     #[tokio::test]
     async fn moderations_create_sends_typed_body() {
         let (client, captured) = serve_once(
-            r#"{"id":"modr_1","model":"omni-moderation-latest","results":[{"flagged":false,"categories":{},"category_scores":{}}]}"#,
+            r#"{"id":"modr_1","model":"omni-moderation-latest","results":[{"flagged":false,"categories":{},"category_scores":{},"category_applied_input_types":{}}]}"#,
         )
         .await;
         let request =

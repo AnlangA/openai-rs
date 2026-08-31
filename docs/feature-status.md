@@ -28,7 +28,7 @@ Status terms:
 | `client` | Yes | Implemented | Enables the Platform `Client`. Coverage includes Responses, Chat Completions, Files/Uploads, Batches, Vector Stores, Models, Embeddings, Moderations, media, Fine-tuning, Conversations, Containers, Skills, and Content Provenance. Evals is available via the default-off `legacy-evals` feature. |
 | `rustls-tls` | Yes | Implemented | Rustls-backed Platform transport. Implies `client`. |
 | `native-tls` | No | Implemented | Native TLS transport selection. Implies `client`. |
-| `structured-output` | Yes | Implemented | Typed schema generation and strict-subset normalization; keyword/limit coverage remains pre-release. |
+| `structured-output` | Yes | Implemented | Typed schema generation and strict-subset normalization aligned with the official Structured Outputs keyword allowlist (`anyOf`/`items` plus object, number, and string constraints; `allOf`/`oneOf`/`not`/`if`/`then`/`else` and the advanced object/array keywords are rejected). |
 | `realtime` | No | Implemented | Pinned GA 11-client/46-server event unions, Realtime WebSocket connection, client-secret and translation-secret REST methods, WebRTC SDP signaling, SIP call control, and the persistent Responses WebSocket client. |
 | `webhook-verification` | No | Implemented | Typed verification for the pinned 18-event webhook union with explicit secret handling. |
 | `admin` | No | Implemented | Dedicated `AdminApiKey`/`AdminClient`, sealed typed requests for the 119-operation Administration manifest, convenience resource facades, and three fine-tuning checkpoint-permission methods. Never added to the ordinary `Client`. |

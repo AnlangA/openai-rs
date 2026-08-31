@@ -210,6 +210,154 @@ impl SpeechSpeedError {
     }
 }
 
+/// Pinned OpenAPI maximum for speech `input` and `instructions`.
+pub const MAX_SPEECH_TEXT_CHARS: usize = 4096;
+/// Inclusive maximum known-speaker lists on transcription create.
+pub const MAX_KNOWN_SPEAKERS: usize = 4;
+/// Inclusive maximum for JSON image-edit `image_url` characters.
+pub const MAX_IMAGE_REFERENCE_URL_CHARS: usize = 20_971_520;
+/// Inclusive minimum prompt length for JSON image-edit bodies.
+pub const MIN_IMAGE_EDIT_JSON_PROMPT_CHARS: usize = 1;
+/// Inclusive minimum image-edit `images` count.
+pub const MIN_IMAGE_EDIT_IMAGES: usize = 1;
+/// Inclusive maximum image-edit `images` count (`maxItems: 16`).
+pub const MAX_IMAGE_EDIT_IMAGES: usize = 16;
+/// Inclusive maximum prompt length for GPT image models.
+pub const MAX_GPT_IMAGE_PROMPT_CHARS: usize = 32_000;
+/// Inclusive maximum prompt length for `dall-e-2`.
+pub const MAX_DALLE2_PROMPT_CHARS: usize = 1_000;
+/// Inclusive maximum prompt length for `dall-e-3` image generation.
+pub const MAX_DALLE3_PROMPT_CHARS: usize = 4_000;
+
+/// A create-request value that violates a pinned Speech constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CreateSpeechConstraintError {
+    /// `input` exceeds 4096 characters.
+    #[error("speech input has {actual} characters; maximum is {maximum}")]
+    Input {
+        /// Observed character count.
+        actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// `instructions` exceeds 4096 characters.
+    #[error("speech instructions have {actual} characters; maximum is {maximum}")]
+    Instructions {
+        /// Observed character count.
+        actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+}
+
+/// A create-request value that violates a pinned transcription constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CreateTranscriptionConstraintError {
+    /// `languages` is present but empty.
+    #[error("transcription languages must contain at least one code when set")]
+    EmptyLanguages,
+    /// `known_speaker_names` exceeds four entries.
+    #[error("known_speaker_names has {actual} items; maximum is {maximum}")]
+    KnownSpeakerCount {
+        /// Observed name count.
+        actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// `known_speaker_references` exceeds four entries.
+    #[error("known_speaker_references has {actual} items; maximum is {maximum}")]
+    KnownSpeakerReferenceCount {
+        /// Observed reference count.
+        actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// Name and reference lists have different lengths.
+    #[error(
+        "known_speaker_names ({names}) and known_speaker_references ({references}) must have the same length"
+    )]
+    KnownSpeakerMismatch {
+        /// Observed name count.
+        names: usize,
+        /// Observed reference count.
+        references: usize,
+    },
+    /// `temperature` is non-finite or outside `0..=1`.
+    #[error("transcription temperature must be finite and within 0..=1, got {value}")]
+    Temperature {
+        /// Rejected value rendered without retaining a floating-point field.
+        value: String,
+    },
+}
+
+/// A create-request value that violates a pinned Images prompt constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CreateImageConstraintError {
+    /// `prompt` exceeds the model-specific character limit.
+    #[error("image prompt has {actual} characters; maximum is {maximum}")]
+    Prompt {
+        /// Observed character count.
+        actual: usize,
+        /// Contract maximum for the selected model.
+        maximum: usize,
+    },
+    /// JSON image-edit `prompt` is empty (`minLength: 1`).
+    #[error("JSON image-edit prompt has {actual} characters; minimum is {minimum}")]
+    EmptyPrompt {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+    },
+    /// JSON image-reference `image_url` exceeds 20,971,520 characters.
+    #[error("image reference image_url has {actual} characters; maximum is {maximum}")]
+    ImageUrl {
+        /// Observed character count.
+        actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// JSON image-edit `images` is outside `1..=16`.
+    #[error("JSON image-edit images has {actual} items; must be {minimum}..={maximum}")]
+    ImageEditCount {
+        /// Observed image count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+}
+
+fn image_prompt_limit(model: &Omittable<Nullable<ModelId>>, edit: bool) -> usize {
+    let model = match model {
+        Omittable::Value(Nullable::Value(id)) => Some(id.as_str()),
+        _ => None,
+    };
+    match model {
+        Some("dall-e-2") => MAX_DALLE2_PROMPT_CHARS,
+        Some("dall-e-3") if !edit => MAX_DALLE3_PROMPT_CHARS,
+        _ => MAX_GPT_IMAGE_PROMPT_CHARS,
+    }
+}
+
+fn check_image_prompt(
+    prompt: &str,
+    model: &Omittable<Nullable<ModelId>>,
+    edit: bool,
+) -> Result<(), CreateImageConstraintError> {
+    let maximum = image_prompt_limit(model, edit);
+    let actual = prompt.chars().count();
+    if actual > maximum {
+        Err(CreateImageConstraintError::Prompt { actual, maximum })
+    } else {
+        Ok(())
+    }
+}
+
 /// Non-streaming media request typestate.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MediaNonStreaming;
@@ -429,6 +577,27 @@ where
     pub fn try_with_speed(mut self, speed: f64) -> Result<Self, SpeechSpeedError> {
         self.speed = Omittable::Value(SpeechSpeed::new(speed)?);
         Ok(self)
+    }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateSpeechConstraintError> {
+        let input_chars = self.input.chars().count();
+        if input_chars > MAX_SPEECH_TEXT_CHARS {
+            return Err(CreateSpeechConstraintError::Input {
+                actual: input_chars,
+                maximum: MAX_SPEECH_TEXT_CHARS,
+            });
+        }
+        if let Omittable::Value(instructions) = &self.instructions {
+            let actual = instructions.chars().count();
+            if actual > MAX_SPEECH_TEXT_CHARS {
+                return Err(CreateSpeechConstraintError::Instructions {
+                    actual,
+                    maximum: MAX_SPEECH_TEXT_CHARS,
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -721,6 +890,57 @@ impl TranscriptionRequestMetadata {
     pub const fn is_streaming(&self) -> bool {
         matches!(self.stream, Omittable::Value(Nullable::Value(true)))
     }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateTranscriptionConstraintError> {
+        if let Omittable::Value(languages) = &self.languages
+            && languages.is_empty()
+        {
+            return Err(CreateTranscriptionConstraintError::EmptyLanguages);
+        }
+        let names = match &self.known_speaker_names {
+            Omittable::Value(names) => Some(names.as_slice()),
+            Omittable::Omitted => None,
+        };
+        let references = match &self.known_speaker_references {
+            Omittable::Value(references) => Some(references.as_slice()),
+            Omittable::Omitted => None,
+        };
+        if let Some(names) = names
+            && names.len() > MAX_KNOWN_SPEAKERS
+        {
+            return Err(CreateTranscriptionConstraintError::KnownSpeakerCount {
+                actual: names.len(),
+                maximum: MAX_KNOWN_SPEAKERS,
+            });
+        }
+        if let Some(references) = references
+            && references.len() > MAX_KNOWN_SPEAKERS
+        {
+            return Err(
+                CreateTranscriptionConstraintError::KnownSpeakerReferenceCount {
+                    actual: references.len(),
+                    maximum: MAX_KNOWN_SPEAKERS,
+                },
+            );
+        }
+        if let (Some(names), Some(references)) = (names, references)
+            && names.len() != references.len()
+        {
+            return Err(CreateTranscriptionConstraintError::KnownSpeakerMismatch {
+                names: names.len(),
+                references: references.len(),
+            });
+        }
+        if let Omittable::Value(temperature) = self.temperature
+            && !(temperature.is_finite() && (0.0..=1.0).contains(&temperature))
+        {
+            return Err(CreateTranscriptionConstraintError::Temperature {
+                value: temperature.to_string(),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Multipart transcription request. Binary data is never Serde-encoded.
@@ -834,6 +1054,11 @@ where
             }
         }
         self
+    }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateTranscriptionConstraintError> {
+        self.metadata.validate()
     }
 }
 
@@ -1348,6 +1573,18 @@ impl CreateTranslationRequest {
         self.metadata.response_format = Omittable::Value(format);
         self
     }
+
+    /// Checks the pinned transcription temperature range reused by translation.
+    pub fn validate(&self) -> Result<(), CreateTranscriptionConstraintError> {
+        if let Omittable::Value(temperature) = self.metadata.temperature
+            && !(temperature.is_finite() && (0.0..=1.0).contains(&temperature))
+        {
+            return Err(CreateTranscriptionConstraintError::Temperature {
+                value: temperature.to_string(),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Debug for CreateTranslationRequest {
@@ -1495,6 +1732,16 @@ pub enum ImageReference {
     File(FileId),
 }
 
+fn validate_image_reference_url_chars(actual: usize) -> Result<(), CreateImageConstraintError> {
+    if actual > MAX_IMAGE_REFERENCE_URL_CHARS {
+        return Err(CreateImageConstraintError::ImageUrl {
+            actual,
+            maximum: MAX_IMAGE_REFERENCE_URL_CHARS,
+        });
+    }
+    Ok(())
+}
+
 impl ImageReference {
     /// Construct a URL or data-URL image reference.
     #[must_use]
@@ -1513,6 +1760,14 @@ impl ImageReference {
     pub fn from_bytes(media_type: &str, bytes: impl AsRef<[u8]>) -> Self {
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes.as_ref());
         Self::Url(format!("data:{media_type};base64,{encoded}"))
+    }
+
+    /// Checks pinned OpenAPI `image_url` `maxLength` without sending the request.
+    pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
+        match self {
+            Self::Url(url) => validate_image_reference_url_chars(url.chars().count()),
+            Self::File(_) => Ok(()),
+        }
     }
 }
 
@@ -1620,6 +1875,11 @@ impl ImageGenerationRequestBody {
             user: Omittable::Omitted,
         }
     }
+
+    /// Checks pinned OpenAPI prompt limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
+        check_image_prompt(&self.prompt, &self.model, false)
+    }
 }
 
 /// JSON body for `POST /images/generations`.
@@ -1712,6 +1972,13 @@ impl CreateImageRequest<MediaStreaming> {
         self.partial_images = Omittable::Value(Nullable::Value(count));
         self
     }
+
+    /// Sends `partial_images: null`.
+    #[must_use]
+    pub fn with_partial_images_null(mut self) -> Self {
+        self.partial_images = Omittable::Value(Nullable::Null);
+        self
+    }
 }
 
 impl<M> CreateImageRequest<M>
@@ -1751,6 +2018,11 @@ where
     pub fn with_background(mut self, background: ImageBackground) -> Self {
         self.body.background = Omittable::Value(Nullable::Value(background));
         self
+    }
+
+    /// Checks pinned OpenAPI prompt limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
+        self.body.validate()
     }
 }
 
@@ -1820,6 +2092,32 @@ impl ImageEditJsonRequestBody {
             background: Omittable::Omitted,
         }
     }
+
+    /// Checks pinned OpenAPI prompt and `image_url` limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
+        let actual = self.prompt.chars().count();
+        if actual < MIN_IMAGE_EDIT_JSON_PROMPT_CHARS {
+            return Err(CreateImageConstraintError::EmptyPrompt {
+                actual,
+                minimum: MIN_IMAGE_EDIT_JSON_PROMPT_CHARS,
+            });
+        }
+        if !(MIN_IMAGE_EDIT_IMAGES..=MAX_IMAGE_EDIT_IMAGES).contains(&self.images.len()) {
+            return Err(CreateImageConstraintError::ImageEditCount {
+                actual: self.images.len(),
+                minimum: MIN_IMAGE_EDIT_IMAGES,
+                maximum: MAX_IMAGE_EDIT_IMAGES,
+            });
+        }
+        check_image_prompt(&self.prompt, &self.model, true)?;
+        for image in &self.images {
+            image.validate()?;
+        }
+        if let Omittable::Value(mask) = &self.mask {
+            mask.validate()?;
+        }
+        Ok(())
+    }
 }
 
 /// JSON body for `POST /images/edits` using image references.
@@ -1859,7 +2157,7 @@ where
         D: Deserializer<'de>,
     {
         let wire = CreateImageEditJsonRequestWire::deserialize(deserializer)?;
-        if wire.body.images.is_empty() || wire.body.images.len() > 16 {
+        if wire.body.images.is_empty() || wire.body.images.len() > MAX_IMAGE_EDIT_IMAGES {
             return Err(D::Error::custom(
                 "JSON image edit requires between one and sixteen images",
             ));
@@ -1917,6 +2215,13 @@ impl CreateImageEditJsonRequest<MediaStreaming> {
         self.partial_images = Omittable::Value(Nullable::Value(count));
         self
     }
+
+    /// Sends `partial_images: null`.
+    #[must_use]
+    pub fn with_partial_images_null(mut self) -> Self {
+        self.partial_images = Omittable::Value(Nullable::Null);
+        self
+    }
 }
 
 impl<M> CreateImageEditJsonRequest<M>
@@ -1956,6 +2261,11 @@ where
     pub fn with_input_fidelity(mut self, fidelity: ImageInputFidelity) -> Self {
         self.body.input_fidelity = Omittable::Value(Nullable::Value(fidelity));
         self
+    }
+
+    /// Checks pinned OpenAPI prompt limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
+        self.body.validate()
     }
 }
 
@@ -2023,6 +2333,11 @@ impl ImageEditMultipartMetadata {
             partial_images: Omittable::Omitted,
             quality: Omittable::Omitted,
         }
+    }
+
+    /// Checks pinned OpenAPI prompt limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
+        check_image_prompt(&self.prompt, &self.model, true)
     }
 
     /// Whether `stream: true` is encoded.
@@ -2093,7 +2408,7 @@ impl CreateImageEditMultipartRequest<MediaNonStreaming> {
         prompt: impl Into<String>,
     ) -> Result<Self, ImageEditSourceCountError> {
         let images: Vec<_> = images.into_iter().collect();
-        if images.is_empty() || images.len() > 16 {
+        if images.is_empty() || images.len() > MAX_IMAGE_EDIT_IMAGES {
             return Err(ImageEditSourceCountError {
                 count: images.len(),
             });
@@ -2125,6 +2440,13 @@ impl CreateImageEditMultipartRequest<MediaStreaming> {
     #[must_use]
     pub fn with_partial_images(mut self, count: PartialImageCount) -> Self {
         self.metadata.partial_images = Omittable::Value(Nullable::Value(count));
+        self
+    }
+
+    /// Sends `partial_images: null`.
+    #[must_use]
+    pub fn with_partial_images_null(mut self) -> Self {
+        self.metadata.partial_images = Omittable::Value(Nullable::Null);
         self
     }
 }
@@ -2167,6 +2489,11 @@ where
     pub fn with_output_format(mut self, format: ImageOutputFormat) -> Self {
         self.metadata.output_format = Omittable::Value(Nullable::Value(format));
         self
+    }
+
+    /// Checks pinned OpenAPI prompt limits without sending the request.
+    pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
+        self.metadata.validate()
     }
 }
 
@@ -2847,6 +3174,20 @@ mod tests {
         let stream_value = ok(serde_json::to_value(&stream));
         assert_eq!(stream_value["stream"], true);
         assert_eq!(stream_value["partial_images"], 2);
+        let cleared = CreateImageRequest::new("A lighthouse")
+            .into_streaming()
+            .with_partial_images_null();
+        assert_eq!(
+            ok(serde_json::to_value(&cleared))["partial_images"],
+            serde_json::Value::Null
+        );
+        let decoded_null = ok(serde_json::from_value::<ImageGenerationStreamRequest>(
+            json!({"prompt": "x", "stream": true, "partial_images": null}),
+        ));
+        assert_eq!(
+            ok(serde_json::to_value(decoded_null))["partial_images"],
+            serde_json::Value::Null
+        );
         assert!(serde_json::from_value::<ImageGenerationRequest>(stream_value.clone()).is_err());
         let decoded = ok(serde_json::from_value::<ImageGenerationStreamRequest>(
             stream_value.clone(),
@@ -2899,6 +3240,78 @@ mod tests {
             }))
             .is_err()
         );
+
+        assert_eq!(MAX_IMAGE_REFERENCE_URL_CHARS, 20_971_520);
+        validate_image_reference_url_chars(MAX_IMAGE_REFERENCE_URL_CHARS)
+            .expect("image_url at the official maxLength is accepted");
+        assert!(matches!(
+            validate_image_reference_url_chars(MAX_IMAGE_REFERENCE_URL_CHARS + 1),
+            Err(CreateImageConstraintError::ImageUrl {
+                actual: 20_971_521,
+                maximum: 20_971_520
+            })
+        ));
+        ImageReference::url("https://example.test/a.png")
+            .validate()
+            .expect("short image reference URL is accepted");
+        ImageReference::file("file_1")
+            .validate()
+            .expect("file image references skip the URL bound");
+        CreateImageEditJsonRequest::new(ImageReference::url("https://example.test/a.png"), "edit")
+            .validate()
+            .expect("JSON image edit walks image_url");
+
+        assert_eq!(MIN_IMAGE_EDIT_JSON_PROMPT_CHARS, 1);
+        CreateImageEditJsonRequest::new(ImageReference::url("https://example.test/a.png"), "x")
+            .validate()
+            .expect("official one-character JSON edit prompt is accepted");
+        assert!(matches!(
+            CreateImageEditJsonRequest::new(ImageReference::url("https://example.test/a.png"), "")
+                .validate(),
+            Err(CreateImageConstraintError::EmptyPrompt {
+                actual: 0,
+                minimum: 1
+            })
+        ));
+        let empty_prompt: ImageEditJsonRequest = ok(serde_json::from_value(json!({
+            "images": [{"file_id": "file_1"}],
+            "prompt": ""
+        })));
+        assert!(empty_prompt.validate().is_err());
+        CreateImageRequest::new("")
+            .validate()
+            .expect("image generation prompt has no official minLength");
+
+        assert_eq!(MIN_IMAGE_EDIT_IMAGES, 1);
+        assert_eq!(MAX_IMAGE_EDIT_IMAGES, 16);
+        let mut too_few = CreateImageEditJsonRequest::new(
+            ImageReference::url("https://example.test/a.png"),
+            "edit",
+        );
+        too_few.body.images.clear();
+        assert!(matches!(
+            too_few.validate(),
+            Err(CreateImageConstraintError::ImageEditCount {
+                actual: 0,
+                minimum: 1,
+                maximum: 16
+            })
+        ));
+        let mut too_many = CreateImageEditJsonRequest::new(
+            ImageReference::url("https://example.test/a.png"),
+            "edit",
+        );
+        too_many.body.images = (0..=MAX_IMAGE_EDIT_IMAGES)
+            .map(|index| ImageReference::file(format!("file_{index}")))
+            .collect();
+        assert!(matches!(
+            too_many.validate(),
+            Err(CreateImageConstraintError::ImageEditCount {
+                actual: 17,
+                minimum: 1,
+                maximum: 16
+            })
+        ));
     }
 
     #[test]
@@ -3046,5 +3459,181 @@ mod tests {
         ));
         assert!(matches!(future, ImageGenerationStreamEvent::Unknown(_)));
         assert_eq!(ok(serde_json::to_value(future)), future_fixture);
+    }
+
+    #[test]
+    fn speech_create_fields_match_python_and_openapi_inventory() {
+        let request = CreateSpeechRequest::new("gpt-4o-mini-tts", "hello", "coral")
+            .with_instructions("Speak warmly")
+            .with_response_format(SpeechResponseFormat::Wav)
+            .with_speed(ok(SpeechSpeed::new(1.0)));
+        let value = ok(serde_json::to_value(&request));
+        let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "input",
+                "instructions",
+                "model",
+                "response_format",
+                "speed",
+                "voice"
+            ]
+        );
+        request.validate().expect("documented fields stay in range");
+    }
+
+    #[test]
+    fn speech_create_validate_enforces_pinned_limits() {
+        let ok_request = CreateSpeechRequest::new(
+            "gpt-4o-mini-tts",
+            "a".repeat(MAX_SPEECH_TEXT_CHARS),
+            "coral",
+        )
+        .with_instructions("b".repeat(MAX_SPEECH_TEXT_CHARS));
+        ok_request.validate().expect("boundary values are accepted");
+
+        let over_input = CreateSpeechRequest::new(
+            "gpt-4o-mini-tts",
+            "a".repeat(MAX_SPEECH_TEXT_CHARS + 1),
+            "coral",
+        );
+        assert!(matches!(
+            over_input.validate(),
+            Err(CreateSpeechConstraintError::Input { actual: 4097, .. })
+        ));
+
+        let over_instructions = CreateSpeechRequest::new("gpt-4o-mini-tts", "hello", "coral")
+            .with_instructions("b".repeat(MAX_SPEECH_TEXT_CHARS + 1));
+        assert!(matches!(
+            over_instructions.validate(),
+            Err(CreateSpeechConstraintError::Instructions { actual: 4097, .. })
+        ));
+
+        let decoded: SpeechRequest = ok(serde_json::from_value(json!({
+            "model": "gpt-4o-mini-tts",
+            "input": "a".repeat(MAX_SPEECH_TEXT_CHARS + 1),
+            "voice": "coral"
+        })));
+        assert!(decoded.validate().is_err());
+    }
+
+    #[test]
+    fn transcription_create_validate_enforces_pinned_limits() {
+        let ok_request = CreateTranscriptionRequest::new(bytes_source(b"audio"), "gpt-transcribe")
+            .with_known_speaker("agent", "audio/wav", b"one")
+            .with_known_speaker("customer", "audio/wav", b"two");
+        ok_request.validate().expect("two speakers are accepted");
+
+        let mut empty_languages =
+            CreateTranscriptionRequest::new(bytes_source(b"audio"), "gpt-transcribe");
+        empty_languages.metadata.languages = Omittable::Value(Vec::new());
+        assert!(matches!(
+            empty_languages.validate(),
+            Err(CreateTranscriptionConstraintError::EmptyLanguages)
+        ));
+
+        let mut too_many =
+            CreateTranscriptionRequest::new(bytes_source(b"audio"), "gpt-transcribe");
+        too_many.metadata.known_speaker_names = Omittable::Value(vec![
+            "a".into(),
+            "b".into(),
+            "c".into(),
+            "d".into(),
+            "e".into(),
+        ]);
+        too_many.metadata.known_speaker_references = Omittable::Value(vec![
+            "1".into(),
+            "2".into(),
+            "3".into(),
+            "4".into(),
+            "5".into(),
+        ]);
+        assert!(matches!(
+            too_many.validate(),
+            Err(CreateTranscriptionConstraintError::KnownSpeakerCount { actual: 5, .. })
+        ));
+
+        let mut hot = CreateTranscriptionRequest::new(bytes_source(b"audio"), "gpt-transcribe");
+        hot.metadata.temperature = Omittable::Value(1.1);
+        assert!(matches!(
+            hot.validate(),
+            Err(CreateTranscriptionConstraintError::Temperature { .. })
+        ));
+    }
+
+    #[test]
+    fn image_create_validate_enforces_model_prompt_limits() {
+        let gpt = CreateImageRequest::new("a".repeat(MAX_GPT_IMAGE_PROMPT_CHARS))
+            .with_model("gpt-image-1.5");
+        gpt.validate().expect("GPT image ceiling is accepted");
+
+        let dalle2 =
+            CreateImageRequest::new("a".repeat(MAX_DALLE2_PROMPT_CHARS + 1)).with_model("dall-e-2");
+        assert!(matches!(
+            dalle2.validate(),
+            Err(CreateImageConstraintError::Prompt {
+                actual: 1001,
+                maximum: 1000
+            })
+        ));
+
+        let dalle3 =
+            CreateImageRequest::new("a".repeat(MAX_DALLE3_PROMPT_CHARS + 1)).with_model("dall-e-3");
+        assert!(matches!(
+            dalle3.validate(),
+            Err(CreateImageConstraintError::Prompt {
+                actual: 4001,
+                maximum: 4000
+            })
+        ));
+    }
+
+    #[test]
+    fn images_response_fields_match_python_and_openapi_inventory() {
+        let fixture = json!({
+            "created": 1,
+            "data": [{"b64_json": "UE5H", "url": "https://example.com/a.png", "revised_prompt": "a cat"}],
+            "background": "opaque",
+            "output_format": "png",
+            "size": "1024x1024",
+            "quality": "high",
+            "usage": {
+                "input_tokens": 8,
+                "output_tokens": 16,
+                "total_tokens": 24,
+                "input_tokens_details": { "text_tokens": 8, "image_tokens": 0 }
+            }
+        });
+        let decoded: ImagesResponse = ok(serde_json::from_value(fixture.clone()));
+        let encoded = ok(serde_json::to_value(&decoded));
+        let mut keys: Vec<_> = encoded
+            .as_object()
+            .expect("object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "background",
+                "created",
+                "data",
+                "output_format",
+                "quality",
+                "size",
+                "usage"
+            ]
+        );
+        let image = match &decoded.data {
+            Omittable::Value(images) => images.first().expect("one image"),
+            Omittable::Omitted => panic!("data should be present"),
+        };
+        assert!(!image.extra().contains_key("b64_json"));
+        assert!(!image.extra().contains_key("url"));
+        assert!(!image.extra().contains_key("revised_prompt"));
+        assert_eq!(encoded, fixture);
     }
 }
