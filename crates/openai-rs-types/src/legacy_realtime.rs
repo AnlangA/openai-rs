@@ -592,6 +592,10 @@ pub struct LegacyRealtimeSessionCreateRequest {
     temperature: Omittable<LegacyRealtimeTemperature>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     max_response_output_tokens: Omittable<LegacyRealtimeMaxResponseOutputTokens>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    truncation: Omittable<RealtimeTruncation>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt: Omittable<Nullable<LegacyRealtimePromptReference>>,
 }
 
 impl LegacyRealtimeSessionCreateRequest {
@@ -741,6 +745,27 @@ impl LegacyRealtimeSessionCreateRequest {
         tokens: LegacyRealtimeMaxResponseOutputTokens,
     ) -> Self {
         self.max_response_output_tokens = Omittable::Value(tokens);
+        self
+    }
+
+    /// Sets the conversation truncation policy.
+    #[must_use]
+    pub fn with_truncation(mut self, truncation: RealtimeTruncation) -> Self {
+        self.truncation = Omittable::Value(truncation);
+        self
+    }
+
+    /// Sets a reusable prompt template reference.
+    #[must_use]
+    pub fn with_prompt(mut self, prompt: LegacyRealtimePromptReference) -> Self {
+        self.prompt = Omittable::Value(Nullable::Value(prompt));
+        self
+    }
+
+    /// Sends official `prompt: null`.
+    #[must_use]
+    pub fn with_prompt_null(mut self) -> Self {
+        self.prompt = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -1070,7 +1095,11 @@ mod tests {
             .with_temperature(LegacyRealtimeTemperature::new(0.7).expect("valid temperature"))
             .with_max_response_output_tokens(
                 LegacyRealtimeMaxResponseOutputTokens::limited(200).expect("valid output limit"),
-            );
+            )
+            .with_truncation(RealtimeTruncation::Mode(
+                crate::realtime::RealtimeTruncationMode::Auto,
+            ))
+            .with_prompt_null();
         assert_eq!(
             serde_json::to_value(request).expect("encode legacy session request"),
             json!({
@@ -1082,8 +1111,25 @@ mod tests {
                 "turn_detection": null,
                 "speed": 1.1,
                 "temperature": 0.7,
-                "max_response_output_tokens": 200
+                "max_response_output_tokens": 200,
+                "truncation": "auto",
+                "prompt": null
             })
+        );
+
+        let prompt_request = LegacyRealtimeSessionCreateRequest::new()
+            .with_prompt(LegacyRealtimePromptReference::new("pmpt_1"));
+        assert_eq!(
+            serde_json::to_value(prompt_request).expect("encode prompt")["prompt"]["id"],
+            "pmpt_1"
+        );
+        assert!(
+            serde_json::from_value::<LegacyRealtimeSessionCreateRequest>(json!({
+                "truncation": "auto",
+                "prompt": null
+            }))
+            .is_ok(),
+            "pinned RealtimeSessionCreateRequest includes truncation and prompt"
         );
     }
 

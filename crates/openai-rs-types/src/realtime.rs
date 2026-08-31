@@ -619,7 +619,7 @@ pub struct RealtimeAudioTranscription {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub language: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub languages: Omittable<Vec<TranscriptionLanguage>>,
+    pub languages: Omittable<Vec<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub keywords: Omittable<Vec<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -5737,6 +5737,28 @@ mod tests {
             }))
             .is_err(),
             "unofficial prompt null still fails"
+        );
+
+        let languages: RealtimeAudioTranscription = serde_json::from_value(json!({
+            "model": "gpt-transcribe",
+            "languages": ["en", "zh"]
+        }))
+        .expect("official AudioTranscription languages are strings");
+        assert_eq!(
+            languages.languages,
+            Omittable::Value(vec!["en".to_owned(), "zh".to_owned()])
+        );
+        assert_eq!(
+            serde_json::to_value(&languages).expect("encode")["languages"],
+            json!(["en", "zh"])
+        );
+        assert!(
+            serde_json::from_value::<RealtimeAudioTranscription>(json!({
+                "model": "gpt-transcribe",
+                "languages": [{"code": "en"}]
+            }))
+            .is_err(),
+            "object-shaped languages belong only on transcription.completed"
         );
 
         let ga: RealtimeTranscriptionSession = serde_json::from_value(json!({

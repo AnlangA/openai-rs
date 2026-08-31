@@ -4667,7 +4667,7 @@ pub struct TextFormatJsonSchema {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     description: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    strict: Omittable<bool>,
+    strict: Omittable<Nullable<bool>>,
 }
 
 impl TextFormatJsonSchema {
@@ -4701,8 +4701,24 @@ impl TextFormatJsonSchema {
     /// Sets strict schema adherence.
     #[must_use]
     pub fn strict(mut self, strict: bool) -> Self {
-        self.strict = Omittable::Value(strict);
+        self.strict = Omittable::Value(Nullable::Value(strict));
         self
+    }
+
+    /// Sends official `strict: null`.
+    #[must_use]
+    pub fn strict_null(mut self) -> Self {
+        self.strict = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Returns the explicit strict flag when present and non-null.
+    #[must_use]
+    pub fn is_strict(&self) -> Option<bool> {
+        match self.strict {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
+        }
     }
 }
 
@@ -17722,6 +17738,28 @@ mod tests {
             }))
             .is_err(),
             "compact instructions are string or null, not item arrays"
+        );
+    }
+
+    #[test]
+    fn text_format_json_schema_strict_accepts_official_null() {
+        let decoded: TextFormatJsonSchema = serde_json::from_value(json!({
+            "type": "json_schema",
+            "name": "weather",
+            "schema": {"type": "object"},
+            "strict": null
+        }))
+        .expect("official TextResponseFormatJsonSchema strict null");
+        assert_eq!(decoded.is_strict(), None);
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("encode")["strict"],
+            Value::Null
+        );
+        assert_eq!(
+            TextFormatJsonSchema::new("weather", json!({"type": "object"}))
+                .strict(true)
+                .is_strict(),
+            Some(true)
         );
     }
 

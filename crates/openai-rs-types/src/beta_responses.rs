@@ -14,16 +14,17 @@ use thiserror::Error;
 use crate::{
     ExtraFields, JsonText, Nullable, Omittable,
     responses::{
-        CompactResponseConstraintError, ComputerScreenshot, ConversationObjectReference,
-        ConversationReference, CountInputTokensConstraintError, CreateResponseConstraintError,
-        IncompleteDetails, InputContent, InputFile, MAX_COMPACT_INPUT_CHARS, MAX_INPUT_TEXT_CHARS,
-        MAX_PROMPT_CACHE_KEY_CHARS, MessageRole, OutputText, PromptCacheRetention, PromptReference,
-        ReasoningTextContent, Refusal, ResponseError, ResponseInputItem, ResponseInstructions,
-        ResponseItemStatus, ResponseOutputItem, ResponseStatus, ResponseStreamEvent,
-        ResponseStreamOptions, ResponseTextConfig, ResponseTool, ResponseUsage, ServiceTier,
-        SummaryTextContent, ToolChoice, TruncationStrategy, UnknownTaggedObject,
-        validate_input_content, validate_input_image_url_chars, validate_input_text_chars,
-        validate_response_input_item, validate_response_tools, validate_websocket_stream_id,
+        Annotation, CompactResponseConstraintError, ComputerScreenshot,
+        ConversationObjectReference, ConversationReference, CountInputTokensConstraintError,
+        CreateResponseConstraintError, IncompleteDetails, InputContent, InputFile, LogProb,
+        MAX_COMPACT_INPUT_CHARS, MAX_INPUT_TEXT_CHARS, MAX_PROMPT_CACHE_KEY_CHARS, MessageRole,
+        OutputText, PromptCacheRetention, PromptReference, ReasoningTextContent, Refusal,
+        ResponseError, ResponseInputItem, ResponseInstructions, ResponseItemStatus,
+        ResponseOutputItem, ResponseStatus, ResponseStreamEvent, ResponseStreamOptions,
+        ResponseTextConfig, ResponseTool, ResponseUsage, ServiceTier, SummaryTextContent,
+        ToolChoice, TruncationStrategy, UnknownTaggedObject, validate_input_content,
+        validate_input_image_url_chars, validate_input_text_chars, validate_response_input_item,
+        validate_response_tools, validate_websocket_stream_id,
     },
 };
 
@@ -1202,32 +1203,10 @@ impl BetaMultiAgentCall {
 }
 
 /// Citation attached to a multi-agent action output.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-#[non_exhaustive]
-pub enum BetaMultiAgentAnnotation {
-    #[serde(rename = "file_citation")]
-    FileCitation {
-        file_id: String,
-        filename: String,
-        index: u64,
-    },
-    #[serde(rename = "url_citation")]
-    UrlCitation {
-        end_index: u64,
-        start_index: u64,
-        title: String,
-        url: String,
-    },
-    #[serde(rename = "container_file_citation")]
-    ContainerFileCitation {
-        container_id: String,
-        end_index: u64,
-        file_id: String,
-        filename: String,
-        start_index: u64,
-    },
-}
+///
+/// Resource `BetaAnnotation` includes `file_path` and is otherwise the same
+/// wire shape as stable [`Annotation`].
+pub type BetaMultiAgentAnnotation = Annotation;
 
 literal_tag!(OutputTextTag, OutputText, "output_text");
 
@@ -1237,8 +1216,12 @@ pub struct BetaMultiAgentOutputText {
     text: String,
     #[serde(rename = "type")]
     kind: OutputTextTag,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    annotations: Omittable<Vec<BetaMultiAgentAnnotation>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    annotations: Vec<BetaMultiAgentAnnotation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    logprobs: Vec<LogProb>,
+    #[serde(flatten)]
+    extra: ExtraFields,
 }
 
 impl BetaMultiAgentOutputText {
@@ -1248,24 +1231,16 @@ impl BetaMultiAgentOutputText {
         Self {
             text: text.into(),
             kind: OutputTextTag::OutputText,
-            annotations: Omittable::Omitted,
+            annotations: Vec::new(),
+            logprobs: Vec::new(),
+            extra: ExtraFields::new(),
         }
     }
 
     /// Adds a typed citation.
     #[must_use]
     pub fn annotation(mut self, annotation: BetaMultiAgentAnnotation) -> Self {
-        let annotations = match &mut self.annotations {
-            Omittable::Value(annotations) => annotations,
-            Omittable::Omitted => {
-                self.annotations = Omittable::Value(Vec::new());
-                match &mut self.annotations {
-                    Omittable::Value(annotations) => annotations,
-                    Omittable::Omitted => unreachable!(),
-                }
-            }
-        };
-        annotations.push(annotation);
+        self.annotations.push(annotation);
         self
     }
 
@@ -1273,6 +1248,24 @@ impl BetaMultiAgentOutputText {
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// Returns annotations in service order.
+    #[must_use]
+    pub fn annotations(&self) -> &[BetaMultiAgentAnnotation] {
+        &self.annotations
+    }
+
+    /// Returns token log probabilities when the resource includes them.
+    #[must_use]
+    pub fn logprobs(&self) -> &[LogProb] {
+        &self.logprobs
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -4514,6 +4507,48 @@ mod tests {
             )
             .expect("serialize multi-agent output nulls")["agent"],
             Value::Null
+        );
+    }
+
+    #[test]
+    fn multi_agent_output_text_decodes_required_logprobs_and_file_path() {
+        let fixture = json!({
+            "type": "output_text",
+            "text": "see file",
+            "annotations": [{
+                "type": "file_path",
+                "file_id": "file_1",
+                "index": 0
+            }],
+            "logprobs": [{
+                "token": "see",
+                "logprob": -0.1,
+                "bytes": [115, 101, 101],
+                "top_logprobs": []
+            }],
+            "future": true
+        });
+        let decoded: BetaMultiAgentOutputText =
+            serde_json::from_value(fixture.clone()).expect("decode resource output_text");
+        assert_eq!(decoded.text(), "see file");
+        assert!(matches!(decoded.annotations(), [Annotation::FilePath(_)]));
+        assert_eq!(decoded.logprobs()[0].token(), "see");
+        assert_eq!(
+            decoded.extra_fields().get("future"),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("lossless re-encode"),
+            fixture
+        );
+        assert!(
+            serde_json::from_value::<BetaMultiAgentOutputText>(json!({
+                "type": "output_text",
+                "text": "x",
+                "annotations": [{"type": "unknown_annotation", "id": "a"}]
+            }))
+            .is_ok(),
+            "future annotation tags remain lossless"
         );
     }
 
