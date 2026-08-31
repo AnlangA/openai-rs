@@ -1305,10 +1305,30 @@ pub struct DeleteCertificateResponse {
 }
 
 crate::open_string_enum! {
-    /// Organization/project data-retention mode.
+    /// Project data-retention mode, which is the pinned superset domain.
+    ///
+    /// This enum also backs the shared resource side ([`DataRetentionResource`]):
+    /// it is open, so the four organization values, the two project-only
+    /// values (`organization_default`, `none`), and any future service value
+    /// all decode losslessly.
     pub enum DataRetentionType {
         OrganizationDefault = "organization_default",
         None = "none",
+        ZeroDataRetention = "zero_data_retention",
+        ModifiedAbuseMonitoring = "modified_abuse_monitoring",
+        EnhancedZeroDataRetention = "enhanced_zero_data_retention",
+        EnhancedModifiedAbuseMonitoring = "enhanced_modified_abuse_monitoring"
+    }
+}
+
+crate::open_string_enum! {
+    /// Organization data-retention mode.
+    ///
+    /// The pinned `UpdateOrganizationDataRetentionBody.retention_type` and
+    /// `OrganizationDataRetention.type` enumerate exactly these four values;
+    /// `organization_default` and `none` are project-only and decode as
+    /// `Unknown` rather than named variants.
+    pub enum OrganizationDataRetentionType {
         ZeroDataRetention = "zero_data_retention",
         ModifiedAbuseMonitoring = "modified_abuse_monitoring",
         EnhancedZeroDataRetention = "enhanced_zero_data_retention",
@@ -1338,10 +1358,16 @@ pub type ProjectDataRetention = DataRetentionResource;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UpdateOrganizationDataRetentionBody {
-    pub retention_type: DataRetentionType,
+    pub retention_type: OrganizationDataRetentionType,
 }
 
-pub type UpdateProjectDataRetentionBody = UpdateOrganizationDataRetentionBody;
+/// Project data-retention update body. Distinct from
+/// [`UpdateOrganizationDataRetentionBody`] because the pinned project domain
+/// additionally allows `organization_default` and `none`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UpdateProjectDataRetentionBody {
+    pub retention_type: DataRetentionType,
+}
 
 crate::open_string_enum! {
     /// Group type.
@@ -1792,10 +1818,13 @@ pub struct DeletedRoleAssignmentResource {
 
 crate::open_string_enum! {
     /// Organization invite role.
+    ///
+    /// The pinned `Invite.role` / `InviteRequest.role` enum is exactly
+    /// `owner` / `reader`. Project memberships use [`InviteProjectRole`],
+    /// which is where `member` lives.
     pub enum InviteRole {
         Owner = "owner",
-        Reader = "reader",
-        Member = "member"
+        Reader = "reader"
     }
 }
 
@@ -4428,11 +4457,13 @@ mod tests {
 
     #[test]
     fn admin_query_filters_match_openapi() {
-        let mut page = AdminListParams::default();
-        page.before = Omittable::Value("cursor_0".to_owned());
-        page.emails = Omittable::Value(vec!["user@example.com".to_owned()]);
-        page.include_archived = Omittable::Value(true);
-        page.owner_project_access = Omittable::Value(ProjectAccessFilter::Any);
+        let page = AdminListParams {
+            before: Omittable::Value("cursor_0".to_owned()),
+            emails: Omittable::Value(vec!["user@example.com".to_owned()]),
+            include_archived: Omittable::Value(true),
+            owner_project_access: Omittable::Value(ProjectAccessFilter::Any),
+            ..AdminListParams::default()
+        };
         let encoded = ok(serde_json::to_value(&page));
         assert_eq!(
             encoded,
@@ -4454,10 +4485,12 @@ mod tests {
                 .is_err()
         );
 
-        let mut audit = AuditLogListParams::default();
-        audit.actor_emails = Omittable::Value(vec!["actor@example.com".to_owned()]);
-        audit.resource_ids = Omittable::Value(vec!["proj_1".to_owned()]);
-        audit.tenant_only = Omittable::Value(true);
+        let audit = AuditLogListParams {
+            actor_emails: Omittable::Value(vec!["actor@example.com".to_owned()]),
+            resource_ids: Omittable::Value(vec!["proj_1".to_owned()]),
+            tenant_only: Omittable::Value(true),
+            ..AuditLogListParams::default()
+        };
         let encoded = ok(serde_json::to_value(&audit));
         assert_eq!(
             encoded,
@@ -4477,11 +4510,13 @@ mod tests {
             serde_json::from_value::<AuditLogListParams>(json!({"tenant_only": null})).is_err()
         );
 
-        let mut usage = UsageQueryParams::new(100);
-        usage.sources = Omittable::Value(vec!["image.generation".to_owned()]);
-        usage.sizes = Omittable::Value(vec!["1024x1024".to_owned()]);
-        usage.vector_store_ids = Omittable::Value(vec!["vs_1".to_owned()]);
-        usage.context_levels = Omittable::Value(vec!["high".to_owned()]);
+        let usage = UsageQueryParams {
+            sources: Omittable::Value(vec!["image.generation".to_owned()]),
+            sizes: Omittable::Value(vec!["1024x1024".to_owned()]),
+            vector_store_ids: Omittable::Value(vec!["vs_1".to_owned()]),
+            context_levels: Omittable::Value(vec!["high".to_owned()]),
+            ..UsageQueryParams::new(100)
+        };
         let encoded = ok(serde_json::to_value(&usage));
         assert_eq!(encoded["start_time"], 100);
         assert_eq!(encoded["sources"], json!(["image.generation"]));
@@ -4496,16 +4531,18 @@ mod tests {
             .is_err()
         );
 
-        let mut certificate = CertificateGetParams::default();
-        certificate.include = Omittable::Value(vec![CertificateInclude::Content]);
+        let certificate = CertificateGetParams {
+            include: Omittable::Value(vec![CertificateInclude::Content]),
+        };
         assert_eq!(
             ok(serde_json::to_value(&certificate)),
             json!({"include": ["content"]})
         );
         assert!(serde_json::from_value::<CertificateGetParams>(json!({"include": null})).is_err());
 
-        let mut group = ProjectGroupGetParams::default();
-        group.group_type = Omittable::Value(GroupType::TenantGroup);
+        let group = ProjectGroupGetParams {
+            group_type: Omittable::Value(GroupType::TenantGroup),
+        };
         assert_eq!(
             ok(serde_json::to_value(&group)),
             json!({"group_type": "tenant_group"})
@@ -4828,6 +4865,152 @@ mod tests {
             assert_eq!(response.object, expected);
             assert_eq!(ok(serde_json::to_value(&response))["object"], value);
         }
+    }
+
+    #[test]
+    fn official_invite_role_pins_owner_and_reader_only() {
+        const OFFICIAL_INVITE_ROLES: [(&str, InviteRole); 2] =
+            [("owner", InviteRole::Owner), ("reader", InviteRole::Reader)];
+        for (value, expected) in OFFICIAL_INVITE_ROLES {
+            let decoded = InviteRole::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official invite role {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+        }
+
+        // `member` belongs to InviteProjectRole only; an org-level `member`
+        // is not a named InviteRole variant anymore.
+        let project_only = InviteRole::from_raw("member");
+        assert!(
+            !project_only.is_known(),
+            "invite role `member` is outside the pinned owner/reader domain"
+        );
+        assert_eq!(project_only.as_str(), "member");
+        assert!(
+            !InviteRole::from_raw("").is_known(),
+            "empty invite role must stay unknown"
+        );
+
+        let request = InviteRequest {
+            email: "user@example.com".to_owned(),
+            role: InviteRole::Reader,
+            projects: Omittable::Omitted,
+        };
+        assert_eq!(
+            ok(serde_json::to_value(&request)),
+            json!({"email": "user@example.com", "role": "reader"})
+        );
+
+        // Resource-side losslessness: an invite echoing an unofficial role
+        // still decodes verbatim through the open-enum fallback.
+        let invite = ok(serde_json::from_value::<Invite>(json!({
+            "object": "organization.invite",
+            "id": "inv_1",
+            "email": "user@example.com",
+            "role": "member",
+            "status": "pending",
+            "created_at": 1,
+            "projects": []
+        })));
+        assert!(!invite.role.is_known());
+        assert_eq!(invite.role.as_str(), "member");
+        assert_eq!(
+            ok(serde_json::to_value(&invite))["role"],
+            json!("member"),
+            "unofficial invite role must round-trip losslessly"
+        );
+    }
+
+    #[test]
+    fn official_org_data_retention_pins_four_value_domain() {
+        const OFFICIAL_ORG_TYPES: [(&str, OrganizationDataRetentionType); 4] = [
+            (
+                "zero_data_retention",
+                OrganizationDataRetentionType::ZeroDataRetention,
+            ),
+            (
+                "modified_abuse_monitoring",
+                OrganizationDataRetentionType::ModifiedAbuseMonitoring,
+            ),
+            (
+                "enhanced_zero_data_retention",
+                OrganizationDataRetentionType::EnhancedZeroDataRetention,
+            ),
+            (
+                "enhanced_modified_abuse_monitoring",
+                OrganizationDataRetentionType::EnhancedModifiedAbuseMonitoring,
+            ),
+        ];
+        for (value, expected) in OFFICIAL_ORG_TYPES {
+            let decoded = OrganizationDataRetentionType::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official organization data-retention type {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+
+            let body = UpdateOrganizationDataRetentionBody {
+                retention_type: expected,
+            };
+            assert_eq!(
+                ok(serde_json::to_value(&body)),
+                json!({"retention_type": value})
+            );
+        }
+
+        // Project-only values are rejected from the organization domain: they
+        // carry no named variant on OrganizationDataRetentionType.
+        for project_only in ["organization_default", "none"] {
+            assert!(
+                !OrganizationDataRetentionType::from_raw(project_only).is_known(),
+                "organization data-retention type `{project_only}` is project-only"
+            );
+        }
+
+        // The project body keeps the full six-value pinned domain.
+        for value in [
+            "organization_default",
+            "none",
+            "zero_data_retention",
+            "modified_abuse_monitoring",
+            "enhanced_zero_data_retention",
+            "enhanced_modified_abuse_monitoring",
+        ] {
+            let body = UpdateProjectDataRetentionBody {
+                retention_type: DataRetentionType::from_raw(value),
+            };
+            assert!(
+                body.retention_type.is_known(),
+                "project data-retention type {value} must be a named variant"
+            );
+            assert_eq!(
+                ok(serde_json::to_value(&body)),
+                json!({"retention_type": value})
+            );
+        }
+
+        // The shared resource side stays the open superset: organization and
+        // project payloads both decode losslessly.
+        let organization = ok(serde_json::from_value::<OrganizationDataRetention>(json!({
+            "object": "organization.data_retention",
+            "type": "modified_abuse_monitoring"
+        })));
+        assert_eq!(
+            organization.retention_type,
+            DataRetentionType::ModifiedAbuseMonitoring
+        );
+        let project = ok(serde_json::from_value::<ProjectDataRetention>(json!({
+            "object": "project.data_retention",
+            "type": "organization_default"
+        })));
+        assert_eq!(
+            project.retention_type,
+            DataRetentionType::OrganizationDefault
+        );
     }
 
     #[test]

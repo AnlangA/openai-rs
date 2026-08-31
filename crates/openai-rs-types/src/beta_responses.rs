@@ -2849,13 +2849,17 @@ impl BetaCompactResponseRequest {
 literal_tag!(BetaCompactedResponseTag, Compaction, "response.compaction");
 
 /// Compacted beta response resource.
+///
+/// `output` follows the pinned `BetaCompactResource.output.items` →
+/// `BetaItemField` union: compaction returns user-role messages plus a final
+/// compaction item, so items decode with the beta input-side codec.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BetaCompactedResponse {
     id: String,
     created_at: i64,
     #[serde(rename = "object")]
     object: BetaCompactedResponseTag,
-    output: Vec<BetaResponseOutputItem>,
+    output: Vec<BetaResponseInputItem>,
     usage: ResponseUsage,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -2870,7 +2874,7 @@ impl BetaCompactedResponse {
 
     /// Returns compacted items in wire order.
     #[must_use]
-    pub fn output(&self) -> &[BetaResponseOutputItem] {
+    pub fn output(&self) -> &[BetaResponseInputItem] {
         &self.output
     }
 
@@ -4416,6 +4420,57 @@ mod tests {
     }
 
     #[test]
+    fn beta_compact_resource_output_decodes_user_messages_and_compaction_item() {
+        // BetaCompactResource.output follows BetaItemField, whose message
+        // branch accepts user roles; usage is completed with the
+        // schema-required token-detail objects.
+        let official = json!({
+            "id": "resp_beta_compact",
+            "object": "response.compaction",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Summarize the thread."}
+                    ]
+                },
+                {
+                    "type": "compaction",
+                    "id": "cmp_beta",
+                    "encrypted_content": "encrypted-summary"
+                }
+            ],
+            "created_at": 1731459200,
+            "usage": {
+                "input_tokens": 100,
+                "input_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 0 },
+                "output_tokens": 20,
+                "output_tokens_details": { "reasoning_tokens": 0 },
+                "total_tokens": 120
+            }
+        });
+        let compacted: BetaCompactedResponse =
+            serde_json::from_value(official.clone()).expect("official BetaCompactResource");
+        let output = compacted.output();
+        assert_eq!(output.len(), 2);
+        assert!(matches!(output[0], BetaResponseInputItem::Stable(_)));
+        assert_eq!(
+            serde_json::to_value(&output[0]).expect("re-encode user message")["role"],
+            "user"
+        );
+        assert!(matches!(output[1], BetaResponseInputItem::Stable(_)));
+        assert_eq!(
+            serde_json::to_value(&output[1]).expect("re-encode compaction item")["id"],
+            "cmp_beta"
+        );
+        assert_eq!(
+            serde_json::to_value(&compacted).expect("round-trip official example"),
+            official
+        );
+    }
+
+    #[test]
     fn future_stable_and_beta_tags_remain_lossless() {
         let fixture = json!({
             "type": "future_multi_agent_item",
@@ -4463,7 +4518,7 @@ mod tests {
         );
 
         assert_eq!(
-            serde_json::to_value(&BetaAgentInputText::new("hi").prompt_cache_breakpoint_null())
+            serde_json::to_value(BetaAgentInputText::new("hi").prompt_cache_breakpoint_null())
                 .expect("serialize agent text breakpoint null")["prompt_cache_breakpoint"],
             Value::Null
         );
@@ -4479,7 +4534,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(
-                &BetaAgentMessage::new("root", "child", [BetaAgentInputText::new("hi")])
+                BetaAgentMessage::new("root", "child", [BetaAgentInputText::new("hi")])
                     .id_null()
                     .agent_null()
             )
@@ -4488,7 +4543,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(
-                &BetaMultiAgentCall::from_raw(BetaMultiAgentAction::ListAgents, "call_1", "{}")
+                BetaMultiAgentCall::from_raw(BetaMultiAgentAction::ListAgents, "call_1", "{}")
                     .id_null()
                     .agent_null()
             )
@@ -4497,7 +4552,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(
-                &BetaMultiAgentCallOutput::new(
+                BetaMultiAgentCallOutput::new(
                     BetaMultiAgentAction::WaitAgent,
                     "call_1",
                     [BetaMultiAgentOutputText::new("done")],
@@ -4830,7 +4885,7 @@ mod tests {
             "official BetaInputImageContent detail is not nullable"
         );
         assert_eq!(
-            serde_json::to_value(&BetaAgentInputImage::from_url("https://example.test/a.png"))
+            serde_json::to_value(BetaAgentInputImage::from_url("https://example.test/a.png"))
                 .expect("constructor sends documented default")["detail"],
             "auto"
         );
@@ -4862,7 +4917,7 @@ mod tests {
             other => panic!("expected BetaAgentInputImageParam, got {other:?}"),
         }
         assert_eq!(
-            serde_json::to_value(&BetaAgentInputImageParam::from_url(
+            serde_json::to_value(BetaAgentInputImageParam::from_url(
                 "https://example.test/a.png"
             ))
             .expect("param constructor omits detail")

@@ -365,6 +365,21 @@ open_string_enum! {
 }
 
 open_string_enum! {
+    /// How long a transcription session waits before emitting text.
+    ///
+    /// The pinned `AudioTranscription.delay` enum happens to share its wire
+    /// values with [`RealtimeReasoningEffort`], but the two govern unrelated
+    /// behavior, so they are modeled as distinct types.
+    pub enum RealtimeTranscriptionDelay {
+        Minimal = "minimal",
+        Low = "low",
+        Medium = "medium",
+        High = "high",
+        XHigh = "xhigh"
+    }
+}
+
+open_string_enum! {
     /// Built-in Realtime voice name.
     pub enum RealtimeVoiceName {
         Alloy = "alloy",
@@ -625,7 +640,7 @@ pub struct RealtimeAudioTranscription {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub prompt: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub delay: Omittable<RealtimeReasoningEffort>,
+    pub delay: Omittable<RealtimeTranscriptionDelay>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -3079,7 +3094,11 @@ impl RealtimeCallRejectRequest {
 pub struct RealtimeCallHangupRequest;
 
 /// One SIP header delivered with an incoming-call webhook.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// SIP INVITE headers can carry `Authorization` and `Proxy-Authorization`
+/// credentials, so the redacted [`fmt::Debug`] implementation never prints the
+/// header name or value.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeSipHeader {
     pub name: String,
     pub value: String,
@@ -3087,13 +3106,35 @@ pub struct RealtimeSipHeader {
     extra: ExtraFields,
 }
 
+impl fmt::Debug for RealtimeSipHeader {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RealtimeSipHeader")
+            .field("extra_fields", &self.extra)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Data attached to `realtime.call.incoming`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// The SIP headers can carry credentials, so the redacted [`fmt::Debug`]
+/// implementation reports only their count.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeCallIncomingData {
     pub call_id: String,
     pub sip_headers: Vec<RealtimeSipHeader>,
     #[serde(flatten)]
     extra: ExtraFields,
+}
+
+impl fmt::Debug for RealtimeCallIncomingData {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RealtimeCallIncomingData")
+            .field("sip_header_count", &self.sip_headers.len())
+            .field("extra_fields", &self.extra)
+            .finish_non_exhaustive()
+    }
 }
 
 literal_tag!(RealtimeIncomingWebhookObjectTag, Event, "event");
@@ -3104,17 +3145,48 @@ literal_tag!(
 );
 
 /// Incoming SIP-call webhook event.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// The pinned schema leaves `object` optional, so the marker is decoded
+/// losslessly and reported through [`Self::object_marker_present`]. The
+/// redacted [`fmt::Debug`] implementation never prints the payload, which can
+/// carry SIP credentials.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct WebhookRealtimeCallIncoming {
     pub created_at: i64,
     pub id: String,
     pub data: RealtimeCallIncomingData,
-    #[serde(rename = "object")]
-    object: RealtimeIncomingWebhookObjectTag,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    object: Omittable<RealtimeIncomingWebhookObjectTag>,
     #[serde(rename = "type")]
     kind: RealtimeIncomingWebhookTypeTag,
     #[serde(flatten)]
     extra: ExtraFields,
+}
+
+impl WebhookRealtimeCallIncoming {
+    /// Returns the exact, known discriminator.
+    #[must_use]
+    pub const fn event_type(&self) -> &'static str {
+        "realtime.call.incoming"
+    }
+
+    /// Returns whether the optional `object = "event"` marker was present.
+    #[must_use]
+    pub fn object_marker_present(&self) -> bool {
+        self.object.is_value()
+    }
+}
+
+impl fmt::Debug for WebhookRealtimeCallIncoming {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WebhookRealtimeCallIncoming")
+            .field("event_type", &"realtime.call.incoming")
+            .field("created_at", &self.created_at)
+            .field("object_marker_present", &self.object_marker_present())
+            .field("extra_fields", &self.extra)
+            .finish_non_exhaustive()
+    }
 }
 
 macro_rules! client_event_struct {
@@ -5149,12 +5221,137 @@ mod tests {
                 "call_id": "rtc_1",
                 "sip_headers": [{"name": "From", "value": "sip:user@example.com"}]
             },
-            "object": "event",
             "type": "realtime.call.incoming"
         });
         let decoded: WebhookRealtimeCallIncoming =
             serde_json::from_value(webhook.clone()).expect("webhook decodes");
+        assert_eq!(decoded.event_type(), "realtime.call.incoming");
+        assert!(!decoded.object_marker_present());
         assert_eq!(serde_json::to_value(decoded).expect("encode"), webhook);
+    }
+
+    #[test]
+    fn realtime_incoming_webhook_decodes_without_optional_object_marker() {
+        let official = json!({
+            "created_at": 1_756_310_470_i64,
+            "id": "evt_273145",
+            "data": {
+                "call_id": "rtc_abc123",
+                "sip_headers": [
+                    {"name": "From", "value": "sip:caller@example.com"}
+                ]
+            },
+            "type": "realtime.call.incoming"
+        });
+        let decoded: WebhookRealtimeCallIncoming =
+            serde_json::from_value(official.clone()).expect("official payload omits object");
+        assert!(!decoded.object_marker_present());
+        assert_eq!(decoded.data.call_id, "rtc_abc123");
+        assert_eq!(decoded.data.sip_headers.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("encode"),
+            official,
+            "round trip stays lossless without the optional marker"
+        );
+
+        let with_marker = json!({
+            "created_at": 1,
+            "id": "evt_2",
+            "data": {"call_id": "rtc_2", "sip_headers": []},
+            "object": "event",
+            "type": "realtime.call.incoming"
+        });
+        let decoded: WebhookRealtimeCallIncoming =
+            serde_json::from_value(with_marker.clone()).expect("marker still accepted");
+        assert!(decoded.object_marker_present());
+        assert_eq!(serde_json::to_value(&decoded).expect("encode"), with_marker);
+    }
+
+    #[test]
+    fn realtime_incoming_webhook_debug_does_not_leak_sip_credentials() {
+        let decoded: WebhookRealtimeCallIncoming = serde_json::from_value(json!({
+            "created_at": 1,
+            "id": "evt_leak",
+            "data": {
+                "call_id": "rtc_leak",
+                "sip_headers": [
+                    {"name": "Authorization", "value": "Bearer sip-secret-token"},
+                    {"name": "Proxy-Authorization", "value": "Digest payload-secret"},
+                    {"name": "From", "value": "sip:caller@example.com"}
+                ]
+            },
+            "type": "realtime.call.incoming"
+        }))
+        .expect("webhook with credentials decodes");
+
+        for formatted in [
+            format!("{decoded:?}"),
+            format!("{decoded:#?}"),
+            format!("{:?}", decoded.data),
+            format!("{:#?}", decoded.data.sip_headers[0]),
+        ] {
+            assert!(
+                !formatted.contains("sip-secret-token"),
+                "leaked token: {formatted}"
+            );
+            assert!(
+                !formatted.contains("payload-secret"),
+                "leaked secret: {formatted}"
+            );
+            assert!(
+                !formatted.contains("Authorization"),
+                "leaked header name: {formatted}"
+            );
+            assert!(
+                !formatted.contains("caller@example.com"),
+                "leaked identity: {formatted}"
+            );
+        }
+
+        let debug = format!("{decoded:#?}");
+        assert!(debug.contains("realtime.call.incoming"));
+        assert!(debug.contains("created_at"));
+        assert!(format!("{:#?}", decoded.data).contains("sip_header_count"));
+    }
+
+    #[test]
+    fn transcription_delay_uses_dedicated_enum_domain() {
+        let transcription: RealtimeAudioTranscription = serde_json::from_value(json!({
+            "model": "gpt-realtime-whisper",
+            "delay": "xhigh"
+        }))
+        .expect("official delay value decodes");
+        assert_eq!(
+            transcription.delay,
+            Omittable::Value(RealtimeTranscriptionDelay::XHigh)
+        );
+        assert_eq!(
+            serde_json::to_value(&transcription).expect("encode")["delay"],
+            "xhigh"
+        );
+
+        let future: RealtimeAudioTranscription = serde_json::from_value(json!({
+            "model": "gpt-realtime-whisper",
+            "delay": "ultra"
+        }))
+        .expect("unknown delay values stay lossless");
+        assert_eq!(
+            future.delay,
+            Omittable::Value(RealtimeTranscriptionDelay::Unknown("ultra".into()))
+        );
+
+        let effort: RealtimeSessionCreateRequest = serde_json::from_value(json!({
+            "type": "realtime",
+            "reasoning": {"effort": "high"}
+        }))
+        .expect("reasoning effort keeps its own type");
+        let Omittable::Value(reasoning) = effort.reasoning else {
+            panic!("expected reasoning");
+        };
+        assert_eq!(
+            reasoning.effort,
+            Omittable::Value(RealtimeReasoningEffort::High)
+        );
     }
 
     #[test]
@@ -5432,24 +5629,28 @@ mod tests {
             Value::Null
         );
 
-        let mut ok = RealtimeSessionCreateRequest::default();
-        ok.audio = Omittable::Value(RealtimeSessionAudio {
-            output: Omittable::Value(RealtimeAudioOutputConfig {
-                speed: Omittable::Value(MIN_REALTIME_OUTPUT_SPEED),
-                ..RealtimeAudioOutputConfig::default()
+        let ok = RealtimeSessionCreateRequest {
+            audio: Omittable::Value(RealtimeSessionAudio {
+                output: Omittable::Value(RealtimeAudioOutputConfig {
+                    speed: Omittable::Value(MIN_REALTIME_OUTPUT_SPEED),
+                    ..RealtimeAudioOutputConfig::default()
+                }),
+                ..RealtimeSessionAudio::default()
             }),
-            ..RealtimeSessionAudio::default()
-        });
+            ..RealtimeSessionCreateRequest::default()
+        };
         ok.validate().expect("0.25 is accepted");
 
-        let mut over = RealtimeSessionCreateRequest::default();
-        over.audio = Omittable::Value(RealtimeSessionAudio {
-            output: Omittable::Value(RealtimeAudioOutputConfig {
-                speed: Omittable::Value(1.51),
-                ..RealtimeAudioOutputConfig::default()
+        let over = RealtimeSessionCreateRequest {
+            audio: Omittable::Value(RealtimeSessionAudio {
+                output: Omittable::Value(RealtimeAudioOutputConfig {
+                    speed: Omittable::Value(1.51),
+                    ..RealtimeAudioOutputConfig::default()
+                }),
+                ..RealtimeSessionAudio::default()
             }),
-            ..RealtimeSessionAudio::default()
-        });
+            ..RealtimeSessionCreateRequest::default()
+        };
         assert!(matches!(
             over.validate(),
             Err(CreateRealtimeSessionConstraintError::OutputSpeed { .. })
@@ -5461,10 +5662,12 @@ mod tests {
         .expect("serde remains lossless");
         assert!(decoded.validate().is_err());
 
-        let mut ratio = RealtimeSessionCreateRequest::default();
-        ratio.truncation = Omittable::Value(RealtimeTruncation::RetentionRatio(
-            RealtimeRetentionRatioTruncation::new(1.0),
-        ));
+        let mut ratio = RealtimeSessionCreateRequest {
+            truncation: Omittable::Value(RealtimeTruncation::RetentionRatio(
+                RealtimeRetentionRatioTruncation::new(1.0),
+            )),
+            ..RealtimeSessionCreateRequest::default()
+        };
         ratio.validate().expect("retention_ratio 1.0 is accepted");
         ratio.truncation = Omittable::Value(RealtimeTruncation::RetentionRatio(
             RealtimeRetentionRatioTruncation::new(1.1),
@@ -5479,9 +5682,10 @@ mod tests {
             post_instructions: Omittable::Value(MIN_REALTIME_POST_INSTRUCTIONS),
             extra: ExtraFields::new(),
         });
-        let mut session = RealtimeSessionCreateRequest::default();
-        session.truncation =
-            Omittable::Value(RealtimeTruncation::RetentionRatio(post_instructions));
+        let session = RealtimeSessionCreateRequest {
+            truncation: Omittable::Value(RealtimeTruncation::RetentionRatio(post_instructions)),
+            ..RealtimeSessionCreateRequest::default()
+        };
         session
             .validate()
             .expect("official post_instructions 0 is accepted");
@@ -5502,21 +5706,23 @@ mod tests {
             })
         ));
 
-        let mut idle = RealtimeSessionCreateRequest::default();
-        idle.audio = Omittable::Value(RealtimeSessionAudio {
-            input: Omittable::Value(RealtimeAudioInputConfig {
-                turn_detection: Omittable::Value(Nullable::Value(
-                    RealtimeTurnDetection::ServerVad(RealtimeServerVad {
-                        idle_timeout_ms: Omittable::Value(Nullable::Value(
-                            MIN_REALTIME_IDLE_TIMEOUT_MS,
-                        )),
-                        ..RealtimeServerVad::default()
-                    }),
-                )),
-                ..RealtimeAudioInputConfig::default()
+        let idle = RealtimeSessionCreateRequest {
+            audio: Omittable::Value(RealtimeSessionAudio {
+                input: Omittable::Value(RealtimeAudioInputConfig {
+                    turn_detection: Omittable::Value(Nullable::Value(
+                        RealtimeTurnDetection::ServerVad(RealtimeServerVad {
+                            idle_timeout_ms: Omittable::Value(Nullable::Value(
+                                MIN_REALTIME_IDLE_TIMEOUT_MS,
+                            )),
+                            ..RealtimeServerVad::default()
+                        }),
+                    )),
+                    ..RealtimeAudioInputConfig::default()
+                }),
+                ..RealtimeSessionAudio::default()
             }),
-            ..RealtimeSessionAudio::default()
-        });
+            ..RealtimeSessionCreateRequest::default()
+        };
         idle.validate().expect("idle_timeout_ms 5000 is accepted");
         let decoded_idle: RealtimeSessionCreateRequest = serde_json::from_value(json!({
             "type": "realtime",
@@ -5532,27 +5738,31 @@ mod tests {
             Err(CreateRealtimeSessionConstraintError::IdleTimeout { actual: 4999, .. })
         ));
 
-        let mut languages = RealtimeSessionCreateRequest::default();
-        languages.audio = Omittable::Value(RealtimeSessionAudio {
-            input: Omittable::Value(RealtimeAudioInputConfig {
-                transcription: Omittable::Value(Nullable::Value(RealtimeAudioTranscription {
-                    languages: Omittable::Value(Vec::new()),
-                    ..RealtimeAudioTranscription::default()
-                })),
-                ..RealtimeAudioInputConfig::default()
+        let languages = RealtimeSessionCreateRequest {
+            audio: Omittable::Value(RealtimeSessionAudio {
+                input: Omittable::Value(RealtimeAudioInputConfig {
+                    transcription: Omittable::Value(Nullable::Value(RealtimeAudioTranscription {
+                        languages: Omittable::Value(Vec::new()),
+                        ..RealtimeAudioTranscription::default()
+                    })),
+                    ..RealtimeAudioInputConfig::default()
+                }),
+                ..RealtimeSessionAudio::default()
             }),
-            ..RealtimeSessionAudio::default()
-        });
+            ..RealtimeSessionCreateRequest::default()
+        };
         assert!(matches!(
             languages.validate(),
             Err(CreateRealtimeSessionConstraintError::EmptyTranscriptionLanguages)
         ));
 
-        let mut secret = RealtimeCreateClientSecretRequest::default();
-        secret.expires_after = Omittable::Value(RealtimeClientSecretExpiration {
-            seconds: Omittable::Value(MIN_REALTIME_CLIENT_SECRET_SECONDS),
-            ..RealtimeClientSecretExpiration::default()
-        });
+        let mut secret = RealtimeCreateClientSecretRequest {
+            expires_after: Omittable::Value(RealtimeClientSecretExpiration {
+                seconds: Omittable::Value(MIN_REALTIME_CLIENT_SECRET_SECONDS),
+                ..RealtimeClientSecretExpiration::default()
+            }),
+            ..RealtimeCreateClientSecretRequest::default()
+        };
         secret.validate().expect("10-second secret is accepted");
         secret.expires_after = Omittable::Value(RealtimeClientSecretExpiration {
             seconds: Omittable::Value(7_201),

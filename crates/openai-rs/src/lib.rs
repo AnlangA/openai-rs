@@ -19,7 +19,7 @@ pub use openai_rs_types::{
 pub use openai_rs_client::{
     AddUploadPartOneShotRequest, ApiError, ApiKey, ApiKeyError, ApiResponse, Audio,
     BatchPageStream, BatchSubmission, BatchSubmissionError, BatchSubmissionOptions, Batches,
-    C2paProvenanceResult, ChatCompletionEventStream, ChatCompletionMessagePageStream,
+    BodyPreview, C2paProvenanceResult, ChatCompletionEventStream, ChatCompletionMessagePageStream,
     ChatCompletionMessages, ChatCompletionPageStream, ChatCompletions, Client, ClientBuilder,
     ContainerFileContentStream, ContainerFilePageStream, ContainerFiles, ContainerPageStream,
     Containers, ContentProvenanceCheck, ContentProvenanceChecks, ContentProvenanceResult,
@@ -31,12 +31,17 @@ pub use openai_rs_client::{
     FineTuningPollError, FineTuningPollOptions, ImageEditEventStream, ImageGenerationEventStream,
     Images, InputItems, InputTokens, MediaByteStream, MediaEventStream, MediaTextBody, Models,
     Moderations, OneShotMultipartSource, PollCancellationToken, PollError, PollOptions,
-    ResponseEventStream, ResponseInputItemPageStream, ResponseMeta, Responses, RetryPolicy,
-    SkillContentStream, SkillPageStream, SkillVersionPageStream, SkillVersions, Skills,
-    SpeechEventStream, StreamError, SynthIdProvenanceResult, TlsBackend, TranscriptionEventStream,
-    TranscriptionOutput, TranslationOutput, Uploads, VectorStoreFileBatches,
-    VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream, VectorStores,
+    RateLimitMetadata, ResponseEventStream, ResponseInputItemPageStream, ResponseMeta, Responses,
+    RetrieveResponseParams, RetrieveResponseStreamParams, RetryPolicy, SkillContentStream,
+    SkillPageStream, SkillVersionPageStream, SkillVersions, Skills, SpeechEventStream, StreamError,
+    SynthIdProvenanceResult, TlsBackend, TranscriptionEventStream, TranscriptionOutput,
+    TranslationOutput, Uploads, VectorStoreFileBatches, VectorStoreFilePageStream,
+    VectorStoreFiles, VectorStorePageStream, VectorStores,
 };
+
+/// Incremental SSE decoding primitives used by the streaming clients.
+#[cfg(feature = "client")]
+pub use openai_rs_client::sse;
 
 #[cfg(all(feature = "client", feature = "legacy-evals"))]
 pub use openai_rs_client::{

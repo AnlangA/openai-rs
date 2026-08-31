@@ -64,7 +64,42 @@ impl Realtime {
         model: impl Into<ModelId>,
         config: RealtimeWebSocketConfig,
     ) -> Result<RealtimeWebSocket, Error> {
-        RealtimeWebSocket::connect(&self.client, model.into(), config).await
+        self.connect_target_with(RealtimeConnectTarget::model(model), config)
+            .await
+    }
+
+    /// Opens a GA transcription Realtime WebSocket with
+    /// `?intent=transcription`. A model must not be pinned on transcription
+    /// sessions, so this target never sends `model`.
+    pub async fn connect_transcription(&self) -> Result<RealtimeWebSocket, Error> {
+        self.connect_transcription_with(RealtimeWebSocketConfig::default())
+            .await
+    }
+
+    pub async fn connect_transcription_with(
+        &self,
+        config: RealtimeWebSocketConfig,
+    ) -> Result<RealtimeWebSocket, Error> {
+        self.connect_target_with(RealtimeConnectTarget::TranscriptionIntent, config)
+            .await
+    }
+
+    /// Opens a GA Realtime WebSocket for an explicit connection target: one
+    /// model, the transcription intent, or an in-progress `call_id`.
+    pub async fn connect_target(
+        &self,
+        target: RealtimeConnectTarget,
+    ) -> Result<RealtimeWebSocket, Error> {
+        self.connect_target_with(target, RealtimeWebSocketConfig::default())
+            .await
+    }
+
+    pub async fn connect_target_with(
+        &self,
+        target: RealtimeConnectTarget,
+        config: RealtimeWebSocketConfig,
+    ) -> Result<RealtimeWebSocket, Error> {
+        RealtimeWebSocket::connect(&self.client, target, config).await
     }
 
     /// Creates a short-lived client secret. The returned secret remains in a
@@ -354,6 +389,51 @@ impl Default for RealtimeWebSocketConfig {
     }
 }
 
+/// Connection target for one GA Realtime WebSocket.
+///
+/// The official clients select exactly one of a model, the GA transcription
+/// intent, or an in-progress call identifier. Modeling the choice as an enum
+/// makes the mutual exclusion structural: a transcription session can never
+/// carry `model`, and a sideband call connection can never carry `intent`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RealtimeConnectTarget {
+    /// A model-backed session, connected with `?model=...`.
+    Model(ModelId),
+    /// A GA transcription session, connected with `?intent=transcription`.
+    TranscriptionIntent,
+    /// A sideband control connection attached to an in-progress call with
+    /// `?call_id=...`.
+    CallId(String),
+}
+
+impl RealtimeConnectTarget {
+    /// Targets a model-backed session.
+    #[must_use]
+    pub fn model(model: impl Into<ModelId>) -> Self {
+        Self::Model(model.into())
+    }
+
+    /// Targets a sideband control connection for one in-progress call.
+    #[must_use]
+    pub fn call_id(call_id: impl Into<String>) -> Self {
+        Self::CallId(call_id.into())
+    }
+
+    fn query_pair(&self) -> (&'static str, &str) {
+        match self {
+            Self::Model(model) => ("model", model.as_str()),
+            Self::TranscriptionIntent => ("intent", "transcription"),
+            Self::CallId(call_id) => ("call_id", call_id.as_str()),
+        }
+    }
+}
+
+impl From<ModelId> for RealtimeConnectTarget {
+    fn from(model: ModelId) -> Self {
+        Self::Model(model)
+    }
+}
+
 /// A typed GA Realtime WebSocket.
 pub struct RealtimeWebSocket {
     socket: Socket,
@@ -365,11 +445,11 @@ pub struct RealtimeWebSocket {
 impl RealtimeWebSocket {
     async fn connect(
         client: &Client,
-        model: ModelId,
+        target: RealtimeConnectTarget,
         config: RealtimeWebSocketConfig,
     ) -> Result<Self, Error> {
         let config = config.validate()?;
-        let url = realtime_websocket_url(client.base_url(), &model)?;
+        let url = realtime_websocket_url(client.base_url(), &target)?;
         let transport = client.transport();
         let connector = websocket_connector(url.scheme(), transport.tls_backend())?;
         let mut auth_refreshed = false;
@@ -529,7 +609,10 @@ impl fmt::Debug for RealtimeWebSocket {
     }
 }
 
-fn realtime_websocket_url(base: &Url, model: &ModelId) -> Result<Url, Error> {
+/// Query keys that select a Realtime connection target.
+const TARGET_QUERY_KEYS: [&str; 3] = ["model", "intent", "call_id"];
+
+fn realtime_websocket_url(base: &Url, target: &RealtimeConnectTarget) -> Result<Url, Error> {
     let mut url = base.clone();
     let scheme = match url.scheme() {
         "https" => "wss",
@@ -549,7 +632,19 @@ fn realtime_websocket_url(base: &Url, model: &ModelId) -> Result<Url, Error> {
         })?;
         segments.pop_if_empty().push("realtime");
     }
-    url.query_pairs_mut().append_pair("model", model.as_str());
+    // Exactly one target key may appear on the wire, so a base URL that already
+    // pins `model`, `intent`, or `call_id` is rejected instead of being merged
+    // into a conflicting pair such as `intent=transcription&model=...`.
+    if url
+        .query_pairs()
+        .any(|(key, _)| TARGET_QUERY_KEYS.contains(&key.as_ref()))
+    {
+        return Err(Error::InvalidConfiguration(
+            "Realtime base URL already pins a connection-target query parameter".into(),
+        ));
+    }
+    let (key, value) = target.query_pair();
+    url.query_pairs_mut().append_pair(key, value);
     Ok(url)
 }
 
@@ -603,7 +698,7 @@ fn validate_call_location(base: &Url, location: &str) -> Result<Box<str>, Error>
 }
 
 macro_rules! operation {
-    ($name:ident, $request:ty, $response:ty, $route:literal, $encoding:expr, $mode:expr) => {
+    ($name:ident, $request:ty, $response:ty, $route:literal, $encoding:expr, $mode:expr, $retry:expr) => {
         struct $name;
         impl Sealed for $name {}
         impl Operation for $name {
@@ -616,20 +711,25 @@ macro_rules! operation {
                 auth: AuthScope::Platform,
                 request_encoding: $encoding,
                 response_mode: $mode,
-                retry: RetryClass::Never,
+                retry: $retry,
                 success_statuses: OK,
             };
         }
     };
 }
 
+// Client-secret issuance is idempotent, so transient 429/5xx responses are
+// retried like every other replayable mutation. The call-control actions
+// below keep `RetryClass::Never` because accepting, rejecting, hanging up,
+// or transferring a live call twice is observable by the caller.
 operation!(
     CreateClientSecret,
     RealtimeCreateClientSecretRequest,
     RealtimeCreateClientSecretResponse,
     "/realtime/client_secrets",
     RequestEncoding::Json,
-    ResponseMode::Json
+    ResponseMode::Json,
+    RetryClass::Replayable
 );
 operation!(
     CreateTranslationClientSecret,
@@ -637,7 +737,8 @@ operation!(
     RealtimeTranslationClientSecretCreateResponse,
     "/realtime/translations/client_secrets",
     RequestEncoding::Json,
-    ResponseMode::Json
+    ResponseMode::Json,
+    RetryClass::Replayable
 );
 operation!(
     AcceptCall,
@@ -645,7 +746,8 @@ operation!(
     (),
     "/realtime/calls/{call_id}/accept",
     RequestEncoding::Json,
-    ResponseMode::Empty
+    ResponseMode::Empty,
+    RetryClass::Never
 );
 operation!(
     RejectCall,
@@ -653,7 +755,8 @@ operation!(
     (),
     "/realtime/calls/{call_id}/reject",
     RequestEncoding::Json,
-    ResponseMode::Empty
+    ResponseMode::Empty,
+    RetryClass::Never
 );
 operation!(
     RejectCallDefault,
@@ -661,7 +764,8 @@ operation!(
     (),
     "/realtime/calls/{call_id}/reject",
     RequestEncoding::None,
-    ResponseMode::Empty
+    ResponseMode::Empty,
+    RetryClass::Never
 );
 operation!(
     HangupCall,
@@ -669,7 +773,8 @@ operation!(
     (),
     "/realtime/calls/{call_id}/hangup",
     RequestEncoding::None,
-    ResponseMode::Empty
+    ResponseMode::Empty,
+    RetryClass::Never
 );
 operation!(
     ReferCall,
@@ -677,7 +782,8 @@ operation!(
     (),
     "/realtime/calls/{call_id}/refer",
     RequestEncoding::Json,
-    ResponseMode::Empty
+    ResponseMode::Empty,
+    RetryClass::Never
 );
 
 #[cfg(test)]
@@ -921,6 +1027,135 @@ mod tests {
         assert_eq!(events[2]["closed"], true);
     }
 
+    #[test]
+    fn websocket_url_derives_model_intent_and_call_id_targets() {
+        let base = Url::parse("https://api.openai.com/v1/").expect("platform base");
+        let model = realtime_websocket_url(&base, &RealtimeConnectTarget::model("gpt-realtime"))
+            .expect("model target URL");
+        assert_eq!(
+            model.as_str(),
+            "wss://api.openai.com/v1/realtime?model=gpt-realtime"
+        );
+
+        let intent = realtime_websocket_url(&base, &RealtimeConnectTarget::TranscriptionIntent)
+            .expect("transcription intent URL");
+        assert_eq!(
+            intent.as_str(),
+            "wss://api.openai.com/v1/realtime?intent=transcription"
+        );
+        assert!(
+            !intent.query_pairs().any(|(key, _)| key == "model"),
+            "transcription sessions never carry a model"
+        );
+
+        let call =
+            realtime_websocket_url(&base, &RealtimeConnectTarget::call_id("call_123 space/a"))
+                .expect("call attach URL");
+        assert_eq!(call.path(), "/v1/realtime");
+        assert_eq!(
+            call.query_pairs()
+                .find(|(key, _)| key == "call_id")
+                .map(|(_, value)| value),
+            Some("call_123 space/a".into())
+        );
+        assert_eq!(
+            call.as_str(),
+            "wss://api.openai.com/v1/realtime?call_id=call_123+space%2Fa"
+        );
+
+        // The connect(model) convenience maps onto the same Model branch.
+        let from_model =
+            realtime_websocket_url(&base, &RealtimeConnectTarget::from(ModelId::new("gpt-a")))
+                .expect("From<ModelId> target URL");
+        assert_eq!(
+            from_model.as_str(),
+            "wss://api.openai.com/v1/realtime?model=gpt-a"
+        );
+
+        // Unrelated base query parameters survive alongside the target key.
+        let versioned = Url::parse("https://gateway.example/v1/?api-version=2026-01-01")
+            .expect("versioned base");
+        let url = realtime_websocket_url(&versioned, &RealtimeConnectTarget::model("gpt-realtime"))
+            .expect("versioned base keeps its own query");
+        assert_eq!(
+            url.query_pairs()
+                .find(|(key, _)| key == "api-version")
+                .map(|(_, value)| value),
+            Some("2026-01-01".into())
+        );
+        assert_eq!(
+            url.query_pairs()
+                .find(|(key, _)| key == "model")
+                .map(|(_, value)| value),
+            Some("gpt-realtime".into())
+        );
+    }
+
+    #[test]
+    fn websocket_url_rejects_conflicting_target_query_keys() {
+        let pinned_model = Url::parse("https://api.openai.com/v1/?model=stale").expect("base");
+        assert!(matches!(
+            realtime_websocket_url(&pinned_model, &RealtimeConnectTarget::TranscriptionIntent),
+            Err(Error::InvalidConfiguration(_))
+        ));
+
+        let pinned_intent =
+            Url::parse("https://api.openai.com/v1/?intent=transcription").expect("base");
+        assert!(matches!(
+            realtime_websocket_url(
+                &pinned_intent,
+                &RealtimeConnectTarget::model("gpt-realtime")
+            ),
+            Err(Error::InvalidConfiguration(_))
+        ));
+
+        let pinned_call = Url::parse("https://api.openai.com/v1/?call_id=call_1").expect("base");
+        assert!(matches!(
+            realtime_websocket_url(&pinned_call, &RealtimeConnectTarget::TranscriptionIntent),
+            Err(Error::InvalidConfiguration(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn transcription_intent_connection_uses_intent_query_without_model() {
+        let (client, handshake, events) = websocket_server().await;
+        let mut socket = client
+            .realtime()
+            .connect_transcription()
+            .await
+            .expect("connect transcription Realtime WebSocket");
+        socket
+            .append_audio(vec![3, 4])
+            .await
+            .expect("append transcription audio");
+        let _ = socket.recv().await.expect("receive future event");
+        socket
+            .cancel_response(None)
+            .await
+            .expect("cancel transcription response");
+        socket.close().await.expect("close transcription socket");
+
+        let handshake = handshake.await.expect("captured transcription handshake");
+        let url = Url::parse(&format!("http://loopback{}", handshake.path_and_query))
+            .expect("captured transcription URL");
+        assert_eq!(url.path(), "/v1/realtime");
+        let pairs: Vec<(String, String)> = url
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![("intent".to_owned(), "transcription".to_owned())]
+        );
+        assert_eq!(
+            handshake.authorization.as_deref(),
+            Some("Bearer test-placeholder-key")
+        );
+        let events = events.await.expect("captured transcription events");
+        assert_eq!(events[0]["type"], "input_audio_buffer.append");
+        assert_eq!(events[2]["closed"], true);
+    }
+
     #[tokio::test]
     async fn client_secret_route_is_typed_and_secret_debug_is_redacted() {
         let (client, captured) = http_server(
@@ -941,6 +1176,11 @@ mod tests {
         assert_eq!(captured.method, reqwest::Method::POST);
         assert_eq!(captured.path, "/v1/realtime/client_secrets");
         assert_eq!(captured.body, b"{}");
+        assert_eq!(
+            CreateClientSecret::META.retry,
+            RetryClass::Replayable,
+            "idempotent secret issuance is retryable"
+        );
     }
 
     #[tokio::test]
@@ -982,6 +1222,11 @@ mod tests {
         assert_eq!(
             body["session"]["audio"]["input"]["transcription"],
             Value::Null
+        );
+        assert_eq!(
+            CreateTranslationClientSecret::META.retry,
+            RetryClass::Replayable,
+            "idempotent translation secret issuance is retryable"
         );
     }
 
@@ -1035,6 +1280,20 @@ mod tests {
         let captured = accept.await.expect("captured accept");
         assert_eq!(captured.path, "/v1/realtime/calls/call%2Fa/accept");
         assert!(String::from_utf8_lossy(&captured.body).contains("\"type\":\"realtime\""));
+        for operation in [
+            ("accept", AcceptCall::META.retry),
+            ("reject", RejectCall::META.retry),
+            ("reject default", RejectCallDefault::META.retry),
+            ("hangup", HangupCall::META.retry),
+            ("refer", ReferCall::META.retry),
+        ] {
+            assert_eq!(
+                operation.1,
+                RetryClass::Never,
+                "call-control action {} keeps its never-retry guard",
+                operation.0
+            );
+        }
 
         let (client, reject) = http_server(StatusCode::OK, "application/json", "", None).await;
         client

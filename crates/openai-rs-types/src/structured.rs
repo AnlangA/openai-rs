@@ -3,6 +3,14 @@
 //! This module turns Rust types into the JSON Schema subset accepted by the
 //! OpenAI API.  It never silently drops a schema keyword: unsupported input is
 //! returned as an error with a JSON Pointer-like path.
+//!
+//! Strict mode rejects a `$ref` that keeps sibling keys (for example the
+//! `description` that a field doc comment produces), so such references are
+//! resolved against the document and inlined with the sibling keys taking
+//! priority; a reference that cannot be resolved locally is an error.
+//! `additionalProperties` is defaulted to `false` only when the key is
+//! missing - a pre-existing non-`false` value (for example the map shape that
+//! a `HashMap` field produces) is reported instead of overwritten.
 
 use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin, sync::Arc};
 
@@ -32,6 +40,15 @@ pub enum StructuredError {
         /// JSON Pointer-like location of the reference.
         path: String,
         /// Rejected external reference.
+        reference: String,
+    },
+    /// The generated schema contains a local `$ref` that cannot be resolved
+    /// to an object schema within the same document.
+    #[error("unresolvable JSON Schema reference `{reference}` at {path}")]
+    UnresolvableRef {
+        /// JSON Pointer-like location of the reference.
+        path: String,
+        /// Reference that could not be resolved within the document.
         reference: String,
     },
     /// A generated schema was not an object schema.
@@ -410,7 +427,10 @@ impl ToolRegistry {
 
 /// Converts a schemars document to OpenAI's strict object-schema convention.
 pub fn normalize_strict_schema(schema: &mut Value) -> Result<(), StructuredError> {
-    normalize(schema, "#")?;
+    // `$ref`s are resolved against a pristine snapshot of the document so
+    // inlining never observes this pass's intermediate mutations.
+    let base = schema.clone();
+    normalize(schema, "#", &base)?;
     let is_object = schema.as_object().is_some_and(schema_is_object);
     if !is_object {
         return Err(StructuredError::RootMustBeObject);
@@ -431,7 +451,7 @@ fn validate_name(name: &str) -> Result<(), StructuredError> {
     }
 }
 
-fn normalize(value: &mut Value, path: &str) -> Result<(), StructuredError> {
+fn normalize(value: &mut Value, path: &str, base: &Value) -> Result<(), StructuredError> {
     let Some(object) = value.as_object_mut() else {
         return Ok(());
     };
@@ -475,8 +495,43 @@ fn normalize(value: &mut Value, path: &str) -> Result<(), StructuredError> {
         });
     }
 
+    // Strict mode rejects a `$ref` that keeps sibling keys, e.g.
+    // `{"$ref": "#/$defs/X", "description": "..."}` produced by a doc
+    // comment on a nested custom-type field.  Mirror the official client:
+    // resolve the reference within the document, inline the target with the
+    // sibling keys taking priority, then re-run normalization on the merged
+    // schema.
+    if object.len() > 1
+        && let Some(node) = object.get("$ref")
+    {
+        let reference = match node {
+            Value::String(reference) => reference.clone(),
+            other => {
+                return Err(StructuredError::UnresolvableRef {
+                    path: format!("{path}/$ref"),
+                    reference: other.to_string(),
+                });
+            }
+        };
+        let Some(resolved) = resolve_ref(base, &reference).and_then(Value::as_object) else {
+            return Err(StructuredError::UnresolvableRef {
+                path: format!("{path}/$ref"),
+                reference,
+            });
+        };
+        let mut merged = resolved.clone();
+        merged.remove("$ref");
+        for (key, sibling) in object.iter() {
+            if key != "$ref" {
+                merged.insert(key.clone(), sibling.clone());
+            }
+        }
+        *value = Value::Object(merged);
+        return normalize(value, path, base);
+    }
+
     if schema_is_object(object) {
-        normalize_object(object, path)?;
+        normalize_object(object, path, base)?;
     }
 
     for (key, child) in object.iter_mut() {
@@ -486,16 +541,17 @@ fn normalize(value: &mut Value, path: &str) -> Result<(), StructuredError> {
                     normalize(
                         schema,
                         &format!("{path}/{}/{}", escape_pointer(key), escape_pointer(name)),
+                        base,
                     )?;
                 }
             }
             Value::Array(children) if key == "anyOf" => {
                 for (index, schema) in children.iter_mut().enumerate() {
-                    normalize(schema, &format!("{path}/{key}/{index}"))?;
+                    normalize(schema, &format!("{path}/{key}/{index}"), base)?;
                 }
             }
             Value::Object(_) | Value::Bool(_) if key == "items" => {
-                normalize(child, &format!("{path}/{key}"))?;
+                normalize(child, &format!("{path}/{key}"), base)?;
             }
             _ => {}
         }
@@ -503,7 +559,28 @@ fn normalize(value: &mut Value, path: &str) -> Result<(), StructuredError> {
     Ok(())
 }
 
-fn normalize_object(object: &mut Map<String, Value>, path: &str) -> Result<(), StructuredError> {
+fn normalize_object(
+    object: &mut Map<String, Value>,
+    path: &str,
+    base: &Value,
+) -> Result<(), StructuredError> {
+    // Only default `additionalProperties` to `false` when the key is absent.
+    // A non-`false` value (for example the map shape of a `HashMap` field)
+    // cannot be represented in strict mode, so it is reported instead of
+    // silently overwritten.
+    match object.get("additionalProperties") {
+        None => {
+            object.insert("additionalProperties".into(), Value::Bool(false));
+        }
+        Some(Value::Bool(false)) => {}
+        Some(_) => {
+            return Err(StructuredError::UnsupportedKeyword {
+                path: format!("{path}/additionalProperties"),
+                keyword: "additionalProperties".to_owned(),
+            });
+        }
+    }
+
     let previous_required = object
         .get("required")
         .and_then(Value::as_array)
@@ -522,12 +599,12 @@ fn normalize_object(object: &mut Map<String, Value>, path: &str) -> Result<(), S
             normalize(
                 property,
                 &format!("{path}/properties/{}", escape_pointer(name)),
+                base,
             )?;
             required.push(Value::String(name.clone()));
         }
     }
     object.insert("required".into(), Value::Array(required));
-    object.insert("additionalProperties".into(), Value::Bool(false));
     Ok(())
 }
 
@@ -569,6 +646,36 @@ fn escape_pointer(segment: &str) -> String {
     segment.replace('~', "~0").replace('/', "~1")
 }
 
+/// Resolves a local JSON Pointer reference (`#/$defs/Name`) within `base`.
+fn resolve_ref<'a>(base: &'a Value, reference: &str) -> Option<&'a Value> {
+    let pointer = reference.strip_prefix("#/")?;
+    let mut current = base;
+    if !pointer.is_empty() {
+        for segment in pointer.split('/') {
+            current = current.as_object()?.get(&unescape_pointer(segment)?)?;
+        }
+    }
+    Some(current)
+}
+
+/// Decodes a single RFC 6901 pointer token, rejecting malformed escapes.
+fn unescape_pointer(segment: &str) -> Option<String> {
+    let mut key = String::with_capacity(segment.len());
+    let mut chars = segment.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '~' {
+            match chars.next() {
+                Some('0') => key.push('~'),
+                Some('1') => key.push('/'),
+                _ => return None,
+            }
+        } else {
+            key.push(ch);
+        }
+    }
+    Some(key)
+}
+
 #[cfg(test)]
 mod tests {
     use schemars::JsonSchema;
@@ -589,6 +696,177 @@ mod tests {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
     struct WeatherResult {
         temperature: f64,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    struct NestedInner {
+        /// Doc comment on the nested definition's field.
+        label: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    struct NestedOuter {
+        /// Doc comment that forces schemars to emit `$ref` with a sibling key.
+        nested: NestedInner,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    struct WithMap {
+        tags: std::collections::HashMap<String, String>,
+    }
+
+    fn assert_no_ref_with_siblings(value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if object.contains_key("$ref") {
+                    assert_eq!(
+                        object.len(),
+                        1,
+                        "`$ref` must not keep sibling keys, got {object:?}"
+                    );
+                }
+                for child in object.values() {
+                    assert_no_ref_with_siblings(child);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items {
+                    assert_no_ref_with_siblings(child);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn nested_ref_fields_with_doc_comments_are_inlined() {
+        let output = StructuredOutput::<NestedOuter>::new("nested").expect("valid schema");
+        let schema = output.schema();
+        assert_no_ref_with_siblings(schema);
+
+        let nested = &schema["properties"]["nested"];
+        assert_eq!(
+            nested["description"],
+            "Doc comment that forces schemars to emit `$ref` with a sibling key."
+        );
+        assert_eq!(nested["type"], "object");
+        assert_eq!(nested["properties"]["label"]["type"], "string");
+        assert_eq!(nested["required"], json!(["label"]));
+        assert_eq!(nested["additionalProperties"], false);
+        // The inlined schema stays semantically equivalent to the definition.
+        assert_eq!(
+            nested["properties"],
+            schema["$defs"]["NestedInner"]["properties"]
+        );
+    }
+
+    #[test]
+    fn unresolvable_sibling_refs_are_rejected_with_path() {
+        let mut schema = json!({
+            "type": "object",
+            "required": ["broken"],
+            "properties": {
+                "broken": { "$ref": "#/$defs/Missing", "description": "dangling" }
+            }
+        });
+        let error = normalize_strict_schema(&mut schema).expect_err("dangling ref must fail");
+        assert!(matches!(
+            &error,
+            StructuredError::UnresolvableRef { path, reference }
+                if path == "#/properties/broken/$ref" && reference == "#/$defs/Missing"
+        ));
+    }
+
+    #[test]
+    fn sibling_keys_win_over_the_inlined_reference() {
+        let mut schema = json!({
+            "type": "object",
+            "required": ["field"],
+            "properties": {
+                "field": {
+                    "$ref": "#/$defs/Inner",
+                    "description": "field-level description"
+                }
+            },
+            "$defs": {
+                "Inner": {
+                    "type": "object",
+                    "description": "definition-level description",
+                    "properties": { "value": { "type": "string" } },
+                    "required": ["value"]
+                }
+            }
+        });
+        normalize_strict_schema(&mut schema).expect("inline sibling ref");
+        let field = &schema["properties"]["field"];
+        assert_eq!(field["description"], "field-level description");
+        assert_eq!(field["type"], "object");
+        assert_eq!(field["properties"]["value"]["type"], "string");
+        assert_eq!(field["required"], json!(["value"]));
+        assert_eq!(field["additionalProperties"], false);
+        assert!(field.get("$ref").is_none());
+    }
+
+    #[test]
+    fn bare_refs_without_siblings_pass_through() {
+        let mut schema = json!({
+            "type": "object",
+            "required": ["field"],
+            "properties": { "field": { "$ref": "#/$defs/Inner" } },
+            "$defs": {
+                "Inner": {
+                    "type": "object",
+                    "properties": { "value": { "type": "string" } },
+                    "required": ["value"]
+                }
+            }
+        });
+        normalize_strict_schema(&mut schema).expect("bare ref passes through");
+        assert_eq!(
+            schema["properties"]["field"],
+            json!({ "$ref": "#/$defs/Inner" })
+        );
+    }
+
+    #[test]
+    fn map_fields_report_additional_properties_with_path() {
+        let error = StructuredOutput::<WithMap>::new("with_map").expect_err("map schema must fail");
+        let StructuredError::UnsupportedKeyword { path, keyword } = &error else {
+            panic!("expected UnsupportedKeyword, got {error:?}");
+        };
+        assert_eq!(keyword, "additionalProperties");
+        assert_eq!(path, "#/properties/tags/additionalProperties");
+    }
+
+    #[test]
+    fn additional_properties_is_defaulted_only_when_missing() {
+        let mut missing = json!({
+            "type": "object",
+            "properties": { "a": { "type": "string" } }
+        });
+        normalize_strict_schema(&mut missing).expect("missing key is defaulted");
+        assert_eq!(missing["additionalProperties"], false);
+
+        let mut explicit = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": { "a": { "type": "string" } }
+        });
+        normalize_strict_schema(&mut explicit).expect("explicit false is kept");
+        assert_eq!(explicit["additionalProperties"], false);
+
+        let mut open = json!({
+            "type": "object",
+            "required": ["field"],
+            "properties": { "field": { "type": "object", "additionalProperties": true } }
+        });
+        let error = normalize_strict_schema(&mut open).expect_err("true must fail");
+        assert!(matches!(
+            &error,
+            StructuredError::UnsupportedKeyword { path, keyword }
+                if path == "#/properties/field/additionalProperties"
+                    && keyword == "additionalProperties"
+        ));
     }
 
     #[test]

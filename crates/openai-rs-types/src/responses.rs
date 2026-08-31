@@ -11,7 +11,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Number, Value};
 use thiserror::Error;
 
-use crate::{ExtraFields, JsonText, Nullable, Omittable, open_string_enum};
+use crate::containers::{MAX_DOMAIN_SECRET_VALUE_CHARS, MIN_DOMAIN_SECRET_CHARS};
+use crate::{ExtraFields, JsonText, Nullable, Omittable, WireSecret, open_string_enum};
 
 pub use crate::kernel::{UnknownTaggedObject, UnknownTaggedObjectError};
 
@@ -221,6 +222,17 @@ open_string_enum! {
         CodeInterpreterOutputs = "code_interpreter_call.outputs",
         ReasoningEncryptedContent = "reasoning.encrypted_content",
         OutputTextLogprobs = "message.output_text.logprobs"
+    }
+}
+
+open_string_enum! {
+    /// Ordering for a response input-item page.
+    ///
+    /// The pinned `GET /responses/{id}/input_items` `order` query parameter
+    /// enumerates `asc` / `desc` (default `desc`).
+    pub enum ResponseItemOrder {
+        Ascending = "asc",
+        Descending = "desc"
     }
 }
 
@@ -509,6 +521,39 @@ pub enum CreateResponseConstraintError {
     CodeInterpreterFileIds {
         /// Observed file-id count.
         actual: usize,
+        /// Contract maximum.
+        maximum: usize,
+    },
+    /// Code-interpreter allowlist `domain_secrets` is present and empty (`minItems: 1`).
+    #[error(
+        "code_interpreter allowlist domain_secrets must contain at least one secret when present"
+    )]
+    EmptyDomainSecrets,
+    /// Code-interpreter domain-secret `domain` is empty (`minLength` 1).
+    #[error("code_interpreter domain_secret domain has {actual} characters; minimum is {minimum}")]
+    DomainSecretDomain {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+    },
+    /// Code-interpreter domain-secret `name` is empty (`minLength` 1).
+    #[error("code_interpreter domain_secret name has {actual} characters; minimum is {minimum}")]
+    DomainSecretName {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
+    },
+    /// Code-interpreter domain-secret `value` is empty or longer than 10,485,760 characters.
+    #[error(
+        "code_interpreter domain_secret value has {actual} characters; must be {minimum}..={maximum}"
+    )]
+    DomainSecretValue {
+        /// Observed character count.
+        actual: usize,
+        /// Contract minimum.
+        minimum: usize,
         /// Contract maximum.
         maximum: usize,
     },
@@ -2108,7 +2153,7 @@ fn is_valid_mcp_tunnel_id(tunnel_id: &str) -> bool {
     rest.len() == 32
         && rest
             .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'z').contains(&byte))
+            .all(|byte: u8| byte.is_ascii_digit() || byte.is_ascii_lowercase())
 }
 
 /// Restricts an MCP tool set by name and/or read-only annotation.
@@ -4114,6 +4159,9 @@ impl OutputMessage {
 /// A typed item accepted as Responses input.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+// Boxing the largest shell-call variants would be a breaking public-API
+// refactor tracked separately from wire fixes.
+#[allow(clippy::large_enum_variant)]
 pub enum ResponseInputItem {
     /// A request message, whose `type` property may be omitted.
     Message(InputMessage),
@@ -6261,6 +6309,10 @@ impl ResponsesWebSocketErrorEvent {
 /// `ErrorPayload` under `error`.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+// The Stream variant wraps the 58-branch ResponseStreamEvent union by
+// value; boxing it would be a breaking public-API refactor tracked
+// separately from wire fixes.
+#[allow(clippy::large_enum_variant)]
 pub enum ResponsesServerEvent {
     /// An SSE-shaped Responses event, including future unknown tags.
     Stream {
@@ -6597,7 +6649,7 @@ pub struct Response {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     service_tier: Omittable<Nullable<ServiceTier>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    store: Omittable<bool>,
+    store: Omittable<Nullable<bool>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     text: Omittable<ResponseTextConfig>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -6901,7 +6953,7 @@ impl Response {
                         id: Omittable::Value(Nullable::Value(value.id.clone())),
                         caller: value.caller.clone(),
                         status: Omittable::Value(Nullable::Value(value.status.clone())),
-                        max_output_length: Omittable::Value(value.max_output_length.clone()),
+                        max_output_length: Omittable::Value(value.max_output_length),
                         extra: value.extra.clone(),
                     })
                 }
@@ -7252,13 +7304,19 @@ pub enum CompactResponseConstraintError {
 literal_tag!(CompactedResponseTag, Compaction, "response.compaction");
 
 /// A compacted Responses resource.
+///
+/// `output` follows the pinned `CompactResource.output.items` → `ItemField`
+/// union: compaction returns the conversation's user-role messages plus a
+/// final compaction item, so items decode with the input-side codec where
+/// user/system/developer roles and the `CompactionSummaryItemParam` shape
+/// are accepted.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompactedResponse {
     id: String,
     created_at: i64,
     #[serde(rename = "object")]
     object: CompactedResponseTag,
-    output: Vec<ResponseOutputItem>,
+    output: Vec<ResponseInputItem>,
     usage: ResponseUsage,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -7273,7 +7331,7 @@ impl CompactedResponse {
 
     /// Returns compacted output items in order.
     #[must_use]
-    pub fn output(&self) -> &[ResponseOutputItem] {
+    pub fn output(&self) -> &[ResponseInputItem] {
         &self.output
     }
 
@@ -7300,7 +7358,7 @@ pub struct ListResponseInputItemsParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     limit: Omittable<u32>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    order: Omittable<String>,
+    order: Omittable<ResponseItemOrder>,
 }
 
 impl ListResponseInputItemsParams {
@@ -7339,7 +7397,7 @@ impl ListResponseInputItemsParams {
 
     /// Sets ascending or descending ordering.
     #[must_use]
-    pub fn order(mut self, order: impl Into<String>) -> Self {
+    pub fn order(mut self, order: impl Into<ResponseItemOrder>) -> Self {
         self.order = Omittable::Value(order.into());
         self
     }
@@ -9156,11 +9214,19 @@ impl ProgramItem {
     }
 }
 
+open_string_enum! {
+    /// Terminal status of a programmatic tool-calling program output.
+    pub enum ProgramOutputStatus {
+        Completed = "completed",
+        Incomplete = "incomplete"
+    }
+}
+
 required_tagged_record!(ProgramOutputItem, ProgramOutputItemTag, ProgramOutput, "program_output", {
     id: String,
     call_id: String,
     result: String,
-    status: String
+    status: ProgramOutputStatus
 });
 
 impl ProgramOutputItem {
@@ -9170,7 +9236,7 @@ impl ProgramOutputItem {
         id: impl Into<String>,
         call_id: impl Into<String>,
         result: impl Into<String>,
-        status: impl Into<String>,
+        status: impl Into<ProgramOutputStatus>,
     ) -> Self {
         Self {
             kind: ProgramOutputItemTag::ProgramOutput,
@@ -9220,7 +9286,7 @@ pub struct FileSearchResult {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     filename: Omittable<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    attributes: Omittable<BTreeMap<String, FileSearchAttributeValue>>,
+    attributes: Omittable<Nullable<BTreeMap<String, FileSearchAttributeValue>>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     score: Omittable<f64>,
     #[serde(flatten)]
@@ -9268,8 +9334,20 @@ impl FileSearchResult {
         mut self,
         attributes: impl IntoIterator<Item = (impl Into<String>, FileSearchAttributeValue)>,
     ) -> Self {
-        self.attributes =
-            Omittable::Value(attributes.into_iter().map(|(k, v)| (k.into(), v)).collect());
+        self.attributes = Omittable::Value(Nullable::Value(
+            attributes.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+        ));
+        self
+    }
+
+    /// Sends official `attributes: null`.
+    ///
+    /// The pinned `VectorStoreFileAttributes` schema is
+    /// `anyOf [{attribute map}, null]`, so an explicit null is an official
+    /// echo form for a result without attributes.
+    #[must_use]
+    pub fn attributes_null(mut self) -> Self {
+        self.attributes = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -9286,6 +9364,15 @@ impl FileSearchResult {
         match &self.file_id {
             Omittable::Value(value) => Some(value),
             Omittable::Omitted => None,
+        }
+    }
+
+    /// Returns file attributes when present and non-null.
+    #[must_use]
+    pub fn attributes_ref(&self) -> Option<&BTreeMap<String, FileSearchAttributeValue>> {
+        match &self.attributes {
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
     }
 
@@ -10571,7 +10658,7 @@ pub struct ToolSearchCallInput {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     call_id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    execution: Omittable<String>,
+    execution: Omittable<ToolSearchExecution>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     status: Omittable<Nullable<ResponseItemStatus>>,
     #[serde(flatten)]
@@ -10609,7 +10696,7 @@ impl ToolSearchCallInput {
 
     /// Sets whether tool search ran on the server or client.
     #[must_use]
-    pub fn execution(mut self, execution: impl Into<String>) -> Self {
+    pub fn execution(mut self, execution: impl Into<ToolSearchExecution>) -> Self {
         self.execution = Omittable::Value(execution.into());
         self
     }
@@ -10663,7 +10750,7 @@ pub struct ToolSearchCall {
     kind: ToolSearchCallTag,
     id: String,
     call_id: Nullable<String>,
-    execution: String,
+    execution: ToolSearchExecution,
     arguments: Value,
     status: ResponseItemStatus,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -10706,7 +10793,7 @@ pub struct ToolSearchOutputInput {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     call_id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    execution: Omittable<String>,
+    execution: Omittable<ToolSearchExecution>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     status: Omittable<Nullable<ResponseItemStatus>>,
     #[serde(flatten)]
@@ -10775,7 +10862,7 @@ pub struct ToolSearchOutput {
     kind: ToolSearchOutputTag,
     id: String,
     call_id: Nullable<String>,
-    execution: String,
+    execution: ToolSearchExecution,
     tools: Vec<ResponseTool>,
     status: ResponseItemStatus,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -12365,13 +12452,29 @@ impl<'de> Deserialize<'de> for ApplyPatchOperation {
     }
 }
 
+open_string_enum! {
+    /// Lifecycle status of an apply-patch tool call.
+    pub enum ApplyPatchCallStatus {
+        InProgress = "in_progress",
+        Completed = "completed"
+    }
+}
+
+open_string_enum! {
+    /// Terminal status of an apply-patch tool call output.
+    pub enum ApplyPatchCallOutputStatus {
+        Completed = "completed",
+        Failed = "failed"
+    }
+}
+
 /// An apply-patch call supplied as input.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplyPatchCallInput {
     #[serde(rename = "type")]
     kind: ApplyPatchCallInputTag,
     call_id: String,
-    status: String,
+    status: ApplyPatchCallStatus,
     operation: ApplyPatchOperation,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     id: Omittable<Nullable<String>>,
@@ -12386,7 +12489,7 @@ impl ApplyPatchCallInput {
     #[must_use]
     pub fn new(
         call_id: impl Into<String>,
-        status: impl Into<String>,
+        status: impl Into<ApplyPatchCallStatus>,
         operation: ApplyPatchOperation,
     ) -> Self {
         Self {
@@ -12454,7 +12557,7 @@ pub struct ApplyPatchCall {
     kind: ApplyPatchCallTag,
     id: String,
     call_id: String,
-    status: String,
+    status: ApplyPatchCallStatus,
     operation: ApplyPatchOperation,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     caller: Omittable<Nullable<ToolCallCaller>>,
@@ -12484,7 +12587,7 @@ pub struct ApplyPatchCallOutputInput {
     #[serde(rename = "type")]
     kind: ApplyPatchCallOutputInputTag,
     call_id: String,
-    status: String,
+    status: ApplyPatchCallOutputStatus,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     output: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -12498,7 +12601,7 @@ pub struct ApplyPatchCallOutputInput {
 impl ApplyPatchCallOutputInput {
     /// Creates an apply-patch output item.
     #[must_use]
-    pub fn new(call_id: impl Into<String>, status: impl Into<String>) -> Self {
+    pub fn new(call_id: impl Into<String>, status: impl Into<ApplyPatchCallOutputStatus>) -> Self {
         Self {
             kind: ApplyPatchCallOutputInputTag::ApplyPatchCallOutput,
             call_id: call_id.into(),
@@ -12574,7 +12677,7 @@ pub struct ApplyPatchCallOutput {
     kind: ApplyPatchCallOutputTag,
     id: String,
     call_id: String,
-    status: String,
+    status: ApplyPatchCallOutputStatus,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     output: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -14488,12 +14591,70 @@ impl Default for CodeInterpreterNetworkDisabled {
     }
 }
 
+/// Domain-scoped secret injected into a code-interpreter container.
+///
+/// Wire shape mirrors the pinned `ContainerNetworkPolicyDomainSecretParam`
+/// (`domain`/`name` `minLength` 1, `value` `1..=10485760`) and reuses the
+/// D0076 containers-side limits; the value stays redacted in `Debug`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CodeInterpreterDomainSecret {
+    domain: String,
+    name: String,
+    value: WireSecret,
+}
+
+impl PartialEq for CodeInterpreterDomainSecret {
+    fn eq(&self, other: &Self) -> bool {
+        self.domain == other.domain
+            && self.name == other.name
+            && self
+                .value
+                .with_exposed(|left| other.value.with_exposed(|right| left == right))
+    }
+}
+
+impl Eq for CodeInterpreterDomainSecret {}
+
+impl CodeInterpreterDomainSecret {
+    /// Constructs a domain-scoped secret.
+    #[must_use]
+    pub fn new(
+        domain: impl Into<String>,
+        name: impl Into<String>,
+        value: impl Into<WireSecret>,
+    ) -> Self {
+        Self {
+            domain: domain.into(),
+            name: name.into(),
+            value: value.into(),
+        }
+    }
+
+    /// Returns the associated domain.
+    #[must_use]
+    pub fn domain(&self) -> &str {
+        &self.domain
+    }
+
+    /// Returns the injected secret name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 /// Allow outbound access only to listed domains.
+///
+/// `domain_secrets` mirrors the pinned
+/// `ContainerNetworkPolicyAllowlistParam.domain_secrets` (minItems 1,
+/// elements of `ContainerNetworkPolicyDomainSecretParam`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CodeInterpreterNetworkAllowlist {
     #[serde(rename = "type")]
     kind: CodeInterpreterNetworkAllowlistTag,
     allowed_domains: Vec<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    domain_secrets: Omittable<Vec<CodeInterpreterDomainSecret>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -14505,14 +14666,46 @@ impl CodeInterpreterNetworkAllowlist {
         Self {
             kind: CodeInterpreterNetworkAllowlistTag::Allowlist,
             allowed_domains: allowed_domains.into_iter().map(Into::into).collect(),
+            domain_secrets: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
+    }
+
+    /// Adds one domain-scoped secret.
+    #[must_use]
+    pub fn with_secret(mut self, secret: CodeInterpreterDomainSecret) -> Self {
+        match &mut self.domain_secrets {
+            Omittable::Value(secrets) => secrets.push(secret),
+            Omittable::Omitted => self.domain_secrets = Omittable::Value(vec![secret]),
+        }
+        self
     }
 
     /// Returns the allowed domains.
     #[must_use]
     pub fn allowed_domains(&self) -> &[String] {
         &self.allowed_domains
+    }
+
+    /// Returns domain-scoped secrets when present.
+    #[must_use]
+    pub fn domain_secrets(&self) -> &[CodeInterpreterDomainSecret] {
+        match &self.domain_secrets {
+            Omittable::Value(secrets) => secrets,
+            Omittable::Omitted => &[],
+        }
+    }
+
+    fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+        if let Omittable::Value(secrets) = &self.domain_secrets {
+            if secrets.is_empty() {
+                return Err(CreateResponseConstraintError::EmptyDomainSecrets);
+            }
+            for secret in secrets {
+                validate_domain_secret(secret)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -14643,8 +14836,44 @@ impl AutoCodeInterpreterContainer {
                 maximum: MAX_CODE_INTERPRETER_FILE_IDS,
             });
         }
+        if let Omittable::Value(CodeInterpreterNetworkPolicy::Allowlist(policy)) =
+            &self.network_policy
+        {
+            policy.validate()?;
+        }
         Ok(())
     }
+}
+
+/// Checks the pinned domain-secret length limits shared with Containers.
+fn validate_domain_secret(
+    secret: &CodeInterpreterDomainSecret,
+) -> Result<(), CreateResponseConstraintError> {
+    let domain = secret.domain.chars().count();
+    if domain < MIN_DOMAIN_SECRET_CHARS {
+        return Err(CreateResponseConstraintError::DomainSecretDomain {
+            actual: domain,
+            minimum: MIN_DOMAIN_SECRET_CHARS,
+        });
+    }
+    let name = secret.name.chars().count();
+    if name < MIN_DOMAIN_SECRET_CHARS {
+        return Err(CreateResponseConstraintError::DomainSecretName {
+            actual: name,
+            minimum: MIN_DOMAIN_SECRET_CHARS,
+        });
+    }
+    secret.value.with_exposed(|value| {
+        let actual = value.chars().count();
+        if !(MIN_DOMAIN_SECRET_CHARS..=MAX_DOMAIN_SECRET_VALUE_CHARS).contains(&actual) {
+            return Err(CreateResponseConstraintError::DomainSecretValue {
+                actual,
+                minimum: MIN_DOMAIN_SECRET_CHARS,
+                maximum: MAX_DOMAIN_SECRET_VALUE_CHARS,
+            });
+        }
+        Ok(())
+    })
 }
 
 impl Default for AutoCodeInterpreterContainer {
@@ -14962,6 +15191,31 @@ impl CustomTool {
 
 literal_tag!(NamespaceToolTag, Namespace, "namespace");
 
+tagged_union! {
+    /// A function or custom tool nested inside a namespace.
+    ///
+    /// The pinned `NamespaceToolParam.tools.items` union is
+    /// `oneOf [FunctionToolParam, CustomToolParam]`, so hosted tool types such
+    /// as `web_search` cannot be constructed for this position. A genuinely
+    /// future nested tool tag decodes losslessly as [`Unknown`].
+    pub enum NamespaceToolEntry {
+        Function(FunctionTool) => "function",
+        Custom(CustomTool) => "custom"
+    }
+}
+
+impl From<FunctionTool> for NamespaceToolEntry {
+    fn from(value: FunctionTool) -> Self {
+        Self::Function(value)
+    }
+}
+
+impl From<CustomTool> for NamespaceToolEntry {
+    fn from(value: CustomTool) -> Self {
+        Self::Custom(value)
+    }
+}
+
 /// A namespace that groups tools for deferred discovery.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NamespaceTool {
@@ -14969,18 +15223,18 @@ pub struct NamespaceTool {
     kind: NamespaceToolTag,
     name: String,
     description: String,
-    tools: Vec<ResponseTool>,
+    tools: Vec<NamespaceToolEntry>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
 
 impl NamespaceTool {
-    /// Creates a namespace and its nested tools.
+    /// Creates a namespace and its nested function/custom tools.
     #[must_use]
     pub fn new(
         name: impl Into<String>,
         description: impl Into<String>,
-        tools: impl IntoIterator<Item = impl Into<ResponseTool>>,
+        tools: impl IntoIterator<Item = impl Into<NamespaceToolEntry>>,
     ) -> Self {
         Self {
             kind: NamespaceToolTag::Namespace,
@@ -14991,6 +15245,12 @@ impl NamespaceTool {
         }
     }
 
+    /// Returns the nested function/custom tools.
+    #[must_use]
+    pub fn tools(&self) -> &[NamespaceToolEntry] {
+        &self.tools
+    }
+
     fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         if self.name.is_empty() {
             return Err(CreateResponseConstraintError::EmptyNamespaceName);
@@ -14998,7 +15258,14 @@ impl NamespaceTool {
         if self.tools.is_empty() {
             return Err(CreateResponseConstraintError::EmptyNamespaceTools);
         }
-        validate_response_tools(&self.tools)
+        for tool in &self.tools {
+            match tool {
+                NamespaceToolEntry::Function(tool) => tool.validate()?,
+                NamespaceToolEntry::Custom(tool) => tool.validate()?,
+                NamespaceToolEntry::Unknown(_) => {}
+            }
+        }
+        Ok(())
     }
 }
 
@@ -15833,6 +16100,9 @@ mod tests {
         assert_json_dto::<UnknownTaggedObject>();
         assert_json_dto::<ResponseStatus>();
         assert_json_dto::<ResponseItemStatus>();
+        assert_json_dto::<ProgramOutputStatus>();
+        assert_json_dto::<ApplyPatchCallStatus>();
+        assert_json_dto::<ApplyPatchCallOutputStatus>();
         assert_json_dto::<MessageRole>();
         assert_json_dto::<MessagePhase>();
         assert_json_dto::<ImageDetail>();
@@ -15860,6 +16130,7 @@ mod tests {
         assert_json_dto::<McpRequireApproval>();
         assert_json_dto::<McpTool>();
         assert_json_dto::<ResponseTool>();
+        assert_json_dto::<NamespaceToolEntry>();
         assert_json_dto::<FunctionCall>();
         assert_json_dto::<FunctionCallOutput>();
         assert_json_dto::<DirectToolCallCaller>();
@@ -15892,6 +16163,8 @@ mod tests {
         assert_json_dto::<TextFormat>();
         assert_json_dto::<ResponseTextConfig>();
         assert_json_dto::<ResponseIncludable>();
+        assert_json_dto::<ResponseItemOrder>();
+        assert_json_dto::<CodeInterpreterDomainSecret>();
         assert_json_dto::<PromptCacheRetention>();
         assert_json_dto::<ServiceTier>();
         assert_json_dto::<ResponseTextVerbosity>();
@@ -17351,6 +17624,97 @@ mod tests {
     }
 
     #[test]
+    fn official_status_and_execution_enums_retain_unknown_values() {
+        // Pinned domains: ProgramOutputStatus completed|incomplete,
+        // ApplyPatchCallStatus(Param) in_progress|completed,
+        // ApplyPatchCallOutputStatus(Param) completed|failed,
+        // ToolSearchExecutionType server|client.
+        assert_eq!(ProgramOutputStatus::Completed.as_str(), "completed");
+        assert_eq!(ProgramOutputStatus::Incomplete.as_str(), "incomplete");
+        assert_eq!(ApplyPatchCallStatus::InProgress.as_str(), "in_progress");
+        assert_eq!(ApplyPatchCallStatus::Completed.as_str(), "completed");
+        assert_eq!(ApplyPatchCallOutputStatus::Completed.as_str(), "completed");
+        assert_eq!(ApplyPatchCallOutputStatus::Failed.as_str(), "failed");
+        assert_eq!(ToolSearchExecution::Server.as_str(), "server");
+        assert_eq!(ToolSearchExecution::Client.as_str(), "client");
+
+        let fixtures = [
+            (
+                json!({
+                    "type": "program_output",
+                    "id": "po1",
+                    "call_id": "c_p1",
+                    "result": "1\n",
+                    "status": "queued"
+                }),
+                "queued",
+            ),
+            (
+                json!({
+                    "type": "apply_patch_call",
+                    "id": "ap1",
+                    "call_id": "apc1",
+                    "status": "retrying",
+                    "operation": {"type": "delete_file", "path": "main.rs"}
+                }),
+                "retrying",
+            ),
+            (
+                json!({
+                    "type": "apply_patch_call_output",
+                    "id": "apo1",
+                    "call_id": "apc1",
+                    "status": "cancelled",
+                    "output": "ok"
+                }),
+                "cancelled",
+            ),
+            (
+                json!({
+                    "type": "tool_search_call",
+                    "id": "tsc1",
+                    "call_id": null,
+                    "execution": "hybrid",
+                    "arguments": {},
+                    "status": "completed"
+                }),
+                "hybrid",
+            ),
+            (
+                json!({
+                    "type": "tool_search_output",
+                    "id": "tso1",
+                    "call_id": null,
+                    "execution": "offline",
+                    "tools": [],
+                    "status": "completed"
+                }),
+                "offline",
+            ),
+        ];
+        for (fixture, unknown) in fixtures {
+            let decoded: ResponseOutputItem =
+                serde_json::from_value(fixture.clone()).expect("unknown enum values stay lossless");
+            assert_eq!(
+                serde_json::to_value(&decoded).expect("round-trip unknown enum"),
+                fixture,
+                "unknown value {unknown} must round-trip"
+            );
+        }
+
+        let search = serde_json::from_value::<ResponseInputItem>(json!({
+            "type": "tool_search_call",
+            "arguments": {},
+            "execution": "hybrid"
+        }))
+        .expect("input-side unknown execution stays lossless");
+        assert_eq!(
+            serde_json::to_value(&search).expect("round-trip input execution")["execution"],
+            "hybrid"
+        );
+    }
+
+    #[test]
     fn input_content_and_prompt_version_accept_official_nulls() {
         let text: InputText = serde_json::from_value(json!({
             "type": "input_text",
@@ -17360,7 +17724,7 @@ mod tests {
         .expect("official prompt_cache_breakpoint null");
         assert_eq!(text.prompt_cache_breakpoint_ref(), None);
         assert_eq!(
-            serde_json::to_value(&InputText::new("hello").prompt_cache_breakpoint_null())
+            serde_json::to_value(InputText::new("hello").prompt_cache_breakpoint_null())
                 .expect("serialize")["prompt_cache_breakpoint"],
             Value::Null
         );
@@ -17413,7 +17777,7 @@ mod tests {
         }))
         .expect("official Prompt.version null");
         assert_eq!(
-            serde_json::to_value(&PromptReference::new("pmpt_weather").version_null())
+            serde_json::to_value(PromptReference::new("pmpt_weather").version_null())
                 .expect("serialize")["version"],
             Value::Null
         );
@@ -17593,17 +17957,17 @@ mod tests {
             json!({ "allowed_domains": null })
         );
         assert_eq!(
-            serde_json::to_value(&WebSearchTool::new().user_location_null())
+            serde_json::to_value(WebSearchTool::new().user_location_null())
                 .expect("serialize web search")["user_location"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&WebSearchPreviewTool::new().user_location_null())
+            serde_json::to_value(WebSearchPreviewTool::new().user_location_null())
                 .expect("serialize preview")["user_location"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&ImageGenerationTool::new().input_fidelity_null())
+            serde_json::to_value(ImageGenerationTool::new().input_fidelity_null())
                 .expect("serialize image tool")["input_fidelity"],
             Value::Null
         );
@@ -17847,6 +18211,57 @@ mod tests {
     }
 
     #[test]
+    fn response_store_null_echo_decodes_and_round_trips() {
+        let value = json!({
+            "id": "resp_store",
+            "object": "response",
+            "created_at": 1,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-5.6",
+            "output": [],
+            "parallel_tool_calls": true,
+            "temperature": 1.0,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "store": null
+        });
+        let response: Response = serde_json::from_value(value.clone())
+            .expect("unofficial store null echo must not fail the decode");
+        assert_eq!(
+            serde_json::to_value(&response).expect("re-encode store null")["store"],
+            Value::Null
+        );
+
+        let omitted: Response = serde_json::from_value(json!({
+            "id": "resp_store",
+            "object": "response",
+            "created_at": 1,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-5.6",
+            "output": [],
+            "parallel_tool_calls": true,
+            "temperature": 1.0,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0
+        }))
+        .expect("decode without store");
+        assert!(
+            serde_json::to_value(&omitted)
+                .expect("re-encode omitted store")
+                .get("store")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn create_request_service_tier_null_matches_openapi() {
         let request = CreateResponseRequest::new("gpt-5.6", "hello").service_tier_null();
         let value = serde_json::to_value(&request).expect("serialize");
@@ -17960,7 +18375,7 @@ mod tests {
         assert!(matches!(
             ApplyPatchCallInput::new(
                 "ap_1",
-                "completed",
+                ApplyPatchCallStatus::Completed,
                 ApplyPatchOperation::DeleteFile(ApplyPatchDeleteFile::new("")),
             )
             .validate(),
@@ -17979,7 +18394,7 @@ mod tests {
         ));
         ApplyPatchCallInput::new(
             "ap_1",
-            "completed",
+            ApplyPatchCallStatus::Completed,
             ApplyPatchOperation::CreateFile(ApplyPatchCreateFile::new(
                 "README.md",
                 "--- /dev/null\n+++ README.md\n",
@@ -18260,7 +18675,7 @@ mod tests {
         .expect("official ModelIdsCompaction includes null");
         assert_eq!(decoded.model, Nullable::Null);
         assert_eq!(
-            serde_json::to_value(&CompactResponseRequest::empty()).expect("serialize empty")["model"],
+            serde_json::to_value(CompactResponseRequest::empty()).expect("serialize empty")["model"],
             Value::Null
         );
     }
@@ -18526,6 +18941,78 @@ mod tests {
     }
 
     #[test]
+    fn official_compact_resource_output_decodes_user_messages_and_compaction_item() {
+        // Pinned OpenAPI example for CompactResource, including the user-role
+        // messages that the assistant-only ResponseOutputItem codec rejected
+        // before the ItemField-equivalent input union was used. `usage` is
+        // completed with the schema-required token-detail objects, which the
+        // abbreviated spec example omits.
+        let official = json!({
+            "id": "resp_001",
+            "object": "response.compaction",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Summarize our launch checklist from last week."
+                        }
+                    ]
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "You are performing a CONTEXT CHECKPOINT COMPACTION..."
+                        }
+                    ]
+                },
+                {
+                    "type": "compaction",
+                    "id": "cmp_001",
+                    "encrypted_content": "encrypted-summary"
+                }
+            ],
+            "created_at": 1731459200,
+            "usage": {
+                "input_tokens": 42897,
+                "input_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 0 },
+                "output_tokens": 12000,
+                "output_tokens_details": { "reasoning_tokens": 0 },
+                "total_tokens": 54912
+            }
+        });
+        let compacted: CompactedResponse =
+            serde_json::from_value(official.clone()).expect("official CompactResource example");
+        assert_eq!(compacted.id(), "resp_001");
+        let output = compacted.output();
+        assert_eq!(output.len(), 3);
+        for item in &output[..2] {
+            assert!(
+                matches!(item, ResponseInputItem::StoredMessage(_)),
+                "user message must decode as a stored input message: {item:?}"
+            );
+            assert_eq!(
+                serde_json::to_value(item).expect("re-encode user message")["role"],
+                "user"
+            );
+        }
+        assert!(matches!(output[2], ResponseInputItem::Compaction(_)));
+        assert_eq!(
+            serde_json::to_value(&output[2]).expect("re-encode compaction item")["id"],
+            "cmp_001"
+        );
+        assert_eq!(
+            serde_json::to_value(&compacted).expect("round-trip official example"),
+            official
+        );
+    }
+
+    #[test]
     fn official_response_item_list_requires_cursor_ids() {
         assert!(
             serde_json::from_value::<ResponseInputItemList>(json!({
@@ -18718,7 +19205,7 @@ mod tests {
             "official InputImageContent detail is not nullable"
         );
         assert_eq!(
-            serde_json::to_value(&InputImage::from_url("https://example.test/a.png"))
+            serde_json::to_value(InputImage::from_url("https://example.test/a.png"))
                 .expect("constructor sends documented default")["detail"],
             "auto"
         );
@@ -18754,7 +19241,7 @@ mod tests {
             other => panic!("expected content output, got {other:?}"),
         }
         assert_eq!(
-            serde_json::to_value(&InputImageParam::from_url("https://example.test/a.png"))
+            serde_json::to_value(InputImageParam::from_url("https://example.test/a.png"))
                 .expect("param constructor omits detail")
                 .get("detail"),
             None
@@ -18799,7 +19286,7 @@ mod tests {
             "Assistants FileSearchRanker is not a named Responses RankerVersionType"
         );
         assert_eq!(
-            serde_json::to_value(&FileSearchRankingOptions::new().ranker(FileSearchRanker::Auto))
+            serde_json::to_value(FileSearchRankingOptions::new().ranker(FileSearchRanker::Auto))
                 .expect("ranker")["ranker"],
             "auto"
         );
@@ -18953,7 +19440,7 @@ mod tests {
         );
         assert!(ImageDetail::from_raw("original").is_known());
         assert_eq!(
-            serde_json::to_value(&InputFile::from_file_id("file_1").detail(FileDetail::Low))
+            serde_json::to_value(InputFile::from_file_id("file_1").detail(FileDetail::Low))
                 .expect("setter")["detail"],
             "low"
         );
@@ -18982,7 +19469,7 @@ mod tests {
         assert!(!decoded.extra_fields().contains_key("phase"));
         assert_eq!(
             serde_json::to_value(
-                &OutputMessage::new(
+                OutputMessage::new(
                     "msg_2",
                     ResponseItemStatus::Completed,
                     [OutputContent::from(OutputText::new("done"))],
@@ -19296,17 +19783,17 @@ mod tests {
         );
 
         assert_eq!(
-            serde_json::to_value(&CustomTool::new("extract").allowed_callers_null())
+            serde_json::to_value(CustomTool::new("extract").allowed_callers_null())
                 .expect("serialize custom null")["allowed_callers"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&FunctionShellTool::new().allowed_callers_null())
+            serde_json::to_value(FunctionShellTool::new().allowed_callers_null())
                 .expect("serialize shell null")["allowed_callers"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&ApplyPatchTool::new().allowed_callers_null())
+            serde_json::to_value(ApplyPatchTool::new().allowed_callers_null())
                 .expect("serialize patch null")["allowed_callers"],
             Value::Null
         );
@@ -19326,7 +19813,7 @@ mod tests {
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&McpToolChoice::server("docs").name_null())
+            serde_json::to_value(McpToolChoice::server("docs").name_null())
                 .expect("serialize mcp name null")["name"],
             Value::Null
         );
@@ -19393,23 +19880,23 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(
-                &ComputerDragAction::new(vec![ComputerCoordinate::new(0, 0)]).keys_null()
+                ComputerDragAction::new(vec![ComputerCoordinate::new(0, 0)]).keys_null()
             )
             .expect("serialize drag keys")["keys"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&ComputerMoveAction::new(1, 2).keys_null())
+            serde_json::to_value(ComputerMoveAction::new(1, 2).keys_null())
                 .expect("serialize move keys")["keys"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&ComputerScrollAction::new(1, 2, 0, 10).keys_null())
+            serde_json::to_value(ComputerScrollAction::new(1, 2, 0, 10).keys_null())
                 .expect("serialize scroll keys")["keys"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&ComputerDoubleClickAction::new(1, 2).keys(["CTRL"]))
+            serde_json::to_value(ComputerDoubleClickAction::new(1, 2).keys(["CTRL"]))
                 .expect("serialize double-click keys")["keys"],
             json!(["CTRL"])
         );
@@ -19419,7 +19906,7 @@ mod tests {
         assert_eq!(safety_value["message"], Value::Null);
         assert_eq!(
             serde_json::to_value(
-                &serde_json::from_value::<ComputerClickAction>(json!({
+                serde_json::from_value::<ComputerClickAction>(json!({
                     "type": "click",
                     "button": "left",
                     "x": 1,
@@ -19470,10 +19957,125 @@ mod tests {
         }
         let _ = update;
 
-        let output = ApplyPatchCallOutputInput::new("call_ap", "completed").output("patched");
+        let output =
+            ApplyPatchCallOutputInput::new("call_ap", ApplyPatchCallOutputStatus::Completed)
+                .output("patched");
         let value = serde_json::to_value(&output).expect("serialize output");
         assert_eq!(value["output"], "patched");
         assert_eq!(value["status"], "completed");
+    }
+
+    #[test]
+    fn code_interpreter_allowlist_domain_secrets_serialize_and_validate() {
+        // Pinned ContainerNetworkPolicyAllowlistParam.domain_secrets:
+        // optional array (minItems 1) of {domain, name, value} with the
+        // D0076 length limits (value 1..=10,485,760 chars).
+        let policy = CodeInterpreterNetworkAllowlist::new(["api.example.test"])
+            .with_secret(CodeInterpreterDomainSecret::new(
+                "api.example.test",
+                "API_TOKEN",
+                "token-value",
+            ))
+            .with_secret(CodeInterpreterDomainSecret::new(
+                "cdn.example.test",
+                "CDN_KEY",
+                "cdn-value",
+            ));
+        assert_eq!(policy.allowed_domains(), ["api.example.test"]);
+        assert_eq!(policy.domain_secrets().len(), 2);
+        assert_eq!(policy.domain_secrets()[0].domain(), "api.example.test");
+        assert_eq!(policy.domain_secrets()[0].name(), "API_TOKEN");
+
+        let tool = CodeInterpreterTool::auto(
+            AutoCodeInterpreterContainer::new()
+                .network_policy(CodeInterpreterNetworkPolicy::Allowlist(policy)),
+        );
+        let value = serde_json::to_value(&tool).expect("serialize domain secrets");
+        assert_eq!(
+            value["container"]["network_policy"]["domain_secrets"],
+            json!([
+                {"domain": "api.example.test", "name": "API_TOKEN", "value": "token-value"},
+                {"domain": "cdn.example.test", "name": "CDN_KEY", "value": "cdn-value"}
+            ])
+        );
+        assert!(!format!("{tool:?}").contains("token-value"));
+        tool.validate()
+            .expect("in-range domain secrets are accepted");
+
+        let decoded: CodeInterpreterTool =
+            serde_json::from_value(value.clone()).expect("decode domain secrets");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("round-trip domain secrets"),
+            value
+        );
+        let auto = match decoded.container() {
+            CodeInterpreterContainer::Auto(auto) => auto,
+            other => panic!("expected auto container, got {other:?}"),
+        };
+        match &auto.network_policy {
+            Omittable::Value(CodeInterpreterNetworkPolicy::Allowlist(policy)) => {
+                assert_eq!(policy.domain_secrets().len(), 2);
+            }
+            other => panic!("expected allowlist policy, got {other:?}"),
+        }
+
+        let omitted =
+            serde_json::to_value(CodeInterpreterNetworkAllowlist::new(["a.example.test"]))
+                .expect("serialize without secrets");
+        assert!(omitted.get("domain_secrets").is_none());
+
+        let mut empty_secrets = CodeInterpreterNetworkAllowlist::new(["api.example.test"]);
+        empty_secrets.domain_secrets = Omittable::Value(Vec::new());
+        assert!(matches!(
+            CodeInterpreterTool::auto(
+                AutoCodeInterpreterContainer::new()
+                    .network_policy(CodeInterpreterNetworkPolicy::Allowlist(empty_secrets))
+            )
+            .validate(),
+            Err(CreateResponseConstraintError::EmptyDomainSecrets)
+        ));
+        assert!(matches!(
+            CodeInterpreterTool::auto(
+                AutoCodeInterpreterContainer::new().network_policy(
+                    CodeInterpreterNetworkPolicy::Allowlist(
+                        CodeInterpreterNetworkAllowlist::new(["api.example.test"]).with_secret(
+                            CodeInterpreterDomainSecret::new("", "API_TOKEN", "token")
+                        )
+                    )
+                )
+            )
+            .validate(),
+            Err(CreateResponseConstraintError::DomainSecretDomain { actual: 0, .. })
+        ));
+        assert!(matches!(
+            CodeInterpreterTool::auto(AutoCodeInterpreterContainer::new().network_policy(
+                CodeInterpreterNetworkPolicy::Allowlist(
+                    CodeInterpreterNetworkAllowlist::new(["api.example.test"]).with_secret(
+                        CodeInterpreterDomainSecret::new("api.example.test", "", "token")
+                    )
+                )
+            ))
+            .validate(),
+            Err(CreateResponseConstraintError::DomainSecretName { actual: 0, .. })
+        ));
+        assert!(matches!(
+            CodeInterpreterTool::auto(AutoCodeInterpreterContainer::new().network_policy(
+                CodeInterpreterNetworkPolicy::Allowlist(
+                    CodeInterpreterNetworkAllowlist::new(["api.example.test"]).with_secret(
+                        CodeInterpreterDomainSecret::new(
+                            "api.example.test",
+                            "API_TOKEN",
+                            "x".repeat(MAX_DOMAIN_SECRET_VALUE_CHARS + 1)
+                        )
+                    )
+                )
+            ))
+            .validate(),
+            Err(CreateResponseConstraintError::DomainSecretValue {
+                actual: 10_485_761,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -19576,12 +20178,12 @@ mod tests {
         assert_eq!(value["container"]["file_ids"], json!(["file-1"]));
         assert_eq!(value["container"]["memory_limit"], "4g");
         assert_eq!(
-            serde_json::to_value(&AutoCodeInterpreterContainer::new().memory_limit_null())
+            serde_json::to_value(AutoCodeInterpreterContainer::new().memory_limit_null())
                 .expect("serialize CI memory_limit null")["memory_limit"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&FunctionShellContainerAuto::new().memory_limit_null())
+            serde_json::to_value(FunctionShellContainerAuto::new().memory_limit_null())
                 .expect("serialize shell memory_limit null")["memory_limit"],
             Value::Null
         );
@@ -19649,13 +20251,13 @@ mod tests {
         assert_eq!(value["caller"]["type"], "direct");
         assert_eq!(value["max_output_length"], 1024);
         assert_eq!(
-            serde_json::to_value(&output.max_output_length_null())
+            serde_json::to_value(output.max_output_length_null())
                 .expect("serialize output length null")["max_output_length"],
             Value::Null
         );
         assert_eq!(
             serde_json::to_value(
-                &FunctionShellCallOutputInput::new(
+                FunctionShellCallOutputInput::new(
                     "s1",
                     vec![FunctionShellCallOutputContent::new(
                         "hello\n",
@@ -19805,6 +20407,64 @@ mod tests {
             decoded.output(),
             FunctionCallOutputValue::Text(text) if text == "result"
         ));
+    }
+
+    #[test]
+    fn file_search_result_attributes_support_omitted_null_and_present() {
+        let omitted: FileSearchResult =
+            serde_json::from_value(json!({ "file_id": "file-1", "text": "hit", "score": 0.5 }))
+                .expect("decode without attributes");
+        assert!(omitted.attributes_ref().is_none());
+        assert!(
+            serde_json::to_value(&omitted)
+                .expect("re-encode omitted attributes")
+                .get("attributes")
+                .is_none()
+        );
+
+        let null_echo: FileSearchResult = serde_json::from_value(json!({
+            "file_id": "file-1",
+            "text": "hit",
+            "attributes": null
+        }))
+        .expect("decode official attributes null");
+        assert!(null_echo.attributes_ref().is_none());
+        assert_eq!(
+            serde_json::to_value(&null_echo).expect("re-encode null attributes")["attributes"],
+            Value::Null
+        );
+
+        let call_json = json!({
+            "type": "file_search_call",
+            "id": "fs_1",
+            "status": "completed",
+            "queries": ["q"],
+            "results": [{
+                "file_id": "file-1",
+                "text": "hit",
+                "attributes": { "source": "docs", "rank": 1, "verified": true }
+            }]
+        });
+        let call: FileSearchCall =
+            serde_json::from_value(call_json.clone()).expect("decode present attributes");
+        let attributes = call.results_ref().expect("results")[0]
+            .attributes_ref()
+            .expect("present attributes");
+        assert_eq!(attributes.len(), 3);
+        assert!(matches!(
+            attributes.get("verified"),
+            Some(FileSearchAttributeValue::Boolean(true))
+        ));
+        assert_eq!(
+            serde_json::to_value(&call).expect("re-encode present attributes"),
+            call_json
+        );
+
+        assert_eq!(
+            serde_json::to_value(FileSearchResult::new().attributes_null())
+                .expect("serialize builder attributes null")["attributes"],
+            Value::Null
+        );
     }
 
     #[test]
@@ -20016,7 +20676,7 @@ mod tests {
             "/skills/lint",
         )]);
         let value = serde_json::to_value(
-            &FunctionShellTool::new().environment(FunctionShellEnvironment::Local(local)),
+            FunctionShellTool::new().environment(FunctionShellEnvironment::Local(local)),
         )
         .expect("serialize local");
         assert_eq!(value["environment"]["skills"][0]["name"], "lint");
@@ -20130,9 +20790,10 @@ mod tests {
         .expect("decode approval resource");
         assert_eq!(resource.reason(), Some("denied"));
 
-        let output = ApplyPatchCallOutputInput::new("call_ap", "completed")
-            .output("patched")
-            .caller(ToolCallCaller::direct());
+        let output =
+            ApplyPatchCallOutputInput::new("call_ap", ApplyPatchCallOutputStatus::Completed)
+                .output("patched")
+                .caller(ToolCallCaller::direct());
         let value = serde_json::to_value(&output).expect("serialize apply-patch output");
         assert_eq!(value["caller"]["type"], "direct");
         assert_eq!(value["output"], "patched");
@@ -20155,7 +20816,7 @@ mod tests {
         let search = ToolSearchCallInput::new(json!({"q": "shell"}))
             .with_id("tsc_1")
             .call_id("call_ts")
-            .execution("server")
+            .execution(ToolSearchExecution::Server)
             .status(ResponseItemStatus::Completed);
         let value = serde_json::to_value(&search).expect("serialize tool search");
         assert_eq!(value["id"], "tsc_1");
@@ -20347,7 +21008,7 @@ mod tests {
 
         let patch = ApplyPatchCallInput::new(
             "call_ap",
-            "completed",
+            ApplyPatchCallStatus::Completed,
             ApplyPatchOperation::CreateFile(ApplyPatchCreateFile::new(
                 "a.rs",
                 "@@\n+fn main() {}\n",
@@ -20360,10 +21021,11 @@ mod tests {
             serde_json::to_value(&patch).expect("serialize apply-patch nulls")["caller"],
             Value::Null
         );
-        let patch_out = ApplyPatchCallOutputInput::new("call_ap", "completed")
-            .id_null()
-            .caller_null()
-            .output_null();
+        let patch_out =
+            ApplyPatchCallOutputInput::new("call_ap", ApplyPatchCallOutputStatus::Completed)
+                .id_null()
+                .caller_null()
+                .output_null();
         patch_out.validate().expect("null log text stays in range");
         assert_eq!(
             serde_json::to_value(&patch_out).expect("serialize apply-patch output nulls")["output"],
@@ -20372,7 +21034,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(
-                &AdditionalToolsInput::new(vec![ResponseTool::from(FunctionTool::new("lookup"))])
+                AdditionalToolsInput::new(vec![ResponseTool::from(FunctionTool::new("lookup"))])
                     .id_null()
             )
             .expect("serialize additional tools null")["id"],
@@ -20390,7 +21052,7 @@ mod tests {
         assert_eq!(MAX_FUNCTION_CALL_OUTPUT_CHARS, 10_485_760);
 
         assert_eq!(
-            serde_json::to_value(&CustomToolCallOutput::new("cust1", "done").caller_null())
+            serde_json::to_value(CustomToolCallOutput::new("cust1", "done").caller_null())
                 .expect("serialize custom output caller null")["caller"],
             Value::Null
         );
@@ -20421,7 +21083,7 @@ mod tests {
         assert!(matches!(decoded.caller, Omittable::Value(Nullable::Null)));
 
         assert_eq!(
-            serde_json::to_value(&CustomToolCall::new("cust1", "lookup", "{}").caller_null())
+            serde_json::to_value(CustomToolCall::new("cust1", "lookup", "{}").caller_null())
                 .expect("serialize custom caller null")["caller"],
             Value::Null
         );
@@ -20472,27 +21134,28 @@ mod tests {
             .is_err()
         );
 
-        let program_out = ProgramOutputItem::new("po1", "c_p1", "1\n", "completed");
+        let program_out =
+            ProgramOutputItem::new("po1", "c_p1", "1\n", ProgramOutputStatus::Completed);
         program_out
             .validate()
             .expect("documented program output is in range");
         assert!(matches!(
-            ProgramOutputItem::new("po1", "", "1\n", "completed").validate(),
+            ProgramOutputItem::new("po1", "", "1\n", ProgramOutputStatus::Completed).validate(),
             Err(CreateResponseConstraintError::CallId { actual: 0, .. })
         ));
 
         assert_eq!(
-            serde_json::to_value(&McpApprovalResponse::approve("apr_1").id_null())
+            serde_json::to_value(McpApprovalResponse::approve("apr_1").id_null())
                 .expect("serialize approval id null")["id"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&LocalShellCallOutput::new("ls1", "c1", "ok").status_null())
+            serde_json::to_value(LocalShellCallOutput::new("ls1", "c1", "ok").status_null())
                 .expect("serialize local-shell status null")["status"],
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&WebSearchOpenPageAction::new().url_null())
+            serde_json::to_value(WebSearchOpenPageAction::new().url_null())
                 .expect("serialize open-page url null")["url"],
             Value::Null
         );
@@ -20554,7 +21217,7 @@ mod tests {
         assert_eq!(echoed_value["status"], "completed");
 
         assert_eq!(
-            serde_json::to_value(&FunctionCallOutput::from_output("ok"))
+            serde_json::to_value(FunctionCallOutput::from_output("ok"))
                 .expect("serialize official required-only function output"),
             json!({
                 "type": "function_call_output",
@@ -20562,7 +21225,7 @@ mod tests {
             })
         );
         assert_eq!(
-            serde_json::to_value(&FunctionCallOutput::from_output("ok").with_call_id("c1"))
+            serde_json::to_value(FunctionCallOutput::from_output("ok").with_call_id("c1"))
                 .expect("serialize function output call_id")["call_id"],
             "c1"
         );
@@ -20611,7 +21274,7 @@ mod tests {
             })
         );
         assert_eq!(
-            serde_json::to_value(&CustomToolCallOutput::new("cust1", "done").id("cto_1"))
+            serde_json::to_value(CustomToolCallOutput::new("cust1", "done").id("cto_1"))
                 .expect("serialize custom output id")["id"],
             "cto_1"
         );
@@ -20646,7 +21309,7 @@ mod tests {
         assert_eq!(listed_value["description"], Value::Null);
         assert_eq!(listed_value["annotations"], Value::Null);
         assert_eq!(
-            serde_json::to_value(&McpListTools::new("lt_1", "docs", [listed]).error_null())
+            serde_json::to_value(McpListTools::new("lt_1", "docs", [listed]).error_null())
                 .expect("serialize list-tools error null")["error"],
             Value::Null
         );
@@ -20655,7 +21318,7 @@ mod tests {
     #[test]
     fn hosted_call_constructors_match_openapi_required_fields() {
         assert_eq!(
-            serde_json::to_value(&McpApprovalRequest::new(
+            serde_json::to_value(McpApprovalRequest::new(
                 "apr_1",
                 "docs",
                 "search",
@@ -20696,7 +21359,7 @@ mod tests {
             Value::Null
         );
         assert_eq!(
-            serde_json::to_value(&image.result("img_b64")).expect("serialize image-gen result")["result"],
+            serde_json::to_value(image.result("img_b64")).expect("serialize image-gen result")["result"],
             "img_b64"
         );
 
@@ -20707,8 +21370,8 @@ mod tests {
         assert_eq!(interpreter_value["code"], Value::Null);
         assert_eq!(interpreter_value["outputs"], Value::Null);
         assert_eq!(
-            serde_json::to_value(&interpreter.code("print(1)"))
-                .expect("serialize interpreter code")["code"],
+            serde_json::to_value(interpreter.code("print(1)")).expect("serialize interpreter code")
+                ["code"],
             "print(1)"
         );
 
@@ -20741,7 +21404,7 @@ mod tests {
         .expect("official parameters null");
         assert_eq!(null_params.parameters, Omittable::Value(Nullable::Null));
         assert_eq!(
-            serde_json::to_value(&FunctionTool::new("lookup").parameters_null())
+            serde_json::to_value(FunctionTool::new("lookup").parameters_null())
                 .expect("serialize null parameters")["parameters"],
             Value::Null
         );
@@ -20785,12 +21448,12 @@ mod tests {
             Err(CreateResponseConstraintError::EmptyAllowedCallers)
         ));
 
-        let empty_ns = NamespaceTool::new("", "desc", Vec::<ResponseTool>::new());
+        let empty_ns = NamespaceTool::new("", "desc", Vec::<NamespaceToolEntry>::new());
         assert!(matches!(
             empty_ns.validate(),
             Err(CreateResponseConstraintError::EmptyNamespaceName)
         ));
-        let no_tools = NamespaceTool::new("crm", "desc", Vec::<ResponseTool>::new());
+        let no_tools = NamespaceTool::new("crm", "desc", Vec::<NamespaceToolEntry>::new());
         assert!(matches!(
             no_tools.validate(),
             Err(CreateResponseConstraintError::EmptyNamespaceTools)
@@ -20798,7 +21461,7 @@ mod tests {
         let nested = NamespaceTool::new(
             "crm",
             "desc",
-            vec![ResponseTool::from(
+            vec![NamespaceToolEntry::from(
                 FunctionTool::new("lookup").allowed_callers(Vec::<String>::new()),
             )],
         );
@@ -20823,6 +21486,62 @@ mod tests {
         }))
         .expect("serde remains lossless");
         assert!(decoded.validate().is_err());
+    }
+
+    #[test]
+    fn namespace_tool_entries_are_function_or_custom_only() {
+        // The pinned NamespaceToolParam.tools.items union is
+        // oneOf [FunctionToolParam, CustomToolParam]; hosted tools such as
+        // web_search cannot be constructed for this position, and a nested
+        // hosted-tool tag decodes losslessly as Unknown rather than silently
+        // becoming a valid namespace member.
+        let namespace = NamespaceTool::new(
+            "crm",
+            "CRM tools",
+            vec![
+                NamespaceToolEntry::from(FunctionTool::new("lookup")),
+                NamespaceToolEntry::from(CustomTool::new("render")),
+            ],
+        );
+        let value = serde_json::to_value(&namespace).expect("serialize namespace");
+        assert_eq!(value["type"], "namespace");
+        assert_eq!(value["tools"][0]["type"], "function");
+        assert_eq!(value["tools"][1]["type"], "custom");
+        namespace
+            .validate()
+            .expect("function/custom entries are valid");
+        assert_eq!(namespace.tools().len(), 2);
+
+        let decoded: NamespaceTool =
+            serde_json::from_value(value.clone()).expect("decode namespace");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("round-trip namespace"),
+            value
+        );
+
+        let nested_hosted: NamespaceTool = serde_json::from_value(json!({
+            "type": "namespace",
+            "name": "crm",
+            "description": "CRM tools",
+            "tools": [
+                {"type": "web_search"},
+                {"type": "future_nested_tool", "name": "new"}
+            ]
+        }))
+        .expect("unofficial nested tags stay lossless");
+        assert!(matches!(
+            nested_hosted.tools()[0],
+            NamespaceToolEntry::Unknown(_)
+        ));
+        assert!(matches!(
+            nested_hosted.tools()[1],
+            NamespaceToolEntry::Unknown(_)
+        ));
+        assert_eq!(
+            serde_json::to_value(&nested_hosted).expect("round-trip unknown nested tools")["tools"]
+                [0]["type"],
+            "web_search"
+        );
     }
 
     #[test]

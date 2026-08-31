@@ -639,12 +639,16 @@ impl SseEndpointPolicy {
     /// exposed as a typed Responses event. A standalone `error` event is
     /// surfaced once as a remote error; `response.failed` and
     /// `response.incomplete` remain ordinary typed terminal lifecycle events.
+    /// The terminal table matches the 58 pinned `ResponseStreamEvent`
+    /// discriminators (no `response.cancelled`, which exists only as a
+    /// webhook event) and the typed
+    /// [`ResponseStreamEvent::is_terminal`](openai_rs_types::responses::ResponseStreamEvent::is_terminal)
+    /// set of completed/failed/incomplete/error.
     pub fn responses() -> Self {
         Self::new(SseEofBehavior::RequireTerminal)
             .with_terminal_event("response.completed")
             .with_terminal_event("response.failed")
             .with_terminal_event("response.incomplete")
-            .with_terminal_event("response.cancelled")
             .with_consumed_data_sentinel("[DONE]")
             .with_remote_error_event("error")
     }
@@ -1164,7 +1168,6 @@ mod tests {
             "response.completed",
             "response.failed",
             "response.incomplete",
-            "response.cancelled",
         ] {
             let mut decoder = SseStreamDecoder::with_default_limits(SseEndpointPolicy::responses());
             let input = format!("event: {terminal}\ndata: {{\"type\":\"{terminal}\"}}\n\n");
@@ -1174,6 +1177,28 @@ mod tests {
             assert_eq!(dispatches[0].frame().event.as_deref(), Some(terminal));
             assert_eq!(decoder.state(), SseStreamState::Completed);
         }
+    }
+
+    #[test]
+    fn responses_terminal_table_matches_pinned_stream_events() {
+        // The pinned ResponseStreamEvent union has 58 discriminators and no
+        // `response.cancelled` (that tag exists only as a webhook event), so
+        // the SSE policy must treat it as an ordinary event rather than a
+        // terminator, mirroring types-side `is_terminal()`.
+        let mut decoder = SseStreamDecoder::with_default_limits(SseEndpointPolicy::responses());
+        let dispatches = ok(decoder.push(
+            concat!(
+                "event: response.cancelled\n",
+                "data: {\"type\":\"response.cancelled\"}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\"}\n\n",
+            )
+            .as_bytes(),
+        ));
+        assert_eq!(dispatches.len(), 2);
+        assert!(matches!(dispatches[0], SseDispatch::Event(_)));
+        assert!(matches!(dispatches[1], SseDispatch::Terminal(_)));
+        assert_eq!(decoder.state(), SseStreamState::Completed);
     }
 
     #[test]

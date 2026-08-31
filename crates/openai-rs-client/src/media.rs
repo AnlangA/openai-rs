@@ -775,7 +775,13 @@ fn append_multipart_value(
     value: Value,
 ) -> Result<ReplayableMultipartForm, Error> {
     match value {
-        Value::Null => Ok(form.text(name, "null")),
+        // Explicit null drops the field instead of encoding a literal "null"
+        // text part. openai-python's multipart serializer discards None-derived
+        // values entirely (`_qs._stringify_item` yields no item once
+        // `_primitive_value_to_str` returns an empty string for None), while
+        // openai-node rejects an explicit null. Dropping matches the automated
+        // Python behavior and keeps explicit null equivalent to omission.
+        Value::Null => Ok(form),
         Value::Bool(value) => Ok(form.text(name, value.to_string())),
         Value::Number(value) => Ok(form.text(name, value.to_string())),
         Value::String(value) => Ok(form.text(name, value)),
@@ -912,7 +918,7 @@ mod tests {
     use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
     use hyper_util::rt::TokioIo;
     use openai_rs_types::{
-        ReplayableMultipartSource,
+        Nullable, ReplayableMultipartSource,
         media::{
             CreateImageEditJsonRequest, CreateImageEditMultipartRequest, CreateImageRequest,
             CreateSpeechRequest, CreateTranscriptionRequest, CreateTranslationRequest,
@@ -1299,5 +1305,62 @@ mod tests {
         let body: Value = serde_json::from_slice(&captured.body).expect("generation stream JSON");
         assert_eq!(body["stream"], true);
         assert_eq!(body["partial_images"], 1);
+    }
+
+    #[tokio::test]
+    async fn transcription_multipart_drops_explicit_null_metadata_fields() {
+        let (client, captured) =
+            serve_once(JSON_MIME, Bytes::from_static(br#"{"text":"hello"}"#)).await;
+        let mut request = CreateTranscriptionRequest::new(
+            bytes_source(b"raw-audio", "meeting.wav", "audio/wav"),
+            "gpt-4o-transcribe",
+        );
+        request.metadata.chunking_strategy = Omittable::Value(Nullable::Null);
+        let response = client
+            .audio()
+            .transcribe(request)
+            .await
+            .expect("transcription response");
+        assert!(matches!(response.body(), TranscriptionOutput::Json(_)));
+
+        let captured = captured.await.expect("captured transcription request");
+        let content_type = captured.content_type.expect("multipart content type");
+        assert!(content_type.starts_with("multipart/form-data; boundary="));
+        let text = String::from_utf8_lossy(&captured.body);
+        // Present fields keep their encoding.
+        assert!(text.contains("name=\"model\"\r\n\r\ngpt-4o-transcribe"));
+        assert!(text.contains("name=\"file\"; filename=\"meeting.wav\""));
+        // The explicit null field is dropped without a literal "null" part.
+        assert!(!text.contains("chunking_strategy"));
+        assert!(!text.contains("null"));
+    }
+
+    #[tokio::test]
+    async fn image_edit_multipart_drops_explicit_null_metadata_fields() {
+        let (client, captured) =
+            serve_once(JSON_MIME, Bytes::from_static(br#"{"created":1,"data":[]}"#)).await;
+        let mut request = CreateImageEditMultipartRequest::from_images(
+            [bytes_source(b"image-one", "one.png", "image/png")],
+            "Add snow",
+        )
+        .expect("multipart image request");
+        request.metadata.background = Omittable::Value(Nullable::Null);
+        request.metadata.quality = Omittable::Value(Nullable::Null);
+        client
+            .images()
+            .edit_multipart(request)
+            .await
+            .expect("multipart image edit");
+
+        let captured = captured.await.expect("captured multipart edit");
+        assert_eq!(captured.path, "/v1/images/edits");
+        let text = String::from_utf8_lossy(&captured.body);
+        // Present fields keep their encoding.
+        assert!(text.contains("name=\"prompt\"\r\n\r\nAdd snow"));
+        assert!(text.contains("name=\"image[]\"; filename=\"one.png\""));
+        // Explicit null fields are dropped without a literal "null" part.
+        assert!(!text.contains("background"));
+        assert!(!text.contains("quality"));
+        assert!(!text.contains("null"));
     }
 }

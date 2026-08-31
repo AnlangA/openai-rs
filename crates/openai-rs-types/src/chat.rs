@@ -1280,6 +1280,54 @@ impl ChatFunctionDefinition {
     }
 }
 
+/// Deprecated function entry for the legacy `functions` request field.
+///
+/// Mirrors pinned `ChatCompletionFunctions`: unlike
+/// [`ChatFunctionDefinition`] (the `tools[].function` shape), the legacy
+/// entry carries no `strict` schema-adherence field.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionFunction {
+    /// Function name.
+    pub name: String,
+    /// Description used for tool selection.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub description: Omittable<String>,
+    /// JSON Schema object for function arguments.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub parameters: Omittable<Map<String, Value>>,
+}
+
+impl ChatCompletionFunction {
+    /// Construct a legacy function entry without a parameter schema.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: Omittable::Omitted,
+            parameters: Omittable::Omitted,
+        }
+    }
+
+    /// Attach a human-readable description.
+    #[must_use]
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Omittable::Value(description.into());
+        self
+    }
+
+    /// Serialize a typed schema representation into the parameters object.
+    pub fn with_parameters<T: Serialize>(
+        mut self,
+        parameters: &T,
+    ) -> Result<Self, serde_json::Error> {
+        self.parameters = Omittable::Value(serialize_object(
+            parameters,
+            "function parameters must serialize as a JSON object",
+        )?);
+        Ok(self)
+    }
+}
+
 literal_tag!(FunctionToolTag, Function, "function");
 
 /// A function tool definition.
@@ -2312,9 +2360,10 @@ pub struct ChatCompletionRequestBody {
     /// Deprecated function selection.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub function_call: Omittable<ChatLegacyFunctionChoice>,
-    /// Deprecated function definitions.
+    /// Deprecated function definitions. Legacy entries carry no `strict`
+    /// field; use `tools[].function` for strict schema adherence.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub functions: Omittable<Vec<ChatFunctionDefinition>>,
+    pub functions: Omittable<Vec<ChatCompletionFunction>>,
     /// Per-token logit biases.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub logit_bias: Omittable<Nullable<BTreeMap<String, i32>>>,
@@ -3819,6 +3868,50 @@ mod tests {
     }
 
     #[test]
+    fn legacy_functions_entries_omit_strict_while_tools_function_keeps_it() {
+        let mut legacy = CreateChatCompletionRequest::new(
+            "gpt-5.6",
+            ChatUserMessage::text("Weather in Shanghai?"),
+        );
+        legacy.body.functions = Omittable::Value(vec![ok(ChatCompletionFunction::new("weather")
+            .with_description("Read weather")
+            .with_parameters(&weather_schema()))]);
+
+        let value = ok(serde_json::to_value(&legacy));
+        assert_eq!(value["functions"][0]["name"], "weather");
+        assert_eq!(value["functions"][0]["description"], "Read weather");
+        assert_eq!(value["functions"][0]["parameters"]["type"], "object");
+        assert!(value["functions"][0].get("strict").is_none());
+
+        let strict = ok(ChatFunctionDefinition::new("weather").with_parameters(&weather_schema()))
+            .with_strict(true);
+        let tools = CreateChatCompletionRequest::new(
+            "gpt-5.6",
+            ChatUserMessage::text("Weather in Shanghai?"),
+        )
+        .with_tool(ChatFunctionTool::new(strict));
+        let value = ok(serde_json::to_value(tools));
+        assert_eq!(value["tools"][0]["function"]["strict"], true);
+        assert!(value.get("functions").is_none());
+
+        let decoded = ok(serde_json::from_value::<CreateChatCompletionRequest>(
+            json!({
+                "model": "gpt-5.6",
+                "messages": [{"role": "user", "content": "hi"}],
+                "functions": [{
+                    "name": "weather",
+                    "description": "Read weather",
+                    "parameters": {"type": "object"}
+                }]
+            }),
+        ));
+        assert_eq!(
+            ok(serde_json::to_value(decoded))["functions"][0]["name"],
+            "weather"
+        );
+    }
+
+    #[test]
     fn known_content_tag_is_strict_and_future_tag_is_lossless() {
         let malformed = serde_json::from_value::<ChatUserContentPart>(json!({
             "type": "image_url",
@@ -4490,7 +4583,7 @@ mod tests {
             CreateChatCompletionRequest::new("gpt-5.6", ChatUserMessage::text("hello"));
         too_many.body.functions = Omittable::Value(
             (0..=MAX_CHAT_FUNCTIONS)
-                .map(|index| ChatFunctionDefinition::new(format!("fn_{index}")))
+                .map(|index| ChatCompletionFunction::new(format!("fn_{index}")))
                 .collect(),
         );
         assert!(matches!(

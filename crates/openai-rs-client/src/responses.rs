@@ -7,8 +7,8 @@ use openai_rs_types::{
     responses::{
         CompactResponseRequest, CompactedResponse, CountInputTokensRequest, CreateResponseRequest,
         CreateStreamingResponseRequest, DeletedResponse, InputTokenCountResponse,
-        ListResponseInputItemsParams, Response, ResponseInputItemList, ResponseStatus,
-        ResponseStreamEvent,
+        ListResponseInputItemsParams, Response, ResponseIncludable, ResponseInputItemList,
+        ResponseStatus, ResponseStreamEvent,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -35,14 +35,14 @@ pub type ResponseInputItemPageStream =
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetrieveResponseParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    include: Vec<String>,
+    include: Vec<ResponseIncludable>,
 }
 
 /// Query parameters for retrieving or resuming a Response SSE stream.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetrieveResponseStreamParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    include: Vec<String>,
+    include: Vec<ResponseIncludable>,
     #[serde(default = "true_value", deserialize_with = "deserialize_true")]
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -63,7 +63,7 @@ impl RetrieveResponseStreamParams {
     }
 
     #[must_use]
-    pub fn include(mut self, value: impl Into<String>) -> Self {
+    pub fn include(mut self, value: impl Into<ResponseIncludable>) -> Self {
         self.include.push(value.into());
         self
     }
@@ -113,7 +113,7 @@ impl RetrieveResponseParams {
     }
 
     #[must_use]
-    pub fn include(mut self, value: impl Into<String>) -> Self {
+    pub fn include(mut self, value: impl Into<ResponseIncludable>) -> Self {
         self.include.push(value.into());
         self
     }
@@ -593,6 +593,7 @@ mod tests {
 
     use super::*;
     use crate::{ApiKey, Client};
+    use openai_rs_types::responses::ResponseItemOrder;
 
     const RESPONSE_FIXTURE: &str = r#"{"id":"resp_wire","created_at":1,"error":null,"incomplete_details":null,"instructions":null,"metadata":null,"model":"test-model","object":"response","output":[],"parallel_tool_calls":true,"temperature":1.0,"tool_choice":"auto","tools":[],"top_p":1.0,"status":"completed"}"#;
 
@@ -896,9 +897,9 @@ mod tests {
         let response_id = ResponseId::new("resp_query");
         let params = ListResponseInputItemsParams::new()
             .after("item cursor")
-            .include("reasoning.encrypted_content")
+            .include(ResponseIncludable::ReasoningEncryptedContent)
             .limit(2)
-            .order("asc");
+            .order(ResponseItemOrder::Ascending);
 
         let response = client(base_url)
             .responses()
@@ -1023,8 +1024,8 @@ mod tests {
                 .await;
         let response_id = ResponseId::new("resp_resume");
         let params = RetrieveResponseStreamParams::new()
-            .include("reasoning.encrypted_content")
-            .include("message.output_text.logprobs")
+            .include(ResponseIncludable::ReasoningEncryptedContent)
+            .include(ResponseIncludable::OutputTextLogprobs)
             .starting_after(41)
             .include_obfuscation(false);
 
@@ -1045,6 +1046,78 @@ mod tests {
         assert!(query.contains(&("starting_after".into(), "41".into())));
         assert!(query.contains(&("include_obfuscation".into(), "false".into())));
         assert_eq!(query.iter().filter(|(key, _)| key == "include").count(), 2);
+    }
+
+    #[tokio::test]
+    async fn retrieve_with_encodes_typed_include_query() {
+        let (base_url, captured) = serve_once(
+            StatusCode::OK,
+            r#"{"id":"resp_1","created_at":1,"error":null,"incomplete_details":null,"instructions":null,"metadata":null,"model":"m","object":"response","output":[],"parallel_tool_calls":true,"temperature":1.0,"tool_choice":"auto","tools":[],"top_p":1.0,"status":"completed"}"#,
+        )
+        .await;
+        let response_id = ResponseId::new("resp_include");
+        let params = RetrieveResponseParams::new()
+            .include(ResponseIncludable::FileSearchResults)
+            .include(ResponseIncludable::from_raw("future.include.value"));
+
+        let response = client(base_url)
+            .responses()
+            .retrieve_with(&response_id, params)
+            .await
+            .expect("retrieve with includes");
+        assert_eq!(response.id(), "resp_1");
+
+        let captured = captured.await.expect("captured request");
+        assert_eq!(captured.method, Method::GET);
+        let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
+            .expect("captured URL");
+        assert_eq!(url.path(), "/v1/responses/resp_include");
+        let query = url.query_pairs().collect::<Vec<_>>();
+        assert_eq!(
+            query
+                .iter()
+                .filter(|(key, value)| key == "include" && value == "file_search_call.results")
+                .count(),
+            1
+        );
+        assert_eq!(
+            query
+                .iter()
+                .filter(|(key, value)| key == "include" && value == "future.include.value")
+                .count(),
+            1,
+            "unknown include values serialize verbatim"
+        );
+    }
+
+    #[test]
+    fn list_input_items_order_serializes_pinned_asc_desc_domain() {
+        let ascending = ListResponseInputItemsParams::new()
+            .include(ResponseIncludable::ReasoningEncryptedContent)
+            .order(ResponseItemOrder::Ascending);
+        let value = serde_json::to_value(&ascending).expect("serialize ascending");
+        assert_eq!(value["order"], "asc");
+        assert_eq!(value["include"], json!(["reasoning.encrypted_content"]));
+
+        let descending = ListResponseInputItemsParams::new().order(ResponseItemOrder::Descending);
+        assert_eq!(
+            serde_json::to_value(&descending).expect("serialize descending")["order"],
+            "desc"
+        );
+
+        let unknown =
+            ListResponseInputItemsParams::new().order(ResponseItemOrder::from_raw("random"));
+        assert_eq!(
+            serde_json::to_value(&unknown).expect("unknown order stays verbatim")["order"],
+            "random"
+        );
+        let default_params = ListResponseInputItemsParams::new();
+        assert!(
+            serde_json::to_value(default_params)
+                .expect("serialize default")
+                .get("order")
+                .is_none()
+        );
     }
 
     #[tokio::test]

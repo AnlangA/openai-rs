@@ -3009,3 +3009,280 @@ until a decision is recorded here and its fixtures pass.
 - Sources: pinned `CreateResponse` / `CompactResponseMethodPublicBody` / `TokenCountsBody` type `instructions` as `string | null`. `Response.instructions` remains `string | InputItem[] | null`.
 - Decision: request DTOs send/accept only `Omittable<Nullable<String>>`. Resource `Response.instructions` keeps `ResponseInstructions`.
 - Tests: create/compact reject instruction item arrays; string/null round-trip.
+
+## D0113 — Compact resource output is the ItemField input union
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CompactedResponse.output` / `BetaCompactedResponse.output`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`CompactResource.output.items` / `BetaCompactResource.output.items` `$ref` `ItemField` / `BetaItemField`, whose Message branch accepts any `MessageRole`; the spec's own CompactResource example returns user-role messages plus a compaction item; Python `compacted_response.py` documents "a list of all user messages, followed by a single compaction item").
+- Decision: decode compact output with the input-side unions (`Vec<ResponseInputItem>` / `Vec<BetaResponseInputItem>`), matching the pinned ItemField branches. The assistant-only `ResponseOutputItem::Message` previously rejected `role: "user"`, failing the whole 200 body.
+- Reason: the compact endpoint is documented to return user messages; the output-side codec cannot represent them.
+- Impact: `openai-rs-types` Responses + beta Responses compact resources; `output()` getter return type changes accordingly.
+- Overrides: none
+- Tests: `official_compact_resource_output_decodes_user_messages_and_compaction_item`, `beta_compact_resource_output_decodes_user_messages_and_compaction_item`.
+
+## D0114 — File-search result attributes and Response store are three-state
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `FileSearchResult.attributes` / `Response.store`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`FileSearchToolCall.results[].attributes` → `VectorStoreFileAttributes` = `anyOf [{16-key map}, null]`; Python models it `Optional[Dict] = None`. The `Response` resource property lists have no `store`; the request-side `store` is `anyOf [bool, null]`).
+- Decision: model both as `Omittable<Nullable<..>>`. `attributes` gains `attributes_null()` and `attributes_ref()`; `store` stays a convenience field so an unofficial `"store": null` echo no longer fails the decode.
+- Reason: a null attributes echo under `include=file_search_call.results` previously failed the whole `Response` decode; `store` null echo likewise.
+- Impact: `openai-rs-types` Responses DTOs.
+- Overrides: none
+- Tests: `file_search_result_attributes_support_omitted_null_and_present`, `response_store_null_echo_decodes_and_round_trips`.
+
+## D0115 — Official program/apply-patch/tool-search status enums
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ProgramOutputItem.status`, `ApplyPatchCall(Input).status`, `ApplyPatchCallOutput(Input).status`, `ToolSearchCall/Output/Input.execution`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`ProgramOutputStatus` completed|incomplete; `ApplyPatchCallStatus(Param)` in_progress|completed; `ApplyPatchCallOutputStatus(Param)` completed|failed; `ToolSearchExecutionType` server|client. Python models each as `Literal`).
+- Decision: model as `ProgramOutputStatus` / `ApplyPatchCallStatus` / `ApplyPatchCallOutputStatus` open string enums, and reuse the existing `ToolSearchExecution` for all four item `execution` fields. Unofficial values decode losslessly as `Unknown`.
+- Reason: storing official enum domains as bare `String` hid the pin, the same class as D0106 / D0107.
+- Impact: `openai-rs-types` Responses item DTOs; builders now take `impl Into<Enum>`.
+- Overrides: none
+- Tests: `official_status_and_execution_enums_retain_unknown_values`.
+
+## D0116 — Namespace tools are function/custom only
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `NamespaceTool.tools`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`NamespaceToolParam.tools.items` = `oneOf [FunctionToolParam, CustomToolParam]`; Python `Tool = Union[ToolFunction, CustomToolParam]`).
+- Decision: introduce `NamespaceToolEntry` (tagged union of `FunctionTool` / `CustomTool`, wire-identical to the matching `ResponseTool` branches) so hosted tools such as nested `web_search` are unconstructible at compile time; genuinely future nested tags decode losslessly as `Unknown`. Chose the typed union over a runtime `validate()` check.
+- Reason: the element domain was wider than the pin and a nested hosted tool would produce a request the pin rejects.
+- Impact: `openai-rs-types` Responses `NamespaceTool` constructor/getter.
+- Overrides: none
+- Tests: `namespace_tool_entries_are_function_or_custom_only`.
+
+## D0117 — Code-interpreter allowlist domain secrets
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CodeInterpreterNetworkAllowlist.domain_secrets`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`AutoCodeInterpreterToolParam.network_policy` → `ContainerNetworkPolicyAllowlistParam.domain_secrets`, minItems 1, elements of `ContainerNetworkPolicyDomainSecretParam` with `domain`/`name` minLength 1 and `value` 1..=10485760; Python types it).
+- Decision: add optional `domain_secrets: Omittable<Vec<CodeInterpreterDomainSecret>>` with `with_secret()` builder and `validate()` hooks reusing the D0076 containers-side limits. `CodeInterpreterDomainSecret` is a responses-side mirror of the containers wire shape (`WireSecret` value, redacted Debug, exposed-only PartialEq) because `ContainerDomainSecret` lacks `PartialEq` and the whole code-interpreter DTO chain derives it.
+- Reason: the official optional field was missing from the typed surface.
+- Impact: `openai-rs-types` Responses code-interpreter network policy.
+- Overrides: none
+- Tests: `code_interpreter_allowlist_domain_secrets_serialize_and_validate`.
+
+## D0118 — SSE terminal table matches the pinned stream events
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `SseEndpointPolicy::responses()` terminal events
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`ResponseStreamEvent` has exactly 58 discriminators; `response.cancelled` exists only as a webhook event; Python/Node have no such stream event); types-side `ResponseStreamEvent::is_terminal()` recognizes only completed/failed/incomplete/error.
+- Decision: drop `response.cancelled` from the Responses SSE terminal table so the transport and typed codecs agree; the tag, if ever observed, is delivered as an ordinary event.
+- Reason: the extra terminal marker contradicted the pinned event set and the typed terminal classification.
+- Impact: `openai-rs-client` SSE transport only; no DTO change.
+- Overrides: none
+- Tests: `responses_terminal_table_matches_pinned_stream_events`, updated `responses_terminal_event_is_emitted_before_completion`.
+
+## D0119 — Retrieve-side include/order query parameters are typed
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `RetrieveResponseParams.include`, `RetrieveResponseStreamParams.include`, `ListResponseInputItemsParams.order`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (both GET `include` are arrays of `IncludeEnum` — the eight values already modeled as `ResponseIncludable`; `order` is `enum [asc, desc]`; Python `response_retrieve_params.py` uses `List[ResponseIncludable]`).
+- Decision: reuse `ResponseIncludable` for both client-side include parameters, and narrow `order` to a new `ResponseItemOrder` open string enum (no crate-wide sort-order type exists; containers/beta each keep their own). Unknown values still serialize verbatim via `from_raw`.
+- Reason: `Vec<String>` / `Omittable<String>` hid the pinned domains, the same class as D0106.
+- Impact: `openai-rs-client` Responses query params and the types-side input-item list params; builders now reject arbitrary strings.
+- Overrides: none
+- Tests: `retrieve_with_encodes_typed_include_query`, `list_input_items_order_serializes_pinned_asc_desc_domain`.
+
+## D0120 — Legacy chat functions entries and Conversation function-call caller fields
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ChatCompletionFunction`, `ChatCompletionRequestBody.functions`, `ConversationFunctionCall`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`ChatCompletionFunctions` has no `strict`; `FunctionToolCall` carries `caller` anyOf ToolCallCaller|null and `namespace`, `FunctionToolCallResource` adds `created_by`); openai-python `completion_create_params.py` `Function` TypedDict (no strict) and Responses resource TypedDicts.
+- Decision: split the deprecated `functions[]` element into its own `ChatCompletionFunction` DTO (required `name`; optional `description`/`parameters`); it never emits `strict`, while `tools[].function` keeps `ChatFunctionDefinition` with `strict`. Type `ConversationFunctionCall` official optional fields `namespace`/`created_by` (`Omittable<String>`) and `caller` (`Omittable<Nullable<ToolCallCaller>>`), mirroring the D0030 shape of `responses::FunctionCall` and reusing the same `ToolCallCaller` union.
+- Reason: the shared definition let deprecated requests emit the pin-illegal `strict` key on `functions[]`, and conversation function-call resources trapped `caller`/`namespace`/`created_by` in ExtraFields while the adjacent function-call-output branch already typed them.
+- Impact: Chat legacy `functions` request JSON (breaking: field element type changed); Conversations function-call item JSON (additive).
+- Overrides: none
+- Tests: `legacy_functions_entries_omit_strict_while_tools_function_keeps_it`, `function_call_resource_caller_namespace_and_created_by_match_responses_shape`.
+
+## D0121 — Realtime connect target is a model / transcription-intent / call-id enum
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: GA Realtime WebSocket connection entry (`Realtime::connect*`, `realtime_websocket_url`)
+- Sources: openai-node `src/realtime/internal-base.ts` pinned `eea2292a4a523da9405161dde0a79ac5dc2ecb2a` (`buildRealtimeURL` accepts exactly one of model/callID/intent; the transcription branch sets `intent=transcription` and forbids a simultaneous model); openai-python `realtime.py` `connect(*, call_id, model, ...)`; pinned OpenAPI carries no `/realtime` WS path to arbitrate.
+- Decision: model the connection target as `RealtimeConnectTarget` (`Model(ModelId)` / `TranscriptionIntent` / `CallId(String)`); mutual exclusion is structural. `?model=` / `?intent=transcription` / `?call_id=` are derived from the single target, and a base URL already carrying any target key is rejected as `InvalidConfiguration` rather than merged. The prior `connect(model)` entry points remain as conveniences mapping to the Model branch.
+- Reason: the transcription session was unreachable (`connect` could only produce `?model=`, which the transcription endpoint rejects) and existing calls could not be attached.
+- Impact: `openai-rs-client` Realtime connect surface (additive).
+- Overrides: none
+- Tests: `websocket_url_derives_model_intent_and_call_id_targets`, `websocket_url_rejects_conflicting_target_query_keys`, `transcription_intent_connection_uses_intent_query_without_model`.
+
+## D0122 — Idempotent Realtime token issuance is replayable; call control stays Never
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `POST /realtime/client_secrets`, `POST /realtime/translations/client_secrets`, legacy `/realtime/(transcription_)sessions`, `/realtime/calls/{call_id}/{accept,reject,hangup,refer}`
+- Sources: openai-python `_base_client.py` and openai-node `client.ts` retry loops apply to every request (default two retries each); token issuance is idempotent.
+- Decision: mark the token-issuance operations `RetryClass::Replayable` (still gated by the `retry_replayable_mutations` policy switch); the observable-side-effect call control actions accept/reject/hangup/refer keep `RetryClass::Never`.
+- Reason: blanket Never made transient 429/5xx outages observable for an idempotent credential mint, below official-SDK availability.
+- Impact: `openai-rs-client` Realtime + legacy Realtime operation tables.
+- Overrides: none
+- Tests: `client_secret_route_is_typed_and_secret_debug_is_redacted`, `translation_client_secret_uses_fixed_typed_route_and_redacts_secret`, `sip_actions_use_typed_routes_and_never_need_response_json`, `session_creation_uses_pinned_route_without_beta_header`, `transcription_creation_uses_pinned_route_and_nullable_secret`.
+
+## D0123 — Legacy Realtime sends no OpenAI-Beta header
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: legacy `/v1/realtime/sessions`, `/v1/realtime/transcription_sessions`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (both operations declare empty parameter lists); `assistants=v2` belongs to the Assistants family and D0087 covers Vector Stores only.
+- Decision: remove the `OpenAI-Beta: assistants=v2` header from both legacy operations; they now use the standard JSON transport.
+- Reason: the header had no basis in the pin or in official SDK behavior for these routes.
+- Impact: `openai-rs-client` legacy Realtime transport only.
+- Overrides: none
+- Tests: `session_creation_uses_pinned_route_without_beta_header`, `transcription_creation_uses_pinned_route_and_nullable_secret` (both assert the header is absent).
+
+## D0124 — Realtime transcription delay uses a dedicated enum
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `RealtimeAudioTranscription.delay`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`AudioTranscription.delay` enum minimal|low|medium|high|xhigh).
+- Decision: introduce `RealtimeTranscriptionDelay` with exactly that domain (unknown values decode losslessly as `Unknown`) instead of reusing `RealtimeReasoningEffort`.
+- Reason: the value sets coincide but the semantics are unrelated; the shared name misled the public API surface.
+- Impact: `openai-rs-types` Realtime transcription config (wire-identical; breaking: public field type changed from `RealtimeReasoningEffort` to `RealtimeTranscriptionDelay`).
+- Overrides: none
+- Tests: `transcription_delay_uses_dedicated_enum_domain`.
+
+## D0125 — realtime.call.incoming object is optional and SIP headers are redacted
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: types-side duplicate `WebhookRealtimeCallIncoming` / `RealtimeCallIncomingData` / `RealtimeSipHeader`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`required` excludes `object`; the spec's own example omits it); openai-python `realtime_call_incoming_webhook_event.py` `Optional[Literal["event"]]`; openai-node `object?: 'event'`; the webhooks.rs codec for the same event already treats it as optional.
+- Decision: `object` becomes `Omittable<RealtimeIncomingWebhookObjectTag>` with an `object_marker_present()` accessor; the three types get hand-written redacted Debug (name/value and payloads never printed, mirroring the webhooks.rs redline and its leak test).
+- Reason: the duplicate model rejected the pinned example shape, and SIP INVITE headers can carry credentials.
+- Impact: `openai-rs-types` Realtime webhook DTOs.
+- Overrides: none
+- Tests: `realtime_incoming_webhook_decodes_without_optional_object_marker`, `realtime_incoming_webhook_debug_does_not_leak_sip_credentials`.
+
+## D0126 — Multipart explicit null metadata fields are dropped
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: runtime multipart encoder (`append_multipart_value`), reachable via `TranscriptionRequestMetadata.chunking_strategy` and all `ImageEditMultipartMetadata` Nullable fields
+- Sources: openai-python `src/openai/_base_client.py:622-647` + `src/openai/_qs.py:115-129` (pinned `b19c2161`): `_stringify_item` maps None to an empty primitive string and then yields no item, so the key is dropped; openai-node `uploads.ts:458-463` (pinned `eea2292a`) rejects explicit null; the pinned OpenAPI does not define null carriage inside multipart bodies.
+- Decision: `Value::Null` metadata values produce no multipart part at all (explicit null is wire-equivalent to omission); no other encoding changes. Empty-string drop semantics remain out of scope (round-1 deferred item 1-D2).
+- Reason: the pin is silent, so the automated Python behavior is adopted as the least surprising, non-rejecting option; encoding a literal "null" text part matched neither official SDK.
+- Impact: multipart request encoder only; no DTO shape or JSON surface change.
+- Overrides: none
+- Tests: `transcription_multipart_drops_explicit_null_metadata_fields`, `image_edit_multipart_drops_explicit_null_metadata_fields`.
+
+## D0127 — Official invite role is owner/reader only
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `InviteRole` (`Invite.role` / `InviteRequest.role`)
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (both `role` enums are owner/reader); openai-python `invite_create_params.py` and openai-node `invites.ts` agree; `member` appears only on the nested `projects[].role`.
+- Decision: remove the `Member` variant from `InviteRole` (owner/reader plus open `Unknown` remain). Project membership roles stay on `InviteProjectRole`. Non-official role echoes decode losslessly as `Unknown`.
+- Reason: the extra variant let requests carry a top-level invite role the pin rejects.
+- Impact: `openai-rs-types` Admin invite DTOs (breaking: variant removed).
+- Overrides: none
+- Tests: `official_invite_role_pins_owner_and_reader_only`.
+
+## D0128 — Organization data-retention body pins the four-value domain
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `UpdateOrganizationDataRetentionBody` / `UpdateProjectDataRetentionBody` / `OrganizationDataRetentionType` / `DataRetentionType`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`UpdateOrganizationDataRetentionBody.retention_type` and `OrganizationDataRetention.type` enumerate four values; the project body and `ProjectDataRetention.type` enumerate six, adding `organization_default` and `none`); openai-node keeps the org/project split across `data-retention.ts` and `projects/data-retention.ts`.
+- Decision: add a four-value open enum `OrganizationDataRetentionType` for the organization request body; split `UpdateProjectDataRetentionBody` out of the type alias so it keeps the six-value `DataRetentionType`; the shared `DataRetentionResource` intentionally stays a six-value open superset (lossless for org, project, and future values). Org-side rejection is structural: `organization_default`/`none` have no named variant and fall to `Unknown`.
+- Reason: sharing the six-value enum let the organization endpoint send values the pin does not define for it.
+- Impact: `openai-rs-types` Admin data-retention DTOs (breaking: `UpdateProjectDataRetentionBody` split out of the `UpdateOrganizationDataRetentionBody` alias; org body field type narrowed to the four-value enum).
+- Overrides: none
+- Tests: `official_org_data_retention_pins_four_value_domain`.
+
+## D0129 — Strict schema normalization unravels sibling-key refs and rejects non-false additionalProperties
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `normalize_strict_schema` / `normalize_object` (`openai-rs-types` structured output)
+- Sources: openai-python `src/openai/lib/_pydantic.py` (`resolve_ref`, `has_more_than_n_keys`; `additionalProperties: false` is only defaulted when missing, per `_ensure_strict_json_schema`); openai-node `zod-v3-strict-schema.ts:67-69` rejects open-ended records outright; the official Structured Outputs examples always use `$ref` as the sole key. schemars 1.2.2 (Cargo.lock) emits `{"description":"...","$ref":"#/$defs/X"}` for nested custom-typed fields carrying doc comments.
+- Decision: a local `$ref` accompanied by sibling keys is resolved by JSON Pointer (RFC 6901 escapes) against a snapshot of the input document, inlined with sibling keys taking precedence, and the result re-enters normalization; unresolvable pointers return the new `StructuredError::UnresolvableRef { path, reference }` instead of silently passing through. Bare sole-key `$ref`s and external refs behave unchanged. `normalize_object` defaults `additionalProperties` to `false` only when the key is missing; an existing non-false value (map fields) returns `UnsupportedKeyword` carrying the field path, honoring the module's "never silently drops a schema keyword" contract.
+- Reason: sibling-key refs produced strict-rejected schemas from common schemars output, and overwriting existing `additionalProperties` silently rewrote dictionary fields into "always empty".
+- Impact: `openai-rs-types` structured output; new error variant `UnresolvableRef` (enum is `#[non_exhaustive]`).
+- Overrides: none
+- Tests: `nested_ref_fields_with_doc_comments_are_inlined`, `unresolvable_sibling_refs_are_rejected_with_path`, `sibling_keys_win_over_the_inlined_reference`, `bare_refs_without_siblings_pass_through`, `map_fields_report_additional_properties_with_path`, `additional_properties_is_defaulted_only_when_missing`.
+
+## D0130 — ModelId constants align with the pinned model enum
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ModelId` constants (`scalar.rs`), `examples/structured_output.rs`
+- Sources: pinned OpenAPI commit `690521b1753dce0c6d6b275f583d22537679cff9` (`ModelIdsShared` contains gpt-5.6-sol/terra/luna with no bare `gpt-5.6` member; `ResponsesOnlyModel` adds `gpt-5.6-cyber`; the bare name appears only in prose); openai-node `shared.ts` model unions agree.
+- Decision: drop the `GPT_5_6 = "gpt-5.6"` constant and its "official alias" comments, add `GPT_5_6_CYBER`, and switch the structured-output example to `ModelId::GPT_5_6_SOL`. `ModelId` remains an open newtype, so raw string construction is still possible.
+- Reason: the constant asserted an alias no baseline supports and the family's fourth member was missing.
+- Impact: `openai-rs-types` constants and one example; no wire behavior change (breaking: public constant `ModelId::GPT_5_6` removed).
+- Overrides: none
+- Tests: `scalar::tests::model_id_is_open_and_round_trips` (updated constant assertions); example covered by `cargo check -p openai-rs-sdk --examples`.
+
+## D0131 — Retry backoff honors a 120s server cap; over-cap and non-positive values fall back locally
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `RetryPolicy::openai_compatible`, transport retry loop (`transport.rs`), and the multipart transport's local retry copy (`multipart.rs`)
+- Sources: openai-python `_constants.py:13` (`MAX_RETRY_AFTER_DELAY = 2*60`) and `_base_client.py:791-813` (server value used only when `0 < retry_after <= MAX`, otherwise local backoff); openai-node `client.ts:1642-1650` (over-cap falls back to default backoff and still retries). Note: python's `_should_retry` (815-823) declines to retry an over-cap Retry-After; this implementation follows the node/python delay-calculation fallback semantics and records the divergence here.
+- Decision: `openai_compatible()` defaults `max_server_delay` to 120s (`conservative()` keeps 60s); `ServerDelay::TooLong` now behaves like `Absent` — local exponential backoff with the same attempt-count ceiling — instead of aborting; `bounded_delay` maps `seconds <= 0.0` and past HTTP-dates to `Absent`, so `Retry-After: 0` no longer retries immediately. The multipart transport's duplicate `retry_delay` was aligned to the same semantics.
+- Reason: the previous 60s cap plus abort-on-overflow made official-SDK-retried transients (e.g. `Retry-After: 90`) surface as errors, and zero-valued headers caused hot-loop retries.
+- Impact: `openai-rs-client` transport defaults and both retry paths; no wire format change.
+- Overrides: none
+- Tests: `non_positive_retry_after_values_fall_back_to_local_backoff`, `server_retry_delays_within_the_default_bound_are_honored`, `retry_after_zero_uses_local_backoff_instead_of_retrying_immediately`, `bounded_server_retry_delays_are_obeyed_end_to_end`, `retry_after_above_the_bound_falls_back_to_local_backoff_and_keeps_retrying`.
+
+## D0132 — Codex UserInput models exactly the five pinned variants
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `openai-rs-codex` `UserInput`
+- Sources: pinned Codex 0.144.5 schema `#/definitions/v2/UserInput/oneOf` (TextUserInput, ImageUserInput, LocalImageUserInput, SkillUserInput, MentionUserInput only).
+- Decision: delete the fabricated `audio`/`localAudio` variants; tags outside the pin are rejected rather than retained, since the app-server protocol is closed and versioned by the pinned runtime.
+- Reason: sending either fabricated variant produced params the pinned 0.144.5 server cannot deserialize.
+- Impact: `openai-rs-codex` protocol (breaking: two variants removed).
+- Overrides: none
+- Tests: `protocol::tests::user_input_accepts_exactly_the_five_pinned_variants`.
+
+## D0133 — Codex account/usage/read takes null params and no threadUsage
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `openai-rs-codex` `account_usage` / `AccountUsageParams` / `AccountUsageResponse`
+- Sources: pinned Codex 0.144.5 schema `#/definitions/ClientRequest` `Account/usage/readRequest` variant (`params` is `{"type":"null"}`) and `#/definitions/v2/GetAccountTokenUsageResponse` (only `summary` and `dailyUsageBuckets`).
+- Decision: `account/usage/read` is always issued without a `params` key; `AccountUsageParams` and the fabricated `thread_usage` response field are removed, leaving `summary`, `dailyUsageBuckets`, and flatten extra.
+- Reason: a `threadId` parameter and a `threadUsage` field existed nowhere in the pinned schema; sending the former would fail server-side validation.
+- Impact: `openai-rs-codex` client API (breaking: method now parameterless).
+- Overrides: none
+- Tests: `app_server::client::tests::fake_child_typed_account_thread_and_turn_contracts` (wire assertions: no `threadId`, no `params` key).
+
+## D0134 — Codex InitializeCapabilities matches the pinned schema exactly
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `openai-rs-codex` `InitializeCapabilities` / `InitializeParams`
+- Sources: pinned Codex 0.144.5 schema `#/definitions/InitializeCapabilities` (exactly `experimentalApi`, `mcpServerOpenaiFormElicitation`, `optOutNotificationMethods`, `requestAttestation`) and `#/definitions/InitializeParams`.
+- Decision: model the four optional properties (`Omittable<bool>` for the three booleans, `Omittable<Nullable<Vec<String>>>` for the array/null union); remove the invented nested `extensions` field; a new flatten `extra` map retains future capability properties losslessly.
+- Reason: the client could not declare `mcpServerOpenaiFormElicitation`, and the `extensions` escape hatch nested one level too deep for the server to read.
+- Impact: `openai-rs-codex` handshake protocol.
+- Overrides: none
+- Tests: `initialize_capabilities_serialize_exactly_the_four_pinned_properties`, `initialize_params_serialize_the_pinned_handshake_shape`, `initialize_capabilities_keep_future_properties_and_null_losslessly`, `fake_child_handshake_correlation_and_unknown_notification`.
+
+## D0135 — Facade re-exports and example continuation (no wire change)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `openai-rs-sdk` facade (`lib.rs`), `examples/responses.rs`
+- Sources: `RetrieveResponseParams`/`RetrieveResponseStreamParams`/`BodyPreview`/`RateLimitMetadata` and the `sse` module are public in `openai-rs-client` but were unreachable through the facade; the official function-calling guide resends `tools` on every `previous_response_id` continuation, and `CreateResponseRequest::follow_up` documents that the prefix does not carry tools.
+- Decision: re-export the four client types and the `sse` module under the facade's client gate; switch the example's continuation to `follow_up_from`, which copies the stable prefix including tools, and correct its comment.
+- Reason: facade-only users could not call `retrieve_with`/`retrieve_stream` or match error details without taking a direct dependency on the client crate, and the example demonstrated a continuation the model could not tool-call against.
+- Impact: facade crate only; no wire behavior change.
+- Overrides: none
+- Tests: `crates/openai-rs/tests/facade_reexports.rs` (4 compile-level checks).
+

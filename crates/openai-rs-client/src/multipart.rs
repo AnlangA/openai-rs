@@ -1223,9 +1223,11 @@ fn retry_delay(headers: &http::HeaderMap, retries: u32, maximum: Duration) -> Op
         .and_then(|value| value.to_str().ok())
         && let Ok(milliseconds) = value.parse::<f64>()
         && milliseconds.is_finite()
-        && milliseconds >= 0.0
+        && milliseconds > 0.0
     {
-        return bounded_delay(milliseconds / 1000.0, maximum);
+        if let Some(delay) = bounded_delay(milliseconds / 1000.0, maximum) {
+            return Some(delay);
+        }
     }
     if let Some(value) = headers
         .get(header::RETRY_AFTER)
@@ -1233,15 +1235,17 @@ fn retry_delay(headers: &http::HeaderMap, retries: u32, maximum: Duration) -> Op
     {
         if let Ok(seconds) = value.parse::<f64>()
             && seconds.is_finite()
-            && seconds >= 0.0
+            && seconds > 0.0
+            && let Some(delay) = bounded_delay(seconds, maximum)
         {
-            return bounded_delay(seconds, maximum);
+            return Some(delay);
         }
-        if let Ok(time) = httpdate::parse_http_date(value) {
-            let delay = time
-                .duration_since(SystemTime::now())
-                .unwrap_or(Duration::ZERO);
-            return (delay <= maximum).then_some(delay);
+        if let Ok(time) = httpdate::parse_http_date(value)
+            && let Ok(delay) = time.duration_since(SystemTime::now())
+            && delay > Duration::ZERO
+            && delay <= maximum
+        {
+            return Some(delay);
         }
     }
     Some(local_retry_delay(retries))

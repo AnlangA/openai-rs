@@ -20,13 +20,12 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore, mpsc, on
 use super::codec::read_bounded_line;
 use crate::credentials::apply_credential;
 use crate::{
-    AccountRateLimitsResponse, AccountReadResponse, AccountUsageParams, AccountUsageResponse,
-    BrowserLogin, BrowserLoginOptions, CancelLoginResponse, ClientInfo, CodexCredentialMarker,
-    ConnectionFailure, ConnectionFailureKind, DeviceCodeLogin, EmptyResponse, Error,
-    InitializeParams, InitializeResponse, LoginAccountResponse, ManagedAppServerCredential,
-    Notification, RpcError, RpcId, RuntimeCompatibility, RuntimeIdentity, ThreadStartParams,
-    ThreadStartResponse, TurnInterruptParams, TurnStartParams, TurnStartResponse,
-    decode_notification,
+    AccountRateLimitsResponse, AccountReadResponse, AccountUsageResponse, BrowserLogin,
+    BrowserLoginOptions, CancelLoginResponse, ClientInfo, CodexCredentialMarker, ConnectionFailure,
+    ConnectionFailureKind, DeviceCodeLogin, EmptyResponse, Error, InitializeParams,
+    InitializeResponse, LoginAccountResponse, ManagedAppServerCredential, Notification, RpcError,
+    RpcId, RuntimeCompatibility, RuntimeIdentity, ThreadStartParams, ThreadStartResponse,
+    TurnInterruptParams, TurnStartParams, TurnStartResponse, decode_notification,
 };
 
 const DEFAULT_LINE_LIMIT: usize = 4 * 1024 * 1024;
@@ -447,15 +446,11 @@ where
         self.request_without_params("account/rateLimits/read").await
     }
 
-    pub async fn account_usage(
-        &self,
-        params: AccountUsageParams,
-    ) -> Result<AccountUsageResponse, Error> {
-        if params.thread_id.is_none() {
-            self.request_without_params("account/usage/read").await
-        } else {
-            self.request("account/usage/read", Some(params)).await
-        }
+    /// Read account token usage. The pinned schema types the
+    /// `account/usage/read` params as `null`, so the request is always sent
+    /// without a `params` key.
+    pub async fn account_usage(&self) -> Result<AccountUsageResponse, Error> {
+        self.request_without_params("account/usage/read").await
     }
 
     pub async fn thread_start(
@@ -1110,9 +1105,8 @@ mod tests {
         AppServerClient, AppServerConfig, AppServerEvent, AppServerLimits, StderrTail, sha256_file,
     };
     use crate::{
-        AccountUsageParams, BrowserLoginOptions, ClientInfo, Error, Notification,
-        RuntimeCompatibility, RuntimeIdentity, ThreadStartParams, TurnInterruptParams,
-        TurnStartParams,
+        BrowserLoginOptions, ClientInfo, Error, Notification, RuntimeCompatibility,
+        RuntimeIdentity, ThreadStartParams, TurnInterruptParams, TurnStartParams,
     };
 
     fn fake_runtime(executable: &Path) -> Result<RuntimeCompatibility, Box<dyn std::error::Error>> {
@@ -1144,6 +1138,8 @@ mod tests {
             test -d "$CODEX_HOME" || exit 11
             IFS= read -r init || exit 12
             case "$init" in *'"method":"initialize"'*'"id":1'*) ;; *) exit 13 ;; esac
+            case "$init" in *'"params":{"clientInfo":{"name":"test","version":"0.0.0"}}'*) ;; *) exit 28 ;; esac
+            case "$init" in *capabilities*) exit 29 ;; esac
             printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
             IFS= read -r initialized || exit 14
             case "$initialized" in *'"method":"initialized"'*) ;; *) exit 15 ;; esac
@@ -1234,6 +1230,8 @@ mod tests {
 
             IFS= read -r usage || exit 43
             case "$usage" in *'"method":"account/usage/read"'*) ;; *) exit 44 ;; esac
+            case "$usage" in *threadId*) exit 52 ;; esac
+            case "$usage" in *'"params"'*) exit 53 ;; esac
             printf '%s\n' '{"id":7,"result":{"summary":{"lifetimeTokens":123,"peakDailyTokens":45,"longestRunningTurnSec":9,"currentStreakDays":2,"longestStreakDays":3},"dailyUsageBuckets":[{"startDate":"2026-08-30","tokens":12}]}}'
 
             IFS= read -r thread || exit 45
@@ -1279,7 +1277,7 @@ mod tests {
             limits.rate_limits.rate_limit_reached_type.as_deref(),
             Some("future_state")
         );
-        let usage = client.account_usage(AccountUsageParams::default()).await?;
+        let usage = client.account_usage().await?;
         assert_eq!(usage.summary.lifetime_tokens, Some(123));
 
         let thread = client.thread_start(ThreadStartParams::default()).await?;

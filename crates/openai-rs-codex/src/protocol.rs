@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use openai_rs_types::kernel::{Nullable, Omittable};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
@@ -33,17 +34,33 @@ impl ClientInfo {
 }
 
 /// Capabilities explicitly advertised by the client.
+///
+/// Mirrors the four optional properties of the pinned
+/// `InitializeCapabilities` schema. Each sendable field is [`Omittable`] so a
+/// caller decides whether the key is sent at all; capabilities the schema has
+/// not modelled yet are retained losslessly in [`InitializeCapabilities::extra`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeCapabilities {
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub experimental_api: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub request_attestation: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub opt_out_notification_methods: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extensions: Option<BTreeMap<String, Value>>,
+    /// Opt into receiving experimental API methods and fields.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub experimental_api: Omittable<bool>,
+    /// Allow downstream MCP servers to request OpenAI extended form
+    /// elicitations.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub mcp_server_openai_form_elicitation: Omittable<bool>,
+    /// Exact notification method names that should be suppressed for this
+    /// connection (for example `thread/started`). The pinned schema allows an
+    /// explicit `null`, so the value axis is [`Nullable`].
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub opt_out_notification_methods: Omittable<Nullable<Vec<String>>>,
+    /// Opt into `attestation/generate` requests for upstream
+    /// `x-oai-attestation`.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub request_attestation: Omittable<bool>,
+    /// Future capability properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -204,13 +221,6 @@ pub struct AccountRateLimitsResponse {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountUsageParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageSummary {
@@ -237,8 +247,6 @@ pub struct DailyUsageBucket {
 pub struct AccountUsageResponse {
     pub summary: AccountUsageSummary,
     pub daily_usage_buckets: Option<Vec<DailyUsageBucket>>,
-    #[serde(default)]
-    pub thread_usage: Option<Value>,
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -329,6 +337,10 @@ pub struct TextElement {
 }
 
 /// Typed user input accepted by `turn/start`.
+///
+/// Exactly the five variants of the pinned `v2/UserInput` schema (`text`,
+/// `image`, `localImage`, `skill`, `mention`). Tags outside that set are
+/// rejected rather than guessed at.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum UserInput {
@@ -346,12 +358,6 @@ pub enum UserInput {
         path: PathBuf,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
-    },
-    Audio {
-        url: String,
-    },
-    LocalAudio {
-        path: PathBuf,
     },
     Skill {
         name: String,
@@ -600,7 +606,10 @@ pub(crate) fn decode_notification(
 mod tests {
     use serde_json::json;
 
-    use super::{Notification, TurnStartParams, UserInput, decode_notification};
+    use super::{
+        ClientInfo, InitializeCapabilities, InitializeParams, Notification, Nullable, Omittable,
+        TurnStartParams, UserInput, decode_notification,
+    };
 
     #[test]
     fn text_input_serializes_without_handwritten_json() -> Result<(), serde_json::Error> {
@@ -613,12 +622,144 @@ mod tests {
                 "input": [{"type": "text", "text": "hello"}]
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_accepts_exactly_the_five_pinned_variants() -> Result<(), serde_json::Error> {
+        assert_eq!(
+            serde_json::to_value(UserInput::text("hello"))?,
+            json!({"type": "text", "text": "hello"})
+        );
         assert!(matches!(
-            serde_json::from_value::<UserInput>(
-                json!({"type":"audio","url":"data:audio/wav;base64,AA=="})
-            )?,
-            UserInput::Audio { .. }
+            serde_json::from_value::<UserInput>(json!({
+                "type": "image",
+                "url": "https://example.test/a.png",
+                "detail": "high"
+            }))?,
+            UserInput::Image { .. }
         ));
+        assert!(matches!(
+            serde_json::from_value::<UserInput>(json!({
+                "type": "localImage",
+                "path": "/tmp/a.png"
+            }))?,
+            UserInput::LocalImage { .. }
+        ));
+        assert!(matches!(
+            serde_json::from_value::<UserInput>(json!({
+                "type": "skill",
+                "name": "deploy",
+                "path": "/skills/deploy"
+            }))?,
+            UserInput::Skill { .. }
+        ));
+        assert!(matches!(
+            serde_json::from_value::<UserInput>(json!({
+                "type": "mention",
+                "name": "file",
+                "path": "src/main.rs"
+            }))?,
+            UserInput::Mention { .. }
+        ));
+
+        // `audio` and `localAudio` are absent from the pinned
+        // `#/definitions/v2/UserInput/oneOf`; decoding them must fail instead
+        // of producing a payload 0.144.5 cannot deserialize.
+        assert!(
+            serde_json::from_value::<UserInput>(json!({
+                "type": "audio",
+                "url": "data:audio/wav;base64,AA=="
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<UserInput>(json!({
+                "type": "localAudio",
+                "path": "/tmp/a.wav"
+            }))
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn initialize_capabilities_serialize_exactly_the_four_pinned_properties()
+    -> Result<(), serde_json::Error> {
+        let capabilities = InitializeCapabilities {
+            experimental_api: Omittable::Value(true),
+            mcp_server_openai_form_elicitation: Omittable::Value(true),
+            opt_out_notification_methods: Omittable::Value(Nullable::Value(vec![
+                "thread/started".to_owned(),
+            ])),
+            request_attestation: Omittable::Value(false),
+            extra: serde_json::Map::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(&capabilities)?,
+            json!({
+                "experimentalApi": true,
+                "mcpServerOpenaiFormElicitation": true,
+                "optOutNotificationMethods": ["thread/started"],
+                "requestAttestation": false,
+            })
+        );
+
+        // An all-omitted capabilities object sends no keys at all; there is no
+        // invented `extensions` escape hatch anymore.
+        assert_eq!(
+            serde_json::to_value(InitializeCapabilities::default())?,
+            json!({})
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn initialize_params_serialize_the_pinned_handshake_shape() -> Result<(), serde_json::Error> {
+        let params = InitializeParams::new(ClientInfo::new("test", "0.0.0"));
+        assert_eq!(
+            serde_json::to_value(&params)?,
+            json!({"clientInfo": {"name": "test", "version": "0.0.0"}})
+        );
+
+        let negotiated = InitializeParams {
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true.into(),
+                ..InitializeCapabilities::default()
+            }),
+            ..params
+        };
+        assert_eq!(
+            serde_json::to_value(&negotiated)?,
+            json!({
+                "clientInfo": {"name": "test", "version": "0.0.0"},
+                "capabilities": {"experimentalApi": true},
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn initialize_capabilities_keep_future_properties_and_null_losslessly()
+    -> Result<(), serde_json::Error> {
+        let capabilities: InitializeCapabilities = serde_json::from_value(json!({
+            "experimentalApi": true,
+            "optOutNotificationMethods": null,
+            "futureCapability": {"nested": [1, 2]},
+        }))?;
+        assert_eq!(capabilities.experimental_api, Omittable::Value(true));
+        assert_eq!(
+            capabilities.opt_out_notification_methods,
+            Omittable::Value(Nullable::Null)
+        );
+        assert_eq!(
+            serde_json::to_value(&capabilities)?,
+            json!({
+                "experimentalApi": true,
+                "optOutNotificationMethods": null,
+                "futureCapability": {"nested": [1, 2]},
+            })
+        );
         Ok(())
     }
 

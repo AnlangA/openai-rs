@@ -409,6 +409,10 @@ macro_rules! tagged_union {
         $(#[$meta])*
         #[derive(Debug, Clone, PartialEq)]
         #[non_exhaustive]
+        // Lossless wire unions keep every variant unboxed so known tags are
+        // cheap to construct and match. Boxing the largest variants would be
+        // a breaking public-API refactor tracked separately from wire fixes.
+        #[allow(clippy::large_enum_variant)]
         pub enum $name {
             $($variant($ty),)+
             /// A future variant retained as a complete semantic JSON object.
