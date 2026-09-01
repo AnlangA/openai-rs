@@ -4588,3 +4588,47 @@ until a decision is recorded here and its fixtures pass.
 - Impact: behavior fixes on the evals nullability (decode-hardening) and direct error display; additive accessors, re-exports, and tests; documentation.
 - Overrides: none
 - Tests: the round-10 additions cited in the group reports (workspace total 1101 → 1119).
+
+## D0247 — Strict schemas drop the root $schema declaration; Prompt.variables is three-state; tool names pin at 128
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `normalize_strict_schema` root handling, `PromptReference.variables`, `validate_name` length split, `FunctionTool::for_type` name validation
+- Sources: round-11 audit (问题11.md items 11-01/11-02/11-05) — schemars 1.2.2's `schema_for!` (draft 2020-12 generator) unconditionally inserts a root `"$schema"` key with no removal transform, and the normalizer's keyword list let it reach the wire on all three public entry points (`StructuredOutput::new`, `TypedFunction::new`, `FunctionTool::for_type`); the ecosystem strips it (node's zod openai target) or never produces it (pydantic), and strict endpoints reject unknown root keys; the pinned `Prompt.variables` is `anyOf [map, null]` (python `Optional[Dict]`, node nullable) yet the field was a bare map so a `variables: null` echo failed the whole Response decode (D0034 fixed the sibling `version` only); the pinned function-tool name bound is 1..=128 while `validate_name` capped every path at 64 (the text-format bound) and `FunctionTool::for_type` validated nothing.
+- Decision: the root `$schema` declaration key is stripped at the `normalize_strict_schema` entrance (root only — schemars emits it once at the document root), recorded as the single documented exception to D0129's never-silently-drops contract; non-root occurrences keep ordinary keyword handling. `PromptReference.variables` becomes `Omittable<Nullable<BTreeMap<..>>>` with a `variables_null()` builder. Name validation splits by surface: `MAX_RESPONSE_FORMAT_NAME_CHARS = 64` for text-format names, `MAX_FUNCTION_TOOL_NAME_CHARS = 128` for `TypedFunction`/`ToolRegistry`/`FunctionTool::for_type` (the `for_type` path gains validation it previously lacked).
+- Impact: `openai-rs-types` structured output and Responses surfaces (behavior fix on the wire — generated strict schemas no longer carry `$schema`; the variables field type is breaking).
+- Overrides: documents the sole D0129 exception
+- Tests: `schemars_root_dollar_schema_never_reaches_the_wire`, `hand_written_root_dollar_schema_is_stripped`, `prompt_reference_variables_send_and_decode_official_null`, `function_tool_names_accept_65_to_128_characters`, `response_format_names_stay_capped_at_64_characters`, `tool_registry_follows_the_128_char_tool_name_pin`, `function_tool_for_type_enforces_the_128_char_name_pin`.
+
+## D0248 — Beta create validates its own context_management; streaming gains a validate entry
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `BetaCreateResponseRequest::validate`, `BetaCreateStreamingResponseRequest::validate`, `validate_beta_context_management`
+- Sources: round-11 item 11-03 — the beta struct stores `context_management` outside the embedded GA base, so `base.validate()` never saw it and the two GA checks (non-empty array, `compact_threshold >= 1000`) were unreachable on the beta channel despite its "alongside the GA constraints" doc; GA's builder macro exposes `validate()` on both typestates while the beta streaming type had none.
+- Decision: the two GA constraints replay on the beta entrance wrapped through the existing `CreateResponseConstraintError` variants (the threshold is read from the shared wire encoding since the field is private to the GA module; null/omitted skip matches GA); the streaming typestate gains a `validate()` that delegates to the non-streaming one.
+- Impact: `openai-rs-types` beta validation surface (additive).
+- Overrides: none
+- Tests: `create_and_streaming_validate_enforce_beta_context_management_bounds`.
+
+## D0249 — Files gains wait_for_processing and the for_files preset; admin digest constants replaced by a row projection parity; catalog's ghost execution field removed; the rmcp alias covers every rmcp feature; the SSE no-leak test retries
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `Files::wait_for_processing`, `PollOptions::for_files`, the deleted admin SHA-256 constants plus a row-projection parity test, the rmcp catalog dropped-fields list, the facade rmcp alias cfg, the SSE tracing no-leak test
+- Sources: round-11 items 11-04/11-06/11-07/11-08/11-09 — both official SDKs ship `wait_for_processing` (terminal set processed/error/deleted with `deleted` expressible only through the open enum's Unknown, and `error` being a resource terminal that returns the object rather than an error; defaults 5s/30min); the two admin manifest digest constants froze at the pin-introduction hash with zero consumers while the runtime parity test already guards the live file; the catalog's dropped-fields list cited an `execution` field that exists in neither the locked rmcp 3.1.4 `Tool` nor the MCP 2026-07-28 schema (a 2025-11-25 revision leftover, breaking the `mcp_tool()` escape promise for that entry); the facade rmcp alias was gated on `rmcp` alone so the server/auth-only feature combinations compiled the crate without exposing anything (the 7-24 pattern); the SSE no-leak test raced the process-level callsite cache in parallel runs (the same root cause rmcp's dispatch-span tests hit in 6-18).
+- Decision: `wait_for_processing` rides the shared poller with the terminal set Processed | Error | unknown "deleted", returning the file on error terminals and `DeadlineExceeded` on timeout, with a `for_files()` preset (5s/30min) added to the poll consumers; the stale digests are deleted and a stronger row-by-row projection parity test (id/method/path/modes/statuses/content-types/schema-refs, sorted and fully compared against the pinned spec) takes over provenance; the catalog list drops `execution` and now claims exhaustiveness against the locked rmcp shape; the facade alias cfg becomes `any(rmcp, rmcp-server, rmcp-server-stdio, rmcp-auth)`; the no-leak test adopts the sixteen-attempt re-arm pattern with a keep-alive queue server (assertion strength unchanged, five repeated runs green).
+- Impact: `openai-rs-client` Files/poll (additive), `openai-rs-types` admin (breaking only for the two zero-consumer constants), rmcp documentation, facade gating (a pure widening), test stability.
+- Overrides: none
+- Tests: `wait_for_processing_resolves_every_terminal_status`, `wait_for_processing_times_out_with_the_last_observed_status`, `wait_for_processing_accepts_for_files_preset_options`, `for_files_preset_matches_the_official_wait_for_processing_defaults`, `operation_manifest_rows_match_the_pinned_spec_projection`, `rmcp_alias_is_nameable_under_any_rmcp_feature`, `rmcp_alias_is_nameable_through_the_facade_under_any_rmcp_feature`, the hardened `sse_stream_deltas_never_enter_tracing`.
+
+## D0250 — Round-11 recorded positions
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: bare root refs; Certificate.active; beta retrieve's non-streaming params; speech stream_format; skill reference validation; webhook docs provenance; the duplicate realtime.call.incoming; RpcId; the executor's auth-only import
+- Sources: round-11 audit observations (问题11.md items 11-10 and the per-domain notes).
+- Decision: the bare `"$ref": "#"` rejection stands (D0143/D0230) despite the official docs using it in recursion examples — the tension is recorded for reopening when real recursion demand appears; `Certificate.active` stays a permissive union field (the shared DTO spans pin-required and optional shapes); beta non-streaming retrieve deliberately omits the stream-only parameters; `CreateSpeechRequest` keeps `stream_format` internal (the default equals omission — a builder may be added on demand); container skill references keep serde-lossless without opt-in validation (python validates nothing either); the webhooks module doc's delivery-semantics provenance now cites the official platform guide rather than node's docs; the second `realtime.call.incoming` model stays (the realtime feature cannot depend on the webhooks feature — the divergence is documented); `RpcId`'s u64 domain stays (1-R3, fail-closed on negatives); the executor's `std::time::Duration` import warning under auth-only feature combinations is noted for a follow-up touch.
+- Impact: documentation and ledger only.
+- Overrides: none
+- Tests: existing suites.

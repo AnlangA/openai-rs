@@ -136,7 +136,20 @@ pub mod admin {
 #[cfg(any(feature = "codex-app-server", feature = "experimental-codex-direct"))]
 pub use openai_rs_codex as codex;
 
-#[cfg(feature = "rmcp")]
+/// RMCP bridge surface.
+///
+/// 11-08: the alias exists whenever any rmcp feature pulls the crate in —
+/// `rmcp` (and its stdio/http derivatives) for the client bridge, plus the
+/// server-only combinations `rmcp-server`, `rmcp-server-stdio`, and
+/// `rmcp-auth` — so enabling a server feature alone no longer compiles the
+/// crate while leaving the facade silent (same family as the 7-24 codex
+/// alias fix).
+#[cfg(any(
+    feature = "rmcp",
+    feature = "rmcp-server",
+    feature = "rmcp-server-stdio",
+    feature = "rmcp-auth"
+))]
 pub use openai_rs_rmcp as rmcp;
 
 #[cfg(test)]
@@ -164,6 +177,24 @@ mod tests {
     fn codex_alias_is_nameable_under_either_codex_feature() {
         fn assert_alias_nameable(id: Option<crate::codex::RpcId>) -> Option<crate::codex::RpcId> {
             id
+        }
+        assert!(assert_alias_nameable(None).is_none());
+    }
+
+    /// 11-08: the `rmcp` alias is compiled in under any rmcp-gated feature,
+    /// so enabling a server-only combination (e.g. `rmcp-auth` or
+    /// `rmcp-server` without the client-bridge feature `rmcp`) still exposes
+    /// the bridge crate through the facade.
+    #[cfg(any(
+        feature = "rmcp",
+        feature = "rmcp-server",
+        feature = "rmcp-server-stdio",
+        feature = "rmcp-auth"
+    ))]
+    #[test]
+    fn rmcp_alias_is_nameable_under_any_rmcp_feature() {
+        fn assert_alias_nameable(tool: Option<crate::rmcp::Tool>) -> Option<crate::rmcp::Tool> {
+            tool
         }
         assert!(assert_alias_nameable(None).is_none());
     }

@@ -125,12 +125,16 @@ impl CatalogEntry {
     ///   slot; callers that need it must read it from the raw declaration.
     /// - `annotations` — hints such as `readOnlyHint`/`destructiveHint` are
     ///   advisory metadata, not part of the function definition.
-    /// - `execution` — task-support configuration has no Responses function
-    ///   counterpart.
     /// - `icons` — presentation-only metadata.
     /// - `_meta` — server-specific extension metadata.
     /// - `title` — used only as the fallback description when `description`
     ///   is absent; when a description exists the title is not carried over.
+    ///
+    /// The list is exhaustive for the pinned rmcp 3.1.4 `Tool` shape: the
+    /// name, description, and `inputSchema` are consumed, and the declaration
+    /// carries no other fields. An earlier revision also listed `execution`
+    /// here, a 2025-11-25 spec-revision leftover that neither the pinned rmcp
+    /// model nor the MCP 2026-07-28 schema defines (11-07).
     pub fn function_tool(&self) -> FunctionTool {
         let mut function =
             FunctionTool::new(&self.openai_name).parameters(Value::Object(self.parameters.clone()));

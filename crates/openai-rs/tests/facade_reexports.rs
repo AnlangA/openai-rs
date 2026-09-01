@@ -226,3 +226,27 @@ fn content_provenance_discriminators_are_nameable_through_the_facade() {
     assert_eq!(C2paValidationState::NotPresent.as_str(), "not_present");
     assert!(C2paValidationState::from_raw("trusted").is_known());
 }
+
+/// The facade's `rmcp` alias used to be gated on the client-bridge feature
+/// alone (issue 11-08, same family as the 7-24 codex alias fix): the
+/// server-only feature combinations (`rmcp-server`, `rmcp-server-stdio`,
+/// `rmcp-auth`) compiled the rmcp crate but left the alias unnameable. This
+/// test keeps the alias and its root `Tool` re-export usable under any rmcp
+/// feature.
+#[cfg(any(
+    feature = "rmcp",
+    feature = "rmcp-server",
+    feature = "rmcp-server-stdio",
+    feature = "rmcp-auth"
+))]
+#[test]
+fn rmcp_alias_is_nameable_through_the_facade_under_any_rmcp_feature() {
+    use openai_rs::rmcp::Tool;
+
+    // `Tool` declarations arrive from an MCP peer, not the facade; coercing
+    // the path through a function signature keeps the alias compile-checked.
+    fn assert_alias_nameable(tool: Option<Tool>) -> Option<Tool> {
+        tool
+    }
+    assert!(assert_alias_nameable(None).is_none());
+}

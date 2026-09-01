@@ -6,8 +6,8 @@ use futures_core::Stream;
 use http::{Method, StatusCode};
 use openai_rs_types::{
     AddUploadPartRequest, CompleteUploadRequest, CreateFileRequest, CreateUploadRequest,
-    DeleteFileResponse, FileId, FileListPage, FileListParams, FileObject, MAX_UPLOAD_PART_BYTES,
-    Omittable, ReplayableMultipartSource, Upload, UploadId, UploadPart,
+    DeleteFileResponse, FileId, FileListPage, FileListParams, FileObject, FileStatus,
+    MAX_UPLOAD_PART_BYTES, Omittable, ReplayableMultipartSource, Upload, UploadId, UploadPart,
 };
 
 use crate::{
@@ -20,6 +20,7 @@ use crate::{
         AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, RetryClass,
         private::Sealed,
     },
+    poll::{PollError, PollOptions},
     transport::PathSegment,
 };
 
@@ -110,6 +111,37 @@ impl Files {
             .transport()
             .execute_json::<RetrieveFile, ()>(&path, None, None)
             .await
+    }
+
+    /// Polls until the file leaves the processing pipeline.
+    ///
+    /// Terminal statuses are `processed`, `error`, and `deleted`. A file whose
+    /// processing failed still resolves with its [`FileObject`] (its status is
+    /// `error`) rather than an `Err`, mirroring the official SDK helpers: the
+    /// failure is a terminal state of the resource, not a transport failure.
+    /// `deleted` is not a named variant of the pinned [`FileStatus`] domain
+    /// (it surfaces on files removed server-side), so that terminal state is
+    /// matched through the open enum's unknown-value fallback.
+    ///
+    /// Start from [`PollOptions::for_files`] (5-second interval, 30-minute
+    /// deadline), which matches the official `wait_for_processing` defaults;
+    /// an expired deadline reports [`PollError::DeadlineExceeded`] with the
+    /// last observed status.
+    pub async fn wait_for_processing(
+        &self,
+        file_id: &FileId,
+        options: PollOptions,
+    ) -> Result<ApiResponse<FileObject>, PollError> {
+        crate::poll::poll_resource_with_status(
+            || self.retrieve(file_id),
+            |file| {
+                matches!(file.status(), FileStatus::Processed | FileStatus::Error)
+                    || file.status().unknown_value() == Some("deleted")
+            },
+            |file| file.status().as_str().to_owned(),
+            options,
+        )
+        .await
     }
 
     /// Deletes one stored file.
@@ -429,6 +461,7 @@ mod tests {
         collections::VecDeque,
         convert::Infallible,
         sync::{Arc, Mutex},
+        time::Duration,
     };
 
     use bytes::Bytes;
@@ -852,6 +885,121 @@ mod tests {
         assert!(stream.next().await.is_none());
         assert!(captured.recv().await.is_some());
         assert!(captured.recv().await.is_some());
+    }
+
+    fn file_json(id: &str, status: &str) -> String {
+        format!(
+            r#"{{"id":"{id}","object":"file","bytes":12,"created_at":1,"filename":"input.txt","purpose":"user_data","status":"{status}"}}"#
+        )
+    }
+
+    #[tokio::test]
+    async fn wait_for_processing_resolves_every_terminal_status() {
+        // `processed` after one in-flight poll.
+        let (client, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, file_json("file_1", "uploaded")),
+            (StatusCode::OK, file_json("file_1", "processed")),
+        ])
+        .await;
+        let response = client
+            .files()
+            .wait_for_processing(
+                &FileId::new("file_1"),
+                PollOptions::new()
+                    .with_interval(Duration::from_millis(1))
+                    .with_timeout(Duration::from_secs(5)),
+            )
+            .await
+            .expect("processed file resolves");
+        assert_eq!(response.status(), &FileStatus::Processed);
+        assert!(captured.recv().await.is_some());
+        assert!(captured.recv().await.is_some());
+
+        // `error` is a terminal state of the resource, not a transport
+        // failure: the poll resolves with the file object carrying it.
+        let (client, _) = serve_sequence(vec![
+            (StatusCode::OK, file_json("file_2", "uploaded")),
+            (StatusCode::OK, file_json("file_2", "error")),
+        ])
+        .await;
+        let response = client
+            .files()
+            .wait_for_processing(
+                &FileId::new("file_2"),
+                PollOptions::new()
+                    .with_interval(Duration::from_millis(1))
+                    .with_timeout(Duration::from_secs(5)),
+            )
+            .await
+            .expect("an error-status file still resolves with its object");
+        assert_eq!(response.status(), &FileStatus::Error);
+
+        // `deleted` is outside the pinned `FileStatus` domain and reaches the
+        // terminal set through the open enum's unknown-value fallback.
+        let (client, _) =
+            serve_sequence(vec![(StatusCode::OK, file_json("file_3", "deleted"))]).await;
+        let response = client
+            .files()
+            .wait_for_processing(
+                &FileId::new("file_3"),
+                PollOptions::new()
+                    .with_interval(Duration::from_millis(1))
+                    .with_timeout(Duration::from_secs(5)),
+            )
+            .await
+            .expect("a deleted file is terminal through the unknown fallback");
+        assert_eq!(response.status().as_str(), "deleted");
+    }
+
+    #[tokio::test]
+    async fn wait_for_processing_times_out_with_the_last_observed_status() {
+        // Far more in-flight responses than the shortened deadline can
+        // consume, so the poll stops on the deadline rather than an empty
+        // queue or a decode failure.
+        let in_flight = (0..50)
+            .map(|_| (StatusCode::OK, file_json("file_1", "uploaded")))
+            .collect();
+        let (client, _) = serve_sequence(in_flight).await;
+
+        let error = client
+            .files()
+            .wait_for_processing(
+                &FileId::new("file_1"),
+                PollOptions::new()
+                    .with_interval(Duration::from_millis(10))
+                    .with_timeout(Duration::from_millis(40)),
+            )
+            .await
+            .expect_err("an ever-processing file must hit the deadline");
+        match error {
+            PollError::DeadlineExceeded { last_status } => {
+                assert_eq!(last_status.as_deref(), Some("uploaded"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_for_processing_accepts_for_files_preset_options() {
+        let (client, _) = serve_sequence(vec![
+            (StatusCode::OK, file_json("file_1", "uploaded")),
+            (StatusCode::OK, file_json("file_1", "processed")),
+        ])
+        .await;
+
+        // Start from the files preset and only shorten the cadence so the
+        // smoke stays fast while proving the preset reaches a terminal state.
+        let response = client
+            .files()
+            .wait_for_processing(
+                &FileId::new("file_1"),
+                PollOptions::for_files()
+                    .with_interval(Duration::from_millis(1))
+                    .with_timeout(Duration::from_secs(5)),
+            )
+            .await
+            .expect("poll file with files preset");
+        assert_eq!(response.status(), &FileStatus::Processed);
     }
 
     // A client pointed at a loopback port with no listener: a part that slips

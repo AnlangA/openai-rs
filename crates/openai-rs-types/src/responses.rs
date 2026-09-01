@@ -2025,6 +2025,10 @@ pub struct FunctionTool {
 
 impl FunctionTool {
     /// Creates a strict function tool from `T`'s `schemars` JSON Schema definition.
+    ///
+    /// The name is validated against the same 1..=128 pin that the
+    /// request-level check enforces, closing the asymmetry with
+    /// [`FunctionTool::new`], which performs no validation.
     #[cfg(feature = "structured-output")]
     pub fn for_type<T: schemars::JsonSchema>(
         name: impl Into<String>,
@@ -2032,6 +2036,7 @@ impl FunctionTool {
     ) -> Result<Self, crate::StructuredError> {
         let name = name.into();
         let description = description.into();
+        crate::structured::validate_function_tool_name(&name)?;
         let mut schema = serde_json::to_value(schemars::schema_for!(T))
             .map_err(crate::StructuredError::Encode)?;
         crate::structured::normalize_strict_schema(&mut schema)?;
@@ -5615,8 +5620,8 @@ pub struct PromptReference {
     id: String,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     version: Omittable<Nullable<String>>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    variables: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    variables: Omittable<Nullable<BTreeMap<String, Value>>>,
 }
 
 impl PromptReference {
@@ -5626,7 +5631,7 @@ impl PromptReference {
         Self {
             id: id.into(),
             version: Omittable::Omitted,
-            variables: BTreeMap::new(),
+            variables: Omittable::Omitted,
         }
     }
 
@@ -5644,14 +5649,30 @@ impl PromptReference {
         self
     }
 
+    /// Sends `variables: null`.
+    #[must_use]
+    pub fn variables_null(mut self) -> Self {
+        self.variables = Omittable::Value(Nullable::Null);
+        self
+    }
+
     /// Serializes and inserts one typed prompt variable.
+    ///
+    /// Replacing a previous `Omitted`/explicit-`null` state with a map means
+    /// `variables_null().variable(..)` resolves to the single supplied
+    /// variable rather than an error.
     pub fn variable<T: Serialize>(
         mut self,
         name: impl Into<String>,
         value: &T,
     ) -> Result<Self, serde_json::Error> {
-        self.variables
-            .insert(name.into(), serde_json::to_value(value)?);
+        let encoded = serde_json::to_value(value)?;
+        let mut variables = match self.variables {
+            Omittable::Value(Nullable::Value(variables)) => variables,
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => BTreeMap::new(),
+        };
+        variables.insert(name.into(), encoded);
+        self.variables = Omittable::Value(Nullable::Value(variables));
         Ok(self)
     }
 }
@@ -18310,6 +18331,11 @@ mod tests {
         assert_eq!(serialized["strict"], true);
         assert_eq!(serialized["parameters"]["type"], "object");
         assert_eq!(serialized["parameters"]["additionalProperties"], false);
+        assert!(
+            serialized["parameters"].get("$schema").is_none(),
+            "schemars root `$schema` must be stripped before the wire: {}",
+            serialized["parameters"]
+        );
 
         let call = FunctionCall::new(
             "item_1",
@@ -18370,6 +18396,23 @@ mod tests {
             val["output"],
             "{\"temperature\":26.0,\"summary\":\"Sunny\"}"
         );
+    }
+
+    #[test]
+    fn function_tool_for_type_enforces_the_128_char_name_pin() {
+        // 11-05: `for_type` used to skip name validation entirely (unlike
+        // `TypedFunction::new`, which capped at 64). It now enforces the
+        // pin's 1..=128 function-tool range.
+        let tool = FunctionTool::for_type::<WeatherQuery>("a".repeat(128), "Boundary tool")
+            .expect("128-char tool name is pin-legal");
+        assert_eq!(tool.name().chars().count(), 128);
+
+        let rejected = FunctionTool::for_type::<WeatherQuery>("a".repeat(129), "Over the pin")
+            .expect_err("129-char tool name must fail");
+        assert!(matches!(
+            rejected,
+            crate::structured::StructuredError::InvalidName(_)
+        ));
     }
 
     #[test]
@@ -19490,6 +19533,61 @@ mod tests {
             InputContent::ComputerScreenshot(_)
         ));
         assert!(!matches!(decoded_content, InputContent::Unknown(_)));
+    }
+
+    #[test]
+    fn prompt_reference_variables_send_and_decode_official_null() {
+        // 11-02: the pin types `Prompt.variables` as anyOf[map, null], so a
+        // response echo carrying `variables: null` must decode (D0034 fixed
+        // the sibling `version` but not this field) and the builder must be
+        // able to send the same shape.
+        let echoed = serde_json::from_value::<PromptReference>(json!({
+            "id": "pmpt_weather",
+            "variables": null
+        }))
+        .expect("official Prompt.variables null");
+        assert!(
+            matches!(
+                echoed,
+                PromptReference {
+                    variables: Omittable::Value(Nullable::Null),
+                    ..
+                }
+            ),
+            "explicit variables null must decode losslessly: {echoed:?}"
+        );
+        assert_eq!(
+            serde_json::to_value(&echoed).expect("round-trip variables null")["variables"],
+            Value::Null
+        );
+
+        let sent = serde_json::to_value(PromptReference::new("pmpt_weather").variables_null())
+            .expect("send variables null");
+        assert_eq!(sent["variables"], Value::Null);
+        assert!(sent.get("version").is_none());
+
+        // The map side of the anyOf keeps working through `variable()`.
+        let with_variable = PromptReference::new("pmpt_weather")
+            .variable("city", &"Shanghai")
+            .expect("insert prompt variable");
+        assert_eq!(
+            serde_json::to_value(&with_variable).expect("serialize variables map"),
+            json!({
+                "id": "pmpt_weather",
+                "variables": { "city": "Shanghai" }
+            })
+        );
+
+        // Supplying a variable after `variables_null()` resolves to the map
+        // branch instead of failing on the explicit null.
+        let replaced = PromptReference::new("pmpt_weather")
+            .variables_null()
+            .variable("city", &"Shanghai")
+            .expect("variable() replaces explicit null with a map");
+        assert_eq!(
+            serde_json::to_value(&replaced).expect("serialize replaced variables")["variables"],
+            json!({ "city": "Shanghai" })
+        );
     }
 
     #[test]

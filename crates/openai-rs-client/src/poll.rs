@@ -1,5 +1,5 @@
-//! Bounded polling shared by Vector Stores, Fine-tuning, Evals, Batches, and
-//! background-mode Responses.
+//! Bounded polling shared by Vector Stores, Files, Fine-tuning, Evals,
+//! Batches, and background-mode Responses.
 
 use std::{
     future::Future,
@@ -101,6 +101,22 @@ impl PollOptions {
     pub const fn for_eval_runs() -> Self {
         Self {
             interval: Duration::from_secs(1),
+            timeout: Duration::from_secs(30 * 60),
+            cancellation: None,
+        }
+    }
+
+    /// Creates options with file-processing defaults (5-second interval, 30-minute timeout).
+    ///
+    /// Matches the official SDK `wait_for_processing` helpers: uploads
+    /// typically finish processing within seconds, but large files can take
+    /// minutes, so the window is widened to thirty minutes while the interval
+    /// stays at five seconds to keep request volume proportionate. Consumed by
+    /// [`crate::files::Files::wait_for_processing`].
+    #[must_use]
+    pub const fn for_files() -> Self {
+        Self {
+            interval: Duration::from_secs(5),
             timeout: Duration::from_secs(30 * 60),
             cancellation: None,
         }
@@ -335,6 +351,20 @@ mod tests {
         assert!(options.cancellation.is_none());
 
         // The generic defaults cannot cover the pinned `24h` completion window.
+        let defaults = PollOptions::new();
+        assert_eq!(defaults.interval(), Duration::from_secs(1));
+        assert_eq!(defaults.timeout(), Duration::from_secs(10 * 60));
+    }
+
+    #[test]
+    fn for_files_preset_matches_the_official_wait_for_processing_defaults() {
+        let options = PollOptions::for_files();
+        assert_eq!(options.interval(), Duration::from_secs(5));
+        assert_eq!(options.timeout(), Duration::from_secs(30 * 60));
+        assert!(options.cancellation.is_none());
+
+        // File processing is bounded by upload size, not a pinned completion
+        // window, so the preset only widens the generic ten-minute deadline.
         let defaults = PollOptions::new();
         assert_eq!(defaults.interval(), Duration::from_secs(1));
         assert_eq!(defaults.timeout(), Duration::from_secs(10 * 60));

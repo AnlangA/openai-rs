@@ -3418,15 +3418,14 @@ macro_rules! admin_op {
 
 /// Complete frozen Administration operation-to-DTO manifest.
 ///
-/// Generated from `spec/contracts/operations.json` SHA-256
-/// `789d8e83ac0ac8ad2d5d44b88b4496b463bda56df730ecade45d8789429cc061`.
-pub const ADMIN_OPERATION_CONTRACT_SOURCE_SHA256: &str =
-    "789d8e83ac0ac8ad2d5d44b88b4496b463bda56df730ecade45d8789429cc061";
-
-/// SHA-256 of the normalized 119-row method/path/mode/status/schema projection.
-pub const ADMIN_OPERATION_CONTRACT_NORMALIZED_SHA256: &str =
-    "595e0eba78c7f7a0e31f46d2eeb5f52140159491d06d284cd3c5b5882b748cf3";
-
+/// Generated from `spec/contracts/operations.json`. Spec provenance is
+/// enforced at runtime rather than by a recorded digest: the
+/// `operation_manifest_rows_match_the_pinned_spec_projection` test decodes the
+/// pinned spec file directly (`include_str`) and compares it row-by-row
+/// against this manifest, so the manifest cannot drift from the spec it was
+/// generated from. An earlier pair of recorded SHA-256 constants was removed
+/// (11-06): the digests had gone stale as the spec evolved, had no consumers
+/// to catch the drift, and offered only false provenance.
 pub const ADMIN_OPERATION_MANIFEST: &[AdminOperationDto] = &[
     admin_op!(
         "CreateanAPIkeyforaserviceaccount",
@@ -4357,6 +4356,123 @@ mod tests {
             .find(|operation| operation.operation_id == "admin-api-keys-delete")
             .expect("delete-key contract");
         assert_eq!(delete_key.response_schema, "AdminApiKeyDeleteResponse");
+    }
+
+    /// One normalized manifest row: the method/path/mode/status/content-type/
+    /// schema-ref projection shared by the pinned spec and the manifest.
+    type OperationProjectionRow = (
+        String,
+        String,
+        String,
+        String,
+        String,
+        Vec<String>,
+        Vec<String>,
+        Vec<String>,
+        Vec<String>,
+    );
+
+    #[test]
+    fn operation_manifest_rows_match_the_pinned_spec_projection() {
+        // Replaces the removed recorded-digest provenance constants (11-06):
+        // the manifest is compared row-by-row against the pinned spec
+        // projection itself, so it cannot drift from the file it was
+        // generated from without failing here.
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../../spec/contracts/operations.json"))
+                .expect("operation manifest JSON");
+        let string_array = |value: &[Value]| -> Vec<String> {
+            value
+                .iter()
+                .map(|item| item.as_str().expect("string entry").to_owned())
+                .collect()
+        };
+        let mut spec_rows = Vec::new();
+        for operation in manifest["client_operations"]
+            .as_array()
+            .expect("client operation array")
+        {
+            let path = operation["path"].as_str().expect("operation path");
+            if !(path.starts_with("/organization/") || path.starts_with("/projects/")) {
+                continue;
+            }
+            let request_refs = operation["request"]["body"]["schema_refs"]
+                .as_array()
+                .map(|refs| string_array(refs))
+                .unwrap_or_default();
+            spec_rows.push((
+                operation["operation_id"]
+                    .as_str()
+                    .expect("operation id")
+                    .to_owned(),
+                operation["method"].as_str().expect("method").to_owned(),
+                path.to_owned(),
+                operation["request"]["mode"]
+                    .as_str()
+                    .expect("request mode")
+                    .to_owned(),
+                operation["response"]["mode"]
+                    .as_str()
+                    .expect("response mode")
+                    .to_owned(),
+                string_array(
+                    operation["response"]["success_statuses"]
+                        .as_array()
+                        .expect("success statuses"),
+                ),
+                string_array(
+                    operation["response"]["content_types"]
+                        .as_array()
+                        .expect("content types"),
+                ),
+                request_refs,
+                string_array(
+                    operation["response"]["schema_refs"]
+                        .as_array()
+                        .expect("response schema refs"),
+                ),
+            ));
+        }
+        spec_rows.sort_unstable();
+
+        let mut manifest_rows: Vec<OperationProjectionRow> = ADMIN_OPERATION_MANIFEST
+            .iter()
+            .map(|operation| {
+                (
+                    operation.operation_id.to_owned(),
+                    operation.method.to_owned(),
+                    operation.path.to_owned(),
+                    operation.request_mode.to_owned(),
+                    operation.response_mode.to_owned(),
+                    operation
+                        .success_statuses
+                        .iter()
+                        .map(|status| status.to_string())
+                        .collect(),
+                    operation
+                        .response_content_types
+                        .iter()
+                        .map(|content_type| (*content_type).to_owned())
+                        .collect(),
+                    operation
+                        .request_schema_refs
+                        .iter()
+                        .map(|reference| (*reference).to_owned())
+                        .collect(),
+                    operation
+                        .response_schema_refs
+                        .iter()
+                        .map(|reference| (*reference).to_owned())
+                        .collect(),
+                )
+            })
+            .collect();
+        manifest_rows.sort_unstable();
+
+        assert_eq!(
+            manifest_rows, spec_rows,
+            "the manifest must be the exact row projection of the pinned spec"
+        );
     }
 
     #[test]

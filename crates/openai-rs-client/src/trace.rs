@@ -608,28 +608,49 @@ mod tests {
         );
     }
 
-    /// Serves exactly one SSE response body, for the streaming no-leak test.
-    async fn serve_sse_once(body: &'static str) -> Url {
+    /// Serves one SSE response per queued body over a keep-alive loopback
+    /// connection, so the streaming no-leak test can replay the handshake
+    /// until the span capture settles (6-18 hardening).
+    async fn serve_sse_sequence(bodies: Vec<&'static str>) -> Url {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind loopback SSE server");
         let address = listener.local_addr().expect("loopback SSE address");
+        let queue = Arc::new(Mutex::new(VecDeque::from(bodies)));
         tokio::spawn(async move {
-            let Ok((stream, _)) = listener.accept().await else {
-                return;
-            };
-            let service = service_fn(move |_request: Request<Incoming>| {
-                let response = hyper::Response::builder()
-                    .status(StatusCode::OK)
-                    .header(http::header::CONTENT_TYPE, "text/event-stream")
-                    .header("x-request-id", "req_sse")
-                    .body(Full::new(Bytes::from_static(body.as_bytes())))
-                    .expect("build loopback SSE response");
-                async move { Ok::<_, Infallible>(response) }
-            });
-            let _ = http1::Builder::new()
-                .serve_connection(TokioIo::new(stream), service)
-                .await;
+            loop {
+                if queue
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .is_empty()
+                {
+                    break;
+                }
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let queue = Arc::clone(&queue);
+                let service = service_fn(move |_request: Request<Incoming>| {
+                    let queue = Arc::clone(&queue);
+                    async move {
+                        let body = queue
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .pop_front()
+                            .unwrap_or("{}");
+                        let response = hyper::Response::builder()
+                            .status(StatusCode::OK)
+                            .header(http::header::CONTENT_TYPE, "text/event-stream")
+                            .header("x-request-id", "req_sse")
+                            .body(Full::new(Bytes::from_static(body.as_bytes())))
+                            .expect("build loopback SSE response");
+                        Ok::<_, Infallible>(response)
+                    }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            }
         });
         Url::parse(&format!("http://{address}/v1/")).expect("loopback base URL")
     }
@@ -637,32 +658,55 @@ mod tests {
     #[tokio::test]
     async fn sse_stream_deltas_never_enter_tracing() {
         const SECRET_DELTA: &str = "SUPER_SECRET_DELTA_XYZ";
+        const SPAN_CAPTURE_ATTEMPTS: usize = 16;
         let body = concat!(
             "event: response.output_text.delta\n",
             "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"SUPER_SECRET_DELTA_XYZ\",\"sequence_number\":1,\"logprobs\":[]}\n\n",
             "data: [DONE]\n\n",
         );
-        let base = serve_sse_once(body).await;
+        let base = serve_sse_sequence(vec![body; SPAN_CAPTURE_ATTEMPTS]).await;
         let capture = Capture::new();
         let _guard = tracing::subscriber::set_default(capture.clone());
-        let request = CreateResponseRequest::new("test-model", SECRET_PROMPT).into_streaming();
-        let mut stream = client(base, "test-placeholder-key")
-            .responses()
-            .create_stream(request)
-            .await
-            .expect("stream handshake");
-        while let Some(event) = futures_util::StreamExt::next(&mut stream).await {
-            assert!(event.is_ok(), "typed SSE event must decode");
+        let client = client(base, "test-placeholder-key");
+
+        // `span!` gates on a process-wide cached maximum level before any
+        // subscriber callback runs, and sibling capture tests installing or
+        // dropping their own default subscribers can leave that cache
+        // momentarily stale (observed as a flaky missing span; 11-09). This
+        // is the same 6-18 hardening the rmcp dispatch-span test applies:
+        // re-install the default to invalidate the callsite cache and replay
+        // the handshake until the capture sees the span.
+        let mut handshake_span = None;
+        for _ in 0..SPAN_CAPTURE_ATTEMPTS {
+            drop(tracing::subscriber::set_default(capture.clone()));
+            let request = CreateResponseRequest::new("test-model", SECRET_PROMPT).into_streaming();
+            let mut stream = client
+                .responses()
+                .create_stream(request)
+                .await
+                .expect("stream handshake");
+            while let Some(event) = futures_util::StreamExt::next(&mut stream).await {
+                assert!(event.is_ok(), "typed SSE event must decode");
+            }
+            if let Some(span) = capture
+                .spans()
+                .into_iter()
+                .find(|span| span.name == "openai.http_request")
+            {
+                handshake_span = Some(span);
+                break;
+            }
         }
+        let span = handshake_span.unwrap_or_else(|| {
+            panic!(
+                "stream handshake span missing; captured {:?}",
+                capture.spans()
+            );
+        });
 
         // The handshake span keeps the six-field shape while the decoded
         // deltas stay out of spans and events entirely (6-18: stream content
         // is never traced; consumption happens below any span).
-        let span = capture
-            .spans()
-            .into_iter()
-            .find(|span| span.name == "openai.http_request")
-            .expect("stream handshake span");
         assert_eq!(span.field("operation.id"), Some("CreateStreamingResponse"));
         assert_eq!(span.field("http.request.method"), Some("POST"));
         assert_eq!(span.field("http.route"), Some("/responses"));

@@ -18,14 +18,14 @@ use crate::{
         ConversationObjectReference, ConversationReference, CountInputTokensConstraintError,
         CreateResponseConstraintError, IncompleteDetails, InputContent, InputFile, InputImage,
         InputText, LogProb, MAX_COMPACT_INPUT_CHARS, MAX_INPUT_TEXT_CHARS,
-        MAX_PROMPT_CACHE_KEY_CHARS, MessageRole, MessageStatus, OutputText, PromptCacheRetention,
-        PromptReference, ReasoningTextContent, Refusal, ResponseError, ResponseInputItem,
-        ResponseInstructions, ResponseItemStatus, ResponseOutputItem, ResponseStatus,
-        ResponseStreamEvent, ResponseStreamOptions, ResponseTextConfig, ResponseTool,
-        ResponseUsage, ServiceTier, SummaryTextContent, ToolChoice, TruncationStrategy,
-        UnknownTaggedObject, validate_input_content, validate_input_image_url_chars,
-        validate_input_text_chars, validate_response_input_item, validate_response_tools,
-        validate_websocket_stream_id,
+        MAX_PROMPT_CACHE_KEY_CHARS, MIN_COMPACT_THRESHOLD, MessageRole, MessageStatus, OutputText,
+        PromptCacheRetention, PromptReference, ReasoningTextContent, Refusal, ResponseError,
+        ResponseInputItem, ResponseInstructions, ResponseItemStatus, ResponseOutputItem,
+        ResponseStatus, ResponseStreamEvent, ResponseStreamOptions, ResponseTextConfig,
+        ResponseTool, ResponseUsage, ServiceTier, SummaryTextContent, ToolChoice,
+        TruncationStrategy, UnknownTaggedObject, validate_input_content,
+        validate_input_image_url_chars, validate_input_text_chars, validate_response_input_item,
+        validate_response_tools, validate_websocket_stream_id,
     },
 };
 
@@ -2196,6 +2196,44 @@ fn validate_beta_response_input_item(
     }
 }
 
+/// Checks the beta-split `context_management` rules against the GA bounds.
+///
+/// The beta envelope stores `context_management` outside the embedded GA
+/// create request, so the GA `validate()` never sees the wire field it checks
+/// on its own channel (responses.rs). The two constraints are re-applied here
+/// against the shared rule type: a present rules vector must be non-empty and
+/// every present `compact_threshold` must respect the pinned floor of 1000.
+///
+/// [`ContextManagement`](crate::responses::ContextManagement) keeps its fields
+/// private to the GA module, so the threshold is read through the shared wire
+/// codec instead of a field access; `compact_threshold: null` and omission
+/// skip the numeric bound exactly as on the GA channel.
+fn validate_beta_context_management(
+    rules: &[BetaContextManagement],
+) -> Result<(), BetaResponseInputConstraintError> {
+    if rules.is_empty() {
+        return Err(CreateResponseConstraintError::EmptyContextManagement.into());
+    }
+    for rule in rules {
+        let Ok(encoded) = serde_json::to_value(rule) else {
+            // The shared rule carries only strings and integers; this branch
+            // exists solely to keep the check total without unwrapping.
+            continue;
+        };
+        if let Some(Value::Number(number)) = encoded.get("compact_threshold")
+            && let Some(threshold) = number.as_u64()
+            && threshold < MIN_COMPACT_THRESHOLD
+        {
+            return Err(CreateResponseConstraintError::CompactThreshold {
+                actual: threshold,
+                minimum: MIN_COMPACT_THRESHOLD,
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
 /// Beta reasoning configuration, including preview-only context and mode.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BetaReasoningConfig {
@@ -2805,11 +2843,17 @@ impl BetaCreateResponseRequest {
     /// Checks pinned OpenAPI field limits without sending the request.
     ///
     /// Rejects prompt-cached message content carrying the item-form-only
-    /// `computer_screenshot` branch (6-05) alongside the GA constraints.
+    /// `computer_screenshot` branch (6-05) alongside the GA constraints. The
+    /// beta-split `context_management` rules re-enter the GA bounds here
+    /// because the embedded base body never carries that wire field on this
+    /// channel (11-03).
     pub fn validate(&self) -> Result<&Self, BetaResponseInputConstraintError> {
         self.base.validate()?;
         if let Omittable::Value(input) = &self.input {
             validate_beta_response_input(input)?;
+        }
+        if let Omittable::Value(Nullable::Value(rules)) = &self.context_management {
+            validate_beta_context_management(rules)?;
         }
         if let Omittable::Value(Nullable::Value(multi_agent)) = &self.multi_agent {
             multi_agent.validate()?;
@@ -2905,6 +2949,16 @@ impl BetaCreateStreamingResponseRequest {
     pub fn stream_options_null(mut self) -> Self {
         self.stream_options = Omittable::Value(Nullable::Null);
         self
+    }
+
+    /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// Delegates to the non-streaming body so both typestates enforce the
+    /// same constraints, mirroring the GA create pair where the shared
+    /// builder macro exposes one `validate` on each mode (11-03).
+    pub fn validate(&self) -> Result<&Self, BetaResponseInputConstraintError> {
+        self.request.validate()?;
+        Ok(self)
     }
 
     /// Converts back to the non-streaming typestate.
@@ -5171,6 +5225,63 @@ mod tests {
             assert_eq!(cleared_value[key], Value::Null, "{key}");
         }
         cleared.validate().expect("null fields stay in range");
+    }
+
+    #[test]
+    fn create_and_streaming_validate_enforce_beta_context_management_bounds() {
+        // The beta envelope splits `context_management` out of the embedded GA
+        // body, so the GA base `validate()` never sees the wire field it
+        // checks on its own channel; the beta entry point re-applies both
+        // bounds (11-03).
+        BetaCreateResponseRequest::new("gpt-test", "hello")
+            .context_management(
+                BetaContextManagement::compaction().compact_threshold(MIN_COMPACT_THRESHOLD),
+            )
+            .validate()
+            .expect("compact_threshold 1000 is accepted");
+        assert!(matches!(
+            BetaCreateResponseRequest::new("gpt-test", "hello")
+                .context_management(BetaContextManagement::compaction().compact_threshold(500))
+                .validate(),
+            Err(BetaResponseInputConstraintError::Create(
+                CreateResponseConstraintError::CompactThreshold {
+                    actual: 500,
+                    minimum: MIN_COMPACT_THRESHOLD
+                }
+            ))
+        ));
+        BetaCreateResponseRequest::new("gpt-test", "hello")
+            .context_management(BetaContextManagement::compaction().compact_threshold_null())
+            .validate()
+            .expect("official compact_threshold null skips the numeric bound");
+
+        // The builder cannot produce an empty rules vector (every call pushes
+        // one rule), so the empty-array rejection runs through decode.
+        let decoded = serde_json::from_value::<BetaCreateResponseRequest>(json!({
+            "model": "gpt-test",
+            "context_management": []
+        }))
+        .expect("serde remains lossless");
+        assert!(matches!(
+            decoded.validate(),
+            Err(BetaResponseInputConstraintError::Create(
+                CreateResponseConstraintError::EmptyContextManagement
+            ))
+        ));
+
+        // The streaming typestate reaches the same checks.
+        let streaming = BetaCreateResponseRequest::new("gpt-test", "hello")
+            .context_management(BetaContextManagement::compaction().compact_threshold(500))
+            .into_streaming();
+        assert!(matches!(
+            streaming.validate(),
+            Err(BetaResponseInputConstraintError::Create(
+                CreateResponseConstraintError::CompactThreshold { actual: 500, .. }
+            ))
+        ));
+        BetaCreateStreamingResponseRequest::new("gpt-test", "hello")
+            .validate()
+            .expect("streaming validate accepts an in-range body");
     }
 
     #[test]

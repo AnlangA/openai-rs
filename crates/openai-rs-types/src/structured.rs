@@ -29,6 +29,16 @@
 //! `additionalProperties` is defaulted to `false` only when the key is
 //! missing - a pre-existing non-`false` value (for example the map shape that
 //! a `HashMap` field produces) is reported instead of overwritten.
+//!
+//! The root `$schema` key is a dialect declaration, not data: `schemars`
+//! emits it only on the document root (nested definitions never carry it),
+//! the API's strict-schema validation rejects it, and every official client
+//! sends without it (the Python SDK never generates one, the Node `zod`
+//! OpenAI target strips it, and the API's own examples show no such key).
+//! [`normalize_strict_schema`] therefore removes a root `$schema` before the
+//! walk - the one documented exception to "never silently drops" - while a
+//! `$schema` appearing anywhere else is left to the ordinary keyword
+//! handling.
 
 use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin, sync::Arc};
 
@@ -135,7 +145,7 @@ where
     /// Builds a strict response format from `T`'s `schemars` definition.
     pub fn new(name: impl Into<String>) -> Result<Self, StructuredError> {
         let name = name.into();
-        validate_name(&name)?;
+        validate_response_format_name(&name)?;
         let mut schema =
             serde_json::to_value(schemars::schema_for!(T)).map_err(StructuredError::Encode)?;
         normalize_strict_schema(&mut schema)?;
@@ -215,7 +225,7 @@ where
     /// Builds strict input and output contracts for a function tool.
     pub fn new(name: impl Into<String>) -> Result<Self, StructuredError> {
         let name = name.into();
-        validate_name(&name)?;
+        validate_function_tool_name(&name)?;
         let mut parameters =
             serde_json::to_value(schemars::schema_for!(A)).map_err(StructuredError::Encode)?;
         let mut output =
@@ -425,7 +435,7 @@ impl ToolRegistry {
         handler: H,
     ) -> Result<(), StructuredError> {
         let name = H::name();
-        validate_name(name)?;
+        validate_function_tool_name(name)?;
         if self.tools.contains_key(name) {
             return Err(StructuredError::InvalidName(format!(
                 "duplicate tool registration: `{name}`"
@@ -484,6 +494,15 @@ impl ToolRegistry {
 
 /// Converts a schemars document to OpenAI's strict object-schema convention.
 pub fn normalize_strict_schema(schema: &mut Value) -> Result<(), StructuredError> {
+    // A root `$schema` key is a JSON Schema dialect declaration rather than
+    // data: schemars emits it only on the document root, strict-mode
+    // validation rejects it, and official clients send without it. Remove it
+    // before the pristine snapshot is taken, so `$ref` resolution and the
+    // keyword walk both observe the stripped document. This is the module's
+    // one documented exception to "never silently drops a keyword".
+    if let Some(object) = schema.as_object_mut() {
+        object.remove("$schema");
+    }
     // `$ref`s are resolved against a pristine snapshot of the document so
     // inlining never observes this pass's intermediate mutations.  Inlining
     // starts with an empty chain of actively expanded references and an
@@ -498,9 +517,16 @@ pub fn normalize_strict_schema(schema: &mut Value) -> Result<(), StructuredError
     Ok(())
 }
 
-fn validate_name(name: &str) -> Result<(), StructuredError> {
+/// Inclusive maximum length for a `text.format` `json_schema`
+/// response-format name.  The pin caps this name at 64 characters even
+/// though a Responses function-tool name may run to
+/// [`crate::responses::MAX_FUNCTION_TOOL_NAME_CHARS`] (128), so the two
+/// paths validate against different limits.
+pub const MAX_RESPONSE_FORMAT_NAME_CHARS: usize = 64;
+
+fn validate_name(name: &str, max_chars: usize) -> Result<(), StructuredError> {
     let valid = !name.is_empty()
-        && name.len() <= 64
+        && name.chars().count() <= max_chars
         && name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
@@ -509,6 +535,22 @@ fn validate_name(name: &str) -> Result<(), StructuredError> {
     } else {
         Err(StructuredError::InvalidName(name.to_owned()))
     }
+}
+
+/// Validates a Responses function-tool name against the pin's 1..=128 range.
+///
+/// Shared by [`TypedFunction::new`], [`ToolRegistry::register`] and
+/// [`crate::responses::FunctionTool::for_type`] so every typed tool path
+/// enforces the same limit that the request-level
+/// [`crate::responses::MAX_FUNCTION_TOOL_NAME_CHARS`] check applies.
+pub(crate) fn validate_function_tool_name(name: &str) -> Result<(), StructuredError> {
+    validate_name(name, crate::responses::MAX_FUNCTION_TOOL_NAME_CHARS)
+}
+
+/// Validates a `text.format` `json_schema` name against the pin's 64-char
+/// maximum, which is stricter than the function-tool limit.
+fn validate_response_format_name(name: &str) -> Result<(), StructuredError> {
+    validate_name(name, MAX_RESPONSE_FORMAT_NAME_CHARS)
 }
 
 /// `chain` lists the local references whose definitions are currently being
@@ -921,6 +963,88 @@ mod tests {
             }
             _ => {}
         }
+    }
+
+    /// Counts every `$schema` key in the document, including nested ones.
+    fn count_dollar_schema_keys(value: &serde_json::Value) -> usize {
+        let mut count = 0;
+        match value {
+            serde_json::Value::Object(object) => {
+                for (key, child) in object {
+                    if key == "$schema" {
+                        count += 1;
+                    }
+                    count += count_dollar_schema_keys(child);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items {
+                    count += count_dollar_schema_keys(child);
+                }
+            }
+            _ => {}
+        }
+        count
+    }
+
+    #[test]
+    fn schemars_root_dollar_schema_never_reaches_the_wire() {
+        // 11-01: schemars' draft2020-12 generator emits `$schema` on the
+        // document root and nowhere else - the assertions below pin that
+        // behavior against the raw generator output - and strict-mode
+        // validation rejects the key, so both typed entry points must strip
+        // it before the value reaches the wire.
+        let raw =
+            serde_json::to_value(schemars::schema_for!(NestedOuter)).expect("raw schemars doc");
+        assert_eq!(
+            raw["$schema"], "https://json-schema.org/draft/2020-12/schema",
+            "schemars must remain the draft2020-12 root generator this test pins"
+        );
+        assert_eq!(
+            count_dollar_schema_keys(&raw),
+            1,
+            "schemars emits `$schema` on the root only; nested output changed"
+        );
+
+        let format = StructuredOutput::<NestedOuter>::new("nested")
+            .expect("valid schema")
+            .to_response_format();
+        assert_eq!(
+            count_dollar_schema_keys(&format),
+            0,
+            "`$schema` leaked through `to_response_format`: {format}"
+        );
+
+        let tool = TypedFunction::<WeatherArgs, NestedOuter>::new("nested_tool")
+            .expect("valid function schema")
+            .to_tool_value();
+        assert_eq!(
+            count_dollar_schema_keys(&tool),
+            0,
+            "`$schema` leaked through `to_tool_value`: {tool}"
+        );
+    }
+
+    #[test]
+    fn hand_written_root_dollar_schema_is_stripped() {
+        // A caller-supplied (non-schemars) root `$schema` declaration is
+        // stripped just like the generated one; the data keywords around it
+        // are still normalized.
+        let mut schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": { "city": { "type": "string" } }
+        });
+        normalize_strict_schema(&mut schema).expect("normalize hand-written root");
+        assert!(schema.get("$schema").is_none());
+        assert_eq!(schema["type"], "object");
+        // `city` was not pre-listed in `required`, so normalization makes it
+        // nullable while still requiring it - the ordinary strict-mode
+        // rewriting around the stripped key.
+        assert_eq!(schema["properties"]["city"]["anyOf"][0]["type"], "string");
+        assert_eq!(schema["properties"]["city"]["anyOf"][1]["type"], "null");
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["required"], json!(["city"]));
     }
 
     #[test]
@@ -1391,6 +1515,32 @@ mod tests {
     }
 
     #[test]
+    fn function_tool_names_accept_65_to_128_characters() {
+        // 11-05: the Responses pin allows function-tool names of 1..=128
+        // characters, so lengths that the old 64-char cap rejected (for
+        // example 65) must now pass, while 129 still fails.
+        for length in 65..=128 {
+            let name = "a".repeat(length);
+            let tool = TypedFunction::<WeatherArgs, WeatherResult>::new(name)
+                .unwrap_or_else(|err| panic!("{length}-char tool name must pass: {err}"));
+            assert_eq!(tool.name().chars().count(), length);
+        }
+        let rejected = TypedFunction::<WeatherArgs, WeatherResult>::new("a".repeat(129))
+            .expect_err("129-char tool name must fail");
+        assert!(matches!(rejected, StructuredError::InvalidName(_)));
+    }
+
+    #[test]
+    fn response_format_names_stay_capped_at_64_characters() {
+        // The `text.format` json_schema pin keeps the stricter 64-char name
+        // maximum even though function-tool names run to 128.
+        assert!(StructuredOutput::<WeatherArgs>::new("a".repeat(64)).is_ok());
+        let rejected = StructuredOutput::<WeatherArgs>::new("a".repeat(65))
+            .expect_err("65-char format name must fail");
+        assert!(matches!(rejected, StructuredError::InvalidName(_)));
+    }
+
+    #[test]
     fn rejects_external_references_without_rewriting_them() {
         let mut schema = json!({
             "type": "object",
@@ -1527,6 +1677,75 @@ mod tests {
             }
             Ok(WeatherResult { temperature: 22.5 })
         }
+    }
+
+    /// Leaks a run of `len` `a` characters as a `'static` tool name so the
+    /// boundary lengths stay legible instead of hiding inside a
+    /// 128-character literal.
+    fn leaked_tool_name(len: usize) -> &'static str {
+        Box::leak("a".repeat(len).into_boxed_str())
+    }
+
+    struct ToolName128;
+
+    impl super::ToolSpec for ToolName128 {
+        type Arguments = WeatherArgs;
+        type Output = WeatherResult;
+
+        fn name() -> &'static str {
+            leaked_tool_name(128)
+        }
+
+        fn description() -> &'static str {
+            "Boundary-length tool name"
+        }
+    }
+
+    impl super::ToolHandler for ToolName128 {
+        async fn call(
+            &self,
+            _arguments: Self::Arguments,
+            _context: super::ToolContext,
+        ) -> Result<Self::Output, super::ToolExecutionError> {
+            Ok(WeatherResult { temperature: 1.0 })
+        }
+    }
+
+    struct ToolName129;
+
+    impl super::ToolSpec for ToolName129 {
+        type Arguments = WeatherArgs;
+        type Output = WeatherResult;
+
+        fn name() -> &'static str {
+            leaked_tool_name(129)
+        }
+
+        fn description() -> &'static str {
+            "One character over the pin"
+        }
+    }
+
+    impl super::ToolHandler for ToolName129 {
+        async fn call(
+            &self,
+            _arguments: Self::Arguments,
+            _context: super::ToolContext,
+        ) -> Result<Self::Output, super::ToolExecutionError> {
+            Ok(WeatherResult { temperature: 1.0 })
+        }
+    }
+
+    #[test]
+    fn tool_registry_follows_the_128_char_tool_name_pin() {
+        let mut registry = super::ToolRegistry::new();
+        registry
+            .register(ToolName128)
+            .expect("128-char tool name is registerable");
+        let rejected = registry
+            .register(ToolName129)
+            .expect_err("129-char tool name must fail");
+        assert!(matches!(rejected, StructuredError::InvalidName(_)));
     }
 
     #[tokio::test]
