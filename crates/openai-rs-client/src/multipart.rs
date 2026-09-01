@@ -413,7 +413,12 @@ impl MultipartTransport {
             .apply_prepared(ReplayableMultipartForm::new())
             .part("file", source);
         let response = self
-            .send_replayable_form(&[PathSegment::literal("files")], &prepared, JSON_MIME)
+            .send_replayable_form(
+                "CreateFile",
+                &[PathSegment::literal("files")],
+                &prepared,
+                JSON_MIME,
+            )
             .await?;
         self.decode_json(response).await
     }
@@ -426,7 +431,12 @@ impl MultipartTransport {
         let fields = CreateFileFields::new(&purpose, &expires_after)?;
         let form = fields.apply(Form::new()).part("file", source.into_part()?);
         let response = self
-            .send_one_shot_form(&[PathSegment::literal("files")], form, JSON_MIME)
+            .send_one_shot_form(
+                "CreateFile",
+                &[PathSegment::literal("files")],
+                form,
+                JSON_MIME,
+            )
             .await?;
         self.decode_json(response).await
     }
@@ -444,7 +454,7 @@ impl MultipartTransport {
         let source = PreparedReplayableSource::prepare(request.data()).await?;
         let prepared = ReplayableMultipartForm::new().part("data", source);
         let response = self
-            .send_replayable_form(&path, &prepared, JSON_MIME)
+            .send_replayable_form("AddUploadPart", &path, &prepared, JSON_MIME)
             .await?;
         self.decode_json(response).await
     }
@@ -460,7 +470,9 @@ impl MultipartTransport {
             PathSegment::literal("parts"),
         ];
         let form = Form::new().part("data", request.into_inner().into_part()?);
-        let response = self.send_one_shot_form(&path, form, JSON_MIME).await?;
+        let response = self
+            .send_one_shot_form("AddUploadPart", &path, form, JSON_MIME)
+            .await?;
         self.decode_json(response).await
     }
 
@@ -470,34 +482,45 @@ impl MultipartTransport {
             PathSegment::parameter("file_id", file_id.as_str())?,
             PathSegment::literal("content"),
         ];
-        let url = self.operation_url(&path)?;
-        self.send_download(url, BINARY_MIME)
+        self.send_download("DownloadFile", &path, BINARY_MIME)
             .await
             .map(FileContentStream::from_response)
     }
 
     /// Sends a safe, authenticated GET for a typed resource path and exposes
     /// the successful body as the shared bounded raw-content stream.
+    ///
+    /// `operation_id` is the real OpenAI operation id of the calling download
+    /// (for example `RetrieveContainerFileContent` or `GetSkillContent`); it
+    /// is recorded as the span's `operation.id` together with the route
+    /// template derived from `path`.
     pub(crate) async fn download_path(
         &self,
+        operation_id: &'static str,
         path: &[PathSegment<'_>],
         accept: &'static str,
     ) -> Result<FileContentStream, Error> {
-        let url = self.operation_url(path)?;
-        self.send_download(url, accept)
+        self.send_download(operation_id, path, accept)
             .await
             .map(FileContentStream::from_response)
     }
 
+    /// Sends a replayable multipart form, rebuilding it for each permitted
+    /// retry.
+    ///
+    /// `operation_id` is the real OpenAI operation id of the calling request
+    /// (for example `CreateFile` or `CreateSkill`); it is recorded as the
+    /// span's `operation.id`, never a transport lane name.
     pub(crate) async fn send_replayable_form(
         &self,
+        operation_id: &'static str,
         path: &[PathSegment<'_>],
         prepared: &ReplayableMultipartForm,
         accept: &'static str,
     ) -> Result<reqwest::Response, Error> {
         let url = self.operation_url(path)?;
-        let route = trace::route_template(path);
-        let span = trace::http_request_span("multipart.replayable_form", "POST", &route);
+        let span =
+            trace::http_request_span_lazy(operation_id, "POST", || trace::route_template(path));
         async move {
             let started = Instant::now();
             let mut retries = 0;
@@ -587,15 +610,22 @@ impl MultipartTransport {
         .await
     }
 
+    /// Sends a one-shot multipart form that is never retried once sending may
+    /// have started.
+    ///
+    /// `operation_id` follows the same rule as
+    /// [`send_replayable_form`](Self::send_replayable_form): the real OpenAI
+    /// operation id of the calling request, not a transport lane name.
     pub(crate) async fn send_one_shot_form(
         &self,
+        operation_id: &'static str,
         path: &[PathSegment<'_>],
         form: Form,
         accept: &'static str,
     ) -> Result<reqwest::Response, Error> {
         let url = self.operation_url(path)?;
-        let route = trace::route_template(path);
-        let span = trace::http_request_span("multipart.one_shot_form", "POST", &route);
+        let span =
+            trace::http_request_span_lazy(operation_id, "POST", || trace::route_template(path));
         async move {
             let authorization = self.auth.authorization().await?;
             let request = self
@@ -620,7 +650,10 @@ impl MultipartTransport {
                     .auth
                     .invalidate_if_generation(authorization.generation)
                     .await;
-                trace::emit_auth_refresh();
+                // Single-shot lane: the credential is invalidated, but the
+                // request is never replayed, so the message must not claim a
+                // retry (6-17).
+                trace::emit_auth_refresh_no_retry();
             }
             trace::record_http_outcome(0, &response);
             if is_success_status(response.status()) {
@@ -635,8 +668,13 @@ impl MultipartTransport {
 
     /// Sends a replayable JSON POST while allowing an operation-specific
     /// response `Accept` value (for example raw speech audio).
+    ///
+    /// `operation_id` follows the same rule as
+    /// [`send_replayable_form`](Self::send_replayable_form): the real OpenAI
+    /// operation id of the calling request, not a transport lane name.
     pub(crate) async fn send_replayable_json<T>(
         &self,
+        operation_id: &'static str,
         path: &[PathSegment<'_>],
         body: &T,
         accept: &'static str,
@@ -646,8 +684,8 @@ impl MultipartTransport {
     {
         let url = self.operation_url(path)?;
         let encoded = serde_json::to_vec(body).map_err(Error::Encode)?;
-        let route = trace::route_template(path);
-        let span = trace::http_request_span("multipart.replayable_json", "POST", &route);
+        let span =
+            trace::http_request_span_lazy(operation_id, "POST", || trace::route_template(path));
         async move {
             let started = Instant::now();
             let mut retries = 0;
@@ -739,10 +777,13 @@ impl MultipartTransport {
 
     async fn send_download(
         &self,
-        url: Url,
+        operation_id: &'static str,
+        path: &[PathSegment<'_>],
         accept: &'static str,
     ) -> Result<reqwest::Response, Error> {
-        let span = trace::http_request_span("multipart.download", "GET", "/download");
+        let url = self.operation_url(path)?;
+        let span =
+            trace::http_request_span_lazy(operation_id, "GET", || trace::route_template(path));
         async move {
             let started = Instant::now();
             let mut retries = 0;
@@ -1607,6 +1648,90 @@ mod tests {
         assert_eq!(captured.path, "/v1/files/file%2Fa%20b/content");
         assert_eq!(captured.accept.as_deref(), Some(BINARY_MIME));
         assert!(captured.body.is_empty());
+    }
+
+    fn http_request_span(
+        capture: &crate::trace::capture::Capture,
+    ) -> crate::trace::capture::CapturedSpan {
+        capture
+            .spans()
+            .into_iter()
+            .find(|span| span.name == "openai.http_request")
+            .expect("http request span")
+    }
+
+    const FILE_OBJECT_JSON: &[u8] = br#"{"id":"file_1","object":"file","bytes":5,"created_at":1,"filename":"blob.bin","purpose":"user_data","status":"processed"}"#;
+
+    #[tokio::test]
+    async fn replayable_form_lane_records_real_operation_id() {
+        let (transport, _captured) = serve_once(
+            StatusCode::OK,
+            JSON_MIME,
+            Bytes::from_static(FILE_OBJECT_JSON),
+            RetryPolicy::disabled(),
+        )
+        .await;
+        let capture = crate::trace::capture::Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        let source = ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(&b"hello"[..]));
+        transport
+            .create_file(&CreateFileRequest::new(source, FilePurpose::UserData))
+            .await
+            .expect("create file response");
+
+        let span = http_request_span(&capture);
+        assert_eq!(span.field("operation.id"), Some("CreateFile"));
+        assert_eq!(span.field("http.request.method"), Some("POST"));
+        assert_eq!(span.field("http.route"), Some("/files"));
+    }
+
+    #[tokio::test]
+    async fn one_shot_form_lane_records_real_operation_id() {
+        let (transport, _captured) = serve_once(
+            StatusCode::OK,
+            JSON_MIME,
+            Bytes::from_static(FILE_OBJECT_JSON),
+            RetryPolicy::disabled(),
+        )
+        .await;
+        let capture = crate::trace::capture::Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        let source = OneShotMultipartSource::from_reader(tokio::io::empty()).with_length(0);
+        transport
+            .create_file_one_shot(CreateFileOneShotRequest::new(source, FilePurpose::UserData))
+            .await
+            .expect("create file response");
+
+        let span = http_request_span(&capture);
+        assert_eq!(span.field("operation.id"), Some("CreateFile"));
+        assert_eq!(span.field("http.route"), Some("/files"));
+    }
+
+    #[tokio::test]
+    async fn download_lane_records_real_operation_id_and_route_template() {
+        let (transport, _captured) = serve_once(
+            StatusCode::OK,
+            "application/octet-stream",
+            Bytes::from_static(b"raw"),
+            RetryPolicy::disabled(),
+        )
+        .await;
+        let capture = crate::trace::capture::Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        let stream = transport
+            .download_file(&FileId::new("file/secret id"))
+            .await
+            .expect("download handshake");
+        drop(stream);
+
+        let span = http_request_span(&capture);
+        assert_eq!(span.field("operation.id"), Some("DownloadFile"));
+        assert_eq!(span.field("http.request.method"), Some("GET"));
+        assert_eq!(span.field("http.route"), Some("/files/{file_id}/content"));
+        assert!(
+            !capture.contains_text("file/secret id"),
+            "file id leaked into tracing fields"
+        );
     }
 
     #[tokio::test]

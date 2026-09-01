@@ -247,7 +247,9 @@ impl Realtime {
                     let _ = transport
                         .invalidate_authorization(authorization.generation)
                         .await;
-                    trace::emit_auth_refresh();
+                    // create_call is single-shot: the credential is invalidated
+                    // but no retry follows.
+                    trace::emit_auth_refresh_no_retry();
                 }
                 return Err(transport.error_from_response(response).await);
             }
@@ -727,7 +729,8 @@ impl RealtimeWebSocket {
     }
 
     /// Close reason text carried by the peer's close frame, if one was
-    /// received with a non-empty reason.
+    /// received with a close frame (the reason may be empty — an unframed
+    /// EOF stays `None`).
     #[must_use]
     pub fn close_reason(&self) -> Option<&str> {
         match &self.last_close {
@@ -2276,10 +2279,7 @@ mod tests {
                     .with_output(RealtimeTranslationAudioOutput::new("es")),
             );
         let request = RealtimeTranslationClientSecretCreateRequest::new(session)
-            .with_expires_after(
-                RealtimeTranslationClientSecretExpiration::new(600)
-                    .expect("valid translation secret lifetime"),
-            );
+            .with_expires_after(RealtimeTranslationClientSecretExpiration::new(600));
         let response = client
             .realtime()
             .create_translation_client_secret(request)

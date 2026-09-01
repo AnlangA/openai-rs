@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
+use openai_rs_types::kernel::{Nullable, Omittable};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -27,7 +28,7 @@ use crate::{
     ConnectionFailureKind, DeviceCodeLogin, EmptyResponse, Error, InitializeParams,
     InitializeResponse, LoginAccountResponse, ManagedAppServerCredential, Notification, RpcError,
     RpcId, RuntimeCompatibility, RuntimeIdentity, ThreadStartParams, ThreadStartResponse,
-    TurnInterruptParams, TurnStartParams, TurnStartResponse, decode_notification,
+    TurnInterruptParams, TurnStartParams, TurnStartResponse, W3cTraceContext, decode_notification,
 };
 
 /// Default inbound JSONL frame limit.
@@ -274,6 +275,11 @@ where
     inner: Arc<Inner>,
     initialize_response: InitializeResponse,
     runtime_identity: RuntimeIdentity,
+    /// Optional W3C trace context injected into every outbound request
+    /// envelope (the pinned `JSONRPCRequest.trace` property). The
+    /// [`Omittable`]`<`[`Nullable`]`<`[`W3cTraceContext`]`>>` shape keeps all
+    /// three wire states; the base handle stays `Omitted`.
+    trace: Omittable<Nullable<W3cTraceContext>>,
     credential: PhantomData<fn() -> C>,
 }
 
@@ -289,6 +295,7 @@ where
             inner: Arc::clone(&self.inner),
             initialize_response: self.initialize_response.clone(),
             runtime_identity: self.runtime_identity.clone(),
+            trace: self.trace.clone(),
             credential: PhantomData,
         }
     }
@@ -403,6 +410,7 @@ where
                     extra: serde_json::Map::new(),
                 },
                 runtime_identity: runtime_identity.clone(),
+                trace: Omittable::Omitted,
                 credential: PhantomData,
             };
 
@@ -425,11 +433,25 @@ where
                 inner: provisional.inner,
                 initialize_response,
                 runtime_identity,
+                trace: Omittable::Omitted,
                 credential: PhantomData,
             })
         }
         .instrument(span)
         .await
+    }
+
+    /// Attaches a W3C trace context to every request sent through the
+    /// returned handle (the optional pinned `JSONRPCRequest.trace` property).
+    ///
+    /// The base handle keeps sending `trace`-less frames; every request made
+    /// through the returned clone — typed methods and the raw faces alike —
+    /// carries the context verbatim. Tracing propagation is opt-in per call
+    /// site, never a client-wide default.
+    #[must_use]
+    pub fn with_trace_context(mut self, trace: W3cTraceContext) -> Self {
+        self.trace = Omittable::Value(Nullable::Value(trace));
+        self
     }
 
     #[must_use]
@@ -608,6 +630,12 @@ where
         if let Some(params) = params {
             object.insert("params".to_owned(), params);
         }
+        // The pinned `JSONRPCRequest.trace` property is optional; it is sent
+        // only when the caller opted into propagation through
+        // `AppServerClient::with_trace_context`.
+        if let Omittable::Value(trace) = &self.trace {
+            object.insert("trace".to_owned(), serde_json::to_value(trace)?);
+        }
 
         // 5-19: the request timeout budgets the whole exchange — the outbound
         // write included — not just the response wait. A child that stops
@@ -615,11 +643,21 @@ where
         // holding the writer lock; bounding it here fails the request with the
         // same `RequestTimeout` semantics (and dropping the cancelled future
         // releases the lock, so `terminate` cannot wedge against it).
+        //
+        // 6-03: `write_all` is not cancel-safe, so dropping the exchange
+        // future on timeout can leave a half-written frame in the child's
+        // stdin; every later frame would then be parsed one frame late. The
+        // completion flag distinguishes "only the response is late" (the
+        // request fails, the stream stays framed) from "the write itself was
+        // cut" (fail-stop teardown below).
+        let write_completed = Arc::new(AtomicBool::new(false));
+        let write_signal = Arc::clone(&write_completed);
         let exchange = async {
             if let Err(error) = self.write_message(&Value::Object(object)).await {
                 lock(&self.inner.pending).remove(&id);
                 return Err(error);
             }
+            write_signal.store(true, Ordering::Release);
             match receiver.await {
                 Ok(result) => Ok(result),
                 Err(_channel_closed) => Err(Error::ResponseChannelClosed(id)),
@@ -630,6 +668,23 @@ where
             Ok(outcome) => outcome,
             Err(_elapsed) => {
                 lock(&self.inner.pending).remove(&id);
+                if !write_completed.load(Ordering::Acquire) {
+                    // The write was cancelled partway: frame synchronization
+                    // with the child is no longer guaranteed, so the
+                    // connection fails closed instead of letting a later
+                    // request ride a desynchronized stream.
+                    let _ = terminate(
+                        &self.inner,
+                        ConnectionFailure::new(
+                            ConnectionFailureKind::WriteTimeout,
+                            format!(
+                                "request {method} (id {id}) timed out mid-write; the \
+                                 possibly half-written frame desynchronizes the JSONL stream"
+                            ),
+                        ),
+                    )
+                    .await;
+                }
                 Err(Error::RequestTimeout {
                     method,
                     id,
@@ -1294,6 +1349,7 @@ mod tests {
         BrowserLoginOptions, CancelLoginStatus, ClientInfo, ConnectionFailureKind, Error,
         Notification, PlanType, RateLimitReachedType, RpcError, RpcId, RuntimeCompatibility,
         RuntimeIdentity, ThreadStartParams, TurnInterruptParams, TurnStartParams, TurnStatus,
+        W3cTraceContext,
     };
     use openai_rs_types::kernel::{Nullable, Omittable};
 
@@ -1867,6 +1923,167 @@ mod tests {
             }
             other => return Err(format!("unexpected blocked-write result: {other:?}").into()),
         }
+        client.close().await?;
+        Ok(())
+    }
+
+    /// 6-03 regression, repeated three times: a request whose write phase
+    /// exceeds the budget leaves a possibly half-written JSONL frame in the
+    /// child's stdin, so the connection must fail closed — `RequestTimeout`
+    /// for the caller plus a terminal `WriteTimeout` teardown — instead of
+    /// letting later frames ride a desynchronized stream.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_phase_timeout_fails_stop_the_half_written_connection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        const SCRIPT: &str = r#"
+            IFS= read -r init || exit 130
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 131
+            exec sleep 60
+        "#;
+        let limits = AppServerLimits {
+            request_timeout: std::time::Duration::from_millis(500),
+            shutdown_timeout: std::time::Duration::from_secs(5),
+            ..AppServerLimits::default()
+        };
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+
+        for attempt in 1..=3 {
+            let profile = tempfile::tempdir()?;
+            let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility.clone());
+            config.arguments = vec![OsString::from("-c"), OsString::from(SCRIPT)];
+            let client = AppServerClient::spawn(
+                config.with_limits(limits.clone()),
+                ClientInfo::new("test", "1.0.0"),
+            )
+            .await?;
+
+            let params = json!({"blob": "x".repeat(512 * 1024)});
+            match client.request_value("test/big", Some(params)).await {
+                Err(Error::RequestTimeout { method, id, .. }) => {
+                    assert_eq!(method, "test/big");
+                    assert_eq!(id, 2, "initialize consumed id 1 (attempt {attempt})");
+                }
+                other => {
+                    return Err(format!(
+                        "unexpected blocked-write result on attempt {attempt}: {other:?}"
+                    )
+                    .into());
+                }
+            }
+
+            assert!(
+                client.is_closed(),
+                "attempt {attempt} must tear the connection down"
+            );
+            let failure = client
+                .connection_failure()
+                .ok_or("missing terminal failure after a mid-write timeout")?;
+            assert_eq!(failure.kind, ConnectionFailureKind::WriteTimeout);
+            assert!(
+                failure.message.contains("timed out mid-write"),
+                "unexpected message: {}",
+                failure.message
+            );
+        }
+        Ok(())
+    }
+
+    /// 6-03 counterweight: when the write completed and only the response is
+    /// late, the timeout fails the request alone — the stream stays framed
+    /// and the connection keeps serving later requests.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn response_phase_timeout_keeps_the_connection_usable()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        // The child swallows the first request and only answers both after
+        // the second one arrives, so request one times out on the response
+        // wait while its frame was written in full.
+        let script = r#"
+            IFS= read -r init || exit 132
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 133
+            IFS= read -r first || exit 134
+            IFS= read -r second || exit 135
+            printf '%s\n' '{"id":2,"result":{"lane":"late"}}'
+            printf '%s\n' '{"id":3,"result":{"lane":"second"}}'
+            IFS= read -r until_eof
+        "#;
+        let limits = AppServerLimits {
+            request_timeout: std::time::Duration::from_millis(400),
+            shutdown_timeout: std::time::Duration::from_secs(5),
+            ..AppServerLimits::default()
+        };
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client =
+            AppServerClient::spawn(config.with_limits(limits), ClientInfo::new("test", "1.0.0"))
+                .await?;
+
+        match client.request_value("test/first", None).await {
+            Err(Error::RequestTimeout { method, id, .. }) => {
+                assert_eq!(method, "test/first");
+                assert_eq!(id, 2, "initialize consumed id 1");
+            }
+            other => return Err(format!("unexpected late-response result: {other:?}").into()),
+        }
+        assert!(
+            !client.is_closed(),
+            "a response-phase timeout must not tear the connection down"
+        );
+        assert!(client.connection_failure().is_none());
+
+        assert_eq!(
+            client.request_value("test/second", None).await?,
+            json!({"lane": "second"})
+        );
+        client.close().await?;
+        Ok(())
+    }
+
+    /// Trace injection: the pinned optional `JSONRPCRequest.trace` property is
+    /// sent only by handles that opted in through `with_trace_context`; the
+    /// base handle keeps sending `trace`-less frames.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn trace_context_is_injected_only_into_opted_in_requests()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 140
+            case "$init" in *trace*) exit 141 ;; esac
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 142
+            IFS= read -r plain || exit 143
+            case "$plain" in *trace*) exit 144 ;; esac
+            printf '%s\n' '{"id":2,"result":{"lane":"plain"}}'
+            IFS= read -r traced || exit 145
+            case "$traced" in *'"trace":{"traceparent":"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01","tracestate":"congo=4"}'*) ;; *) exit 146 ;; esac
+            printf '%s\n' '{"id":3,"result":{"lane":"traced"}}'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        assert_eq!(
+            client.request_value("test/plain", None).await?,
+            json!({"lane": "plain"})
+        );
+
+        let traced = client.clone().with_trace_context(
+            W3cTraceContext::new("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+                .with_tracestate("congo=4"),
+        );
+        assert_eq!(
+            traced.request_value("test/traced", None).await?,
+            json!({"lane": "traced"})
+        );
+
         client.close().await?;
         Ok(())
     }

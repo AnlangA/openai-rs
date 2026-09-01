@@ -3,11 +3,47 @@
 //! [`Client`] deliberately accepts only an [`ApiKey`]. ChatGPT/Codex credentials
 //! live in the separate `openai-rs-codex` crate and cannot cross this boundary.
 //!
-//! HTTP send paths emit `tracing` spans named `openai.http_request` at debug
-//! level, and warn events when a request is retried. Install a subscriber in
-//! the application to collect them. Spans record the operation id, method,
-//! route template, status, and `x-request-id` only; credentials, URLs, and
-//! request bodies are never recorded.
+//! # Tracing facade
+//!
+//! All telemetry is local `tracing` output; nothing is sent over the network
+//! (no telemetry endpoint and no `X-Stainless`-style headers, matching
+//! openai-node). The dependency is unconditional, no feature gates it, and no
+//! global hooks or subscriber implementations are installed: install any
+//! `tracing` subscriber in the application to collect spans and events, and
+//! remove it to silence this crate entirely.
+//!
+//! **Span whitelist.** Every outbound HTTP lane — the platform JSON
+//! transport, the multipart form and download lanes, the Administration
+//! client, the X.509 preview client and its token exchange, and Realtime
+//! call signaling — emits exactly one debug span named `openai.http_request`
+//! per logical request, with one field whitelist:
+//!
+//! - `operation.id`: the pinned operation id (or lane id for hand-routed
+//!   calls such as `x509.execute_json`);
+//! - `http.request.method`: the HTTP method;
+//! - `http.route`: the route template with parameters as `{name}` (never a
+//!   concrete URL, query string, or path value);
+//! - `http.response.status_code` and `openai.request_id`: the response
+//!   status and `x-request-id` header, recorded once known;
+//! - `retry.count`: retries consumed so far.
+//!
+//! The X.509 token refresh additionally wraps its single-flight exchange in a
+//! debug span `openai.x509.token_refresh` with no fields.
+//!
+//! **Event whitelist.** Two WARN events — `retrying OpenAI request`
+//! (`retry.count`, `retry.delay_ms`, `retry.reason`) and
+//! `request deadline exceeded` — plus the DEBUG `401 received, invalidating
+//! cached authentication` pair, where the `...and retrying` variant is
+//! reserved for lanes that actually replay the request. WARN was chosen over
+//! openai-python's INFO for retries and deadline exhaustion because both
+//! change observable latency and belong in default-level logs; openai-node
+//! emits nothing comparable.
+//!
+//! **Never recorded:** credentials of any kind (API keys, Administration
+//! keys, workload-identity and X.509 bearer tokens, client certificates),
+//! full URLs, query strings, concrete path values, request or response
+//! bodies, and stream events or deltas. SSE/WS *consumption* happens below
+//! span scope entirely. Leak tests pin every lane to this list.
 
 #[cfg(feature = "admin")]
 mod admin;
@@ -125,6 +161,17 @@ pub use realtime::{
     Realtime, RealtimeCallCreated, RealtimeConnectTarget, RealtimeKeepalive, RealtimeWebSocket,
     RealtimeWebSocketConfig,
 };
+/// Re-export of the `reqwest` version this crate is built against.
+///
+/// [`ClientBuilder::proxy`] and the X.509 builder's `proxy` method accept a
+/// `reqwest::Proxy`, so the type must stay nameable (in signatures, through
+/// the `openai-rs` facade chain) even for callers without a direct `reqwest`
+/// dependency. Constructing a `Proxy` still means depending on `reqwest`
+/// directly — within the same major version — because the builder API used
+/// to build one is deliberately not wrapped here. This re-export adds no new
+/// capability beyond naming: the `reqwest` semver surface is already part of
+/// this crate's public API through those signatures.
+pub use reqwest;
 pub use response_stream::ResponseEventStream;
 pub use responses::{
     DeleteResponseResult, InputItems, InputTokens, ResponseInputItemPageStream, Responses,

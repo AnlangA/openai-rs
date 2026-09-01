@@ -2352,6 +2352,78 @@ mod tests {
     }
 
     #[test]
+    fn writer_line_count_budget_rejects_the_line_over_the_limit() {
+        let first = BatchLine::new("one", BatchEndpoint::Responses, json!({})).expect("first line");
+        let second =
+            BatchLine::new("two", BatchEndpoint::Responses, json!({})).expect("second line");
+        let third =
+            BatchLine::new("three", BatchEndpoint::Responses, json!({})).expect("third line");
+        let mut writer = BatchJsonlWriter::new(Vec::new()).with_limits(
+            2,
+            MAX_BATCH_INPUT_BYTES,
+            DEFAULT_BATCH_JSONL_LINE_LIMIT,
+        );
+
+        writer
+            .write_line(&first)
+            .expect("first line fits the budget");
+        writer
+            .write_line(&second)
+            .expect("second line fills the budget");
+        assert!(matches!(
+            writer.write_line(&third),
+            Err(BatchJsonlError::TooManyLines { limit: 2 })
+        ));
+        // The rejected third line leaves both counters and the output intact.
+        assert_eq!(writer.line_count(), 2);
+        assert_eq!(
+            writer
+                .into_inner()
+                .iter()
+                .filter(|byte| **byte == b'\n')
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn writer_line_byte_budget_rejects_one_oversized_line() {
+        let line = BatchLine::new(
+            "wide",
+            BatchEndpoint::Responses,
+            json!({"padding": "x".repeat(64)}),
+        )
+        .expect("line");
+        let encoded = serde_json::to_vec(&line).expect("encode line");
+        let mut oversized = BatchJsonlWriter::new(Vec::new()).with_limits(
+            MAX_BATCH_INPUT_LINES,
+            MAX_BATCH_INPUT_BYTES,
+            encoded.len() - 1,
+        );
+
+        assert!(matches!(
+            oversized.write_line(&line),
+            Err(BatchJsonlError::LineTooLong {
+                line: 1,
+                limit
+            }) if limit == encoded.len() - 1
+        ));
+        // A line rejected for length never reaches the writer or its counters.
+        assert_eq!(oversized.line_count(), 0);
+        assert_eq!(oversized.byte_count(), 0);
+        assert!(oversized.into_inner().is_empty());
+
+        let mut exact = BatchJsonlWriter::new(Vec::new()).with_limits(
+            MAX_BATCH_INPUT_LINES,
+            MAX_BATCH_INPUT_BYTES,
+            encoded.len(),
+        );
+        exact
+            .write_line(&line)
+            .expect("line at the exact bound passes");
+    }
+
+    #[test]
     fn partial_json_write_poisons_writer_permanently() {
         let first = BatchLine::new(
             "partial",
@@ -2454,6 +2526,42 @@ mod tests {
                 .collect::<Result<Vec<_>, _>>()
                 .expect("decode both lines");
         assert_eq!(values.len(), 2);
+    }
+
+    #[test]
+    fn reader_with_line_limit_rejects_oversized_and_blank_lines() {
+        let valid: &[u8] =
+            b"{\"custom_id\":\"a\",\"method\":\"POST\",\"url\":\"/v1/responses\",\"body\":{}}\n";
+        let line_length = valid.len() - 1; // encoded bytes without `\n`
+        let mut bounded =
+            read_batch_jsonl::<_, BatchLine<serde_json::Value>>(BufReader::new(valid))
+                .with_line_limit(line_length);
+        bounded
+            .next()
+            .expect("line exactly at the configured bound")
+            .expect("decode bounded line");
+
+        let oversized: &[u8] = b"{\"padding\":\"too long for the configured bound\"}\n";
+        let mut oversized_reader =
+            read_batch_jsonl::<_, BatchLine<serde_json::Value>>(BufReader::new(oversized))
+                .with_line_limit(8);
+        assert!(matches!(
+            oversized_reader.next(),
+            Some(Err(BatchJsonlError::LineTooLong { line: 1, limit: 8 }))
+        ));
+        assert!(oversized_reader.next().is_none());
+
+        // A blank line under a small custom bound still reports EmptyLine at
+        // its original one-based position instead of a length failure.
+        let blank: &[u8] = b"\n";
+        let mut blank_reader =
+            read_batch_jsonl::<_, BatchLine<serde_json::Value>>(BufReader::new(blank))
+                .with_line_limit(8);
+        assert!(matches!(
+            blank_reader.next(),
+            Some(Err(BatchJsonlError::EmptyLine { line: 1 }))
+        ));
+        assert!(blank_reader.next().is_none());
     }
 
     proptest! {

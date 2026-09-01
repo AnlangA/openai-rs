@@ -33,10 +33,11 @@ impl ContentProvenanceChecks {
         let source = PreparedReplayableSource::prepare(request.file()).await?;
         let form = ReplayableMultipartForm::new().part("file", source);
         let path = [PathSegment::literal("content_provenance_checks")];
+        // The pinned spec records this operation's id with this exact casing.
         let response = self
             .client
             .multipart_transport()
-            .send_replayable_form(&path, &form, JSON_MIME)
+            .send_replayable_form("Createcontentprovenancecheck", &path, &form, JSON_MIME)
             .await?;
         self.client
             .multipart_transport()

@@ -781,7 +781,8 @@ impl BetaResponsesWebSocket {
     }
 
     /// Close reason text carried by the peer's close frame, if one was
-    /// received with a non-empty reason.
+    /// received with a close frame (the reason may be empty — an unframed
+    /// EOF stays `None`).
     #[must_use]
     pub fn close_reason(&self) -> Option<&str> {
         match &self.last_close {

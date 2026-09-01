@@ -186,12 +186,32 @@ crate::open_string_enum! {
 /// defines only `after`/`before`/`limit` of these fields (its own filters live
 /// on [`AuditLogListParams`]); sending an undefined key is the caller's
 /// responsibility.
+///
+/// # `limit` value domains
+///
+/// `limit` is not validated here (6-R1: the shared bag is a deliberate
+/// superset, D0059); the pinned domains differ per route family:
+///
+/// | Route family | Domain | Default | Source |
+/// |---|---|---|---|
+/// | Roles and role assignments (`list-roles`, `list-project-roles`, group/user/project role-assignment lists) | `0..=1000` | 1000 for the role lists, unset for assignments | schema `minimum`/`maximum` |
+/// | Groups and group users (`list-groups`, `list-group-users`) | `0..=1000` | 100 | schema `minimum`/`maximum` |
+/// | Project groups (`list-project-groups`) | `0..=100` | 20 | schema `minimum`/`maximum` |
+/// | Spend alerts (`list-organization/project-spend-alerts`) | `0..=100` | 20 | schema `minimum`/`maximum` |
+/// | Most remaining lists (admin API keys, audit logs, certificates, invites, projects, project API keys/certificates/service accounts/users) | `1..=100` (prose) | 20 | description text only — no schema bounds (the D0154 "prose-backed lower bound" family) |
+///
+/// The usage/costs bucket limits do not use this bag at all — they live on
+/// [`UsageQueryParams`] with per-`bucket_width` defaults. Sending a `limit`
+/// outside the target route's domain is the caller's responsibility; the
+/// service, not this bag, rejects it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AdminListParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub after: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub before: Omittable<String>,
+    /// Page size. Unvalidated shared-bag value; see the `limit` value domains
+    /// table in the type documentation for the per-route bounds and defaults.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<u64>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -329,13 +349,17 @@ pub struct AdminNextPage<T> {
 
 impl<T> AdminNextPage<T> {
     /// Cursor for another page.
+    ///
+    /// An empty `next` yields `None` (D0145): it would otherwise be dropped
+    /// by the query encoder and silently re-request the first page, exactly
+    /// like the empty `last_id` of [`AdminCursorPage::next_after`].
     #[must_use]
     pub fn next_cursor(&self) -> Option<&str> {
         if !self.has_more {
             return None;
         }
         match &self.next {
-            Nullable::Value(next) => Some(next),
+            Nullable::Value(next) => Some(next.as_str()).filter(|next| !next.is_empty()),
             Nullable::Null => None,
         }
     }
@@ -1412,9 +1436,16 @@ pub type OrganizationCertificateDeactivationResponse = CertificateScopeResponse;
 pub type OrganizationProjectCertificateActivationResponse = CertificateScopeResponse;
 pub type OrganizationProjectCertificateDeactivationResponse = CertificateScopeResponse;
 
+crate::open_string_enum! {
+    /// Deleted certificate discriminator.
+    pub enum DeleteCertificateObject {
+        Deleted = "certificate.deleted"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeleteCertificateResponse {
-    pub object: String,
+    pub object: DeleteCertificateObject,
     pub id: String,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -1663,9 +1694,16 @@ pub struct UserRoleAssignment {
     extra: ExtraFields,
 }
 
+crate::open_string_enum! {
+    /// Deleted group discriminator.
+    pub enum GroupDeletedObject {
+        Deleted = "group.deleted"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupDeletedResource {
-    pub object: String,
+    pub object: GroupDeletedObject,
     pub id: String,
     pub deleted: bool,
     #[serde(default, flatten)]
@@ -1817,9 +1855,16 @@ pub struct UserRoleUpdateRequest {
     pub developer_persona: Omittable<Nullable<String>>,
 }
 
+crate::open_string_enum! {
+    /// Deleted organization user discriminator.
+    pub enum UserDeleteObject {
+        Deleted = "organization.user.deleted"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UserDeleteResponse {
-    pub object: String,
+    pub object: UserDeleteObject,
     pub id: String,
     pub deleted: bool,
     #[serde(default, flatten)]
@@ -1916,9 +1961,16 @@ pub struct AssignedRoleDetails {
 pub type PublicRoleListResource = AdminNextPage<Role>;
 pub type RoleListResource = AdminNextPage<AssignedRoleDetails>;
 
+crate::open_string_enum! {
+    /// Deleted role discriminator.
+    pub enum RoleDeletedObject {
+        Deleted = "role.deleted"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RoleDeletedResource {
-    pub object: String,
+    pub object: RoleDeletedObject,
     pub id: String,
     pub deleted: bool,
     #[serde(default, flatten)]
@@ -2012,9 +2064,16 @@ pub struct InviteRequest {
 
 pub type InviteListResponse = AdminCursorPage<Invite>;
 
+crate::open_string_enum! {
+    /// Deleted invite discriminator.
+    pub enum InviteDeleteObject {
+        Deleted = "organization.invite.deleted"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InviteDeleteResponse {
-    pub object: String,
+    pub object: InviteDeleteObject,
     pub id: String,
     pub deleted: bool,
     #[serde(default, flatten)]
@@ -2104,9 +2163,16 @@ crate::open_string_enum! {
     }
 }
 
+crate::open_string_enum! {
+    /// Project group discriminator.
+    pub enum ProjectGroupObject {
+        Group = "project.group"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectGroup {
-    pub object: String,
+    pub object: ProjectGroupObject,
     pub project_id: String,
     pub group_id: String,
     pub group_name: String,
@@ -2131,9 +2197,16 @@ pub struct InviteProjectGroupBody {
     pub role: String,
 }
 
+crate::open_string_enum! {
+    /// Removed project-group discriminator.
+    pub enum ProjectGroupDeletedObject {
+        Deleted = "project.group.deleted"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectGroupDeletedResource {
-    pub object: String,
+    pub object: ProjectGroupDeletedObject,
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2171,9 +2244,16 @@ pub struct ProjectUserUpdateRequest {
 
 pub type ProjectUserListResponse = AdminCursorPage<ProjectUser>;
 
+crate::open_string_enum! {
+    /// Removed project-user discriminator.
+    pub enum ProjectUserDeleteObject {
+        Deleted = "organization.project.user.deleted"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectUserDeleteResponse {
-    pub object: String,
+    pub object: ProjectUserDeleteObject,
     pub id: String,
     pub deleted: bool,
     #[serde(default, flatten)]
@@ -2299,9 +2379,16 @@ pub struct CreateProjectServiceAccountApiKeyBody {
 
 pub type ProjectServiceAccountListResponse = AdminCursorPage<ProjectServiceAccount>;
 
+crate::open_string_enum! {
+    /// Deleted project service-account discriminator.
+    pub enum ProjectServiceAccountDeleteObject {
+        Deleted = "organization.project.service_account.deleted"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectServiceAccountDeleteResponse {
-    pub object: String,
+    pub object: ProjectServiceAccountDeleteObject,
     pub id: String,
     pub deleted: bool,
     #[serde(default, flatten)]
@@ -2394,9 +2481,16 @@ impl ProjectApiKeyOwner {
     }
 }
 
+crate::open_string_enum! {
+    /// Project API-key discriminator.
+    pub enum ProjectApiKeyObject {
+        Key = "organization.project.api_key"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectApiKey {
-    pub object: String,
+    pub object: ProjectApiKeyObject,
     pub redacted_value: String,
     pub name: String,
     pub created_at: u64,
@@ -2410,9 +2504,16 @@ pub struct ProjectApiKey {
 
 pub type ProjectApiKeyListResponse = AdminCursorPage<ProjectApiKey>;
 
+crate::open_string_enum! {
+    /// Deleted project API-key discriminator.
+    pub enum ProjectApiKeyDeleteObject {
+        Deleted = "organization.project.api_key.deleted"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectApiKeyDeleteResponse {
-    pub object: String,
+    pub object: ProjectApiKeyDeleteObject,
     pub id: String,
     pub deleted: bool,
     #[serde(default, flatten)]
@@ -2427,9 +2528,16 @@ crate::open_string_enum! {
     }
 }
 
+crate::open_string_enum! {
+    /// Project model-permissions discriminator.
+    pub enum ProjectModelPermissionsObject {
+        Permissions = "project.model_permissions"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectModelPermissions {
-    pub object: String,
+    pub object: ProjectModelPermissionsObject,
     pub mode: ProjectModelPermissionMode,
     pub model_ids: Vec<ModelId>,
     #[serde(default, flatten)]
@@ -2442,9 +2550,16 @@ pub struct ProjectModelPermissionsUpdateRequest {
     pub model_ids: Vec<ModelId>,
 }
 
+crate::open_string_enum! {
+    /// Deleted project model-permissions discriminator.
+    pub enum ProjectModelPermissionsDeleteObject {
+        Deleted = "project.model_permissions.deleted"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectModelPermissionsDeleteResponse {
-    pub object: String,
+    pub object: ProjectModelPermissionsDeleteObject,
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2593,10 +2708,21 @@ pub type ProjectSpendAlert = SpendAlert;
 pub type OrganizationSpendAlertListResource = AdminRequiredCursorPage<SpendAlert>;
 pub type ProjectSpendAlertListResource = AdminRequiredCursorPage<SpendAlert>;
 
+crate::open_string_enum! {
+    /// Deleted spend-alert discriminator.
+    ///
+    /// The organization and project delete routes each pin their own constant,
+    /// so one open enum carries both (the shared struct is aliased per route).
+    pub enum SpendAlertDeletedObject {
+        Organization = "organization.spend_alert.deleted",
+        Project = "project.spend_alert.deleted"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpendAlertDeletedResource {
     pub id: String,
-    pub object: String,
+    pub object: SpendAlertDeletedObject,
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2665,9 +2791,20 @@ impl UpdateSpendLimitBody {
 pub type UpdateOrganizationSpendLimitBody = UpdateSpendLimitBody;
 pub type UpdateProjectSpendLimitBody = UpdateSpendLimitBody;
 
+crate::open_string_enum! {
+    /// Deleted spend-limit discriminator.
+    ///
+    /// The organization and project delete routes each pin their own constant,
+    /// so one open enum carries both (the shared struct is aliased per route).
+    pub enum SpendLimitDeletedObject {
+        Organization = "organization.spend_limit.deleted",
+        Project = "project.spend_limit.deleted"
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpendLimitDeletedResource {
-    pub object: String,
+    pub object: SpendLimitDeletedObject,
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2803,11 +2940,20 @@ crate::open_string_enum! {
 }
 
 /// Shared query superset for Usage endpoints.
+///
+/// This is a send-side superset (D0059): individual endpoints accept only a
+/// subset of these filters, per the pinned OpenAPI.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageQueryParams {
+    /// Unix seconds; buckets with start timestamps at or after this value
+    /// are included.
     pub start_time: u64,
+    /// Unix seconds, exclusive upper bound on bucket start timestamps.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub end_time: Omittable<u64>,
+    /// Bucket width; defaults to `1d`. The per-bucket `limit` defaults and
+    /// ceilings vary with it (`1d`: default 7, max 31; `1h`: 24/168;
+    /// `1m`: 60/1440) per the official docs.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub bucket_width: Omittable<UsageBucketWidth>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2818,14 +2964,19 @@ pub struct UsageQueryParams {
     pub api_key_ids: Omittable<Vec<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub models: Omittable<Vec<ModelId>>,
+    /// Restricts results to batch usage only.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub batch: Omittable<bool>,
+    /// Images endpoints only.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub sources: Omittable<Vec<UsageImageSource>>,
+    /// Images endpoints only.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub sizes: Omittable<Vec<UsageImageSize>>,
+    /// File-search endpoints only.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub vector_store_ids: Omittable<Vec<String>>,
+    /// Web-search endpoints only.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub context_levels: Omittable<Vec<UsageContextLevel>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -3142,13 +3293,17 @@ pub struct UsageResponse {
 
 impl UsageResponse {
     /// Cursor for the next usage page.
+    ///
+    /// An empty `next_page` yields `None` (D0145): it would otherwise be
+    /// dropped by the query encoder and silently re-request the first page,
+    /// exactly like the empty `last_id` of [`AdminCursorPage::next_after`].
     #[must_use]
     pub fn next_page(&self) -> Option<&str> {
         if !self.has_more {
             return None;
         }
         match &self.next_page {
-            Nullable::Value(page) => Some(page),
+            Nullable::Value(page) => Some(page.as_str()).filter(|page| !page.is_empty()),
             Nullable::Null => None,
         }
     }
@@ -4140,9 +4295,34 @@ mod tests {
         }
     }
 
+    /// Count of Administration routes in the pinned spec source.
+    ///
+    /// Organization and project routes only — the three Administration-only
+    /// fine-tuning checkpoint-permission operations belong to the dedicated
+    /// Administration client channel, not to this manifest.
+    fn pinned_admin_operation_count() -> usize {
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../../spec/contracts/operations.json"))
+                .expect("operation manifest JSON");
+        manifest["client_operations"]
+            .as_array()
+            .expect("client operation array")
+            .iter()
+            .filter(|operation| {
+                operation["path"].as_str().is_some_and(|path| {
+                    path.starts_with("/organization/") || path.starts_with("/projects/")
+                })
+            })
+            .count()
+    }
+
     #[test]
     fn operation_manifest_covers_every_frozen_admin_operation_once() {
-        assert_eq!(ADMIN_OPERATION_MANIFEST.len(), 119);
+        assert_eq!(
+            ADMIN_OPERATION_MANIFEST.len(),
+            pinned_admin_operation_count(),
+            "the manifest must cover exactly the pinned Administration routes"
+        );
         let mut ids = HashSet::new();
         let mut method_paths = HashSet::new();
         for operation in ADMIN_OPERATION_MANIFEST {
@@ -5806,6 +5986,228 @@ mod tests {
         assert_eq!(
             required_empty.next_after_with(Some("cert_1")),
             Some("cert_1")
+        );
+    }
+
+    #[test]
+    fn admin_next_and_usage_page_cursors_drop_empty_strings() {
+        // D0145 (third family member): an empty cursor would be dropped by
+        // the query encoder and silently re-request the first page, so the
+        // `next`-style getters treat it as absent even when `has_more` is
+        // set — mirroring `AdminCursorPage::next_after`.
+        let group_page = ok(serde_json::from_value::<GroupListResource>(json!({
+            "object": "list",
+            "data": [],
+            "has_more": true,
+            "next": ""
+        })));
+        assert_eq!(group_page.next_cursor(), None);
+
+        let group_null = ok(serde_json::from_value::<GroupListResource>(json!({
+            "object": "list",
+            "data": [],
+            "has_more": true,
+            "next": null
+        })));
+        assert_eq!(group_null.next_cursor(), None);
+
+        let group_done = ok(serde_json::from_value::<GroupListResource>(json!({
+            "object": "list",
+            "data": [],
+            "has_more": false,
+            "next": "group_cursor"
+        })));
+        assert_eq!(group_done.next_cursor(), None);
+
+        let group_more = ok(serde_json::from_value::<GroupListResource>(json!({
+            "object": "list",
+            "data": [],
+            "has_more": true,
+            "next": "group_cursor"
+        })));
+        assert_eq!(group_more.next_cursor(), Some("group_cursor"));
+
+        let usage = ok(serde_json::from_value::<UsageResponse>(json!({
+            "object": "page",
+            "data": [],
+            "has_more": true,
+            "next_page": ""
+        })));
+        assert_eq!(usage.next_page(), None);
+
+        let usage_null = ok(serde_json::from_value::<UsageResponse>(json!({
+            "object": "page",
+            "data": [],
+            "has_more": true,
+            "next_page": null
+        })));
+        assert_eq!(usage_null.next_page(), None);
+    }
+
+    #[test]
+    fn delete_and_resource_object_discriminators_are_pinned_open_enums() {
+        // 6-14: every `object` below is a pinned single-constant string that
+        // openai-python and openai-node model as a Literal; the Rust side now
+        // mirrors the sibling open enums (e.g. `AdminApiKeyDeleteObject`) so a
+        // known discriminator decodes to a named variant while a future one
+        // stays lossless through `Unknown`.
+        macro_rules! discriminator_case {
+            ($ty:ty, $fixture:expr, $expected:literal) => {{
+                let decoded = ok(serde_json::from_value::<$ty>($fixture.clone()));
+                assert_eq!(
+                    decoded.object.as_str(),
+                    $expected,
+                    concat!(stringify!($ty), " discriminator")
+                );
+                assert!(
+                    decoded.object.is_known(),
+                    concat!(stringify!($ty), " must decode as a named variant")
+                );
+                assert_eq!(ok(serde_json::to_value(decoded)), $fixture);
+            }};
+        }
+
+        discriminator_case!(
+            DeleteCertificateResponse,
+            json!({"object": "certificate.deleted", "id": "cert_1"}),
+            "certificate.deleted"
+        );
+        discriminator_case!(
+            GroupDeletedResource,
+            json!({"object": "group.deleted", "id": "grp_1", "deleted": true}),
+            "group.deleted"
+        );
+        discriminator_case!(
+            UserDeleteResponse,
+            json!({"object": "organization.user.deleted", "id": "user_1", "deleted": true}),
+            "organization.user.deleted"
+        );
+        discriminator_case!(
+            RoleDeletedResource,
+            json!({"object": "role.deleted", "id": "role_1", "deleted": true}),
+            "role.deleted"
+        );
+        discriminator_case!(
+            InviteDeleteResponse,
+            json!({"object": "organization.invite.deleted", "id": "inv_1", "deleted": true}),
+            "organization.invite.deleted"
+        );
+        discriminator_case!(
+            ProjectGroup,
+            json!({
+                "object": "project.group",
+                "project_id": "proj_1",
+                "group_id": "grp_1",
+                "group_name": "ops",
+                "group_type": "group",
+                "created_at": 1
+            }),
+            "project.group"
+        );
+        discriminator_case!(
+            ProjectGroupDeletedResource,
+            json!({"object": "project.group.deleted", "deleted": true}),
+            "project.group.deleted"
+        );
+        discriminator_case!(
+            ProjectUserDeleteResponse,
+            json!({
+                "object": "organization.project.user.deleted",
+                "id": "user_1",
+                "deleted": true
+            }),
+            "organization.project.user.deleted"
+        );
+        discriminator_case!(
+            ProjectServiceAccountDeleteResponse,
+            json!({
+                "object": "organization.project.service_account.deleted",
+                "id": "sa_1",
+                "deleted": true
+            }),
+            "organization.project.service_account.deleted"
+        );
+        discriminator_case!(
+            ProjectApiKey,
+            json!({
+                "object": "organization.project.api_key",
+                "redacted_value": "sk-proj...",
+                "name": "ci",
+                "created_at": 1,
+                "last_used_at": null,
+                "id": "key_1",
+                "owner_project_access": "active",
+                "owner": {}
+            }),
+            "organization.project.api_key"
+        );
+        discriminator_case!(
+            ProjectApiKeyDeleteResponse,
+            json!({
+                "object": "organization.project.api_key.deleted",
+                "id": "key_1",
+                "deleted": true
+            }),
+            "organization.project.api_key.deleted"
+        );
+        discriminator_case!(
+            ProjectModelPermissions,
+            json!({
+                "object": "project.model_permissions",
+                "mode": "allow_list",
+                "model_ids": []
+            }),
+            "project.model_permissions"
+        );
+        discriminator_case!(
+            ProjectModelPermissionsDeleteResponse,
+            json!({"object": "project.model_permissions.deleted", "deleted": true}),
+            "project.model_permissions.deleted"
+        );
+        // The two spend families each pin an organization and a project
+        // constant on the same shared struct.
+        discriminator_case!(
+            OrganizationSpendAlertDeletedResource,
+            json!({
+                "id": "alert_1",
+                "object": "organization.spend_alert.deleted",
+                "deleted": true
+            }),
+            "organization.spend_alert.deleted"
+        );
+        discriminator_case!(
+            ProjectSpendAlertDeletedResource,
+            json!({
+                "id": "alert_1",
+                "object": "project.spend_alert.deleted",
+                "deleted": true
+            }),
+            "project.spend_alert.deleted"
+        );
+        discriminator_case!(
+            OrganizationSpendLimitDeletedResource,
+            json!({"object": "organization.spend_limit.deleted", "deleted": true}),
+            "organization.spend_limit.deleted"
+        );
+        discriminator_case!(
+            ProjectSpendLimitDeletedResource,
+            json!({"object": "project.spend_limit.deleted", "deleted": true}),
+            "project.spend_limit.deleted"
+        );
+
+        // A discriminator minted after this release decodes losslessly.
+        let future = ok(serde_json::from_value::<UserDeleteResponse>(json!({
+            "object": "organization.user.future_deleted",
+            "id": "user_1",
+            "deleted": true
+        })));
+        assert_eq!(
+            future.object.unknown_value(),
+            Some("organization.user.future_deleted")
+        );
+        assert_eq!(
+            ok(serde_json::to_value(future))["object"],
+            "organization.user.future_deleted"
         );
     }
 

@@ -4327,3 +4327,103 @@ until a decision is recorded here and its fixtures pass.
 - Impact: `openai-rs-types` Responses/beta Responses list params (breaking: `limit()` builders now fallible).
 - Overrides: none
 - Tests: `input_item_list_limit_rejects_zero_on_build_and_decode`, `beta_input_item_list_limit_rejects_zero_on_build_and_decode`, `beta_retrieve_stream_params_pin_stream_true`.
+
+## D0225 — Webhook signature candidates are bounded-verified; no slot-count rejection
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `decode_signatures` (`webhooks.rs`), `InvalidSignatureHeader` docs
+- Sources: openai-node's `webhook-signature-amplification.test.ts` explicitly accepts a valid signature in slot 33 and after 1600 distinct invalid candidates; openai-python's `any(compare_digest)` has no cap; the 8 KiB joined-header bound (~170 `v1,<tag>` slots) is already the amplification limit. Round-6 item 6-01.
+- Decision: the 32-candidate hard rejection and `MAX_SIGNATURE_CANDIDATES` are removed; every candidate within the header bound is evaluated at constant work (no short-circuit), keeping the 32-byte length filter, the invalid-candidate skip, and the zero-valid-candidate rejection.
+- Reason: the fail-stop cap rejected deliveries both official SDKs verify.
+- Impact: `openai-rs-client` webhook verification (behavior widened: 33rd+ valid candidates now verify).
+- Overrides: revises D0205's implicit candidate-cap stance
+- Tests: `a_valid_signature_in_slot_thirty_three_still_verifies`, `a_valid_signature_after_1600_invalid_candidates_still_verifies`, rewritten `rejects_replay_future_tamper_and_unusable_signature_lists`, plus the configuration fail-closed suite.
+
+## D0226 — Codex app-server send surface completed; write-timeout fail-stop; extra Debug redacted
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ThreadStartParams`/`TurnStartParams` (+`SandboxPolicy`, `ApprovalsReviewer`, `SessionStartSource`, `NetworkAccess`, `W3cTraceContext`), `AppServerClient::with_trace_context`, `ConnectionFailureKind::WriteTimeout`, `redacted_extra_debug!`, `decode_notification` known list
+- Sources: pinned 0.144.5 `v2/ThreadStartParams` (15 optional properties) and `v2/TurnStartParams` (turn-level `sandboxPolicy`/`approvalPolicy`/`approvalsReviewer`/`serviceTier` overrides), `v2/SandboxPolicy` four-branch tagged union with server-side defaults, `JSONRPCRequest.trace` optional `W3cTraceContext`; tokio `write_all` is not cancel-safe. Round-6 items 6-02/6-03/6-07/6-13.
+- Decision: the two send DTOs model every pinned optional property (open enums, a `config` map escape hatch, server defaults expressed by omitting keys) and gain the flatten `extra` they uniquely lacked; W3C trace context is injected per-handle opt-in with three-state fields; a request timeout that fires before the write completes now tears the connection down (`WriteTimeout` terminal kind) since a half-written frame desynchronizes the JSONL stream, while response-late timeouts keep the connection; all thirty-one `extra` carriers (including `RpcError.data`) print only lengths/`<redacted>` in Debug; `error` joins the known-notification warn list.
+- Impact: `openai-rs-codex` surface (additive fields/types; Debug output changes; breaking error-type removal noted in the round record).
+- Overrides: none
+- Tests: `thread_start_params_serialize_the_previously_missing_pinned_fields`, `turn_start_params_serialize_the_turn_level_overrides`, `sandbox_policy_matches_the_pinned_tagged_union`, `extra_carriers_debug_never_leaks_retained_values`, `error_notification_decode_failure_emits_warn`, `w3c_trace_context_serializes_the_pinned_wire_states`, `write_phase_timeout_fails_stop_the_half_written_connection`, `response_phase_timeout_keeps_the_connection_usable`, `trace_context_is_injected_only_into_opted_in_requests`.
+
+## D0227 — Admin cursor empty-string family completed; delete discriminators typed; manifest pinned parity
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `AdminNextPage::next_cursor`, `UsageResponse::next_page`, fine-tuning events/checkpoints/permissions `next_after`; fifteen admin response DTO `object` fields; admin manifest tests
+- Sources: D0145 already filtered empty cursors on `AdminCursorPage`/`AdminRequiredCursorPage` — five same-shaped getters were missed; the pinned `object` constants (python/node model Literal) while sibling discriminators were already open enums; every existing manifest guard was self-referential. Round-6 items 6-04/6-14/6-15.
+- Decision: all five cursor getters return `None` for empty strings; fifteen DTO discriminators become open string enums (spend-alert/spend-limit each carry the organization+project pair); `admin_manifest_matches_pinned_operations_json` asserts bidirectional (operation_id, method, path) set equality against the pinned operations projection, replacing both hard-coded 119 counts with pin-derived counts.
+- Impact: `openai-rs-types` admin/fine-tuning surfaces; `openai-rs-client` tests only.
+- Overrides: extends D0145
+- Tests: `admin_next_and_usage_page_cursors_drop_empty_strings`, `list_pages_drop_empty_cursors_when_more_remains`, `delete_and_resource_object_discriminators_are_pinned_open_enums`, `admin_manifest_matches_pinned_operations_json`.
+
+## D0228 — Beta prompt-cached content pins its three construction branches; chat moderation policy is typed
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BetaPromptCachedInputContent` construction + `BetaResponseInputConstraintError`; `ChatModerationConfig.policy`
+- Sources: the pinned beta message-content unions are exactly input_text/input_image/input_file (the item-form-only `computer_screenshot` was constructible via the wide `Into<InputContent>` entry — D0167's beta gap); `CreateChatCompletionRequest.moderation` is the same `ModerationParam` the Responses host already types. Round-6 items 6-05/6-11.
+- Decision: the prompt-cached content gains named `text`/`image`/`file` constructors only, and every beta request `validate()` rejects a decoded `computer_screenshot` branch through the new beta envelope error (decode stays the D0142 lossless four-branch bridge); chat `policy` reuses `responses::ModerationPolicy` with typed builders, and the `with_policy` escape hatch now requires its serialization to match the pinned shape exactly (out-of-domain members error rather than drop).
+- Impact: `openai-rs-types` beta Responses construction (breaking: `new` removed; beta `validate()` error types unified) and Chat moderation field type.
+- Overrides: extends D0167/D0142
+- Tests: `beta_prompt_cached_content_pins_the_three_official_branches`, `beta_prompt_cached_computer_screenshot_decode_stays_lossless_and_validate_rejects`, `chat_moderation_policy_mirrors_the_pinned_moderation_param`.
+
+## D0229 — Multipart sources redact metadata; lanes trace real operation identities
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ReplayableMultipartSource` Debug, the four multipart send lanes' `operation.id`/`http.route`, `from_path`/`Uploads::add_part` docs
+- Sources: the one-shot source already redacted `file_name`/`media_type` while the replayable source printed them (a Path source's explicit file name is typically the basename of the redacted path); the download lane hardcoded `http.route = "/download"` and the lanes carried transport names instead of operation ids, unlike the JSON lanes. Round-6 items 6-06/6-16.
+- Decision: replayable source Debug redacts `file_name`/`media_type` (existence preserved); every lane records the caller-supplied pinned operation id and the download route derives from the path segments; `from_path` documents the regular-files-only, symlink-rejecting stance and `add_part` mirrors the retry-identity documentation.
+- Impact: `openai-rs-types` files/media Debug output; `openai-rs-client` multipart internals (private signatures).
+- Overrides: none
+- Tests: `multipart_source_debug_redacts_file_name_and_media_type`, `image_edit_multipart_debug_redacts_source_file_names_and_media_types`, `replayable_form_lane_records_real_operation_id`, `one_shot_form_lane_records_real_operation_id`, `download_lane_records_real_operation_id_and_route_template`.
+
+## D0230 — Containers limits and translation secret lifetime join their families; `#/` joins the root-reference rejection
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ContainerListLimit`, `RealtimeTranslationClientSecretExpiration`, `structured.rs` root-reference classification
+- Sources: both container `limit` parameters carry only the prose 1..=100 range (the third D0217-family miss, zero previously passing); the translation secret lifetime shares the GA client-secret pin schema yet hard-failed on decode with a u16 cap; `#/` is the second spelling of the document-root reference and passed through the bare sole-key path. Round-6 items 6-08/6-09/6-12.
+- Decision: container limits enforce ≥1 at both serde boundaries (newtype, D0204 two-phase reporting); translation seconds become `Omittable<i64>` with the 10..=7200 range moved into the request `validate()` (D0036/D0169 pattern); `"#"` and `"#/"` both report `RecursiveReference`.
+- Impact: `openai-rs-types` Containers/Realtime/Structured surfaces (breaking field-type changes noted in the round record).
+- Overrides: extends D0217, D0036/D0169, D0143
+- Tests: `container_list_limits_enforce_the_prose_backed_minimum_of_one`, `translation_secret_lifetime_range_is_opt_in_validate`, `empty_pointer_root_reference_reports_recursion_in_both_forms`.
+
+## D0231 — The tracing facade is local-only, six-field spans, one retry field name
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `trace.rs` helpers; span declarations across transport/admin/x509/multipart/codex-direct; client/rmcp/codex crate docs; README; `reqwest` re-export
+- Sources: round-6 items 6-17/6-18/6-21 (the engineering gaps after remote commit b6b01a6 introduced tracing); openai-python logs retries at INFO and openai-node emits no SDK logging; OTel HTTP semconv informed field naming only.
+- Decision: tracing is a local facade — unconditional dependency, no feature gate, no public hooks or subscriber, no network telemetry (README states this). Each outbound HTTP lane emits exactly one debug span `openai.http_request` with a fixed six-field whitelist (`operation.id`, `http.request.method`, `http.route` templates, `http.response.status_code`, `openai.request_id`, `retry.count`); events are the retry WARN (with `retry.count`/`retry.delay_ms`/`retry.reason`) and the deadline WARN — WARN rather than python's INFO because both change observable latency, and node has no counterpart; the 401 invalidation pair keeps "and retrying" only on lanes that actually replay. The retry counter is named `retry.count` everywhere. Route templates evaluate lazily (closure form), so disabled debug spans allocate nothing. Never recorded: credentials, full URLs/query strings, path values, bodies, stream deltas/events — SSE and WS consumption run outside the span scope. rmcp keeps its flat snake_case fields (`rmcp.tool_dispatch` four fields) and codex records `codex.app_server.connection`/`codex.app_server.rpc`/`codex.direct.sse`. `reqwest` is re-exported at the client root and facade for nameability only; constructing a `Proxy` still requires a same-major direct dependency.
+- Impact: documentation plus crate-private helpers; one event field rename (`retry.attempt`→`retry.count`); additive re-export.
+- Overrides: none
+- Tests: `http_retry_emits_warn_with_retry_count`, `auth_refresh_messages_match_their_lanes_retry_behavior`, `lazy_route_template_is_skipped_when_debug_spans_are_disabled`, `sse_stream_deltas_never_enter_tracing`, `admin_lane_span_records_six_fields_without_credentials`, `x509_lane_span_records_six_fields_without_bearer_tokens`, `direct_trace_tests::direct_lane_span_keeps_shape_without_leaking_credentials`, extended `dispatch_span_records_mcp_name`, `reqwest_proxy_is_nameable_through_the_facade`.
+
+## D0232 — Round-6 recorded positions (docs/tests/decisions only)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: builder/limit/manifest rustdoc; JSONL and hyperparameter boundary tests; close-reason docs; batch budget docs; codex TOCTOU and Windows snapshot stances; D0154-family wording
+- Sources: round-6 items 6-10/6-19/6-20/6-22/6-23 and the accompanying audit evidence.
+- Decision: AdminClientBuilder knobs document defaults and the total-budget semantics; AdminListParams carries the limit-domain matrix with the shared-bag stance; the operations module lists the three once-only mint endpoints; the admin proxy comment no longer implies an unavailable escape hatch; JSONL line/byte/blank boundaries, FT reinforcement hyperparameter boundaries, and the webhook configuration fail-closed suite are test-locked; `submit_jsonl_path` documents its no-validation stance and the embeddings 50k cross-request cap; `close_reason()` documents that coded closes may carry empty reasons (unframed EOF stays `None`); the realtime single-shot lane emits the no-retry invalidation message; recorded positions — codex spawn hash→spawn TOCTOU accepted under the single-machine threat model, the Windows path-source snapshot is weaker (len+mtime), the batch 200 MB budget is decimal fail-closed and overridable, AdminInner holds the bearer header for the client lifetime (both baselines store plaintext keys), admin convenience facades are samples over the complete generic `request::<O>()` surface (D0151/D0164 extended), the realtime call-control Accept/no-body stance joins D0223, and D0154/D0174/D0217's "schema-backed lower bound" wording is corrected to "prose-backed".
+- Impact: documentation and test coverage only.
+- Overrides: corrects D0154/D0174/D0217 wording
+- Tests: the round-6 test additions cited above.
+
+## D0233 — Round-6 review addenda
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: D0225/D0227/D0229 cross-references; UsageQueryParams field docs
+- Sources: the round-6 review's four observations.
+- Decision: D0225's revision also supersedes D0187's thirty-two-valid-candidate branch description; D0227's impact is breaking (fifteen `pub object` fields changed type from `String` to open enums); core-domain multipart lane `operation.id` values are the codegen type-name spelling (PascalCase, matching the JSON lanes' `stringify!(TypeName)` convention), not the pinned operationId's original camelCase — admin-domain ids match the pin verbatim; `UsageQueryParams` fields now document the superset stance, the exclusive `end_time` bound, the bucket-width-dependent `limit` defaults, and the endpoint-specific filters.
+- Impact: documentation and ledger hygiene only.
+- Overrides: notes on D0187, D0225, D0227, D0229
+- Tests: none (documentation).

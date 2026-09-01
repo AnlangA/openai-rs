@@ -174,7 +174,7 @@ impl ContainerFiles {
         let response = self
             .client
             .multipart_transport()
-            .send_replayable_form(&path, &form, JSON_MIME)
+            .send_replayable_form("CreateContainerFile", &path, &form, JSON_MIME)
             .await?;
         self.client
             .multipart_transport()
@@ -275,7 +275,7 @@ impl ContainerFiles {
         ];
         self.client
             .multipart_transport()
-            .download_path(&path, BINARY_MIME)
+            .download_path("RetrieveContainerFileContent", &path, BINARY_MIME)
             .await
     }
 }
@@ -447,9 +447,9 @@ mod tests {
     use openai_rs_types::{
         Omittable,
         containers::{
-            ContainerFileId, ContainerFileListParams, ContainerId, ContainerListOrder,
-            ContainerListParams, CreateContainerBody, CreateContainerFileFromIdRequest,
-            CreateContainerFileUploadRequest,
+            ContainerFileId, ContainerFileListParams, ContainerId, ContainerListLimit,
+            ContainerListOrder, ContainerListParams, CreateContainerBody,
+            CreateContainerFileFromIdRequest, CreateContainerFileUploadRequest,
         },
         files::ReplayableMultipartSource,
     };
@@ -670,7 +670,7 @@ mod tests {
         .await;
         let containers = Containers::new(client);
         let params = ContainerListParams {
-            limit: Omittable::Value(2),
+            limit: Omittable::Value(ContainerListLimit::new(2).expect("non-zero limit")),
             order: Omittable::Value(ContainerListOrder::Ascending),
             after: Omittable::Value(ContainerId::new("cntr cursor")),
             name: Omittable::Value("sandbox".into()),
@@ -716,7 +716,7 @@ mod tests {
         .await;
         let response = Containers::new(client)
             .list(ContainerListParams {
-                limit: Omittable::Value(2),
+                limit: Omittable::Value(ContainerListLimit::new(2).expect("non-zero limit")),
                 order: Omittable::Value(ContainerListOrder::Ascending),
                 after: Omittable::Value(ContainerId::new("cntr_cursor")),
                 name: Omittable::Value("sandbox".into()),
@@ -947,7 +947,7 @@ mod tests {
             .list(
                 &container_id,
                 ContainerFileListParams {
-                    limit: Omittable::Value(3),
+                    limit: Omittable::Value(ContainerListLimit::new(3).expect("non-zero limit")),
                     order: Omittable::Value(ContainerListOrder::Descending),
                     after: Omittable::Value(ContainerFileId::new("cursor")),
                 },
@@ -1007,7 +1007,7 @@ mod tests {
             .list(
                 &ContainerId::new("cntr/a b"),
                 ContainerFileListParams {
-                    limit: Omittable::Value(3),
+                    limit: Omittable::Value(ContainerListLimit::new(3).expect("non-zero limit")),
                     order: Omittable::Value(ContainerListOrder::Descending),
                     after: Omittable::Value(ContainerFileId::new("cfile_cursor")),
                 },

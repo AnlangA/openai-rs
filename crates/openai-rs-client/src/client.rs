@@ -502,6 +502,16 @@ impl ClientBuilder {
     /// credentials, the token exchange) through that single declared proxy
     /// instead; passing `None` restores the default no-proxy posture. There is
     /// no way to enable the environment-variable proxies.
+    ///
+    /// # Constructing a `Proxy`
+    ///
+    /// [`reqwest::Proxy`] must be built with `reqwest`'s own builder API
+    /// (`Proxy::all`, `Proxy::http`, ...), so using this method requires a
+    /// direct dependency on `reqwest` — keep it on the same major version as
+    /// the one this crate links (0.12). For naming the type in signatures
+    /// without adding that dependency, the module is re-exported as
+    /// [`crate::reqwest`]; the construction API is not wrapped, so building a
+    /// proxy still goes through your own `reqwest` dependency.
     #[must_use]
     pub fn proxy(mut self, proxy: Option<reqwest::Proxy>) -> Self {
         self.proxy = proxy;

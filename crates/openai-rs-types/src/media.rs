@@ -2452,6 +2452,9 @@ where
     M: MediaStreamMode,
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `images` and `mask` stay safe only because
+        // `ReplayableMultipartSource`'s Debug redacts its path, filename, and
+        // media type values; see the mirror test below.
         formatter
             .debug_struct("CreateImageEditMultipartRequest")
             .field("images", &self.images)
@@ -2990,6 +2993,34 @@ mod tests {
             "edit",
         ));
         assert_eq!(list.image_field_name(), "image[]");
+    }
+
+    #[test]
+    fn image_edit_multipart_debug_redacts_source_file_names_and_media_types() {
+        // Mirrors the client-side `OneShotMultipartSource` test and the
+        // `ReplayableMultipartSource` test in `files.rs`: source filenames and
+        // media types must not render, for images and mask alike.
+        let image = bytes_source(b"secret-image")
+            .try_with_file_name("private-name.png")
+            .expect("safe filename")
+            .try_with_media_type("text/plain")
+            .expect("safe media type");
+        let mask = ReplayableMultipartSource::from_path("secrets/private-name.png")
+            .try_with_file_name("private-name.png")
+            .expect("safe filename")
+            .try_with_media_type("text/plain")
+            .expect("safe media type");
+        let request = ok(CreateImageEditMultipartRequest::from_images(
+            [image],
+            "edit",
+        ))
+        .with_mask(mask);
+
+        let debug = format!("{request:?}");
+        assert!(!debug.contains("private-name"), "leaked in: {debug}");
+        assert!(!debug.contains("text/plain"), "leaked in: {debug}");
+        assert!(!debug.contains("secrets"), "leaked in: {debug}");
+        assert!(!debug.contains("secret-image"), "leaked in: {debug}");
     }
 
     #[test]

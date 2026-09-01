@@ -60,6 +60,8 @@ separation.
   events where the protocol permits them.
 - Keep Platform API, Codex subscription, and app-server transport credentials in
   separate types and trust boundaries.
+- Emit only local `tracing` spans and events — no network telemetry of any
+  kind.
 - Generate and audit API bindings from pinned upstream artifacts rather than
   treating a moving network specification as a build input.
 

@@ -1939,12 +1939,16 @@ pub struct ListFineTuningJobEventsResponse {
 
 impl ListFineTuningJobEventsResponse {
     /// Cursor for the next page, when available.
+    ///
+    /// An empty trailing event id yields `None` (D0145): the query encoder
+    /// would drop it and silently re-request the first page.
     #[must_use]
     pub fn next_after(&self) -> Option<&str> {
         self.has_more
             .then(|| self.data.last())
             .flatten()
             .map(|event| event.id.as_str())
+            .filter(|id| !id.is_empty())
     }
 
     /// Future fields retained during decode.
@@ -1970,13 +1974,16 @@ pub struct ListFineTuningJobCheckpointsResponse {
 
 impl ListFineTuningJobCheckpointsResponse {
     /// Cursor returned by the server for the next page.
+    ///
+    /// An empty `last_id` yields `None` (D0145): it would otherwise be dropped
+    /// by the query encoder and silently re-request the first page.
     #[must_use]
     pub fn next_after(&self) -> Option<&str> {
         if !self.has_more {
             return None;
         }
         match &self.last_id {
-            Omittable::Value(Nullable::Value(id)) => Some(id),
+            Omittable::Value(Nullable::Value(id)) => Some(id.as_str()).filter(|id| !id.is_empty()),
             Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
     }
@@ -2076,13 +2083,16 @@ pub struct ListFineTuningCheckpointPermissionResponse {
 
 impl ListFineTuningCheckpointPermissionResponse {
     /// Cursor for the next page.
+    ///
+    /// An empty `last_id` yields `None` (D0145): it would otherwise be dropped
+    /// by the query encoder and silently re-request the first page.
     #[must_use]
     pub fn next_after(&self) -> Option<&str> {
         if !self.has_more {
             return None;
         }
         match &self.last_id {
-            Omittable::Value(Nullable::Value(id)) => Some(id),
+            Omittable::Value(Nullable::Value(id)) => Some(id.as_str()).filter(|id| !id.is_empty()),
             Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
     }
@@ -2532,6 +2542,51 @@ mod tests {
     }
 
     #[test]
+    fn list_pages_drop_empty_cursors_when_more_remains() {
+        // D0145: an empty cursor would be dropped by the query encoder and
+        // silently re-request the first page, so every `next_after` treats it
+        // as absent even when `has_more` is set.
+        let events = ok(serde_json::from_value::<ListFineTuningJobEventsResponse>(
+            json!({
+                "object": "list",
+                "data": [{
+                    "object": "fine_tuning.job.event",
+                    "id": "",
+                    "created_at": 1,
+                    "level": "info",
+                    "message": "running",
+                    "type": "message",
+                    "data": null
+                }],
+                "has_more": true
+            }),
+        ));
+        assert_eq!(events.next_after(), None);
+
+        let checkpoints = ok(
+            serde_json::from_value::<ListFineTuningJobCheckpointsResponse>(json!({
+                "object": "list",
+                "data": [],
+                "first_id": "",
+                "last_id": "",
+                "has_more": true
+            })),
+        );
+        assert_eq!(checkpoints.next_after(), None);
+
+        let permissions = ok(serde_json::from_value::<
+            ListFineTuningCheckpointPermissionResponse,
+        >(json!({
+            "object": "list",
+            "data": [],
+            "first_id": "",
+            "last_id": "",
+            "has_more": true
+        })));
+        assert_eq!(permissions.next_after(), None);
+    }
+
+    #[test]
     fn jobs_page_and_query_preserve_metadata_nullability() {
         let jobs_fixture = json!({
             "object": "list",
@@ -2805,6 +2860,70 @@ mod tests {
             }),
         ));
         assert!(decoded.validate().is_err());
+    }
+
+    #[test]
+    fn fine_tuning_create_validate_enforces_reinforcement_hyperparameter_limits() {
+        fn reinforcement_request(
+            hyperparameters: FineTuneReinforcementHyperparameters,
+        ) -> CreateFineTuningJobRequest {
+            let grader = StringCheckGrader::new(
+                "exact",
+                "{{sample.output_text}}",
+                "{{item.label}}",
+                StringCheckOperation::Equal,
+            );
+            CreateFineTuningJobRequest::new("gpt-5-mini", "file_train").with_method(
+                ReinforcementFineTuneMethod::new(
+                    FineTuneReinforcementMethodConfig::new(grader.into())
+                        .with_hyperparameters(hyperparameters),
+                ),
+            )
+        }
+
+        let multiplier = |compute_multiplier: f64| FineTuneReinforcementHyperparameters {
+            compute_multiplier: Omittable::Value(AutoOrNumber::Value(compute_multiplier)),
+            ..FineTuneReinforcementHyperparameters::default()
+        };
+
+        // The pinned `compute_multiplier` range is (0.00001, 10]: the bound is
+        // exclusive at the bottom and inclusive at the top, so the exact
+        // minimum and one step over the maximum are rejected while one step
+        // above the minimum and the maximum itself are accepted.
+        assert!(matches!(
+            reinforcement_request(multiplier(MIN_FINE_TUNE_COMPUTE_MULTIPLIER)).validate(),
+            Err(CreateFineTuningJobConstraintError::ComputeMultiplier { value })
+                if value == "0.00001"
+        ));
+        reinforcement_request(multiplier(0.00002))
+            .validate()
+            .expect("one step above the exclusive minimum is accepted");
+        reinforcement_request(multiplier(MAX_FINE_TUNE_COMPUTE_MULTIPLIER))
+            .validate()
+            .expect("inclusive maximum is accepted");
+        assert!(matches!(
+            reinforcement_request(multiplier(10.1)).validate(),
+            Err(CreateFineTuningJobConstraintError::ComputeMultiplier { value })
+                if value == "10.1"
+        ));
+
+        let eval_interval = FineTuneReinforcementHyperparameters {
+            eval_interval: Omittable::Value(AutoOrInteger::Value(0)),
+            ..FineTuneReinforcementHyperparameters::default()
+        };
+        assert!(matches!(
+            reinforcement_request(eval_interval).validate(),
+            Err(CreateFineTuningJobConstraintError::EvalInterval(0))
+        ));
+
+        let eval_samples = FineTuneReinforcementHyperparameters {
+            eval_samples: Omittable::Value(AutoOrInteger::Value(0)),
+            ..FineTuneReinforcementHyperparameters::default()
+        };
+        assert!(matches!(
+            reinforcement_request(eval_samples).validate(),
+            Err(CreateFineTuningJobConstraintError::EvalSamples(0))
+        ));
     }
 
     #[test]

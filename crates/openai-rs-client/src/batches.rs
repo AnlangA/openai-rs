@@ -149,6 +149,12 @@ impl Batches {
     ///
     /// The path remains caller-owned. It is snapshotted, reopened, and streamed
     /// by the Files transport rather than buffered into memory.
+    ///
+    /// Unlike [`Batches::submit_lines`], this method uploads the bytes as-is:
+    /// it performs neither the documented input budget (50,000 request lines
+    /// and 200 decimal megabytes) nor the per-line JSONL checks (at least one
+    /// line, unique `custom_id`s, a single endpoint per file), so a caller that
+    /// owns the file content keeps responsibility for those rules.
     pub async fn submit_jsonl_path(
         &self,
         path: impl AsRef<Path>,
@@ -179,6 +185,16 @@ impl Batches {
     /// Encodes typed lines into a bounded temporary JSONL file, uploads that
     /// file by path, and creates a batch. The temporary file is automatically
     /// removed after upload/create completes or fails.
+    ///
+    /// Each line is written through [`BatchJsonlWriter`], so the documented
+    /// input budget (50,000 request lines and 200 decimal megabytes) and the
+    /// per-line checks (unique `custom_id`, one endpoint per file) are
+    /// enforced before anything is uploaded. Two documented rules remain
+    /// caller-side: `/v1/embeddings` batches are additionally capped at
+    /// 50,000 embedding inputs across all requests in the batch, which the
+    /// writer cannot count inside opaque typed bodies, and the metadata
+    /// 16/64/512 limits stay opt-in (see
+    /// [`BatchSubmissionOptions::with_metadata`]).
     pub async fn submit_lines<O, I>(
         &self,
         lines: I,
@@ -233,7 +249,13 @@ impl BatchSubmissionOptions {
         }
     }
 
-    /// Attaches validated metadata.
+    /// Attaches metadata to the created batch.
+    ///
+    /// The map is accepted losslessly: the documented 16-property /
+    /// 64-character-key / 512-character-value limits are opt-in through
+    /// [`BatchMetadata::validate`] (or [`CreateBatchRequest::validate`] on the
+    /// assembled request, decisions D0015/D0017), not a precondition of this
+    /// builder.
     #[must_use]
     pub fn with_metadata(mut self, metadata: BatchMetadata) -> Self {
         self.metadata = Some(Some(metadata));

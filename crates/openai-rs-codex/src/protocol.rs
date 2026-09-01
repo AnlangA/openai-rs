@@ -6,6 +6,69 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
+/// Implements `Debug` for a DTO carrying the `extra` flatten escape hatch.
+///
+/// 6-07: `extra` retains arbitrary server- or caller-supplied properties, so
+/// a derived `Debug` prints them verbatim and can leak credential-shaped
+/// values into logs. This macro prints the modelled fields listed in the
+/// braces, the retained-property count in place of the map, and `<redacted>`
+/// for the fields listed in the optional `secret [...]` group — escape-hatch
+/// maps such as [`ThreadStartParams::config`], the device login code, and
+/// the server-controlled JSON-RPC error payload.
+macro_rules! redacted_extra_debug {
+    ($name:ident { $($field:ident),* $(,)? }) => {
+        redacted_extra_debug!($name secret [] { $($field),* });
+    };
+    ($name:ident secret [$($secret:ident),* $(,)?] { $($field:ident),* $(,)? }) => {
+        impl ::std::fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                formatter
+                    .debug_struct(stringify!($name))
+                    $(.field(stringify!($field), &self.$field))*
+                    $(.field(stringify!($secret), &"<redacted>"))*
+                    .field("extra", &self.extra.len())
+                    .finish()
+            }
+        }
+    };
+}
+
+pub(crate) use redacted_extra_debug;
+
+/// W3C Trace Context attached to outbound JSON-RPC requests.
+///
+/// Wire shape of the pinned `W3cTraceContext`: `traceparent` and
+/// `tracestate` are both optional nullable strings, so each field is
+/// [`Omittable`]`<`[`Nullable`]`<String>>` and keeps all three wire states.
+/// The optional `trace` property of the pinned `JSONRPCRequest` is therefore
+/// modelled as `Omittable<Nullable<W3cTraceContext>>` at the injection
+/// surface ([`AppServerClient::with_trace_context`](crate::AppServerClient::with_trace_context)).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct W3cTraceContext {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub traceparent: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub tracestate: Omittable<Nullable<String>>,
+}
+
+impl W3cTraceContext {
+    /// A context identified by its `traceparent` header value.
+    #[must_use]
+    pub fn new(traceparent: impl Into<String>) -> Self {
+        Self {
+            traceparent: Omittable::Value(Nullable::Value(traceparent.into())),
+            tracestate: Omittable::Omitted,
+        }
+    }
+
+    /// Attaches a `tracestate` header value.
+    #[must_use]
+    pub fn with_tracestate(mut self, tracestate: impl Into<String>) -> Self {
+        self.tracestate = Omittable::Value(Nullable::Value(tracestate.into()));
+        self
+    }
+}
+
 /// Metadata sent during the mandatory connection handshake.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,7 +102,7 @@ impl ClientInfo {
 /// `InitializeCapabilities` schema. Each sendable field is [`Omittable`] so a
 /// caller decides whether the key is sent at all; capabilities the schema has
 /// not modelled yet are retained losslessly in [`InitializeCapabilities::extra`].
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeCapabilities {
     /// Opt into receiving experimental API methods and fields.
@@ -63,6 +126,13 @@ pub struct InitializeCapabilities {
     pub extra: serde_json::Map<String, Value>,
 }
 
+redacted_extra_debug!(InitializeCapabilities {
+    experimental_api,
+    mcp_server_openai_form_elicitation,
+    opt_out_notification_methods,
+    request_attestation
+});
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
@@ -81,7 +151,7 @@ impl InitializeParams {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     pub user_agent: String,
@@ -91,6 +161,13 @@ pub struct InitializeResponse {
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
+
+redacted_extra_debug!(InitializeResponse {
+    user_agent,
+    codex_home,
+    platform_family,
+    platform_os
+});
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -124,7 +201,7 @@ pub struct DeviceCodeLogin {
     pub user_code: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LoginAccountResponse {
     #[serde(rename = "type")]
@@ -146,6 +223,15 @@ pub(crate) struct LoginAccountResponse {
     pub extra: serde_json::Map<String, Value>,
 }
 
+// The device user code authorizes a login; Debug keeps it redacted like the
+// direct-side `DeviceCodeLogin` stance.
+redacted_extra_debug!(LoginAccountResponse secret [user_code] {
+    kind,
+    login_id,
+    auth_url,
+    verification_url
+});
+
 openai_rs_types::open_string_enum! {
     /// Outcome of an `account/login/cancel` call.
     ///
@@ -158,13 +244,15 @@ openai_rs_types::open_string_enum! {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelLoginResponse {
     pub status: CancelLoginStatus,
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
+
+redacted_extra_debug!(CancelLoginResponse { status });
 
 openai_rs_types::open_string_enum! {
     /// ChatGPT plan classification reported by app-server.
@@ -203,7 +291,7 @@ openai_rs_types::open_string_enum! {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {
     /// Open discriminator (`apiKey`, `chatgpt`, `amazonBedrock`, or a future
@@ -218,7 +306,13 @@ pub struct Account {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(Account {
+    kind,
+    email,
+    plan_type
+});
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountReadResponse {
     pub account: Option<Account>,
@@ -227,7 +321,12 @@ pub struct AccountReadResponse {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(AccountReadResponse {
+    account,
+    requires_openai_auth
+});
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitWindow {
     pub used_percent: i32,
@@ -237,7 +336,13 @@ pub struct RateLimitWindow {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(RateLimitWindow {
+    used_percent,
+    window_duration_mins,
+    resets_at
+});
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreditsSnapshot {
     pub has_credits: bool,
@@ -247,7 +352,13 @@ pub struct CreditsSnapshot {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(CreditsSnapshot {
+    has_credits,
+    unlimited,
+    balance
+});
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitSnapshot {
     pub limit_id: Option<String>,
@@ -263,7 +374,17 @@ pub struct RateLimitSnapshot {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(RateLimitSnapshot {
+    limit_id,
+    limit_name,
+    primary,
+    secondary,
+    credits,
+    plan_type,
+    rate_limit_reached_type
+});
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRateLimitsResponse {
     pub rate_limits: RateLimitSnapshot,
@@ -275,7 +396,13 @@ pub struct AccountRateLimitsResponse {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+redacted_extra_debug!(AccountRateLimitsResponse {
+    rate_limits,
+    rate_limits_by_limit_id,
+    rate_limit_reset_credits
+});
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageSummary {
     pub lifetime_tokens: Option<i64>,
@@ -287,7 +414,15 @@ pub struct AccountUsageSummary {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+redacted_extra_debug!(AccountUsageSummary {
+    lifetime_tokens,
+    peak_daily_tokens,
+    longest_running_turn_sec,
+    current_streak_days,
+    longest_streak_days
+});
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyUsageBucket {
     pub start_date: String,
@@ -296,7 +431,9 @@ pub struct DailyUsageBucket {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(DailyUsageBucket { start_date, tokens });
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageResponse {
     pub summary: AccountUsageSummary,
@@ -304,6 +441,11 @@ pub struct AccountUsageResponse {
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
+
+redacted_extra_debug!(AccountUsageResponse {
+    summary,
+    daily_usage_buckets
+});
 
 openai_rs_types::open_string_enum! {
     /// String branch of the pinned `v2/AskForApproval`.
@@ -459,8 +601,93 @@ openai_rs_types::open_string_enum! {
     }
 }
 
+openai_rs_types::open_string_enum! {
+    /// Where approval requests are routed for review.
+    ///
+    /// The pinned `v2/ApprovalsReviewer` enumerates exactly `user` (the
+    /// interactive user), `auto_review` (a risk-framed reviewing subagent),
+    /// and the legacy `guardian_subagent`; reviewers introduced later decode
+    /// losslessly as [`ApprovalsReviewer::Unknown`].
+    pub enum ApprovalsReviewer {
+        User = "user",
+        AutoReview = "auto_review",
+        GuardianSubagent = "guardian_subagent"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Analytics classification of how a thread's session started.
+    ///
+    /// The pinned definition is named `v2/ThreadStartSource` (the property
+    /// carrying it is `sessionStartSource`) and enumerates exactly `startup`
+    /// and `clear`; sources introduced later decode losslessly as
+    /// [`SessionStartSource::Unknown`].
+    pub enum SessionStartSource {
+        Startup = "startup",
+        Clear = "clear"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Outbound network reachability of an externally sandboxed policy.
+    ///
+    /// The pinned `v2/NetworkAccess` enumerates exactly `restricted` and
+    /// `enabled`; values introduced later decode losslessly as
+    /// [`NetworkAccess::Unknown`].
+    pub enum NetworkAccess {
+        Restricted = "restricted",
+        Enabled = "enabled"
+    }
+}
+
+/// Sandbox policy override for a turn, typed as the pinned four-branch
+/// `v2/SandboxPolicy` tagged union.
+///
+/// Every branch is discriminated by its camelCase `type` tag. Sub-settings
+/// the pin defaults server-side (`readOnly`/`workspaceWrite` default
+/// `networkAccess: false`, `externalSandbox` defaults `networkAccess:
+/// "restricted"`, `workspaceWrite` defaults `writableRoots: []` and both
+/// `exclude*` flags to `false`) are [`Option`] fields left unset to send no
+/// key, which lets app-server apply its own defaults; setting them sends the
+/// key explicitly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SandboxPolicy {
+    /// Full access, no sandboxing; carries no sub-settings.
+    DangerFullAccess,
+    /// Read-only filesystem view of the host.
+    ReadOnly {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        network_access: Option<bool>,
+    },
+    /// Sandbox enforcement delegated to an external sandbox implementation.
+    ExternalSandbox {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        network_access: Option<NetworkAccess>,
+    },
+    /// Writable workspace plus explicit writable roots.
+    WorkspaceWrite {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        writable_roots: Option<Vec<PathBuf>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        network_access: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exclude_slash_tmp: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exclude_tmpdir_env_var: Option<bool>,
+    },
+}
+
 /// Core, stable subset of `thread/start` parameters.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+///
+/// Every optional property of the pinned `v2/ThreadStartParams` is modelled,
+/// and properties a newer app-server adds are retained losslessly in
+/// [`ThreadStartParams::extra`].
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -476,6 +703,10 @@ pub struct ThreadStartParams {
     pub cwd: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<AskForApproval>,
+    /// Where approval requests raised by this thread and its subsequent turns
+    /// are routed for review; defaults to the user on the app-server side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<SandboxMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -483,14 +714,49 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub developer_instructions: Option<String>,
+    /// Client-supplied analytics source classification. The pinned
+    /// `v2/ThreadSource` is a plain string with no enumerated values, so it
+    /// stays a free-form string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_source: Option<String>,
+    /// Analytics classification of how this session started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_start_source: Option<SessionStartSource>,
+    /// Escape hatch for pinned config overrides the typed surface does not
+    /// model; serialized verbatim. Values can carry credentials, so `Debug`
+    /// keeps them redacted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Map<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ephemeral: Option<bool>,
+    /// Future `thread/start` properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(ThreadStartParams secret [config] {
+    model,
+    model_provider,
+    cwd,
+    approval_policy,
+    approvals_reviewer,
+    sandbox,
+    personality,
+    service_name,
+    service_tier,
+    base_instructions,
+    developer_instructions,
+    thread_source,
+    session_start_source,
+    ephemeral
+});
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
     pub id: String,
@@ -516,7 +782,20 @@ pub struct Thread {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(Thread {
+    id,
+    session_id,
+    preview,
+    ephemeral,
+    model_provider,
+    created_at,
+    updated_at,
+    cwd,
+    name,
+    turns
+});
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartResponse {
     pub thread: Thread,
@@ -533,6 +812,15 @@ pub struct ThreadStartResponse {
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
+
+redacted_extra_debug!(ThreadStartResponse {
+    thread,
+    model,
+    model_provider,
+    service_tier,
+    cwd,
+    instruction_sources
+});
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -620,7 +908,14 @@ openai_rs_types::open_string_enum! {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Core, stable subset of `turn/start` parameters.
+///
+/// Every optional property of the pinned `v2/TurnStartParams` is modelled —
+/// including the turn-level `sandboxPolicy`/`approvalPolicy` overrides that
+/// apply to this turn and all subsequent turns of the thread — and properties
+/// a newer app-server adds are retained losslessly in
+/// [`TurnStartParams::extra`].
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartParams {
     pub thread_id: String,
@@ -641,7 +936,40 @@ pub struct TurnStartParams {
     pub personality: Option<Personality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<Value>,
+    /// Sandbox policy override for this turn and subsequent turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Approval policy override for this turn and subsequent turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<AskForApproval>,
+    /// Where approval requests raised by this turn and subsequent turns are
+    /// routed for review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Service tier override for this turn and subsequent turns. The pin
+    /// types this as a plain nullable string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    /// Future `turn/start` properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
+
+redacted_extra_debug!(TurnStartParams {
+    thread_id,
+    input,
+    client_user_message_id,
+    cwd,
+    model,
+    effort,
+    summary,
+    personality,
+    output_schema,
+    sandbox_policy,
+    approval_policy,
+    approvals_reviewer,
+    service_tier
+});
 
 impl TurnStartParams {
     #[must_use]
@@ -656,6 +984,11 @@ impl TurnStartParams {
             summary: None,
             personality: None,
             output_schema: None,
+            sandbox_policy: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            service_tier: None,
+            extra: serde_json::Map::new(),
         }
     }
 }
@@ -765,7 +1098,7 @@ pub enum CodexErrorInfo {
 /// Wire shape of the pinned `v2/TurnError`: `message` is required, while
 /// `additionalDetails` and `codexErrorInfo` are optional nulls; properties
 /// added by a newer app-server are retained losslessly in [`TurnError::extra`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnError {
     pub message: String,
@@ -777,7 +1110,13 @@ pub struct TurnError {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(TurnError {
+    message,
+    additional_details,
+    codex_error_info
+});
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
     pub id: String,
@@ -798,13 +1137,25 @@ pub struct Turn {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(Turn {
+    id,
+    items,
+    status,
+    error,
+    started_at,
+    completed_at,
+    duration_ms
+});
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartResponse {
     pub turn: Turn,
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
+
+redacted_extra_debug!(TurnStartResponse { turn });
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -813,13 +1164,15 @@ pub struct TurnInterruptParams {
     pub turn_id: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmptyResponse {
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(EmptyResponse {});
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountLoginCompletedNotification {
     pub login_id: Option<String>,
@@ -828,6 +1181,12 @@ pub struct AccountLoginCompletedNotification {
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
+
+redacted_extra_debug!(AccountLoginCompletedNotification {
+    login_id,
+    success,
+    error
+});
 
 openai_rs_types::open_string_enum! {
     /// How the app-server authenticated the current account.
@@ -847,7 +1206,7 @@ openai_rs_types::open_string_enum! {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUpdatedNotification {
     pub auth_mode: Option<AuthMode>,
@@ -856,7 +1215,12 @@ pub struct AccountUpdatedNotification {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(AccountUpdatedNotification {
+    auth_mode,
+    plan_type
+});
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
@@ -864,13 +1228,15 @@ pub struct AccountRateLimitsUpdatedNotification {
     pub extra: serde_json::Map<String, Value>,
 }
 
+redacted_extra_debug!(AccountRateLimitsUpdatedNotification { rate_limits });
+
 /// Turn failure broadcast on the dedicated `error` notification channel.
 ///
 /// Wire shape of the pinned `v2/ErrorNotification`: `threadId`, `turnId`,
 /// `willRetry`, and the typed [`TurnError`] are all required; envelope
 /// properties added by a newer app-server stay lossless in
 /// [`ErrorNotification::extra`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorNotification {
     pub thread_id: String,
@@ -882,7 +1248,14 @@ pub struct ErrorNotification {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(ErrorNotification {
+    thread_id,
+    turn_id,
+    will_retry,
+    error
+});
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartedNotification {
     pub thread: Thread,
@@ -890,7 +1263,9 @@ pub struct ThreadStartedNotification {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(ThreadStartedNotification { thread });
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartedNotification {
     pub thread_id: String,
@@ -899,7 +1274,9 @@ pub struct TurnStartedNotification {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(TurnStartedNotification { thread_id, turn });
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnCompletedNotification {
     pub thread_id: String,
@@ -908,7 +1285,9 @@ pub struct TurnCompletedNotification {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+redacted_extra_debug!(TurnCompletedNotification { thread_id, turn });
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemLifecycleNotification {
     pub thread_id: String,
@@ -922,7 +1301,15 @@ pub struct ItemLifecycleNotification {
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+redacted_extra_debug!(ItemLifecycleNotification {
+    thread_id,
+    turn_id,
+    item,
+    started_at_ms,
+    completed_at_ms
+});
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMessageDeltaNotification {
     pub thread_id: String,
@@ -932,6 +1319,13 @@ pub struct AgentMessageDeltaNotification {
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
+
+redacted_extra_debug!(AgentMessageDeltaNotification {
+    thread_id,
+    turn_id,
+    item_id,
+    delta
+});
 
 /// Full, lossless envelope for a notification not understood by this crate.
 #[derive(Debug, Clone, PartialEq)]
@@ -972,6 +1366,7 @@ pub(crate) fn decode_notification(
         "account/login/completed"
             | "account/updated"
             | "account/rateLimits/updated"
+            | "error"
             | "thread/started"
             | "turn/started"
             | "turn/completed"
@@ -1028,14 +1423,15 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AccountUpdatedNotification, ActiveTurnNotSteerableDetails, AskForApproval,
-        AskForApprovalMode, AuthMode, ByteRange, CancelLoginResponse, CancelLoginStatus,
-        ClientInfo, CodexErrorCode, CodexErrorInfo, ErrorNotification, ForwardedHttpStatus,
-        GranularAskForApproval, ImageDetail, InitializeCapabilities, InitializeParams,
-        LoginAccountResponse, NonSteerableTurnKind, Notification, Nullable, Omittable, Personality,
-        PlanType, RateLimitReachedType, RateLimitSnapshot, ReasoningSummary, SandboxMode,
-        TextElement, ThreadStartParams, Turn, TurnError, TurnStartParams, TurnStatus, UserInput,
-        decode_notification,
+        AccountUpdatedNotification, ActiveTurnNotSteerableDetails, ApprovalsReviewer,
+        AskForApproval, AskForApprovalMode, AuthMode, ByteRange, CancelLoginResponse,
+        CancelLoginStatus, ClientInfo, CodexErrorCode, CodexErrorInfo, ErrorNotification,
+        ForwardedHttpStatus, GranularAskForApproval, ImageDetail, InitializeCapabilities,
+        InitializeParams, LoginAccountResponse, NetworkAccess, NonSteerableTurnKind, Notification,
+        Nullable, Omittable, Personality, PlanType, RateLimitReachedType, RateLimitSnapshot,
+        ReasoningSummary, SandboxMode, SandboxPolicy, SessionStartSource, TextElement, Thread,
+        ThreadStartParams, Turn, TurnError, TurnStartParams, TurnStatus, UserInput,
+        W3cTraceContext, decode_notification,
     };
 
     #[test]
@@ -1890,6 +2286,346 @@ mod tests {
                 "completedAt": null,
                 "durationMs": null
             })
+        );
+        Ok(())
+    }
+
+    /// 6-02: `thread/start` carries the five previously missing pinned
+    /// optional properties under their exact camelCase wire keys, and future
+    /// properties stay lossless through the new `extra` escape hatch.
+    #[test]
+    fn thread_start_params_serialize_the_previously_missing_pinned_fields()
+    -> Result<(), serde_json::Error> {
+        for (wire, expected) in [
+            ("user", ApprovalsReviewer::User),
+            ("auto_review", ApprovalsReviewer::AutoReview),
+            ("guardian_subagent", ApprovalsReviewer::GuardianSubagent),
+        ] {
+            assert_eq!(ApprovalsReviewer::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        for (wire, expected) in [
+            ("startup", SessionStartSource::Startup),
+            ("clear", SessionStartSource::Clear),
+        ] {
+            assert_eq!(SessionStartSource::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+
+        let params = ThreadStartParams {
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            thread_source: Some("cli".to_owned()),
+            session_start_source: Some(SessionStartSource::Startup),
+            service_tier: Some("flex".to_owned()),
+            config: Some(
+                [("model_reasoning_summary".to_owned(), json!("detailed"))]
+                    .into_iter()
+                    .collect(),
+            ),
+            extra: [("futureField".to_owned(), json!(7))].into_iter().collect(),
+            ..ThreadStartParams::default()
+        };
+        let encoded = serde_json::to_value(&params)?;
+        assert_eq!(encoded["approvalsReviewer"], json!("auto_review"));
+        assert_eq!(encoded["threadSource"], json!("cli"));
+        assert_eq!(encoded["sessionStartSource"], json!("startup"));
+        assert_eq!(encoded["serviceTier"], json!("flex"));
+        assert_eq!(
+            encoded["config"]["model_reasoning_summary"],
+            json!("detailed")
+        );
+        assert_eq!(encoded["futureField"], json!(7));
+        assert_eq!(
+            serde_json::from_value::<ThreadStartParams>(encoded)?,
+            params
+        );
+
+        // The reviewer and start-source enums stay open: values a newer
+        // app-server introduced round-trip losslessly.
+        let future = ThreadStartParams {
+            approvals_reviewer: Some(ApprovalsReviewer::from_raw("futureReviewer")),
+            session_start_source: Some(SessionStartSource::from_raw("futureSource")),
+            ..ThreadStartParams::default()
+        };
+        let encoded = serde_json::to_value(&future)?;
+        assert_eq!(encoded["approvalsReviewer"], json!("futureReviewer"));
+        assert_eq!(encoded["sessionStartSource"], json!("futureSource"));
+        assert_eq!(
+            serde_json::from_value::<ThreadStartParams>(encoded)?,
+            future
+        );
+        Ok(())
+    }
+
+    /// 6-02: `turn/start` carries the turn-level `sandboxPolicy`,
+    /// `approvalPolicy`, `approvalsReviewer`, and `serviceTier` overrides
+    /// under their exact camelCase wire keys.
+    #[test]
+    fn turn_start_params_serialize_the_turn_level_overrides() -> Result<(), serde_json::Error> {
+        let params = TurnStartParams {
+            sandbox_policy: Some(SandboxPolicy::WorkspaceWrite {
+                writable_roots: Some(vec![PathBuf::from("/workspace")]),
+                network_access: Some(true),
+                exclude_slash_tmp: Some(true),
+                exclude_tmpdir_env_var: Some(false),
+            }),
+            approval_policy: Some(AskForApproval::Granular(GranularAskForApproval::new(
+                false, true, true,
+            ))),
+            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            service_tier: Some("priority".to_owned()),
+            extra: [("futureTurnField".to_owned(), json!("kept"))]
+                .into_iter()
+                .collect(),
+            ..TurnStartParams::text("thr_123", "hello")
+        };
+        let encoded = serde_json::to_value(&params)?;
+        assert_eq!(
+            encoded["sandboxPolicy"],
+            json!({
+                "type": "workspaceWrite",
+                "writableRoots": ["/workspace"],
+                "networkAccess": true,
+                "excludeSlashTmp": true,
+                "excludeTmpdirEnvVar": false
+            })
+        );
+        assert_eq!(encoded["approvalPolicy"]["granular"]["rules"], json!(true));
+        assert_eq!(encoded["approvalsReviewer"], json!("guardian_subagent"));
+        assert_eq!(encoded["serviceTier"], json!("priority"));
+        assert_eq!(encoded["futureTurnField"], json!("kept"));
+        assert_eq!(serde_json::from_value::<TurnStartParams>(encoded)?, params);
+        Ok(())
+    }
+
+    /// 6-02: the turn-level `v2/SandboxPolicy` tagged union keeps all four
+    /// pinned branch shapes, and the sub-settings the pin defaults
+    /// server-side stay absent when unset.
+    #[test]
+    fn sandbox_policy_matches_the_pinned_tagged_union() -> Result<(), serde_json::Error> {
+        for (wire, expected) in [
+            ("restricted", NetworkAccess::Restricted),
+            ("enabled", NetworkAccess::Enabled),
+        ] {
+            assert_eq!(NetworkAccess::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+
+        let cases = [
+            (
+                json!({"type": "dangerFullAccess"}),
+                SandboxPolicy::DangerFullAccess,
+            ),
+            (
+                json!({"type": "readOnly"}),
+                SandboxPolicy::ReadOnly {
+                    network_access: None,
+                },
+            ),
+            (
+                json!({"type": "readOnly", "networkAccess": true}),
+                SandboxPolicy::ReadOnly {
+                    network_access: Some(true),
+                },
+            ),
+            (
+                json!({"type": "externalSandbox"}),
+                SandboxPolicy::ExternalSandbox {
+                    network_access: None,
+                },
+            ),
+            (
+                json!({"type": "externalSandbox", "networkAccess": "enabled"}),
+                SandboxPolicy::ExternalSandbox {
+                    network_access: Some(NetworkAccess::Enabled),
+                },
+            ),
+            (
+                json!({
+                    "type": "workspaceWrite",
+                    "writableRoots": ["/w"],
+                    "networkAccess": false,
+                    "excludeSlashTmp": true,
+                    "excludeTmpdirEnvVar": true
+                }),
+                SandboxPolicy::WorkspaceWrite {
+                    writable_roots: Some(vec![PathBuf::from("/w")]),
+                    network_access: Some(false),
+                    exclude_slash_tmp: Some(true),
+                    exclude_tmpdir_env_var: Some(true),
+                },
+            ),
+        ];
+        for (wire, expected) in cases {
+            assert_eq!(
+                serde_json::from_value::<SandboxPolicy>(wire.clone())?,
+                expected
+            );
+            assert_eq!(serde_json::to_value(&expected)?, wire);
+        }
+
+        // An unknown branch tag is rejected instead of being guessed at.
+        assert!(
+            serde_json::from_value::<SandboxPolicy>(json!({"type": "futureMode"})).is_err(),
+            "an unknown sandbox policy tag must not decode"
+        );
+        assert!(
+            serde_json::from_value::<SandboxPolicy>(json!("readOnly")).is_err(),
+            "the tagged union requires an object"
+        );
+
+        // Nested inside `turn/start` the policy sits under its pinned key.
+        let params = TurnStartParams {
+            sandbox_policy: Some(SandboxPolicy::ReadOnly {
+                network_access: Some(false),
+            }),
+            ..TurnStartParams::text("thr_123", "hello")
+        };
+        let encoded = serde_json::to_value(&params)?;
+        assert_eq!(
+            encoded["sandboxPolicy"],
+            json!({"type": "readOnly", "networkAccess": false})
+        );
+        assert_eq!(serde_json::from_value::<TurnStartParams>(encoded)?, params);
+        Ok(())
+    }
+
+    /// 6-07: DTOs carrying the `extra` flatten escape hatch keep retained
+    /// properties out of `Debug` output; the config escape hatch and the
+    /// device user code are redacted the same way.
+    #[test]
+    fn extra_carriers_debug_never_leaks_retained_values() -> Result<(), serde_json::Error> {
+        let thread: Thread = serde_json::from_value(json!({
+            "id": "thr_123",
+            "openaiApiKey": "sk-secret-value",
+            "authorization": "Bearer secret-token"
+        }))?;
+        let rendered = format!("{thread:?}");
+        assert!(
+            rendered.contains("Thread {"),
+            "unexpected output: {rendered}"
+        );
+        assert!(
+            rendered.contains("extra: 2"),
+            "unexpected output: {rendered}"
+        );
+        assert!(!rendered.contains("sk-secret-value"));
+        assert!(!rendered.contains("secret-token"));
+        assert!(!rendered.contains("openaiApiKey"));
+
+        let turn_params = TurnStartParams {
+            extra: [("futureToken".to_owned(), json!("sk-turn-secret"))]
+                .into_iter()
+                .collect(),
+            ..TurnStartParams::text("thr_123", "hello")
+        };
+        let rendered = format!("{turn_params:?}");
+        assert!(
+            !rendered.contains("sk-turn-secret"),
+            "unexpected output: {rendered}"
+        );
+        assert!(
+            rendered.contains("extra: 1"),
+            "unexpected output: {rendered}"
+        );
+
+        let thread_params = ThreadStartParams {
+            config: Some(
+                [("apiKey".to_owned(), json!("sk-config-secret"))]
+                    .into_iter()
+                    .collect(),
+            ),
+            ..ThreadStartParams::default()
+        };
+        let rendered = format!("{thread_params:?}");
+        assert!(
+            !rendered.contains("sk-config-secret"),
+            "unexpected output: {rendered}"
+        );
+        assert!(
+            rendered.contains("config: \"<redacted>\""),
+            "unexpected output: {rendered}"
+        );
+
+        let login: LoginAccountResponse = serde_json::from_value(json!({
+            "type": "chatgptDeviceCode",
+            "userCode": "ABCD-1234"
+        }))?;
+        let rendered = format!("{login:?}");
+        assert!(
+            !rendered.contains("ABCD-1234"),
+            "unexpected output: {rendered}"
+        );
+        Ok(())
+    }
+
+    /// 6-13: the dedicated `error` channel belongs to the known-notification
+    /// warn list, so a typed decode failure is logged instead of being
+    /// silently degraded to `Unknown`.
+    #[test]
+    fn error_notification_decode_failure_emits_warn() {
+        let subscriber = WarnCapture::default();
+        let _guard = tracing::subscriber::set_default(subscriber.clone());
+        let notification = decode_notification(
+            "error".to_owned(),
+            Some(json!({"threadId": "thr_123"})),
+            json!({"method": "error"}),
+        );
+        assert!(matches!(notification, Notification::Unknown(_)));
+        let events = subscriber.messages();
+        assert!(events.iter().any(|message| {
+            message.contains("typed decode failed for known app-server notification")
+        }));
+        assert!(
+            events
+                .iter()
+                .any(|message| message.contains("rpc.method=error")),
+            "warn events: {events:?}"
+        );
+        assert!(!events.iter().any(|message| message.contains("thr_123")));
+    }
+
+    /// Trace injection support: `W3cTraceContext` keeps the pinned optional
+    /// nullable string pair in every wire state.
+    #[test]
+    fn w3c_trace_context_serializes_the_pinned_wire_states() -> Result<(), serde_json::Error> {
+        let context =
+            W3cTraceContext::new("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+                .with_tracestate("congo=4");
+        assert_eq!(
+            serde_json::to_value(&context)?,
+            json!({
+                "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                "tracestate": "congo=4"
+            })
+        );
+
+        // An unset `tracestate` stays off the wire entirely.
+        let parent_only = W3cTraceContext::new("00-abc");
+        assert_eq!(
+            serde_json::to_value(&parent_only)?,
+            json!({"traceparent": "00-abc"})
+        );
+
+        // An explicit null keeps the key present, the same three-state
+        // posture `RpcError.data` uses.
+        let explicit_null = W3cTraceContext {
+            traceparent: Omittable::Value(Nullable::Null),
+            tracestate: Omittable::Omitted,
+        };
+        assert_eq!(
+            serde_json::to_value(&explicit_null)?,
+            json!({"traceparent": null})
+        );
+        assert_eq!(
+            serde_json::from_value::<W3cTraceContext>(json!({
+                "traceparent": null,
+                "tracestate": "rojo=1"
+            }))?,
+            W3cTraceContext {
+                traceparent: Omittable::Value(Nullable::Null),
+                tracestate: Omittable::Value(Nullable::Value("rojo=1".to_owned())),
+            }
         );
         Ok(())
     }

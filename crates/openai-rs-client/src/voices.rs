@@ -55,7 +55,7 @@ impl Voices {
         let response = self
             .client
             .multipart_transport()
-            .send_replayable_form(&path, &form, JSON_MIME)
+            .send_replayable_form("CreateVoice", &path, &form, JSON_MIME)
             .await?;
         self.client
             .multipart_transport()
@@ -107,7 +107,7 @@ impl VoiceConsents {
         let response = self
             .client
             .multipart_transport()
-            .send_replayable_form(&path, &form, JSON_MIME)
+            .send_replayable_form("CreateVoiceConsent", &path, &form, JSON_MIME)
             .await?;
         self.client
             .multipart_transport()

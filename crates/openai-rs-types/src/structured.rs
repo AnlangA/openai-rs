@@ -12,10 +12,11 @@
 //! Recursive types are not representable in strict mode: inlining tracks the
 //! chain of references it is currently expanding, and a reference that
 //! recurses into a definition on that chain - including a self-reference to
-//! the document root, `$ref: "#"` - can never flatten into a finite schema,
-//! so it fails with [`StructuredError::RecursiveReference`] instead of
-//! expanding without bound. A `$ref` that is not a string is likewise
-//! rejected instead of being silently passed through.
+//! the document root, `$ref: "#"` or its empty-pointer spelling `"#/"` - can
+//! never flatten into a finite schema, so it fails with
+//! [`StructuredError::RecursiveReference`] instead of expanding without
+//! bound. A `$ref` that is not a string is likewise rejected instead of being
+//! silently passed through.
 //!
 //! Cycle detection alone does not bound the work: a reference graph that
 //! fans out (a DAG rather than a cycle) can double the schema on every
@@ -566,8 +567,9 @@ fn normalize(
     }
 
     // Classify `$ref` before anything else: a pointer that leaves the
-    // document is external, `#` points back at the document root and so
-    // always recurses, and a non-string `$ref` is never passed through.
+    // document is external, `#` and `#/` (the empty pointer) both point back
+    // at the document root and so always recurse, and a non-string `$ref` is
+    // never passed through.
     if let Some(node) = object.get("$ref") {
         let reference = match node {
             Value::String(reference) => reference.clone(),
@@ -578,7 +580,7 @@ fn normalize(
                 });
             }
         };
-        if reference == "#" {
+        if reference == "#" || reference == "#/" {
             return Err(StructuredError::RecursiveReference {
                 path: format!("{path}/$ref"),
                 reference,
@@ -1154,6 +1156,47 @@ mod tests {
                 &error,
                 StructuredError::RecursiveReference { path, reference }
                     if reference == "#" && path == "#/properties/self/$ref"
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn empty_pointer_root_reference_reports_recursion_in_both_forms() {
+        // `#/` is the second spelling of the document-root self-reference
+        // (an empty JSON pointer). Both the bare and the sibling-key form
+        // must take the same `RecursiveReference` path as `#` (D0143): the
+        // bare form used to pass through untouched because only the
+        // sole-key fast path saw it.
+        let mut bare = json!({
+            "type": "object",
+            "required": ["self"],
+            "properties": { "self": { "$ref": "#/" } }
+        });
+        let error = normalize_strict_schema(&mut bare).expect_err("bare root reference must fail");
+        assert!(
+            matches!(
+                &error,
+                StructuredError::RecursiveReference { path, reference }
+                    if reference == "#/" && path == "#/properties/self/$ref"
+            ),
+            "unexpected error: {error:?}"
+        );
+
+        let mut sibling = json!({
+            "type": "object",
+            "required": ["self"],
+            "properties": {
+                "self": { "$ref": "#/", "description": "self with sibling" }
+            }
+        });
+        let error =
+            normalize_strict_schema(&mut sibling).expect_err("sibling root reference must fail");
+        assert!(
+            matches!(
+                &error,
+                StructuredError::RecursiveReference { path, reference }
+                    if reference == "#/" && path == "#/properties/self/$ref"
             ),
             "unexpected error: {error:?}"
         );

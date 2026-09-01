@@ -314,32 +314,54 @@ mod tests {
             .into_iter()
             .next()
             .expect("one function");
-        let outcome = bridge
-            .dispatch_parts(
-                "call_1",
-                function.name(),
-                r#"{"city":"x"}"#,
-                &ExecutionControl::default(),
-            )
-            .await
-            .expect("dispatch");
-        assert!(!outcome.is_tool_error());
-        let spans = capture.spans();
-        let span = spans
-            .iter()
-            .find(|span| span.name == "rmcp.tool_dispatch")
-            .cloned()
-            .unwrap_or_else(|| {
-                panic!(
-                    "dispatch span missing; captured {:?}",
-                    spans
-                        .iter()
-                        .map(|span| (span.name.as_str(), span.fields.clone()))
-                        .collect::<Vec<_>>()
+        // `span!` gates on a process-wide cached maximum level before any
+        // subscriber callback runs, and sibling capture tests installing or
+        // dropping their own default subscribers can leave that cache
+        // momentarily stale (observed as a flaky missing span). Dispatching
+        // against the fake executor is cheap, so retry until the capture sees
+        // the span.
+        let mut captured_span = None;
+        for _ in 0..16 {
+            drop(tracing::subscriber::set_default(capture.clone()));
+            let outcome = bridge
+                .dispatch_parts(
+                    "call_1",
+                    function.name(),
+                    r#"{"city":"x"}"#,
+                    &ExecutionControl::default(),
                 )
-            });
+                .await
+                .expect("dispatch");
+            assert!(!outcome.is_tool_error());
+            let spans = capture.spans();
+            if let Some(span) = spans
+                .iter()
+                .find(|span| span.name == "rmcp.tool_dispatch")
+                .cloned()
+            {
+                captured_span = Some(span);
+                break;
+            }
+        }
+        let span = captured_span.unwrap_or_else(|| {
+            let spans = capture.spans();
+            panic!(
+                "dispatch span missing; captured {:?}",
+                spans
+                    .iter()
+                    .map(|span| (span.name.as_str(), span.fields.clone()))
+                    .collect::<Vec<_>>()
+            )
+        });
         assert_eq!(span.field("mcp_name"), Some("weather/read"));
         assert_eq!(span.field("call_id"), Some("call_1"));
+        // 6-18: the dispatch span's whole field whitelist, including the
+        // outcome flag recorded after execution.
+        assert!(
+            span.field("openai_name")
+                .is_some_and(|name| !name.is_empty())
+        );
+        assert_eq!(span.field("is_error"), Some("false"));
         assert!(!capture.contains_text(r#"{"city":"x"}"#));
     }
 

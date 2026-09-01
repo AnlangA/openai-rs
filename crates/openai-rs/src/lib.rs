@@ -64,6 +64,15 @@ pub use openai_rs_client::{CompletionEventStream, Completions};
 #[allow(deprecated)]
 pub use openai_rs_client::LegacyRealtimeSessions;
 
+/// Re-export of the `reqwest` version the client crate links.
+///
+/// `ClientBuilder::proxy` accepts a `reqwest::Proxy`, so the type stays
+/// nameable through the facade chain (`openai_rs::reqwest::Proxy`) without a
+/// direct `reqwest` dependency. Constructing a proxy still means depending on
+/// `reqwest` yourself, on the same major version.
+#[cfg(feature = "client")]
+pub use openai_rs_client::reqwest;
+
 #[cfg(all(feature = "client", feature = "custom-voice"))]
 pub use openai_rs_client::{VoiceConsentPageStream, VoiceConsents, Voices};
 
@@ -122,3 +131,21 @@ pub use openai_rs_codex as codex;
 
 #[cfg(feature = "rmcp")]
 pub use openai_rs_rmcp as rmcp;
+
+#[cfg(test)]
+mod tests {
+    /// 6-21: the re-exported `reqwest` module keeps the `Proxy` type in
+    /// `ClientBuilder::proxy`'s signature nameable through the facade chain
+    /// (issue 1-29 family), without requiring a direct `reqwest` dependency
+    /// just to spell the parameter type.
+    #[cfg(feature = "client")]
+    #[test]
+    fn reqwest_proxy_is_nameable_through_the_facade() {
+        fn assert_proxy_nameable(
+            proxy: Option<crate::reqwest::Proxy>,
+        ) -> Option<crate::reqwest::Proxy> {
+            proxy
+        }
+        assert!(assert_proxy_nameable(None).is_none());
+    }
+}

@@ -67,7 +67,7 @@ impl Skills {
         let response = self
             .client
             .multipart_transport()
-            .send_replayable_form(&path, &form, JSON_MIME)
+            .send_replayable_form("CreateSkill", &path, &form, JSON_MIME)
             .await?;
         self.client
             .multipart_transport()
@@ -159,7 +159,7 @@ impl Skills {
         ];
         self.client
             .multipart_transport()
-            .download_path(&path, BINARY_MIME)
+            .download_path("GetSkillContent", &path, BINARY_MIME)
             .await
     }
 
@@ -198,7 +198,7 @@ impl SkillVersions {
         let response = self
             .client
             .multipart_transport()
-            .send_replayable_form(&path, &form, JSON_MIME)
+            .send_replayable_form("CreateSkillVersion", &path, &form, JSON_MIME)
             .await?;
         self.client
             .multipart_transport()
@@ -288,7 +288,7 @@ impl SkillVersions {
         ];
         self.client
             .multipart_transport()
-            .download_path(&path, BINARY_MIME)
+            .download_path("GetSkillVersionContent", &path, BINARY_MIME)
             .await
     }
 }

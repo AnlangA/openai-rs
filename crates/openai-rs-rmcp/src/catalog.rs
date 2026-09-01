@@ -371,9 +371,22 @@ mod tests {
     fn mapping_invalid_names_emits_warn() {
         let capture = crate::trace_capture::Capture::new();
         let _guard = tracing::subscriber::set_default(capture.clone());
-        let tools = vec![tool("database/read 天气", json!({"properties": {}}))];
-        ToolCatalog::build(tools, CatalogPolicy::default()).expect("mapped catalog");
-        assert!(capture.events_contain("mapped invalid MCP tool name"));
+        // `event!` gates on a process-wide cached maximum level before any
+        // subscriber callback runs, and sibling capture tests installing or
+        // dropping their own default subscribers can leave that cache
+        // momentarily stale (observed as a flaky missing WARN). Rebuilding a
+        // catalog is cheap, so retry the emission until the capture sees it.
+        let mut warned = false;
+        for _ in 0..16 {
+            drop(tracing::subscriber::set_default(capture.clone()));
+            let tools = vec![tool("database/read 天气", json!({"properties": {}}))];
+            ToolCatalog::build(tools, CatalogPolicy::default()).expect("mapped catalog");
+            if capture.events_contain("mapped invalid MCP tool name") {
+                warned = true;
+                break;
+            }
+        }
+        assert!(warned, "mapped-name WARN event never reached the capture");
         assert!(capture.events_contain("inserted type=object on MCP tool schema"));
         assert!(!capture.contains_text("database/read 天气"));
     }

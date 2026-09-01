@@ -177,6 +177,12 @@ impl Uploads {
 
     /// Adds a replayable bytes or filesystem-path part to an Upload.
     ///
+    /// The multipart form is rebuilt for every permitted retry. Path sources
+    /// are reopened and checked against their original identity (length,
+    /// timestamps, and on Unix the device and inode captured when the source
+    /// was prepared) before each attempt, so a part can never silently upload
+    /// different bytes than were snapshotted.
+    ///
     /// The part must carry at most 64 MB; the Upload accepts at most 8 GB in
     /// total and expires about an hour after creation, so complete it before
     /// [`Upload::expires_at`] passes. See the
@@ -193,6 +199,10 @@ impl Uploads {
     }
 
     /// Adds a reader or stream part exactly once and never retries it.
+    ///
+    /// Unlike [`Uploads::add_part`], a path is never reopened for another
+    /// attempt: the single send opens the file once and validates it against
+    /// the identity snapshot taken when the part was prepared.
     ///
     /// The same session constraints apply as for [`Uploads::add_part`]: at
     /// most 64 MB per part, at most 8 GB in total, and completion before the

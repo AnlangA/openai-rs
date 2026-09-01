@@ -346,8 +346,9 @@ impl X509Client {
             .map(serde_json::to_vec)
             .transpose()
             .map_err(Error::Encode)?;
-        let route = x509_route_template(path);
-        let span = trace::http_request_span("x509.execute_json", method.as_str(), &route);
+        let span = trace::http_request_span_lazy("x509.execute_json", method.as_str(), || {
+            x509_route_template(path)
+        });
         async move {
             let started = Instant::now();
             let mut auth_replayed = false;
@@ -359,6 +360,12 @@ impl X509Client {
                     .filter(|value| !value.is_zero())
                     .ok_or_else(|| {
                         trace::emit_deadline_exceeded();
+                        // This lane never retries (the only replay is the
+                        // single 401 authentication pass), so the counter is
+                        // pinned at zero like every other outcome record —
+                        // keeping the six-field span shape uniform across
+                        // lanes (6-17).
+                        trace::record_retry_count(0);
                         X509Error::from(Error::DeadlineExceeded)
                     })?;
                 let lease = self.inner.token_manager.lease().await?;
@@ -1344,5 +1351,87 @@ mod tests {
         // The proxy face must not bypass identity validation: the structural
         // fake PEM still fails when the rustls identity is parsed.
         assert!(matches!(builder.build(), Err(X509Error::InvalidIdentity)));
+    }
+
+    /// 6-18: the X.509 lane keeps the shared six-field span shape while the
+    /// exchanged bearer token never reaches a span or event. The pinned mTLS
+    /// origin is replaced by a plain loopback stand-in (the token manager is
+    /// faked, so no certificate is needed for the API hop).
+    #[tokio::test]
+    async fn x509_lane_span_records_six_fields_without_bearer_tokens() {
+        use std::convert::Infallible;
+
+        use bytes::Bytes;
+        use http_body_util::Full;
+        use hyper::server::conn::http1;
+        use hyper::service::service_fn;
+        use hyper::{Request, body::Incoming};
+        use hyper_util::rt::TokioIo;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback mTLS stand-in");
+        let address = listener.local_addr().expect("loopback address");
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let service = service_fn(move |_request: Request<Incoming>| {
+                let response = hyper::Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-request-id", "req_x509_loopback")
+                    .body(Full::new(Bytes::from_static(
+                        br#"{"object":"list","data":[]}"#,
+                    )))
+                    .expect("build loopback response");
+                async move { Ok::<_, Infallible>(response) }
+            });
+            let _ = http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+        });
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("loopback base URL");
+        let exchange = Arc::new(FakeExchange::new(
+            Duration::ZERO,
+            [Ok(("x509-lane-secret-token", Duration::from_secs(3_600)))],
+        ));
+        let client = X509Client {
+            inner: Arc::new(X509Inner {
+                http: reqwest::Client::new(),
+                base_url,
+                region: X509Region::Global,
+                token_manager: Arc::new(X509TokenManager::new(exchange, Duration::ZERO)),
+                request_timeout: Duration::from_secs(30),
+                max_json_body_bytes: 1024,
+                max_error_body_bytes: 1024,
+            }),
+        };
+
+        let capture = crate::trace::capture::Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        let models = client.models().list().await.expect("x509 model list");
+
+        assert!(models.data.is_empty());
+        let span = capture
+            .spans()
+            .into_iter()
+            .find(|span| span.name == "openai.http_request")
+            .expect("x509 http request span");
+        assert_eq!(span.field("operation.id"), Some("x509.execute_json"));
+        assert_eq!(span.field("http.request.method"), Some("GET"));
+        assert_eq!(span.field("http.route"), Some("/models"));
+        assert_eq!(span.field("http.response.status_code"), Some("200"));
+        assert_eq!(span.field("openai.request_id"), Some("req_x509_loopback"));
+        assert_eq!(span.field("retry.count"), Some("0"));
+        assert!(
+            !capture.contains_text("x509-lane-secret-token"),
+            "exchanged bearer token leaked into tracing fields"
+        );
+        assert!(
+            !capture.contains_text("Bearer "),
+            "authorization header leaked into tracing fields"
+        );
     }
 }

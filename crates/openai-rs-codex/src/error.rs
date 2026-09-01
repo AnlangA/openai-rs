@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::protocol::redacted_extra_debug;
+
 /// A JSON-RPC identifier. App-server accepts numeric and string identifiers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -14,7 +16,7 @@ pub enum RpcId {
 }
 
 /// A lossless JSON-RPC error object returned by app-server.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcError {
     pub code: i64,
@@ -28,6 +30,11 @@ pub struct RpcError {
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
+
+// 6-07: both the server-controlled `data` payload and the retained `extra`
+// properties can quote payload fragments (the same reason `Error::Json` keeps
+// a neutral display), so Debug only reports their presence.
+redacted_extra_debug!(RpcError secret [data] { code, message });
 
 impl fmt::Display for RpcError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -49,6 +56,10 @@ pub enum ConnectionFailureKind {
     LineTooLong,
     EventQueueFull,
     ChildExit,
+    /// The write phase of a request exceeded its budget and the connection
+    /// was torn down because the cancelled write may have left a half-written
+    /// JSONL frame in the child's stdin (6-03).
+    WriteTimeout,
 }
 
 /// Cloneable terminal failure shared with all in-flight requests.

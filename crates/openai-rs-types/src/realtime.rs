@@ -2671,45 +2671,6 @@ impl fmt::Debug for RealtimeCreateClientSecretResponse {
     }
 }
 
-/// Validated translation client-secret lifetime in seconds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(transparent)]
-pub struct RealtimeTranslationSecretLifetime(u16);
-
-impl RealtimeTranslationSecretLifetime {
-    pub const MIN_SECONDS: u16 = 10;
-    pub const MAX_SECONDS: u16 = 7_200;
-
-    pub fn new(seconds: u16) -> Result<Self, RealtimeTranslationSecretLifetimeError> {
-        if (Self::MIN_SECONDS..=Self::MAX_SECONDS).contains(&seconds) {
-            Ok(Self(seconds))
-        } else {
-            Err(RealtimeTranslationSecretLifetimeError { seconds })
-        }
-    }
-
-    #[must_use]
-    pub const fn seconds(self) -> u16 {
-        self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for RealtimeTranslationSecretLifetime {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let seconds = u16::deserialize(deserializer)?;
-        Self::new(seconds).map_err(D::Error::custom)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("translation client-secret lifetime {seconds} is outside 10..=7200 seconds")]
-pub struct RealtimeTranslationSecretLifetimeError {
-    pub seconds: u16,
-}
-
 literal_tag!(
     RealtimeTranslationExpirationAnchorTag,
     CreatedAt,
@@ -2717,29 +2678,41 @@ literal_tag!(
 );
 
 /// Expiration configuration for a Realtime translation client secret.
+///
+/// Mirrors [`RealtimeClientSecretExpiration`]: `seconds` decodes losslessly —
+/// the pinned 10..=7200 range is description prose, so it is enforced only by
+/// [`RealtimeTranslationClientSecretCreateRequest::validate`] (D0036/D0169),
+/// not at the serde boundary.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranslationClientSecretExpiration {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     anchor: Omittable<RealtimeTranslationExpirationAnchorTag>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    seconds: Omittable<RealtimeTranslationSecretLifetime>,
+    seconds: Omittable<i64>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
 
 impl RealtimeTranslationClientSecretExpiration {
-    pub fn new(seconds: u16) -> Result<Self, RealtimeTranslationSecretLifetimeError> {
-        Ok(Self {
+    /// Creates a `created_at`-anchored expiration of `seconds` seconds.
+    ///
+    /// The constructor stays infallible: the 10..=7200 prose range is checked
+    /// by [`RealtimeTranslationClientSecretCreateRequest::validate`], matching
+    /// the GA client-secret posture.
+    #[must_use]
+    pub fn new(seconds: i64) -> Self {
+        Self {
             anchor: Omittable::Value(RealtimeTranslationExpirationAnchorTag::CreatedAt),
-            seconds: Omittable::Value(RealtimeTranslationSecretLifetime::new(seconds)?),
+            seconds: Omittable::Value(seconds),
             extra: ExtraFields::new(),
-        })
+        }
     }
 
+    /// Returns the configured lifetime in seconds when present.
     #[must_use]
-    pub fn seconds(&self) -> Option<u16> {
+    pub const fn seconds(&self) -> Option<i64> {
         match self.seconds {
-            Omittable::Value(value) => Some(value.seconds()),
+            Omittable::Value(value) => Some(value),
             Omittable::Omitted => None,
         }
     }
@@ -3007,6 +2980,31 @@ impl RealtimeTranslationClientSecretCreateRequest {
             session,
             extra: ExtraFields::new(),
         }
+    }
+
+    /// Checks the pinned `expires_after.seconds` range without sending the
+    /// request.
+    ///
+    /// Decoding stays lossless (any JSON integer round-trips, D0169): the
+    /// 10..=7200 range is description prose on the same pin schema as the GA
+    /// client-secret expiration, so it is enforced only through this opt-in
+    /// hook, reusing the GA [`CreateRealtimeSessionConstraintError`] variant
+    /// (D0036).
+    pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
+        if let Omittable::Value(expiration) = &self.expires_after
+            && let Omittable::Value(seconds) = expiration.seconds
+            && !(MIN_REALTIME_CLIENT_SECRET_SECONDS..=MAX_REALTIME_CLIENT_SECRET_SECONDS)
+                .contains(&seconds)
+        {
+            return Err(
+                CreateRealtimeSessionConstraintError::ClientSecretExpiration {
+                    actual: seconds,
+                    minimum: MIN_REALTIME_CLIENT_SECRET_SECONDS,
+                    maximum: MAX_REALTIME_CLIENT_SECRET_SECONDS,
+                },
+            );
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -5493,22 +5491,6 @@ mod tests {
 
     #[test]
     fn translation_session_preserves_nullability_extras_and_secret_privacy() {
-        assert!(RealtimeTranslationClientSecretExpiration::new(9).is_err());
-        assert_eq!(
-            RealtimeTranslationClientSecretExpiration::new(10)
-                .expect("minimum lifetime")
-                .seconds(),
-            Some(10)
-        );
-        assert!(RealtimeTranslationClientSecretExpiration::new(7_200).is_ok());
-        assert!(RealtimeTranslationClientSecretExpiration::new(7_201).is_err());
-        assert!(
-            serde_json::from_value::<RealtimeTranslationClientSecretExpiration>(
-                json!({"seconds": 9})
-            )
-            .is_err()
-        );
-
         let input = RealtimeTranslationAudioInput::default()
             .with_transcription(RealtimeTranslationTranscription::new(
                 "gpt-realtime-whisper",
@@ -5521,9 +5503,7 @@ mod tests {
                     .with_output(RealtimeTranslationAudioOutput::new("es")),
             );
         let request = RealtimeTranslationClientSecretCreateRequest::new(session)
-            .with_expires_after(
-                RealtimeTranslationClientSecretExpiration::new(600).expect("translation lifetime"),
-            );
+            .with_expires_after(RealtimeTranslationClientSecretExpiration::new(600));
         assert_eq!(
             serde_json::to_value(request).expect("encode translation request"),
             json!({
@@ -5583,6 +5563,67 @@ mod tests {
                 "audio": {}
             }))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn translation_secret_lifetime_range_is_opt_in_validate() {
+        // The 10..=7200 range is description prose on the same pin schema the
+        // GA client-secret expiration uses, so decode stays lossless and the
+        // range moved to the request-level opt-in validate (D0036/D0169) —
+        // the previous u16 newtype also truncated values above 65,535.
+        let out_of_range = serde_json::from_value::<RealtimeTranslationClientSecretExpiration>(
+            json!({"anchor": "created_at", "seconds": 9}),
+        )
+        .expect("out-of-range seconds decode losslessly");
+        assert_eq!(out_of_range.seconds(), Some(9));
+        assert_eq!(
+            serde_json::to_value(&out_of_range).expect("round-trip"),
+            json!({"anchor": "created_at", "seconds": 9})
+        );
+
+        let session = || RealtimeTranslationSessionCreateRequest::new("gpt-realtime-translate");
+        let rejected = |actual: i64| CreateRealtimeSessionConstraintError::ClientSecretExpiration {
+            actual,
+            minimum: MIN_REALTIME_CLIENT_SECRET_SECONDS,
+            maximum: MAX_REALTIME_CLIENT_SECRET_SECONDS,
+        };
+
+        for seconds in [9_i64, 7_201, 100_000] {
+            let request = RealtimeTranslationClientSecretCreateRequest::new(session())
+                .with_expires_after(RealtimeTranslationClientSecretExpiration::new(seconds));
+            assert_eq!(request.validate(), Err(rejected(seconds)));
+        }
+
+        // A decoded out-of-range lifetime round-trips untouched and is only
+        // rejected by validate (100_000 used to fail decoding outright as a
+        // u16 overflow).
+        let decoded: RealtimeTranslationClientSecretCreateRequest = serde_json::from_value(json!({
+            "expires_after": {"anchor": "created_at", "seconds": 100_000},
+            "session": {"model": "gpt-realtime-translate"}
+        }))
+        .expect("decode stays lossless");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode"),
+            json!({
+                "expires_after": {"anchor": "created_at", "seconds": 100_000},
+                "session": {"model": "gpt-realtime-translate"}
+            })
+        );
+        assert_eq!(decoded.validate(), Err(rejected(100_000)));
+
+        for seconds in [
+            MIN_REALTIME_CLIENT_SECRET_SECONDS,
+            600_i64,
+            MAX_REALTIME_CLIENT_SECRET_SECONDS,
+        ] {
+            let request = RealtimeTranslationClientSecretCreateRequest::new(session())
+                .with_expires_after(RealtimeTranslationClientSecretExpiration::new(seconds));
+            assert_eq!(request.validate(), Ok(()));
+        }
+        assert_eq!(
+            RealtimeTranslationClientSecretCreateRequest::new(session()).validate(),
+            Ok(())
         );
     }
 

@@ -859,7 +859,12 @@ impl ReplayableMultipartSource {
 
     /// Creates a source that the transport reopens from this path.
     ///
-    /// Construction performs no filesystem access.
+    /// Construction performs no filesystem access. Validation happens when the
+    /// transport prepares the source for sending: only regular files are
+    /// accepted, and symlinks (as well as directories, FIFOs, and other
+    /// non-regular files) are rejected fail-closed, because a symlink target
+    /// could otherwise change between the identity snapshot taken at
+    /// preparation and each reopen.
     #[must_use]
     pub fn from_path(path: impl Into<PathBuf>) -> Self {
         Self::Path {
@@ -976,26 +981,24 @@ impl ReplayableMultipartSource {
 
 impl fmt::Debug for ReplayableMultipartSource {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Presence is observable, but the filename and media type values stay
+        // redacted: a `Path` source's explicit filename is often exactly the
+        // redacted path's basename, so printing it would undo `path`
+        // redaction. Mirrors `OneShotMultipartSource` on the client side.
+        let file_name = self.file_name_field().as_ref().map(|_| "[REDACTED]");
+        let media_type = self.media_type_field().as_ref().map(|_| "[REDACTED]");
         match self {
-            Self::Bytes {
-                data,
-                file_name,
-                media_type,
-            } => formatter
+            Self::Bytes { data, .. } => formatter
                 .debug_struct("ReplayableMultipartSource::Bytes")
                 .field("len", &data.len())
-                .field("file_name", file_name)
-                .field("media_type", media_type)
+                .field("file_name", &file_name)
+                .field("media_type", &media_type)
                 .finish(),
-            Self::Path {
-                path: _,
-                file_name,
-                media_type,
-            } => formatter
+            Self::Path { .. } => formatter
                 .debug_struct("ReplayableMultipartSource::Path")
                 .field("path", &"[REDACTED]")
-                .field("file_name", file_name)
-                .field("media_type", media_type)
+                .field("file_name", &file_name)
+                .field("media_type", &media_type)
                 .finish(),
         }
     }
@@ -1586,6 +1589,43 @@ mod tests {
         assert_eq!(path.path(), Some(Path::new("fixtures/training.jsonl")));
         assert_eq!(path.as_bytes(), None);
         assert!(!format!("{path:?}").contains("fixtures/training.jsonl"));
+    }
+
+    #[test]
+    fn multipart_source_debug_redacts_file_name_and_media_type() {
+        // Mirrors the client-side `OneShotMultipartSource` test: a `Path`
+        // source's explicit filename is frequently the redacted path's
+        // basename, so the filename and media type values must never render.
+        let bytes = ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(&b"payload"[..]))
+            .try_with_file_name("private-name.txt")
+            .expect("safe filename")
+            .try_with_media_type("text/plain")
+            .expect("safe media type");
+        let debug = format!("{bytes:?}");
+        assert!(!debug.contains("private-name"));
+        assert!(!debug.contains("text/plain"));
+        assert!(
+            debug.contains("[REDACTED]"),
+            "redaction marker expected in {debug}"
+        );
+
+        let path = ReplayableMultipartSource::from_path("secrets/private-name.txt")
+            .try_with_file_name("private-name.txt")
+            .expect("safe filename")
+            .try_with_media_type("text/plain")
+            .expect("safe media type");
+        let debug = format!("{path:?}");
+        assert!(!debug.contains("private-name"));
+        assert!(!debug.contains("text/plain"));
+        assert!(!debug.contains("secrets"));
+        assert!(
+            debug.contains("[REDACTED]"),
+            "redaction marker expected in {debug}"
+        );
+
+        // Presence state stays observable without exposing values.
+        let omitted = ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(&b"x"[..]));
+        assert!(format!("{omitted:?}").contains("Omitted"));
     }
 
     #[test]

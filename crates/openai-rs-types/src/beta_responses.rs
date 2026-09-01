@@ -16,15 +16,16 @@ use crate::{
     responses::{
         Annotation, CompactResponseConstraintError, ComputerScreenshot,
         ConversationObjectReference, ConversationReference, CountInputTokensConstraintError,
-        CreateResponseConstraintError, IncompleteDetails, InputContent, InputFile, LogProb,
-        MAX_COMPACT_INPUT_CHARS, MAX_INPUT_TEXT_CHARS, MAX_PROMPT_CACHE_KEY_CHARS, MessageRole,
-        MessageStatus, OutputText, PromptCacheRetention, PromptReference, ReasoningTextContent,
-        Refusal, ResponseError, ResponseInputItem, ResponseInstructions, ResponseItemStatus,
-        ResponseOutputItem, ResponseStatus, ResponseStreamEvent, ResponseStreamOptions,
-        ResponseTextConfig, ResponseTool, ResponseUsage, ServiceTier, SummaryTextContent,
-        ToolChoice, TruncationStrategy, UnknownTaggedObject, validate_input_content,
-        validate_input_image_url_chars, validate_input_text_chars, validate_response_input_item,
-        validate_response_tools, validate_websocket_stream_id,
+        CreateResponseConstraintError, IncompleteDetails, InputContent, InputFile, InputImage,
+        InputText, LogProb, MAX_COMPACT_INPUT_CHARS, MAX_INPUT_TEXT_CHARS,
+        MAX_PROMPT_CACHE_KEY_CHARS, MessageRole, MessageStatus, OutputText, PromptCacheRetention,
+        PromptReference, ReasoningTextContent, Refusal, ResponseError, ResponseInputItem,
+        ResponseInstructions, ResponseItemStatus, ResponseOutputItem, ResponseStatus,
+        ResponseStreamEvent, ResponseStreamOptions, ResponseTextConfig, ResponseTool,
+        ResponseUsage, ServiceTier, SummaryTextContent, ToolChoice, TruncationStrategy,
+        UnknownTaggedObject, validate_input_content, validate_input_image_url_chars,
+        validate_input_text_chars, validate_response_input_item, validate_response_tools,
+        validate_websocket_stream_id,
     },
 };
 
@@ -388,6 +389,14 @@ impl BetaMultiAgentConfig {
 pub use crate::responses::PromptCacheBreakpoint as BetaPromptCacheBreakpoint;
 
 /// A stable input-content branch with a typed beta prompt-cache breakpoint.
+///
+/// The construction surface takes exactly the three branches the pinned beta
+/// message-content union (`BetaInputContent`: `input_text` / `input_image` /
+/// `input_file`) declares; `computer_screenshot` is item-form-only and has no
+/// constructor or `From` here (the D0167 family). Decoding keeps the shared
+/// four-branch [`InputContent`] codec so official payloads stay lossless
+/// (D0142 loose bridge); the request-level `validate()` hooks reject a
+/// decoded screenshot branch before it can be sent.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BetaPromptCachedInputContent {
     core: InputContent,
@@ -395,11 +404,29 @@ pub struct BetaPromptCachedInputContent {
 }
 
 impl BetaPromptCachedInputContent {
-    /// Wraps any stable input content branch.
+    /// Wraps an `input_text` part.
     #[must_use]
-    pub fn new(core: impl Into<InputContent>) -> Self {
+    pub fn text(core: InputText) -> Self {
         Self {
-            core: core.into(),
+            core: InputContent::Text(core),
+            prompt_cache_breakpoint: Omittable::Omitted,
+        }
+    }
+
+    /// Wraps an `input_image` part.
+    #[must_use]
+    pub fn image(core: InputImage) -> Self {
+        Self {
+            core: InputContent::Image(core),
+            prompt_cache_breakpoint: Omittable::Omitted,
+        }
+    }
+
+    /// Wraps an `input_file` part.
+    #[must_use]
+    pub fn file(core: InputFile) -> Self {
+        Self {
+            core: InputContent::File(core),
             prompt_cache_breakpoint: Omittable::Omitted,
         }
     }
@@ -469,6 +496,24 @@ impl<'de> Deserialize<'de> for BetaPromptCachedInputContent {
             core: serde_json::from_value(value).map_err(D::Error::custom)?,
             prompt_cache_breakpoint,
         })
+    }
+}
+
+impl From<InputText> for BetaPromptCachedInputContent {
+    fn from(value: InputText) -> Self {
+        Self::text(value)
+    }
+}
+
+impl From<InputImage> for BetaPromptCachedInputContent {
+    fn from(value: InputImage) -> Self {
+        Self::image(value)
+    }
+}
+
+impl From<InputFile> for BetaPromptCachedInputContent {
+    fn from(value: InputFile) -> Self {
+        Self::file(value)
     }
 }
 
@@ -2087,9 +2132,36 @@ impl From<Vec<BetaResponseInputItem>> for BetaResponseInput {
     }
 }
 
+/// A beta request `input` value that violates a pinned OpenAPI constraint.
+///
+/// Beta-only rejections that the shared GA error type cannot express are
+/// native variants; nested GA constraints wrap transparently, mirroring the
+/// `Input(#[from] CreateResponseConstraintError)` wrappers on the compact and
+/// count-tokens hosts.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum BetaResponseInputConstraintError {
+    /// Prompt-cached message content carries `computer_screenshot`, a branch
+    /// the pinned beta message-content union (`BetaInputContent`) does not
+    /// define; it is legal only in item-form message content.
+    #[error(
+        "beta prompt-cached message content must be one of input_text, input_image, or input_file; computer_screenshot is item-form-only"
+    )]
+    PromptCachedComputerScreenshot,
+    /// A nested GA create-request or stable-input constraint.
+    #[error(transparent)]
+    Create(#[from] CreateResponseConstraintError),
+    /// A nested compact-request constraint.
+    #[error(transparent)]
+    Compact(#[from] CompactResponseConstraintError),
+    /// A nested count-tokens constraint.
+    #[error(transparent)]
+    Count(#[from] CountInputTokensConstraintError),
+}
+
 fn validate_beta_response_input(
     input: &BetaResponseInput,
-) -> Result<(), CreateResponseConstraintError> {
+) -> Result<(), BetaResponseInputConstraintError> {
     match input {
         BetaResponseInput::Text(_) => Ok(()),
         BetaResponseInput::Items(items) => {
@@ -2103,18 +2175,24 @@ fn validate_beta_response_input(
 
 fn validate_beta_response_input_item(
     item: &BetaResponseInputItem,
-) -> Result<(), CreateResponseConstraintError> {
+) -> Result<(), BetaResponseInputConstraintError> {
     match item {
-        BetaResponseInputItem::Stable(item) => validate_response_input_item(item.core()),
+        BetaResponseInputItem::Stable(item) => Ok(validate_response_input_item(item.core())?),
         BetaResponseInputItem::PromptCachedMessage(item) => {
             for part in item.content() {
+                // Defense-in-depth for the D0142 loose decode bridge: the
+                // narrowed constructors cannot produce this branch, but a
+                // decoded message part can still carry it.
+                if matches!(part.core(), InputContent::ComputerScreenshot(_)) {
+                    return Err(BetaResponseInputConstraintError::PromptCachedComputerScreenshot);
+                }
                 validate_input_content(part.core())?;
             }
             Ok(())
         }
-        BetaResponseInputItem::AgentMessage(item) => item.validate(),
-        BetaResponseInputItem::MultiAgentCall(item) => item.validate(),
-        BetaResponseInputItem::MultiAgentCallOutput(item) => item.validate(),
+        BetaResponseInputItem::AgentMessage(item) => Ok(item.validate()?),
+        BetaResponseInputItem::MultiAgentCall(item) => Ok(item.validate()?),
+        BetaResponseInputItem::MultiAgentCallOutput(item) => Ok(item.validate()?),
     }
 }
 
@@ -2725,7 +2803,10 @@ impl BetaCreateResponseRequest {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
-    pub fn validate(&self) -> Result<&Self, CreateResponseConstraintError> {
+    ///
+    /// Rejects prompt-cached message content carrying the item-form-only
+    /// `computer_screenshot` branch (6-05) alongside the GA constraints.
+    pub fn validate(&self) -> Result<&Self, BetaResponseInputConstraintError> {
         self.base.validate()?;
         if let Omittable::Value(input) = &self.input {
             validate_beta_response_input(input)?;
@@ -3231,14 +3312,18 @@ impl BetaCompactResponseRequest {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
-    pub fn validate(&self) -> Result<(), CompactResponseConstraintError> {
+    ///
+    /// Rejects prompt-cached message content carrying the item-form-only
+    /// `computer_screenshot` branch (6-05) alongside the GA constraints.
+    pub fn validate(&self) -> Result<(), BetaResponseInputConstraintError> {
         if let Omittable::Value(Nullable::Value(key)) = &self.prompt_cache_key {
             let actual = key.chars().count();
             if actual > MAX_PROMPT_CACHE_KEY_CHARS {
                 return Err(CompactResponseConstraintError::PromptCacheKey {
                     actual,
                     maximum: MAX_PROMPT_CACHE_KEY_CHARS,
-                });
+                }
+                .into());
             }
         }
         if let Omittable::Value(Nullable::Value(BetaResponseInput::Text(input))) = &self.input {
@@ -3247,7 +3332,8 @@ impl BetaCompactResponseRequest {
                 return Err(CompactResponseConstraintError::InputLength {
                     actual,
                     maximum: MAX_COMPACT_INPUT_CHARS,
-                });
+                }
+                .into());
             }
         }
         if let Omittable::Value(Nullable::Value(input)) = &self.input {
@@ -3752,14 +3838,18 @@ impl BetaCountInputTokensRequest {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
-    pub fn validate(&self) -> Result<(), CountInputTokensConstraintError> {
+    ///
+    /// Rejects prompt-cached message content carrying the item-form-only
+    /// `computer_screenshot` branch (6-05) alongside the GA constraints.
+    pub fn validate(&self) -> Result<(), BetaResponseInputConstraintError> {
         if let Omittable::Value(Nullable::Value(BetaResponseInput::Text(input))) = &self.input {
             let actual = input.chars().count();
             if actual > MAX_COMPACT_INPUT_CHARS {
                 return Err(CountInputTokensConstraintError::InputLength {
                     actual,
                     maximum: MAX_COMPACT_INPUT_CHARS,
-                });
+                }
+                .into());
             }
         }
         if let Omittable::Value(Nullable::Value(input)) = &self.input {
@@ -3941,7 +4031,10 @@ impl BetaResponsesCreateEvent {
     }
 
     /// Checks pinned OpenAPI `stream_id` and create-body limits.
-    pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
+    ///
+    /// Rejects prompt-cached message content carrying the item-form-only
+    /// `computer_screenshot` branch (6-05) alongside the GA constraints.
+    pub fn validate(&self) -> Result<(), BetaResponseInputConstraintError> {
         if let Omittable::Value(stream_id) = &self.stream_id {
             validate_websocket_stream_id(stream_id)?;
         }
@@ -4832,10 +4925,12 @@ mod tests {
             BetaCreateResponseRequest::empty()
                 .multi_agent(BetaMultiAgentConfig::new(true).max_concurrent_subagents(0))
                 .validate(),
-            Err(CreateResponseConstraintError::ConcurrentSubagents {
-                actual: 0,
-                minimum: 1
-            })
+            Err(BetaResponseInputConstraintError::Create(
+                CreateResponseConstraintError::ConcurrentSubagents {
+                    actual: 0,
+                    minimum: 1
+                }
+            ))
         ));
         let decoded = serde_json::from_value::<BetaCreateResponseRequest>(json!({
             "model": "gpt-test",
@@ -5306,7 +5401,9 @@ mod tests {
                 .input("hello")
                 .prompt_cache_key("a".repeat(MAX_PROMPT_CACHE_KEY_CHARS + 1))
                 .validate(),
-            Err(CompactResponseConstraintError::PromptCacheKey { actual: 65, .. })
+            Err(BetaResponseInputConstraintError::Compact(
+                CompactResponseConstraintError::PromptCacheKey { actual: 65, .. }
+            ))
         ));
         let decoded = serde_json::from_value::<BetaCompactResponseRequest>(json!({
             "model": null,
@@ -5325,7 +5422,7 @@ mod tests {
             BetaCompactResponseRequest::new("gpt-5.6-sol")
                 .input(vec![ResponseInputItem::AdditionalTools(extra_tools).into()])
                 .validate(),
-            Err(CompactResponseConstraintError::Input(
+            Err(BetaResponseInputConstraintError::Create(
                 CreateResponseConstraintError::EmptyAllowedCallers
             ))
         ));
@@ -5336,7 +5433,7 @@ mod tests {
                         .allowed_callers(Vec::<String>::new()),
                 )
                 .validate(),
-            Err(CountInputTokensConstraintError::Input(
+            Err(BetaResponseInputConstraintError::Create(
                 CreateResponseConstraintError::EmptyAllowedCallers
             ))
         ));
@@ -5508,7 +5605,7 @@ mod tests {
         assert_eq!(stable_value["caller"], Value::Null);
         assert_eq!(stable_value["phase"], Value::Null);
 
-        let cached = BetaPromptCachedInputMessage::user([BetaPromptCachedInputContent::new(
+        let cached = BetaPromptCachedInputMessage::user([BetaPromptCachedInputContent::text(
             crate::responses::InputText::new("hello"),
         )
         .prompt_cache_breakpoint_null()])
@@ -5578,7 +5675,7 @@ mod tests {
         // mirroring the stable message narrowing (3-06, synced in 4-16);
         // the decode side keeps the shared open status union.
         let echoed = serde_json::to_value(
-            BetaPromptCachedInputMessage::user([BetaPromptCachedInputContent::new(
+            BetaPromptCachedInputMessage::user([BetaPromptCachedInputContent::text(
                 crate::responses::InputText::new("hello"),
             )])
             .status(MessageStatus::Completed),
@@ -5594,6 +5691,101 @@ mod tests {
         .expect("decode keeps open statuses");
         let value = serde_json::to_value(&foreign).expect("round trip");
         assert_eq!(value["status"], "searching");
+    }
+
+    #[test]
+    fn beta_prompt_cached_content_pins_the_three_official_branches() {
+        // Pinned BetaInputContent enumerates exactly input_text/input_image/
+        // input_file. The construction surface is the three named
+        // constructors plus From<InputText|InputImage|InputFile>; there is
+        // deliberately no Into<InputContent> entrance, so computer_screenshot
+        // cannot be constructed here (6-05, D0167 family).
+        let text =
+            BetaPromptCachedInputContent::text(InputText::new("hello")).prompt_cache_breakpoint();
+        let image =
+            BetaPromptCachedInputContent::image(InputImage::from_url("https://example.test/a.png"));
+        let file = BetaPromptCachedInputContent::from(InputFile::from_file_id("file_1"));
+
+        let message = BetaPromptCachedInputMessage::user([text, image, file]);
+        let value = serde_json::to_value(&message).expect("serialize three pinned branches");
+        assert_eq!(
+            value["content"][0],
+            json!({"type": "input_text", "text": "hello", "prompt_cache_breakpoint": {"mode": "explicit"}})
+        );
+        assert_eq!(
+            value["content"][1],
+            json!({"type": "input_image", "detail": "auto", "image_url": "https://example.test/a.png"})
+        );
+        assert_eq!(
+            value["content"][2],
+            json!({"type": "input_file", "file_id": "file_1"})
+        );
+        assert!(matches!(message.content()[0].core(), InputContent::Text(_)));
+        assert!(matches!(
+            message.content()[1].core(),
+            InputContent::Image(_)
+        ));
+        assert!(matches!(message.content()[2].core(), InputContent::File(_)));
+
+        // The three constructible branches keep passing the request checks.
+        BetaCreateResponseRequest::new("gpt-test", vec![BetaResponseInputItem::from(message)])
+            .validate()
+            .expect("pinned prompt-cached branches validate");
+    }
+
+    #[test]
+    fn beta_prompt_cached_computer_screenshot_decode_stays_lossless_and_validate_rejects() {
+        // Defense-in-depth for the D0142 loose bridge: the narrowed
+        // constructors cannot produce computer_screenshot, but a decoded
+        // message part still carries it losslessly, and every request-level
+        // validate() hook rejects it before anything is sent (6-05).
+        let fixture = json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "computer_screenshot",
+                "image_url": "https://example.test/s.png",
+                "file_id": null,
+                "detail": "auto",
+                "prompt_cache_breakpoint": {"mode": "explicit"}
+            }]
+        });
+        let item: BetaResponseInputItem =
+            serde_json::from_value(fixture.clone()).expect("decode smuggled screenshot");
+        let BetaResponseInputItem::PromptCachedMessage(message) = &item else {
+            panic!("breakpoint marker must route to the prompt-cached branch");
+        };
+        assert!(matches!(
+            message.content()[0].core(),
+            InputContent::ComputerScreenshot(_)
+        ));
+        assert_eq!(
+            serde_json::to_value(&item).expect("decode stays lossless"),
+            fixture
+        );
+
+        assert!(matches!(
+            BetaCreateResponseRequest::new("gpt-test", vec![item.clone()]).validate(),
+            Err(BetaResponseInputConstraintError::PromptCachedComputerScreenshot)
+        ));
+        assert!(matches!(
+            BetaCompactResponseRequest::new("gpt-test")
+                .input(vec![item.clone()])
+                .validate(),
+            Err(BetaResponseInputConstraintError::PromptCachedComputerScreenshot)
+        ));
+        assert!(matches!(
+            BetaCountInputTokensRequest::new("gpt-test", vec![item.clone()]).validate(),
+            Err(BetaResponseInputConstraintError::PromptCachedComputerScreenshot)
+        ));
+        assert!(matches!(
+            BetaResponsesCreateEvent::from_request(BetaCreateResponseRequest::new(
+                "gpt-test",
+                vec![item]
+            ))
+            .validate(),
+            Err(BetaResponseInputConstraintError::PromptCachedComputerScreenshot)
+        ));
     }
 
     #[test]
@@ -5946,7 +6138,9 @@ mod tests {
             ))
             .stream_id("lane 1")
             .validate(),
-            Err(CreateResponseConstraintError::StreamId { .. })
+            Err(BetaResponseInputConstraintError::Create(
+                CreateResponseConstraintError::StreamId { .. }
+            ))
         ));
     }
 

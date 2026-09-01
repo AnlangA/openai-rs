@@ -11,6 +11,23 @@
 //! The local bridge accepts an abstract [`ResponsesToolExecutor`], so OpenAI
 //! credentials remain in the Responses client and MCP credentials remain in
 //! the transport used to create an executor.
+//!
+//! # Tracing facade
+//!
+//! Local `tracing` output only; no network telemetry. One debug span,
+//! `rmcp.tool_dispatch`, wraps each locally executed function call and
+//! whitelists exactly four fields: `call_id`, `openai_name`,
+//! `mcp_name` (recorded once the catalog resolves the binding), and
+//! `is_error` (the MCP in-band error flag). Tool arguments and tool results
+//! — including rich media content — never enter spans or events. Catalog
+//! construction emits WARN events when an MCP tool name had to be mapped
+//! (`name_mapped = true`, "mapped invalid MCP tool name") or a schema gained
+//! an inserted `type=object` ("inserted type=object on MCP tool schema"):
+//! both are visible adaptations a stricter [`CatalogPolicy`] can avoid, so
+//! they are worth default-level attention. Discovery emits one DEBUG event
+//! carrying the frozen `tool_count`. Field naming deliberately keeps this
+//! crate's flat snake_case style (`call_id`, not OTel-dotted names) instead
+//! of mirroring the client crate's span namespace.
 
 mod arguments;
 mod bridge;

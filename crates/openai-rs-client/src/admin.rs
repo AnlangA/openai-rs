@@ -254,6 +254,23 @@ pub struct AdminClientOperationContract {
 }
 
 /// Sealed Administration operation markers generated from the frozen manifest.
+///
+/// Three of these operations are one-shot secret mints — the response carries
+/// a credential `value` exactly once and never again:
+///
+/// - [`OpAdminApiKeysCreate`] (`admin-api-keys-create`) mints an organization
+///   Admin API key;
+/// - [`OpCreateanAPIkeyforaserviceaccount`] mints a project service-account
+///   API key;
+/// - [`OpCreateProjectServiceAccount`] mints a service account together with
+///   its first API key.
+///
+/// Replay risk: under the default [`RetryPolicy::openai_compatible`] these
+/// `POST`s are classified `Replayable`, so a timeout after the server already
+/// minted the credential can trigger a retry that mints a second, unobserved
+/// secret. Callers that must avoid orphaned credentials should build the
+/// client with [`RetryPolicy::conservative`] (read-only retries only) or
+/// [`RetryPolicy::disabled`] — see [`AdminClientBuilder::with_retry_policy`].
 pub mod operations {
     use http::{Method, StatusCode};
     use openai_rs_types::admin::*;
@@ -2022,30 +2039,70 @@ impl AdminClientBuilder {
         self
     }
 
+    /// Sets the per-attempt connection budget (TCP plus TLS handshake).
+    ///
+    /// The default is 10s, matching the platform transport's
+    /// [`crate::ClientBuilder::connect_timeout`] middle ground between the two
+    /// official baselines (openai-python 5s, openai-node transport default 10s;
+    /// decisions D0163/D0199). The budget is independent of
+    /// [`AdminClientBuilder::request_timeout`] and applies to every dial,
+    /// including retried attempts. Must be non-zero; zero values are rejected
+    /// by [`AdminClientBuilder::build`].
     #[must_use]
     pub const fn connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = timeout;
         self
     }
 
+    /// Sets the total budget for one logical Administration request.
+    ///
+    /// This budget covers connection, request write, server processing, body
+    /// read, and *all* retries with their backoff delays from start to finish:
+    /// every attempt is issued with the remaining slice of the same deadline,
+    /// and a retry that cannot fit inside the remainder fails fast with
+    /// `Error::DeadlineExceeded` instead of extending the operation (matching
+    /// the platform transport's `overall_timeout` semantics, D0199). The
+    /// default is 600s, identical to the platform default. Must be non-zero;
+    /// zero values are rejected by [`AdminClientBuilder::build`].
     #[must_use]
     pub const fn request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
         self
     }
 
+    /// Sets the cap on buffered success-response bodies, in bytes.
+    ///
+    /// The default is 16 MiB (matching the platform transport). Administration
+    /// responses are always JSON, so this bounds the largest decoded envelope
+    /// (a paginated `list` or usage-bucket page); bodies that exceed it fail
+    /// with a transport error rather than growing unbounded. Must be non-zero;
+    /// zero values are rejected by [`AdminClientBuilder::build`].
     #[must_use]
     pub const fn max_json_body_bytes(mut self, limit: usize) -> Self {
         self.max_json_body_bytes = limit;
         self
     }
 
+    /// Sets the cap on buffered error-response bodies, in bytes.
+    ///
+    /// The default is 64 KiB. Unlike the success cap, an oversized error body
+    /// is *truncated and flagged* on the resulting [`crate::Error`], not fatal,
+    /// so the typed envelope and request id survive for diagnostics (D0176).
+    /// Must be non-zero; zero values are rejected by
+    /// [`AdminClientBuilder::build`].
     #[must_use]
     pub const fn max_error_body_bytes(mut self, limit: usize) -> Self {
         self.max_error_body_bytes = limit;
         self
     }
 
+    /// Selects one of the TLS backends compiled into this crate.
+    ///
+    /// The default is the platform default backend (the first of
+    /// rustls/native-TLS enabled by the crate's feature set). Selecting a
+    /// backend that was not compiled in leaves the client without TLS, which
+    /// [`AdminClientBuilder::build`] rejects for the default HTTPS base URL
+    /// ("HTTPS requires a compiled TLS backend").
     #[must_use]
     pub const fn tls_backend(mut self, backend: TlsBackend) -> Self {
         self.tls_backend = Some(backend);
@@ -2112,9 +2169,11 @@ impl AdminClientBuilder {
             // reads HTTP(S)_PROXY/ALL_PROXY-style environment configuration, so
             // an administrator credential cannot be routed through an invisible
             // on-host hop the caller never opted into. The Administration
-            // channel deliberately exposes no proxy knob: enterprise egress
-            // needs go through the platform [`crate::ClientBuilder`]'s explicit
-            // proxy surface instead (decision recorded by the main agent).
+            // channel deliberately exposes no proxy knob and cannot borrow the
+            // platform client's proxy surface either — it is not constructible
+            // from or convertible into a platform [`crate::Client`] — so
+            // proxied egress for Administration traffic is simply unavailable
+            // here (fail-closed by design).
             .no_proxy()
             .user_agent(concat!("openai-rs-admin/", env!("CARGO_PKG_VERSION")));
         let builder = match self.tls_backend {
@@ -4387,9 +4446,95 @@ mod tests {
         );
     }
 
+    /// Pinned Administration routes from the frozen spec source.
+    ///
+    /// `include_checkpoint_permissions` adds the three Administration-only
+    /// fine-tuning checkpoint-permission operations, which the types-side
+    /// manifest deliberately leaves to this channel.
+    fn pinned_admin_operations(
+        include_checkpoint_permissions: bool,
+    ) -> Vec<(String, String, String)> {
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../../spec/contracts/operations.json"))
+                .expect("operation manifest JSON");
+        let mut prefixes = ["/organization/", "/projects/"].to_vec();
+        if include_checkpoint_permissions {
+            prefixes.push("/fine_tuning/checkpoints/");
+        }
+        manifest["client_operations"]
+            .as_array()
+            .expect("client operation array")
+            .iter()
+            .filter_map(|operation| {
+                let path = operation["path"].as_str()?;
+                prefixes
+                    .iter()
+                    .any(|prefix| path.starts_with(prefix))
+                    .then(|| {
+                        (
+                            operation["operation_id"]
+                                .as_str()
+                                .expect("pinned operation id")
+                                .to_owned(),
+                            operation["method"]
+                                .as_str()
+                                .expect("pinned method")
+                                .to_owned(),
+                            path.to_owned(),
+                        )
+                    })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn admin_manifest_matches_pinned_operations_json() {
+        // 6-15: the binding manifest is checked against the pinned spec source
+        // itself (method/path/operation_id, both directions) so the existing
+        // self-referencing manifest tests cannot drift from the pin.
+        let pinned = pinned_admin_operations(true);
+        assert!(!pinned.is_empty(), "pinned admin operations must exist");
+        let bound: Vec<(String, String, String)> = ADMIN_CLIENT_OPERATION_MANIFEST
+            .iter()
+            .chain(ADMIN_CHECKPOINT_PERMISSION_OPERATION_MANIFEST)
+            .map(|contract| {
+                (
+                    contract.operation_id.to_owned(),
+                    contract.method.to_owned(),
+                    contract.path.to_owned(),
+                )
+            })
+            .collect();
+        let bound_set: HashSet<&(String, String, String)> = bound.iter().collect();
+        let pinned_set: HashSet<&(String, String, String)> = pinned.iter().collect();
+        assert_eq!(
+            bound.len(),
+            bound_set.len(),
+            "bound admin operations must be unique"
+        );
+        for (operation_id, method, path) in &pinned {
+            assert!(
+                bound_set.contains(&(operation_id.clone(), method.clone(), path.clone())),
+                "pinned admin operation {operation_id} ({method} {path}) has no sealed binding"
+            );
+        }
+        for (operation_id, method, path) in &bound {
+            assert!(
+                pinned_set.contains(&(operation_id.clone(), method.clone(), path.clone())),
+                "binding {operation_id} ({method} {path}) is absent from the pinned manifest"
+            );
+        }
+        assert_eq!(pinned.len(), bound.len());
+    }
+
     #[test]
     fn every_manifest_entry_has_a_unique_compiling_operation_marker() {
-        assert_eq!(ADMIN_OPERATION_MANIFEST.len(), 119);
+        assert_eq!(
+            ADMIN_OPERATION_MANIFEST.len(),
+            pinned_admin_operations(false).len(),
+            "the frozen types manifest must cover every pinned Administration \
+             operation (checkpoint permissions excluded)"
+        );
         let mut bound_ids: HashSet<&'static str> = HashSet::new();
         assert!(bound_ids.insert(assert_operation::<
             operations::OpCreateanAPIkeyforaserviceaccount,

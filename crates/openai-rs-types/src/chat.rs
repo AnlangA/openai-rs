@@ -15,7 +15,8 @@ use thiserror::Error;
 use crate::{
     ExtraFields, FileId, JsonText, MAX_RESPONSE_METADATA_KEY_CHARS, MAX_RESPONSE_METADATA_PAIRS,
     MAX_RESPONSE_METADATA_VALUE_CHARS, MAX_SAFETY_IDENTIFIER_CHARS, MAX_TOP_LOGPROBS, ModelId,
-    ModerationInputType, Nullable, Omittable, responses::UnknownTaggedObject,
+    ModerationInputType, Nullable, Omittable,
+    responses::{ModerationPolicy, UnknownTaggedObject},
 };
 
 macro_rules! strict_tagged_union {
@@ -2131,14 +2132,19 @@ pub struct ChatWebSearchOptions {
 }
 
 /// Moderation configuration for a Chat request.
+///
+/// The pinned `CreateChatCompletionRequest.moderation` is the exact same
+/// `ModerationParam` schema the Responses host uses, so `policy` reuses the
+/// typed [`ModerationPolicy`] instead of a raw map (6-11);
+/// [`ChatModerationConfig::with_policy`] remains for callers that already
+/// hold a serializable policy of the same pinned shape.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatModerationConfig {
     /// Moderation model identifier.
     pub model: String,
-    /// Policy object; represented semantically and constructible from any
-    /// serializable typed policy.
+    /// Input/output moderation policy, explicitly nullable.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub policy: Omittable<Nullable<Map<String, Value>>>,
+    pub policy: Omittable<Nullable<ModerationPolicy>>,
 }
 
 impl ChatModerationConfig {
@@ -2151,12 +2157,39 @@ impl ChatModerationConfig {
         }
     }
 
-    /// Serialize a typed moderation policy.
+    /// Sets the directional moderation policy.
+    #[must_use]
+    pub fn policy(mut self, policy: ModerationPolicy) -> Self {
+        self.policy = Omittable::Value(Nullable::Value(policy));
+        self
+    }
+
+    /// Sends `policy: null`.
+    #[must_use]
+    pub fn policy_null(mut self) -> Self {
+        self.policy = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Serialize a typed moderation policy through the pinned policy shape.
+    ///
+    /// Escape hatch for callers that already hold a policy as their own
+    /// serializable type: the value must serialize exactly onto the pinned
+    /// `ModerationPolicyParam` shape the Responses host shares (`input` /
+    /// `output` directions, each carrying a `mode`). Members the typed
+    /// [`ModerationPolicy`] cannot represent are rejected with an error
+    /// instead of being silently dropped. New shapes should grow on
+    /// [`ModerationPolicy`] itself, which keeps the wire form lossless.
     pub fn with_policy<T: Serialize>(mut self, policy: &T) -> Result<Self, serde_json::Error> {
-        self.policy = Omittable::Value(Nullable::Value(serialize_object(
-            policy,
-            "moderation policy must serialize as a JSON object",
-        )?));
+        let object = serialize_object(policy, "moderation policy must serialize as a JSON object")?;
+        let typed: ModerationPolicy = serde_json::from_value(Value::Object(object.clone()))?;
+        if serde_json::to_value(&typed)? != Value::Object(object) {
+            return Err(serde_json::Error::custom(
+                "moderation policy must serialize exactly onto the pinned \
+                 ModerationPolicyParam shape",
+            ));
+        }
+        self.policy = Omittable::Value(Nullable::Value(typed));
         Ok(self)
     }
 }
@@ -4623,6 +4656,126 @@ mod tests {
             moderation.output(),
             ChatCompletionModerationOutcome::Error { code, .. } if code == "moderation_unavailable"
         ));
+    }
+
+    #[test]
+    fn chat_moderation_policy_mirrors_the_pinned_moderation_param() {
+        use crate::responses::{ModerationConfig, ModerationDirection, ModerationMode};
+
+        // The pinned CreateChatCompletionRequest.moderation is the Responses
+        // host's ModerationParam: {model, policy?} with ModerationPolicyParam
+        // {input?: ModerationConfigParam|null, output?: ...}. Every mode of
+        // both directions, the explicit nulls, and omission must mirror the
+        // Responses wire byte-for-byte (6-11).
+        for (input, output) in [
+            (ModerationMode::Score, ModerationMode::Block),
+            (ModerationMode::Block, ModerationMode::Score),
+        ] {
+            let (input_wire, output_wire) = (input.as_str().to_owned(), output.as_str().to_owned());
+            let policy = ModerationPolicy::default()
+                .input(ModerationDirection::new(input))
+                .output(ModerationDirection::new(output));
+            let chat = serde_json::to_value(
+                ChatModerationConfig::new("omni-moderation-latest").policy(policy.clone()),
+            )
+            .expect("serialize chat moderation");
+            assert_eq!(
+                chat,
+                json!({
+                    "model": "omni-moderation-latest",
+                    "policy": {
+                        "input": {"mode": input_wire},
+                        "output": {"mode": output_wire}
+                    }
+                })
+            );
+            let responses_host = serde_json::to_value(
+                ModerationConfig::new("omni-moderation-latest").policy(policy),
+            )
+            .expect("serialize responses moderation");
+            assert_eq!(chat, responses_host, "both hosts share the pinned param");
+        }
+
+        let nulls = serde_json::to_value(
+            ChatModerationConfig::new("omni-moderation-latest")
+                .policy(ModerationPolicy::default().input_null().output_null()),
+        )
+        .expect("serialize explicit policy nulls");
+        assert_eq!(
+            nulls,
+            json!({
+                "model": "omni-moderation-latest",
+                "policy": {"input": null, "output": null}
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ChatModerationConfig::new("omni-moderation-latest").policy(
+                ModerationPolicy::default().input(ModerationDirection::new(
+                    ModerationMode::from_raw("future-mode")
+                ))
+            ))
+            .expect("unknown modes stay lossless")["policy"]["input"]["mode"],
+            "future-mode"
+        );
+        let omitted = serde_json::to_value(ChatModerationConfig::new("omni-moderation-latest"))
+            .expect("serialize omitted policy");
+        assert!(omitted.get("policy").is_none());
+        let explicit_null =
+            serde_json::to_value(ChatModerationConfig::new("omni-moderation-latest").policy_null())
+                .expect("serialize policy null");
+        assert_eq!(explicit_null["policy"], Value::Null);
+
+        let decoded = serde_json::from_value::<ChatModerationConfig>(json!({
+            "model": "omni-moderation-latest",
+            "policy": {
+                "input": {"mode": "score"},
+                "output": null
+            }
+        }))
+        .expect("decode typed policy");
+        assert_eq!(
+            decoded.policy,
+            Omittable::Value(Nullable::Value(
+                ModerationPolicy::default()
+                    .input(ModerationDirection::new(ModerationMode::Score))
+                    .output_null()
+            ))
+        );
+
+        #[derive(Serialize)]
+        struct PinnedShape {
+            input: Option<PinnedDirection>,
+            output: Option<PinnedDirection>,
+        }
+        #[derive(Serialize)]
+        struct PinnedDirection {
+            mode: &'static str,
+        }
+        let escaped = ChatModerationConfig::new("omni-moderation-latest")
+            .with_policy(&PinnedShape {
+                input: Some(PinnedDirection { mode: "block" }),
+                output: None,
+            })
+            .expect("pinned-shaped serializable policy is accepted");
+        assert_eq!(
+            serde_json::to_value(escaped).expect("serialize escaped policy")["policy"],
+            json!({"input": {"mode": "block"}, "output": null})
+        );
+
+        #[derive(Serialize)]
+        struct FutureShape {
+            input: PinnedDirection,
+            retention: &'static str,
+        }
+        assert!(
+            ChatModerationConfig::new("omni-moderation-latest")
+                .with_policy(&FutureShape {
+                    input: PinnedDirection { mode: "score" },
+                    retention: "24h",
+                })
+                .is_err(),
+            "members outside ModerationPolicyParam are rejected, not dropped"
+        );
     }
 
     #[test]

@@ -737,11 +737,96 @@ impl ContainerResource {
     }
 }
 
+/// A Containers or Container Files list page size below the documented
+/// minimum of 1.
+///
+/// The pinned `limit` parameters document a prose range of 1..=100 with a
+/// default of 20 but carry no schema `minimum`, so only the prose-backed lower
+/// bound of 1 is enforced (D0217). The bound fires when the parameters are
+/// encoded or decoded, so a zero page size can never reach the wire.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[error("container list limit must be at least 1, got {actual}")]
+pub struct ContainerListLimitError {
+    /// Rejected page size.
+    actual: u64,
+}
+
+impl ContainerListLimitError {
+    /// Rejected page size.
+    #[must_use]
+    pub const fn actual(self) -> u64 {
+        self.actual
+    }
+}
+
+/// Page size shared by the Containers and Container Files list parameters.
+///
+/// [`ContainerListParams::limit`] and [`ContainerFileListParams::limit`] stay
+/// infallible public fields, so a rejected value is stored and surfaced as
+/// [`ContainerListLimitError`] through the serde boundary instead — the
+/// send-time half of the two-phase split documented on
+/// [`crate::voices::VoiceConsentListLimitError`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContainerListLimit(u64);
+
+impl ContainerListLimit {
+    /// Creates a page size, rejecting zero.
+    ///
+    /// The pinned parameters document a prose range of 1..=100 with a default
+    /// of 20 but carry no schema bounds, so no upper limit is applied.
+    pub const fn new(value: u64) -> Result<Self, ContainerListLimitError> {
+        if value == 0 {
+            Err(ContainerListLimitError { actual: value })
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    /// Returns the page size.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    fn validate(value: u64) -> Result<(), ContainerListLimitError> {
+        if value == 0 {
+            Err(ContainerListLimitError { actual: value })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Serialize for ContainerListLimit {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        Self::validate(self.0).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_u64(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ContainerListLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = u64::deserialize(deserializer)?;
+        Self::validate(value).map_err(D::Error::custom)?;
+        Ok(Self(value))
+    }
+}
+
 /// Query parameters for listing Containers.
+///
+/// The pinned `limit` parameter documents a prose range of 1..=100 with a
+/// default of 20 but carries no schema bounds, so only the prose-backed lower
+/// bound of 1 is enforced, and it is enforced on both encode and decode.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContainerListParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub limit: Omittable<u64>,
+    pub limit: Omittable<ContainerListLimit>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub order: Omittable<ContainerListOrder>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -804,10 +889,14 @@ impl ContainerListResource {
 }
 
 /// Query parameters for listing Container Files.
+///
+/// The pinned `limit` parameter documents a prose range of 1..=100 with a
+/// default of 20 but carries no schema bounds, so only the prose-backed lower
+/// bound of 1 is enforced, and it is enforced on both encode and decode.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContainerFileListParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub limit: Omittable<u64>,
+    pub limit: Omittable<ContainerListLimit>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub order: Omittable<ContainerListOrder>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -1160,6 +1249,74 @@ mod tests {
             "has_more": false
         })));
         assert_eq!(terminal.next_after(), None);
+    }
+
+    #[test]
+    fn container_list_limits_enforce_the_prose_backed_minimum_of_one() {
+        // The pinned `limit` parameters document "between 1 and 100" in prose
+        // with no schema `minimum`, so only the lower bound of 1 is enforced
+        // (the D0217 family's third member). Zero is stored by the public
+        // field but rejected at both serde boundaries before it can reach the
+        // wire; 1, 101, and u64::MAX all pass because no ceiling is invented.
+        let error = ContainerListLimitError { actual: 0 };
+        assert_eq!(error.actual(), 0);
+        assert_eq!(
+            error.to_string(),
+            "container list limit must be at least 1, got 0"
+        );
+        assert!(ContainerListLimit::new(0).is_err());
+        assert_eq!(
+            ContainerListLimit::new(1).expect("minimum"),
+            ContainerListLimit(1)
+        );
+        assert_eq!(ContainerListLimit::new(1).expect("minimum").get(), 1);
+
+        let encode_error = serde_json::to_value(ContainerListParams {
+            limit: Omittable::Value(ContainerListLimit(0)),
+            ..ContainerListParams::default()
+        })
+        .expect_err("zero Containers page size must not encode");
+        assert!(
+            encode_error
+                .to_string()
+                .contains("container list limit must be at least 1, got 0")
+        );
+        let decode_error = serde_json::from_value::<ContainerFileListParams>(json!({
+            "limit": 0
+        }))
+        .expect_err("zero Container Files page size must not decode");
+        assert!(
+            decode_error
+                .to_string()
+                .contains("container list limit must be at least 1, got 0")
+        );
+
+        for limit in [1_u64, 101, u64::MAX] {
+            let expected = json!({"limit": limit});
+            let containers = ContainerListParams {
+                limit: Omittable::Value(ContainerListLimit::new(limit).expect("non-zero limit")),
+                ..ContainerListParams::default()
+            };
+            let encoded = ok(serde_json::to_value(&containers));
+            assert_eq!(encoded, expected);
+            let round_trip = ok(serde_json::from_value::<ContainerListParams>(encoded));
+            assert_eq!(
+                round_trip.limit,
+                Omittable::Value(ContainerListLimit(limit))
+            );
+
+            let files = ContainerFileListParams {
+                limit: Omittable::Value(ContainerListLimit::new(limit).expect("non-zero limit")),
+                ..ContainerFileListParams::default()
+            };
+            let encoded = ok(serde_json::to_value(&files));
+            assert_eq!(encoded, expected);
+            let round_trip = ok(serde_json::from_value::<ContainerFileListParams>(encoded));
+            assert_eq!(
+                round_trip.limit,
+                Omittable::Value(ContainerListLimit(limit))
+            );
+        }
     }
 
     #[test]

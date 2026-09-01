@@ -69,7 +69,7 @@ impl Audio {
         let response = self
             .client
             .multipart_transport()
-            .send_replayable_json(&path, &request, AUDIO_MIME)
+            .send_replayable_json("CreateSpeech", &path, &request, AUDIO_MIME)
             .await?;
         Ok(MediaByteStream::from_response(response))
     }
@@ -111,7 +111,7 @@ impl Audio {
         let response = self
             .client
             .multipart_transport()
-            .send_replayable_form(&path, &form, format.accept())
+            .send_replayable_form("CreateTranscription", &path, &form, format.accept())
             .await?;
         decode_transcription(self.client.multipart_transport(), response, format).await
     }
@@ -129,7 +129,7 @@ impl Audio {
         let response = self
             .client
             .multipart_transport()
-            .send_replayable_form(&path, &form, SSE_MIME)
+            .send_replayable_form("CreateTranscription", &path, &form, SSE_MIME)
             .await?;
         MediaEventStream::from_response(
             response,
@@ -154,7 +154,7 @@ impl Audio {
         let response = self
             .client
             .multipart_transport()
-            .send_replayable_form(&path, &form, format.accept())
+            .send_replayable_form("CreateTranslation", &path, &form, format.accept())
             .await?;
         decode_translation(self.client.multipart_transport(), response, format).await
     }
@@ -258,7 +258,7 @@ impl Images {
         let response = self
             .client
             .multipart_transport()
-            .send_replayable_form(&path, &form, JSON_MIME)
+            .send_replayable_form("CreateImageEdit", &path, &form, JSON_MIME)
             .await?;
         self.client
             .multipart_transport()
@@ -279,7 +279,7 @@ impl Images {
         let response = self
             .client
             .multipart_transport()
-            .send_replayable_form(&path, &form, SSE_MIME)
+            .send_replayable_form("CreateImageEdit", &path, &form, SSE_MIME)
             .await?;
         MediaEventStream::from_response(
             response,
@@ -1138,6 +1138,8 @@ mod tests {
     async fn speech_raw_uses_json_request_and_streams_audio() {
         let audio = Bytes::from_static(b"\0RIFF\xffaudio");
         let (client, captured) = serve_once("audio/wav", audio.clone()).await;
+        let capture = crate::trace::capture::Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
         let request = CreateSpeechRequest::new("gpt-4o-mini-tts", "hello", "coral");
         let stream = client
             .audio()
@@ -1147,6 +1149,19 @@ mod tests {
         assert_eq!(stream.content_type(), Some("audio/wav"));
         let response = stream.collect(1024).await.expect("collect speech audio");
         assert_eq!(response.as_ref(), audio.as_ref());
+
+        let span = capture
+            .spans()
+            .into_iter()
+            .find(|span| span.name == "openai.http_request")
+            .expect("speech http request span");
+        assert_eq!(span.field("operation.id"), Some("CreateSpeech"));
+        assert_eq!(span.field("http.request.method"), Some("POST"));
+        assert_eq!(span.field("http.route"), Some("/audio/speech"));
+        assert!(
+            !capture.contains_text("hello"),
+            "speech input leaked into tracing fields"
+        );
 
         let captured = captured.await.expect("captured speech request");
         assert_eq!(captured.method, Method::POST);

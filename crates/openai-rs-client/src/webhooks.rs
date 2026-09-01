@@ -29,7 +29,11 @@ use thiserror::Error;
 
 const DEFAULT_TOLERANCE: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
-const MAX_SIGNATURE_CANDIDATES: usize = 32;
+// The joined `webhook-signature` header bound is the only limiter on the
+// candidate count (a full 8 KiB header of `v1,<44-char tag>` candidates
+// admits about 170 slots): node's `webhook-signature-amplification` test
+// pins that every slot inside the bound is evaluated, with no per-slot
+// count rejection.
 const MAX_SIGNATURE_HEADER_BYTES: usize = 8 * 1024;
 const MAX_WEBHOOK_ID_BYTES: usize = 512;
 const MAX_TIMESTAMP_BYTES: usize = 32;
@@ -181,8 +185,10 @@ impl WebhookVerifier {
             let mut mac = Hmac::<Sha256>::new_from_slice(&signing_key)
                 .map_err(|_| WebhookVerificationError::InvalidSecret)?;
             mac.update(&signed);
-            // Evaluate every bounded candidate rather than returning on the
-            // first match. This keeps work independent of the matching index.
+            // Evaluate every candidate inside the 8 KiB header bound rather
+            // than returning on the first match, mirroring node's bounded
+            // verification path: the HMAC work stays independent of the
+            // matching index and of how many candidates precede it.
             matched |= mac.verify_slice(&signature).is_ok();
         }
         if !matched {
@@ -213,7 +219,8 @@ pub enum WebhookVerificationError {
     /// A required delivery header was absent or invalid.
     #[error("missing or invalid required webhook header `{0}`")]
     InvalidHeader(&'static str),
-    /// The signature header contained too many or malformed candidates.
+    /// The signature header exceeded the header-size bound, or none of
+    /// its candidates decoded to a 32-byte HMAC-SHA-256 tag.
     #[error("invalid webhook signature header")]
     InvalidSignatureHeader,
     /// The delivery timestamp was not a strict unsigned integer.
@@ -320,14 +327,20 @@ fn joined_header_values(
     }
 }
 
+/// Decodes every candidate in the joined `webhook-signature` header.
+///
+/// There is deliberately no per-slot count rejection: node's
+/// `webhook-signature-amplification` test pins that a valid signature in
+/// any slot — the 33rd, or after a flood of unusable ones — still
+/// verifies, so the 8 KiB bound on the joined header is the only
+/// amplifier limiter. Candidates that do not decode to the 32-byte tag
+/// length are skipped, and a header carrying no usable candidate at all
+/// is rejected.
 fn decode_signatures(
     header: &str,
 ) -> Result<Vec<[u8; HMAC_SHA256_BYTES]>, WebhookVerificationError> {
     let mut signatures = Vec::new();
     for candidate in header.split_ascii_whitespace() {
-        if signatures.len() == MAX_SIGNATURE_CANDIDATES {
-            return Err(WebhookVerificationError::InvalidSignatureHeader);
-        }
         let encoded = candidate.strip_prefix("v1,").unwrap_or(candidate);
         let decoded = match STANDARD.decode(encoded) {
             Ok(decoded) if decoded.len() == HMAC_SHA256_BYTES => decoded,
@@ -397,14 +410,17 @@ fn sanitized_decode_failure(payload: &[u8], error: serde_json::Error) -> Webhook
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use hmac::{Hmac, Mac};
     use http::{HeaderMap, HeaderValue};
     use sha2::Sha256;
 
-    use super::{MAX_SIGNATURE_CANDIDATES, WebhookVerificationError, WebhookVerifier};
+    use super::{
+        DEFAULT_MAX_PAYLOAD_BYTES, MAX_SIGNATURE_HEADER_BYTES, WebhookVerificationError,
+        WebhookVerifier,
+    };
 
     const NOW: u64 = 1_800_000_000;
     const ID: &str = "evt_delivery_123";
@@ -463,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_replay_future_tamper_and_unbounded_signature_lists() {
+    fn rejects_replay_future_tamper_and_unusable_signature_lists() {
         let secret = b"webhook-test-secret";
         let verifier = WebhookVerifier::new(String::from_utf8(secret.to_vec()).expect("UTF-8"))
             .expect("verifier");
@@ -480,40 +496,69 @@ mod tests {
             Err(WebhookVerificationError::SignatureMismatch)
         ));
 
-        // 32 well-formed signatures plus one extra candidate: every token is
-        // a valid HMAC for this delivery, so rejection can only come from the
-        // candidate cap inside `decode_signatures`, which fires while the
-        // 33rd candidate is inspected (before any HMAC work).
+        // A header whose every candidate fails to decode to a 32-byte tag
+        // carries nothing to verify against and is rejected as a header
+        // failure, before any HMAC work.
+        let mut none_valid = headers(secret, NOW, PAYLOAD);
+        none_valid.insert(
+            "webhook-signature",
+            HeaderValue::from_static("v1,AAAA v1,BBBB"),
+        );
+        assert!(matches!(
+            verifier.verify_at(PAYLOAD, &none_valid, NOW),
+            Err(WebhookVerificationError::InvalidSignatureHeader)
+        ));
+    }
+
+    #[test]
+    fn a_valid_signature_in_slot_thirty_three_still_verifies() {
+        // Node's `webhook-signature-amplification` test pins that slot 33
+        // is not special: bounded verification evaluates every candidate
+        // the header cap admits, and a delivery signed with the 33rd
+        // candidate alone must verify. 33 `v1,<tag>` candidates occupy
+        // 1583 bytes, well inside the 8 KiB bound.
+        let secret = b"webhook-test-secret";
+        let verifier = WebhookVerifier::new("webhook-test-secret").expect("verifier");
         let valid = signature(secret, NOW, PAYLOAD);
         let mut capped = headers(secret, NOW, PAYLOAD);
-        let candidates = std::iter::repeat_n(format!("v1,{valid}"), MAX_SIGNATURE_CANDIDATES + 1)
+        let candidates = std::iter::repeat_n(format!("v1,{valid}"), 33)
             .collect::<Vec<_>>()
             .join(" ");
         capped.insert(
             "webhook-signature",
             HeaderValue::from_str(&candidates).expect("bounded test header"),
         );
-        assert!(matches!(
-            verifier.verify_at(PAYLOAD, &capped, NOW),
-            Err(WebhookVerificationError::InvalidSignatureHeader)
-        ));
+        let verified = verifier
+            .verify_at(PAYLOAD, &capped, NOW)
+            .expect("valid signature in slot 33 verifies");
+        assert_eq!(verified.webhook_id(), ID);
+    }
 
-        // Contrast path: the same 33 candidates, none of which decodes to a
-        // 32-byte HMAC, never reach the cap and fail through the
-        // zero-valid-signature branch instead — both branches must reject
-        // with the same variant.
-        let mut none_valid = headers(secret, NOW, PAYLOAD);
-        let candidates = std::iter::repeat_n("v1,AAAA", MAX_SIGNATURE_CANDIDATES + 1)
-            .collect::<Vec<_>>()
-            .join(" ");
-        none_valid.insert(
+    #[test]
+    fn a_valid_signature_after_1600_invalid_candidates_still_verifies() {
+        // The other half of node's amplification baseline: a flood of
+        // unusable candidates must not push the real signature out of the
+        // window. 1600 single-character tokens plus the valid candidate
+        // stay inside the 8 KiB header bound.
+        let secret = b"webhook-test-secret";
+        let verifier = WebhookVerifier::new("webhook-test-secret").expect("verifier");
+        let valid = signature(secret, NOW, PAYLOAD);
+        let mut flooded = headers(secret, NOW, PAYLOAD);
+        let candidates = format!(
+            "{} v1,{valid}",
+            std::iter::repeat_n("A", 1600).collect::<Vec<_>>().join(" ")
+        );
+        flooded.insert(
             "webhook-signature",
             HeaderValue::from_str(&candidates).expect("bounded test header"),
         );
-        assert!(matches!(
-            verifier.verify_at(PAYLOAD, &none_valid, NOW),
-            Err(WebhookVerificationError::InvalidSignatureHeader)
-        ));
+        assert!(
+            candidates.len() <= MAX_SIGNATURE_HEADER_BYTES,
+            "test header must stay inside the joined-header bound"
+        );
+        verifier
+            .verify_at(PAYLOAD, &flooded, NOW)
+            .expect("trailing valid signature after 1600 invalid candidates verifies");
     }
 
     #[test]
@@ -666,9 +711,194 @@ mod tests {
             one_second.verify_at(
                 PAYLOAD,
                 &headers(b"webhook-test-secret", NOW + 2, PAYLOAD),
-                NOW
+                NOW,
             ),
             Err(WebhookVerificationError::TimestampTooNew)
         ));
+    }
+
+    #[test]
+    fn payload_limits_fail_closed_at_the_default_and_configured_bounds() {
+        let secret = b"webhook-test-secret";
+        let verifier = WebhookVerifier::new("webhook-test-secret").expect("verifier");
+
+        // A zero limit would reject every delivery, including valid ones.
+        assert!(matches!(
+            verifier.clone().with_max_payload_bytes(0),
+            Err(WebhookVerificationError::InvalidPayloadLimit)
+        ));
+
+        // The default bound is 16 MiB, enforced before any header parsing
+        // or HMAC work; exactly at the bound the size gate passes (this
+        // delivery has no headers, so it stops at the first header check).
+        let oversized = vec![b'x'; DEFAULT_MAX_PAYLOAD_BYTES + 1];
+        assert!(matches!(
+            verifier.verify_at(&oversized, &HeaderMap::new(), NOW),
+            Err(WebhookVerificationError::PayloadTooLarge { limit })
+                if limit == DEFAULT_MAX_PAYLOAD_BYTES
+        ));
+        let at_limit = vec![b'x'; DEFAULT_MAX_PAYLOAD_BYTES];
+        assert!(matches!(
+            verifier.verify_at(&at_limit, &HeaderMap::new(), NOW),
+            Err(WebhookVerificationError::InvalidHeader("webhook-timestamp"))
+        ));
+
+        // A configured tighter bound rejects one byte over it while still
+        // accepting a valid small delivery.
+        let limited = verifier
+            .clone()
+            .with_max_payload_bytes(1024)
+            .expect("non-zero payload limit");
+        let oversized_for_limit = vec![b'x'; 1025];
+        assert!(matches!(
+            limited.verify_at(
+                &oversized_for_limit,
+                &headers(secret, NOW, &oversized_for_limit),
+                NOW,
+            ),
+            Err(WebhookVerificationError::PayloadTooLarge { limit }) if limit == 1024
+        ));
+        limited
+            .verify_at(PAYLOAD, &headers(secret, NOW, PAYLOAD), NOW)
+            .expect("delivery inside the configured limit still verifies");
+    }
+
+    #[test]
+    fn delivery_headers_fail_closed_on_size_duplicates_and_missing_or_opaque_values() {
+        let secret = b"webhook-test-secret";
+        let verifier = WebhookVerifier::new("webhook-test-secret").expect("verifier");
+
+        // A `webhook-id` longer than the 512-byte bound is rejected before
+        // the signature is evaluated.
+        let mut long_id = headers(secret, NOW, PAYLOAD);
+        long_id.insert(
+            "webhook-id",
+            HeaderValue::from_str(&"e".repeat(513)).expect("long webhook-id header"),
+        );
+        assert!(matches!(
+            verifier.verify_at(PAYLOAD, &long_id, NOW),
+            Err(WebhookVerificationError::InvalidHeader("webhook-id"))
+        ));
+
+        // Repeated single-value headers are ambiguous (an intermediary may
+        // have appended a second value), so they are rejected rather than
+        // trusted to the first one.
+        let mut duplicated = headers(secret, NOW, PAYLOAD);
+        duplicated.append("webhook-id", HeaderValue::from_static(ID));
+        assert!(matches!(
+            verifier.verify_at(PAYLOAD, &duplicated, NOW),
+            Err(WebhookVerificationError::InvalidHeader("webhook-id"))
+        ));
+
+        // Non-UTF-8 header bytes cannot become part of the signed string.
+        let mut opaque = headers(secret, NOW, PAYLOAD);
+        opaque.insert(
+            "webhook-id",
+            HeaderValue::from_bytes(&[0xC3, 0x28]).expect("opaque header bytes"),
+        );
+        assert!(matches!(
+            verifier.verify_at(PAYLOAD, &opaque, NOW),
+            Err(WebhookVerificationError::InvalidHeader("webhook-id"))
+        ));
+
+        // Absent headers fail closed, starting with the first one checked.
+        assert!(matches!(
+            verifier.verify_at(PAYLOAD, &HeaderMap::new(), NOW),
+            Err(WebhookVerificationError::InvalidHeader("webhook-timestamp"))
+        ));
+        let mut no_signature = headers(secret, NOW, PAYLOAD);
+        no_signature.remove("webhook-signature");
+        assert!(matches!(
+            verifier.verify_at(PAYLOAD, &no_signature, NOW),
+            Err(WebhookVerificationError::InvalidHeader("webhook-signature"))
+        ));
+    }
+
+    #[test]
+    fn timestamps_fail_closed_on_length_sign_and_overflow() {
+        let secret = b"webhook-test-secret";
+        let verifier = WebhookVerifier::new("webhook-test-secret").expect("verifier");
+
+        // 33 digits exceed the 32-byte header bound.
+        let mut too_long = headers(secret, NOW, PAYLOAD);
+        too_long.insert(
+            "webhook-timestamp",
+            HeaderValue::from_str(&"1".repeat(33)).expect("long timestamp header"),
+        );
+        assert!(matches!(
+            verifier.verify_at(PAYLOAD, &too_long, NOW),
+            Err(WebhookVerificationError::InvalidHeader("webhook-timestamp"))
+        ));
+
+        // `+123` is not a strict unsigned integer.
+        let mut signed = headers(secret, NOW, PAYLOAD);
+        signed.insert("webhook-timestamp", HeaderValue::from_static("+123"));
+        assert!(matches!(
+            verifier.verify_at(PAYLOAD, &signed, NOW),
+            Err(WebhookVerificationError::InvalidTimestamp)
+        ));
+
+        // 24 digits fit the header bound but overflow `u64` seconds.
+        let mut overflow = headers(secret, NOW, PAYLOAD);
+        overflow.insert(
+            "webhook-timestamp",
+            HeaderValue::from_str(&"1".repeat(24)).expect("overflowing timestamp header"),
+        );
+        assert!(matches!(
+            verifier.verify_at(PAYLOAD, &overflow, NOW),
+            Err(WebhookVerificationError::InvalidTimestamp)
+        ));
+    }
+
+    #[test]
+    fn multi_valued_signature_headers_are_space_joined_within_the_size_bound() {
+        // Repeated `webhook-signature` headers are joined with spaces
+        // before candidates are split, so an unusable candidate in the
+        // first value must not stop the valid one in the second from
+        // verifying (mirroring node's header joining).
+        let secret = b"webhook-test-secret";
+        let verifier = WebhookVerifier::new("webhook-test-secret").expect("verifier");
+        let valid = signature(secret, NOW, PAYLOAD);
+        let mut split = headers(secret, NOW, PAYLOAD);
+        split.insert("webhook-signature", HeaderValue::from_static("v1,AAAA"));
+        split.append(
+            "webhook-signature",
+            HeaderValue::from_str(&format!("v1,{valid}")).expect("valid candidate header"),
+        );
+        verifier
+            .verify_at(PAYLOAD, &split, NOW)
+            .expect("valid candidate in the second header value verifies");
+
+        // The joined bound is 8 KiB: two values totalling more are rejected
+        // before any candidate is decoded.
+        let mut oversized = headers(secret, NOW, PAYLOAD);
+        oversized.insert(
+            "webhook-signature",
+            HeaderValue::from_str(&"A".repeat(MAX_SIGNATURE_HEADER_BYTES - 1))
+                .expect("large signature header"),
+        );
+        oversized.append("webhook-signature", HeaderValue::from_static("BB"));
+        assert!(matches!(
+            verifier.verify_at(PAYLOAD, &oversized, NOW),
+            Err(WebhookVerificationError::InvalidSignatureHeader)
+        ));
+    }
+
+    #[test]
+    fn verify_accepts_a_fresh_delivery_against_the_wall_clock() {
+        // Smoke test for the production entry point: `verify` reads the
+        // wall clock itself, and a delivery signed for "now" stays inside
+        // the default five-minute tolerance for the duration of the call.
+        let secret = b"webhook-test-secret";
+        let verifier = WebhookVerifier::new("webhook-test-secret").expect("verifier");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("wall clock after the Unix epoch")
+            .as_secs();
+        let verified = verifier
+            .verify(PAYLOAD, &headers(secret, now, PAYLOAD))
+            .expect("fresh delivery verifies against the wall clock");
+        assert_eq!(verified.webhook_id(), ID);
+        assert_eq!(verified.as_ref().event_type(), "future.event");
     }
 }
