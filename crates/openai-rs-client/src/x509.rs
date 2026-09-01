@@ -125,6 +125,7 @@ pub struct X509ClientBuilder {
     request_timeout: Duration,
     max_json_body_bytes: usize,
     max_error_body_bytes: usize,
+    proxy: Option<reqwest::Proxy>,
 }
 
 impl X509ClientBuilder {
@@ -148,6 +149,7 @@ impl X509ClientBuilder {
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             max_json_body_bytes: DEFAULT_MAX_JSON_BODY_BYTES,
             max_error_body_bytes: DEFAULT_MAX_ERROR_BODY_BYTES,
+            proxy: None,
         })
     }
 
@@ -166,12 +168,19 @@ impl X509ClientBuilder {
         self
     }
 
+    /// Sets the per-attempt connection budget (default 10s). Same semantics
+    /// as [`crate::ClientBuilder::connect_timeout`] (decisions D0163/D0199):
+    /// a deliberate middle ground between openai-python's 5s connect budget
+    /// and openai-node's transport default of 10s. Must be non-zero.
     #[must_use]
     pub const fn connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = timeout;
         self
     }
 
+    /// Sets the total budget for one logical request (default 600s),
+    /// including the 401 replay attempt. Same D0199 total-budget semantics as
+    /// [`crate::ClientBuilder::request_timeout`]. Must be non-zero.
     #[must_use]
     pub const fn request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
@@ -187,6 +196,21 @@ impl X509ClientBuilder {
     #[must_use]
     pub const fn max_error_body_bytes(mut self, limit: usize) -> Self {
         self.max_error_body_bytes = limit;
+        self
+    }
+
+    /// Sets one explicit forward proxy for the pinned mTLS origins and the
+    /// token exchange (they share one connection pool).
+    ///
+    /// The default is `None`, which disables all proxying including
+    /// `HTTP_PROXY`-style environment variables — the openai-node-aligned
+    /// posture: the client certificate and exchanged bearer tokens never
+    /// traverse a hop the caller has not declared. HTTPS proxying tunnels
+    /// with CONNECT, so the mTLS handshake still terminates at the pinned
+    /// origin. There is no way to enable the environment-variable proxies.
+    #[must_use]
+    pub fn proxy(mut self, proxy: Option<reqwest::Proxy>) -> Self {
+        self.proxy = proxy;
         self
     }
 
@@ -208,13 +232,19 @@ impl X509ClientBuilder {
             .connect_timeout(self.connect_timeout)
             .timeout(self.request_timeout)
             .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
             .user_agent(concat!(
                 "openai-rs-x509-preview/",
                 env!("CARGO_PKG_VERSION")
-            ))
-            .build()
-            .map_err(|_| X509Error::InvalidIdentity)?;
+            ));
+        // Proxy posture (openai-node parity): environment proxies are never
+        // read, so the client identity and bearer tokens cannot traverse an
+        // undeclared hop. The equivalent escape hatch is the builder's own
+        // explicit proxy() face above.
+        let http = match self.proxy {
+            Some(proxy) => http.proxy(proxy),
+            None => http.no_proxy(),
+        };
+        let http = http.build().map_err(|_| X509Error::InvalidIdentity)?;
         let exchange = Arc::new(HttpX509Exchange {
             http: http.clone(),
             identity_provider_id: self.identity_provider_id,
@@ -250,6 +280,7 @@ impl fmt::Debug for X509ClientBuilder {
             .field("request_timeout", &self.request_timeout)
             .field("max_json_body_bytes", &self.max_json_body_bytes)
             .field("max_error_body_bytes", &self.max_error_body_bytes)
+            .field("proxy", &self.proxy.as_ref().map(|_| "[REDACTED]"))
             .finish()
     }
 }
@@ -1294,5 +1325,24 @@ mod tests {
             None
         );
         assert_eq!(safe_oauth_code(b"not-json"), None);
+    }
+
+    #[test]
+    fn explicit_proxy_face_is_accepted_and_redacted_from_debug() {
+        let builder = X509ClientBuilder::new(
+            X509IdentityPem::new(structural_pem()).expect("structural PEM"),
+            "idp_test",
+            "svc_test",
+        )
+        .expect("safe selectors")
+        .proxy(Some(
+            reqwest::Proxy::all("http://127.0.0.1:1").expect("test proxy"),
+        ));
+        let debug = format!("{builder:?}");
+        assert!(!debug.contains("127.0.0.1:1"), "proxy must be redacted");
+        assert!(debug.contains("proxy"));
+        // The proxy face must not bypass identity validation: the structural
+        // fake PEM still fails when the rustls identity is parsed.
+        assert!(matches!(builder.build(), Err(X509Error::InvalidIdentity)));
     }
 }

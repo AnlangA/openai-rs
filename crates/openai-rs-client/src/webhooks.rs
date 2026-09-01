@@ -1,4 +1,18 @@
 //! Verification and typed decoding for OpenAI webhook deliveries.
+//!
+//! # Delivery semantics
+//!
+//! OpenAI treats a delivery as failed unless the endpoint answers with a
+//! 2xx status within a few seconds, and retries failed deliveries with
+//! exponential backoff for up to 72 hours. Redirect responses (3xx) are
+//! not followed and count as failures. A delivery that times out after
+//! the handler already did its work is still retried, so the same event
+//! may be delivered more than once: use the `webhook-id` header —
+//! preserved as [`VerifiedWebhook::webhook_id`] on the verification
+//! result — as the idempotency key and skip deliveries already processed.
+//! Respond with 2xx as quickly as possible and process the event in the
+//! background, mirroring the official webhook guidance in openai-node's
+//! `docs/webhooks.md`.
 
 use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -89,6 +103,17 @@ impl WebhookVerifier {
     }
 
     /// Verifies the timestamp and HMAC before decoding a typed event.
+    ///
+    /// # Raw-body requirement
+    ///
+    /// `payload` must be the original request bytes exactly as they
+    /// arrived on the wire. The signature covers those bytes, so parsing
+    /// the body as JSON and re-serializing it — even without editing any
+    /// field — can change what was signed (object key order, whitespace,
+    /// number formatting) and make verification fail. Capture the raw body
+    /// before any JSON middleware parses it, the same way openai-node's
+    /// `docs/webhooks.md` instructs node users to register a raw-body
+    /// middleware ahead of the JSON body parser.
     pub fn verify(
         &self,
         payload: &[u8],
@@ -102,6 +127,9 @@ impl WebhookVerifier {
     }
 
     /// Deterministic variant of [`Self::verify`] for controlled clocks/tests.
+    ///
+    /// Like [`Self::verify`], this requires the original, un-re-serialized
+    /// request bytes; see the raw-body requirement on [`Self::verify`].
     pub fn verify_at(
         &self,
         payload: &[u8],
@@ -163,7 +191,7 @@ impl WebhookVerifier {
 
         let event = serde_json::from_slice(payload)
             .map_err(|error| sanitized_decode_failure(payload, error))?;
-        Ok(VerifiedWebhook::from_verified(event))
+        Ok(VerifiedWebhook::from_verified(webhook_id, event))
     }
 }
 
@@ -416,6 +444,22 @@ mod tests {
             .expect("valid delivery");
         assert_eq!(verified.as_ref().event_type(), "future.event");
         assert!(!format!("{verified:?}").contains("do-not-log"));
+    }
+
+    #[test]
+    fn verified_delivery_exposes_the_webhook_id_as_the_deduplication_key() {
+        let secret = b"webhook-test-secret";
+        let verifier = WebhookVerifier::new("webhook-test-secret").expect("verifier");
+        let verified = verifier
+            .verify_at(PAYLOAD, &headers(secret, NOW, PAYLOAD), NOW)
+            .expect("valid delivery");
+        // The `webhook-id` header the signature was computed over is the
+        // recommended idempotency key for retried deliveries, so it must
+        // survive onto the verification result and across mapping.
+        assert_eq!(verified.webhook_id(), ID);
+        let mapped = verified.map(|event| event.event_type().to_owned());
+        assert_eq!(mapped.webhook_id(), ID);
+        assert_eq!(mapped.into_body(), "future.event");
     }
 
     #[test]

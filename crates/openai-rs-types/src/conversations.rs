@@ -138,11 +138,11 @@ pub enum ConversationValidationError {
         /// Contract maximum.
         maximum: usize,
     },
-    /// A list limit is outside the documented range.
-    #[error("conversation item list limit must be between 1 and 100, got {limit}")]
+    /// A list limit is below the schema-backed minimum of 1.
+    #[error("conversation item list limit must be at least 1, got {actual}")]
     InvalidListLimit {
         /// Rejected list limit.
-        limit: u32,
+        actual: u32,
     },
 }
 
@@ -1708,9 +1708,9 @@ impl<'de> Deserialize<'de> for ListConversationItemsParams {
     {
         let wire = ListConversationItemsParamsWire::deserialize(deserializer)?;
         if let Omittable::Value(limit) = wire.limit {
-            if !(1..=100).contains(&limit) {
+            if limit == 0 {
                 return Err(D::Error::custom(
-                    ConversationValidationError::InvalidListLimit { limit },
+                    ConversationValidationError::InvalidListLimit { actual: limit },
                 ));
             }
         }
@@ -1730,10 +1730,13 @@ impl ListConversationItemsParams {
         Self::default()
     }
 
-    /// Sets a validated page size.
+    /// Sets a validated page size of at least 1.
+    ///
+    /// The pinned list schema documents "between 1 and 100" in prose but
+    /// carries no `maximum`, so no upper bound is enforced (D0154/D0174).
     pub fn limit(mut self, limit: u32) -> Result<Self, ConversationValidationError> {
-        if !(1..=100).contains(&limit) {
-            return Err(ConversationValidationError::InvalidListLimit { limit });
+        if limit == 0 {
+            return Err(ConversationValidationError::InvalidListLimit { actual: limit });
         }
         self.limit = Omittable::Value(limit);
         Ok(self)
@@ -2087,12 +2090,29 @@ mod tests {
 
         assert!(matches!(
             ListConversationItemsParams::new().limit(0),
-            Err(ConversationValidationError::InvalidListLimit { limit: 0 })
+            Err(ConversationValidationError::InvalidListLimit { actual: 0 })
         ));
         assert!(
-            serde_json::from_value::<ListConversationItemsParams>(json!({"limit": 101})).is_err()
+            serde_json::from_value::<ListConversationItemsParams>(json!({"limit": 0})).is_err()
+        );
+        // The pinned list schema documents "between 1 and 100" in prose but
+        // carries no `maximum` and the official Python SDK forwards unbounded
+        // integers, so only the schema-backed lower bound of 1 is enforced
+        // (D0154/D0174).
+        assert!(
+            serde_json::from_value::<ListConversationItemsParams>(json!({"limit": 101}))
+                .expect("value above the documented prose ceiling stays valid")
+                .limit
+                == Omittable::Value(101)
         );
         assert!(ListConversationItemsParams::new().limit(100).is_ok());
+        assert!(
+            ListConversationItemsParams::new()
+                .limit(u32::MAX)
+                .expect("no invented upper bound")
+                .limit
+                == Omittable::Value(u32::MAX)
+        );
     }
 
     #[test]

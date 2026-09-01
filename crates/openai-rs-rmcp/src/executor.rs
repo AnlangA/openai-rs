@@ -14,6 +14,20 @@ use crate::{BridgeError, ExecutionControl};
 #[async_trait]
 pub trait ResponsesToolExecutor: Send + Sync {
     /// Discover the currently available local tools.
+    ///
+    /// Implementations must return the *complete* tool set, not one page of
+    /// it. MCP servers may paginate `tools/list` through a `nextCursor`, so
+    /// an executor has to keep requesting pages until the server stops
+    /// returning a cursor and merge every page before answering. Returning
+    /// only the first page freezes a truncated catalog inside
+    /// [`crate::ResponsesToolBridge::discover`]: the missing tools are never
+    /// exposed to the model, and function calls naming them fail as unknown
+    /// functions even though the server could have served them.
+    ///
+    /// `control` bounds the traversal from the caller's side. Servers decide
+    /// when pagination ends, so an executor must not invent its own page
+    /// limit: the [`ExecutionControl`] deadline and cancellation token are
+    /// the only bound on how long discovery may run.
     async fn list_tools(&self, control: &ExecutionControl) -> Result<Vec<Tool>, BridgeError>;
 
     /// Execute a single MCP tool with an already validated argument object.
@@ -120,6 +134,20 @@ impl RmcpExecutor {
 #[cfg(feature = "client")]
 #[async_trait]
 impl ResponsesToolExecutor for RmcpExecutor {
+    /// Discover the peer's tools across every `tools/list` page.
+    ///
+    /// This follows rmcp's `list_all_tools` semantics: `tools/list` is
+    /// re-issued with the previous response's `nextCursor` until the server
+    /// stops returning one, and the per-page results are merged into a
+    /// single list. The traversal itself is unbounded — rmcp's loop stops
+    /// only when the server omits the cursor — so `control` is the only
+    /// bound: its timeout and cancellation are what keep a peer that keeps
+    /// paginating (or stalls mid-page) from hanging discovery forever.
+    /// Prefer a bounded [`ExecutionControl`] here;
+    /// [`ExecutionControl::unbounded`] is reasonable only for in-process
+    /// executors. When the bound fires mid-traversal the already-fetched
+    /// pages are dropped and no cancellation notification is sent (see the
+    /// struct docs).
     async fn list_tools(&self, control: &ExecutionControl) -> Result<Vec<Tool>, BridgeError> {
         preflight_control(control)?;
         tokio::select! {

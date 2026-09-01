@@ -58,6 +58,64 @@ pub struct Client {
 struct Inner {
     transport: Transport,
     multipart: MultipartTransport,
+    /// Cloneable snapshot of every transport construction input, kept so
+    /// [`Client::with_request_timeout`] can rebuild both transports with one
+    /// budget overridden while sharing the connection pool and credential.
+    derivation: TransportDerivation,
+}
+
+/// The inputs [`ClientBuilder::build`] used to assemble the two transports.
+///
+/// [`Transport`] deliberately owns its timeout privately (and is not
+/// `Clone`), so a derived client is rebuilt through the `pub(crate)`
+/// constructors instead of mutating an existing transport in place.
+#[derive(Clone)]
+struct TransportDerivation {
+    http: reqwest::Client,
+    base_url: Url,
+    auth: AuthProvider,
+    organization: Option<HeaderValue>,
+    project: Option<HeaderValue>,
+    client_request_id: Option<HeaderValue>,
+    max_json_body_bytes: usize,
+    max_error_body_bytes: usize,
+    retry_policy: RetryPolicy,
+    sse_limits: SseLimits,
+    tls_backend: Option<TlsBackend>,
+}
+
+impl Inner {
+    fn from_derivation(derivation: TransportDerivation, request_timeout: Duration) -> Self {
+        Self {
+            transport: Transport::new(
+                derivation.http.clone(),
+                derivation.base_url.clone(),
+                derivation.auth.clone(),
+                derivation.organization.clone(),
+                derivation.project.clone(),
+                derivation.client_request_id.clone(),
+                derivation.max_json_body_bytes,
+                derivation.max_error_body_bytes,
+                derivation.retry_policy,
+                request_timeout,
+                derivation.sse_limits,
+                derivation.tls_backend,
+            ),
+            multipart: MultipartTransport::new(
+                derivation.http.clone(),
+                derivation.base_url.clone(),
+                derivation.auth.clone(),
+                derivation.organization.clone(),
+                derivation.project.clone(),
+                derivation.client_request_id.clone(),
+                derivation.max_json_body_bytes,
+                derivation.max_error_body_bytes,
+                derivation.retry_policy,
+                request_timeout,
+            ),
+            derivation,
+        }
+    }
 }
 
 impl Client {
@@ -250,6 +308,35 @@ impl Client {
         self.inner.transport.base_url()
     }
 
+    /// Returns a client that runs every operation under one overridden total
+    /// request budget.
+    ///
+    /// The default budget is 600s (see [`ClientBuilder::request_timeout`] for
+    /// the D0199 total-budget semantics). This is the escape hatch for
+    /// long-running work — a large upload or a deliberately slow stream can
+    /// derive a wider budget (or a tight caller a narrower one) without
+    /// loosening the budget every other call runs under. The derived client
+    /// shares this client's credential, connection pool, TLS backend, retry
+    /// policy, and body limits; the original client is unaffected.
+    ///
+    /// The knob is deliberately client-shaped rather than request-shaped:
+    /// typed resource methods take no per-request timeout parameters, so
+    /// budgets stay a property of the client that owns them. Derive one
+    /// client per budget instead.
+    ///
+    /// Unlike [`ClientBuilder::build`], a zero duration cannot be rejected
+    /// here (no fallible surface); a client derived with zero fails every
+    /// request immediately with [`Error::DeadlineExceeded`].
+    #[must_use]
+    pub fn with_request_timeout(&self, request_timeout: Duration) -> Client {
+        Client {
+            inner: Arc::new(Inner::from_derivation(
+                self.inner.derivation.clone(),
+                request_timeout,
+            )),
+        }
+    }
+
     pub(crate) fn transport(&self) -> &Transport {
         &self.inner.transport
     }
@@ -284,6 +371,7 @@ pub struct ClientBuilder {
     tls_backend: Option<TlsBackend>,
     retry_policy: RetryPolicy,
     sse_limits: SseLimits,
+    proxy: Option<reqwest::Proxy>,
 }
 
 enum ClientCredential {
@@ -309,6 +397,7 @@ impl ClientBuilder {
             tls_backend: default_tls_backend(),
             retry_policy: RetryPolicy::default(),
             sse_limits: SseLimits::default(),
+            proxy: None,
         }
     }
 
@@ -329,6 +418,7 @@ impl ClientBuilder {
             tls_backend: default_tls_backend(),
             retry_policy: RetryPolicy::default(),
             sse_limits: SseLimits::default(),
+            proxy: None,
         }
     }
 
@@ -370,15 +460,51 @@ impl ClientBuilder {
         self
     }
 
+    /// Sets the per-attempt connection budget (TCP plus TLS handshake).
+    ///
+    /// The default is 10s, a deliberate middle ground between the two official
+    /// baselines: openai-python sets a 5s connect budget while openai-node has
+    /// no SDK-level connect timeout and inherits the transport default of 10s
+    /// (see decisions D0163/D0199). The connect budget is independent of
+    /// [`ClientBuilder::request_timeout`] and applies to every dial, including
+    /// retried attempts and workload-identity token exchanges. Must be non-zero;
+    /// zero values are rejected by [`ClientBuilder::build`].
     #[must_use]
     pub const fn connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = timeout;
         self
     }
 
+    /// Sets the total budget for one logical request.
+    ///
+    /// This budget covers connection, request write, server processing, body
+    /// streaming, and any in-budget retries from start to finish — it is a
+    /// *total* budget, matching openai-node. openai-python's 600s
+    /// `DEFAULT_TIMEOUT` is instead applied by httpx per I/O operation, so the
+    /// same number buys less there (D0199 corrects the attribution; the 600s
+    /// default itself matches both SDKs). Long-running operations (large
+    /// uploads, slow streams) should derive a wider budget with
+    /// [`Client::with_request_timeout`] instead of raising this value for every
+    /// call. Must be non-zero; zero values are rejected by
+    /// [`ClientBuilder::build`].
     #[must_use]
     pub const fn request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
+        self
+    }
+
+    /// Sets one explicit forward proxy for every connection this client makes.
+    ///
+    /// By default the client disables all proxying — including `HTTP_PROXY` /
+    /// `HTTPS_PROXY` / `ALL_PROXY` environment variables — to match openai-node
+    /// and to keep credentials off hops the caller cannot see. Passing
+    /// `Some(proxy)` routes all API traffic (and, for workload-identity
+    /// credentials, the token exchange) through that single declared proxy
+    /// instead; passing `None` restores the default no-proxy posture. There is
+    /// no way to enable the environment-variable proxies.
+    #[must_use]
+    pub fn proxy(mut self, proxy: Option<reqwest::Proxy>) -> Self {
+        self.proxy = proxy;
         self
     }
 
@@ -460,8 +586,15 @@ impl ClientBuilder {
             .connect_timeout(self.connect_timeout)
             .timeout(self.request_timeout)
             .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
             .user_agent(concat!("openai-rs/", env!("CARGO_PKG_VERSION")));
+        // Proxy posture (aligned with openai-node): environment proxies are
+        // never read, so credentials cannot traverse undeclared hops. Only the
+        // explicitly supplied proxy is used; without one the client stays
+        // direct via no_proxy().
+        let http = match self.proxy.clone() {
+            Some(proxy) => http.proxy(proxy),
+            None => http.no_proxy(),
+        };
         let http = match self.tls_backend {
             #[cfg(feature = "rustls-tls")]
             Some(TlsBackend::Rustls) => http.use_rustls_tls(),
@@ -481,40 +614,29 @@ impl ClientBuilder {
                     self.tls_backend,
                     self.connect_timeout,
                     self.request_timeout,
+                    // The token exchange shares the explicit proxy (if any):
+                    // a declared hop covers both API traffic and exchange, and
+                    // env proxies stay unread either way.
+                    self.proxy,
                 )?)
             }
         };
 
-        let multipart = MultipartTransport::new(
-            http.clone(),
-            base_url.clone(),
-            auth.clone(),
-            organization.clone(),
-            project.clone(),
-            client_request_id.clone(),
-            self.max_json_body_bytes,
-            self.max_error_body_bytes,
-            self.retry_policy,
-            self.request_timeout,
-        );
+        let derivation = TransportDerivation {
+            http,
+            base_url,
+            auth,
+            organization,
+            project,
+            client_request_id,
+            max_json_body_bytes: self.max_json_body_bytes,
+            max_error_body_bytes: self.max_error_body_bytes,
+            retry_policy: self.retry_policy,
+            sse_limits: self.sse_limits,
+            tls_backend: self.tls_backend,
+        };
         Ok(Client {
-            inner: Arc::new(Inner {
-                transport: Transport::new(
-                    http,
-                    base_url,
-                    auth,
-                    organization,
-                    project,
-                    client_request_id,
-                    self.max_json_body_bytes,
-                    self.max_error_body_bytes,
-                    self.retry_policy,
-                    self.request_timeout,
-                    self.sse_limits,
-                    self.tls_backend,
-                ),
-                multipart,
-            }),
+            inner: Arc::new(Inner::from_derivation(derivation, self.request_timeout)),
         })
     }
 }
@@ -543,6 +665,7 @@ impl fmt::Debug for ClientBuilder {
             .field("tls_backend", &self.tls_backend)
             .field("retry_policy", &self.retry_policy)
             .field("sse_limits", &self.sse_limits)
+            .field("proxy", &self.proxy.as_ref().map(|_| "[REDACTED]"))
             .finish()
     }
 }
@@ -643,10 +766,67 @@ const fn default_tls_backend() -> Option<TlsBackend> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        convert::Infallible,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use bytes::Bytes;
+    use http_body_util::Full;
+    use hyper::{Request, StatusCode, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use tokio::net::TcpListener;
+
     use super::*;
 
     fn key() -> ApiKey {
         ApiKey::new("test-placeholder-key").expect("valid test key")
+    }
+
+    /// Serves an empty model list after `delay`, counting request arrivals.
+    async fn delayed_models_server(delay: Duration) -> (Url, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind API server");
+        let address = listener.local_addr().expect("API address");
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server_requests = Arc::clone(&requests);
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let requests = Arc::clone(&server_requests);
+                tokio::spawn(async move {
+                    let service = service_fn(move |_: Request<Incoming>| {
+                        let requests = Arc::clone(&requests);
+                        async move {
+                            requests.fetch_add(1, Ordering::SeqCst);
+                            tokio::time::sleep(delay).await;
+                            Ok::<_, Infallible>(
+                                hyper::Response::builder()
+                                    .status(StatusCode::OK)
+                                    .header(http::header::CONTENT_TYPE, "application/json")
+                                    .body(Full::new(Bytes::from_static(
+                                        br#"{"object":"list","data":[]}"#,
+                                    )))
+                                    .expect("API response"),
+                            )
+                        }
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        (
+            Url::parse(&format!("http://{address}/v1/")).expect("test API URL"),
+            requests,
+        )
     }
 
     #[test]
@@ -734,6 +914,104 @@ mod tests {
                 .client_request_id("a".repeat(513))
                 .build()
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn explicit_proxy_builds_and_none_restores_the_no_proxy_default() {
+        let loopback = Url::parse("http://127.0.0.1:1234/v1/").expect("test URL");
+        let proxy = reqwest::Proxy::all("http://127.0.0.1:1").expect("test proxy");
+        assert!(
+            Client::builder(key())
+                .base_url(loopback.clone())
+                .allow_insecure_loopback(true)
+                .proxy(Some(proxy))
+                .build()
+                .is_ok(),
+            "an explicit proxy must replace the no_proxy default"
+        );
+        assert!(
+            Client::builder(key())
+                .base_url(loopback)
+                .allow_insecure_loopback(true)
+                .proxy(None)
+                .build()
+                .is_ok(),
+            "passing None must restore the no_proxy default"
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_proxy_carries_traffic_so_no_proxy_no_longer_applies() {
+        let (api_url, requests) = delayed_models_server(Duration::ZERO).await;
+        let dead_proxy = reqwest::Proxy::all("http://127.0.0.1:1").expect("test proxy");
+        let client = Client::builder(key())
+            .base_url(api_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(RetryPolicy::disabled())
+            .proxy(Some(dead_proxy))
+            .build()
+            .expect("client with an explicit proxy");
+        assert!(
+            matches!(client.models().list().await, Err(Error::Transport(_))),
+            "the unreachable proxy must fail the request"
+        );
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            0,
+            "traffic must be routed to the proxy instead of the origin"
+        );
+    }
+
+    #[tokio::test]
+    async fn with_request_timeout_narrows_only_the_derived_client() {
+        let (api_url, requests) = delayed_models_server(Duration::from_millis(400)).await;
+        let client = Client::builder(key())
+            .base_url(api_url)
+            .allow_insecure_loopback(true)
+            .request_timeout(Duration::from_secs(5))
+            .build()
+            .expect("base client");
+
+        let narrowed = client.with_request_timeout(Duration::from_millis(100));
+        assert!(
+            matches!(narrowed.models().list().await, Err(Error::Timeout(_))),
+            "the derived budget must expire before the delayed server answers"
+        );
+        client
+            .models()
+            .list()
+            .await
+            .expect("the original budget still covers the delay");
+        narrowed
+            .with_request_timeout(Duration::from_secs(5))
+            .models()
+            .list()
+            .await
+            .expect("deriving again widens the budget back");
+        // One arrival per issued request: the timed-out attempt still reaches
+        // the server, then the two successful calls.
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn zero_derived_budget_fails_closed_immediately() {
+        let (api_url, _) = delayed_models_server(Duration::ZERO).await;
+        let client = Client::builder(key())
+            .base_url(api_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("base client");
+        assert!(
+            matches!(
+                client
+                    .with_request_timeout(Duration::ZERO)
+                    .models()
+                    .list()
+                    .await,
+                Err(Error::DeadlineExceeded)
+            ),
+            "a zero derived budget has no time to spend"
         );
     }
 }

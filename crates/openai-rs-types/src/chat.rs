@@ -3536,11 +3536,38 @@ pub struct ChatCompletionList {
     extra: ExtraFields,
 }
 
+/// Resolves the next-page cursor of a `first_id`/`last_id` list envelope.
+///
+/// Mirrors the shared auto-pagination rule (D0147): when `has_more` is set, a
+/// non-empty envelope `last_id` wins, an empty one falls back to the id of the
+/// page's final element, and pagination stops when neither names a cursor so
+/// an empty `last_id` cannot silently refetch the first page.
+fn list_next_after<'a>(
+    has_more: bool,
+    last_id: &'a str,
+    last_item_id: Option<&'a str>,
+) -> Option<&'a str> {
+    if !has_more {
+        return None;
+    }
+    if !last_id.is_empty() {
+        return Some(last_id);
+    }
+    last_item_id.filter(|id| !id.is_empty())
+}
+
 impl ChatCompletionList {
     /// Cursor for the next page when `has_more` is true.
+    ///
+    /// A non-empty `last_id` wins; an empty one falls back to the id of the
+    /// page's final completion (D0147).
     #[must_use]
     pub fn next_after(&self) -> Option<&str> {
-        self.has_more.then_some(self.last_id.as_str())
+        list_next_after(
+            self.has_more,
+            &self.last_id,
+            self.data.last().map(|completion| completion.id.as_str()),
+        )
     }
 
     /// Future fields retained while decoding.
@@ -3699,9 +3726,16 @@ pub struct ChatCompletionMessageList {
 
 impl ChatCompletionMessageList {
     /// Cursor for the next page when `has_more` is true.
+    ///
+    /// A non-empty `last_id` wins; an empty one falls back to the id of the
+    /// page's final message (D0147).
     #[must_use]
     pub fn next_after(&self) -> Option<&str> {
-        self.has_more.then_some(self.last_id.as_str())
+        list_next_after(
+            self.has_more,
+            &self.last_id,
+            self.data.last().map(|message| message.id.as_str()),
+        )
     }
 
     /// Future fields retained while decoding.
@@ -4392,6 +4426,66 @@ mod tests {
         ));
         assert!(deleted.extra().contains_key("delete_future"));
         assert_eq!(ok(serde_json::to_value(deleted)), deleted_fixture);
+    }
+
+    #[test]
+    fn stored_completion_and_message_pages_fall_back_to_the_last_item_id() {
+        // D0147: a page advertising more results with an empty last_id must
+        // still name a cursor via data[-1].id instead of yielding an empty
+        // cursor that silently refetches the first page.
+        let completion = json!({
+            "id": "chatcmpl_9",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-5.6-sol",
+            "choices": []
+        });
+        let page = ok(serde_json::from_value::<ChatCompletionList>(json!({
+            "object": "list",
+            "data": [completion],
+            "first_id": "chatcmpl_9",
+            "last_id": "",
+            "has_more": true
+        })));
+        assert_eq!(page.next_after(), Some("chatcmpl_9"));
+
+        let message_page = ok(serde_json::from_value::<ChatCompletionMessageList>(json!({
+            "object": "list",
+            "data": [{"id": "msg_9", "role": "assistant", "content": null}],
+            "first_id": "msg_9",
+            "last_id": "",
+            "has_more": true
+        })));
+        assert_eq!(message_page.next_after(), Some("msg_9"));
+
+        // A non-empty server cursor still wins over the fallback, and neither
+        // an empty cursor with empty data nor a terminal page advances.
+        let server_cursor = ok(serde_json::from_value::<ChatCompletionList>(json!({
+            "object": "list",
+            "data": [completion],
+            "first_id": "chatcmpl_9",
+            "last_id": "chatcmpl_server",
+            "has_more": true
+        })));
+        assert_eq!(server_cursor.next_after(), Some("chatcmpl_server"));
+
+        let unresolved = ok(serde_json::from_value::<ChatCompletionList>(json!({
+            "object": "list",
+            "data": [],
+            "first_id": "",
+            "last_id": "",
+            "has_more": true
+        })));
+        assert_eq!(unresolved.next_after(), None);
+
+        let terminal = ok(serde_json::from_value::<ChatCompletionList>(json!({
+            "object": "list",
+            "data": [completion],
+            "first_id": "chatcmpl_9",
+            "last_id": "chatcmpl_9",
+            "has_more": false
+        })));
+        assert_eq!(terminal.next_after(), None);
     }
 
     #[test]

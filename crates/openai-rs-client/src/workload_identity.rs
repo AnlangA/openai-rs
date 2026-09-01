@@ -339,6 +339,7 @@ impl WorkloadIdentityAuth {
         tls_backend: Option<TlsBackend>,
         connect_timeout: Duration,
         request_timeout: Duration,
+        proxy: Option<reqwest::Proxy>,
     ) -> Result<Arc<Self>, Error> {
         if config.exchange_url().starts_with("https://") && tls_backend.is_none() {
             return Err(Error::InvalidConfiguration(
@@ -348,8 +349,17 @@ impl WorkloadIdentityAuth {
         let http = reqwest::Client::builder()
             .connect_timeout(connect_timeout)
             .timeout(request_timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy();
+            .redirect(reqwest::redirect::Policy::none());
+        // Proxy posture (openai-node parity): environment proxies are never
+        // read, so the subject token never traverses an undeclared hop. This
+        // exchange client has no public builder of its own; the equivalent
+        // escape hatch is ClientBuilder::proxy, threaded through
+        // ClientBuilder::build so one declared hop covers both the exchange
+        // and the API traffic.
+        let http = match proxy {
+            Some(proxy) => http.proxy(proxy),
+            None => http.no_proxy(),
+        };
         let http = match tls_backend {
             #[cfg(feature = "rustls-tls")]
             Some(TlsBackend::Rustls) => http.use_rustls_tls(),
@@ -897,9 +907,14 @@ mod tests {
             .with_token_exchange_url(
                 Url::parse("http://127.0.0.1:9/oauth/token").expect("unused test exchange URL"),
             );
-        let auth =
-            WorkloadIdentityAuth::new(config, None, Duration::from_secs(1), Duration::from_secs(1))
-                .expect("workload auth");
+        let auth = WorkloadIdentityAuth::new(
+            config,
+            None,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            None,
+        )
+        .expect("workload auth");
         let mut tasks = Vec::new();
         for _ in 0..8 {
             let auth = Arc::clone(&auth);
@@ -964,6 +979,7 @@ mod tests {
             None,
             Duration::from_secs(1),
             Duration::from_secs(1),
+            None,
         )
         .expect("workload auth");
         let old = auth.token().await.expect("old token");
@@ -1063,6 +1079,7 @@ mod tests {
             None,
             Duration::from_secs(1),
             Duration::from_secs(1),
+            None,
         )
         .expect("workload auth");
         let first = auth.token().await.expect("first token");
@@ -1092,6 +1109,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn builder_proxy_covers_the_token_exchange_too() {
+        let (exchange_url, exchanges, _) = exchange_server(vec![Reply {
+            status: StatusCode::OK,
+            body: r#"{"access_token":"access_one","expires_in":3600}"#.to_owned(),
+            location: None,
+        }])
+        .await;
+        let (api_url, api_calls, _) = api_server(false, r#"{"object":"list","data":[]}"#).await;
+        let client =
+            Client::workload_identity_builder(config(exchange_url, Arc::new(AtomicUsize::new(0))))
+                .base_url(api_url)
+                .allow_insecure_loopback(true)
+                .retry_policy(crate::RetryPolicy::disabled())
+                .proxy(Some(
+                    reqwest::Proxy::all("http://127.0.0.1:1").expect("test proxy"),
+                ))
+                .build()
+                .expect("workload client");
+        assert!(
+            client.models().list().await.is_err(),
+            "the unreachable proxy must fail the API call"
+        );
+        assert_eq!(
+            exchanges.load(Ordering::SeqCst),
+            0,
+            "the token exchange must route through the declared proxy"
+        );
+        assert_eq!(api_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn bad_status_token_and_redirect_fail_closed_without_leaks() {
         let (exchange_url, _, _) = exchange_server(vec![Reply {
             status: StatusCode::BAD_REQUEST,
@@ -1104,6 +1152,7 @@ mod tests {
             None,
             Duration::from_secs(1),
             Duration::from_secs(1),
+            None,
         )
         .expect("workload auth");
         let error = match auth.token().await {
@@ -1126,6 +1175,7 @@ mod tests {
             None,
             Duration::from_secs(1),
             Duration::from_secs(1),
+            None,
         )
         .expect("workload auth");
         assert!(auth.token().await.is_err());
@@ -1148,6 +1198,7 @@ mod tests {
             None,
             Duration::from_secs(1),
             Duration::from_secs(1),
+            None,
         )
         .expect("workload auth");
         assert!(auth.token().await.is_err());

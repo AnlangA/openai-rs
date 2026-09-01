@@ -467,6 +467,11 @@ pub struct ThreadStartParams {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_provider: Option<String>,
+    /// Working directory of the thread. When omitted, app-server inherits the
+    /// child process's cwd — and this crate always spawns the child with the
+    /// dedicated CODEX_HOME as its cwd — so an absent `cwd` means CODEX_HOME,
+    /// never the embedding process's working directory. Set it explicitly to
+    /// anchor the thread in a workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

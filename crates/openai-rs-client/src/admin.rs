@@ -2108,6 +2108,13 @@ impl AdminClientBuilder {
             .connect_timeout(self.connect_timeout)
             .timeout(self.request_timeout)
             .redirect(reqwest::redirect::Policy::none())
+            // Proxy stance (5-25): aligned with openai-node, this channel never
+            // reads HTTP(S)_PROXY/ALL_PROXY-style environment configuration, so
+            // an administrator credential cannot be routed through an invisible
+            // on-host hop the caller never opted into. The Administration
+            // channel deliberately exposes no proxy knob: enterprise egress
+            // needs go through the platform [`crate::ClientBuilder`]'s explicit
+            // proxy surface instead (decision recorded by the main agent).
             .no_proxy()
             .user_agent(concat!("openai-rs-admin/", env!("CARGO_PKG_VERSION")));
         let builder = match self.tls_backend {
@@ -3502,6 +3509,13 @@ mod tests {
                                     StatusCode::OK,
                                     r#"{"object":"project.data_retention","type":"none"}"#,
                                 )
+                            } else if path_and_query.starts_with("/v1/organization/audit_logs") {
+                                // has_more with a null last_id: the D0147
+                                // last-item fallback must recover the cursor.
+                                (
+                                    StatusCode::OK,
+                                    r#"{"object":"list","data":[{"id":"audit_1","type":"api_key.created","effective_at":10},{"id":"audit_2","type":"api_key.deleted","effective_at":11}],"has_more":true,"first_id":"audit_1","last_id":null}"#,
+                                )
                             } else if path_and_query.starts_with("/v1/organization/users") {
                                 (
                                     StatusCode::OK,
@@ -3662,6 +3676,49 @@ mod tests {
         }
         assert_eq!(url.as_str(), "https://api.openai.com/v1/organization/users");
         assert!(url.query().is_none());
+    }
+
+    #[test]
+    fn audit_effective_at_encodes_as_deep_object_bounds() {
+        // The pinned audit route types `effective_at` as an object with exactly
+        // gt/gte/lt/lte, so the typed filter must serialize through the admin
+        // deep-object path as `effective_at[gt]=…` pairs (5-17).
+        let params = AuditLogListParams {
+            effective_at: openai_rs_types::Omittable::Value(
+                AuditEffectiveAt::default()
+                    .with_gt(1_700_000_000)
+                    .with_lte(1_800_000_000),
+            ),
+            project_ids: openai_rs_types::Omittable::Value(vec![
+                "proj_1".to_owned(),
+                "proj_2".to_owned(),
+            ]),
+            tenant_only: openai_rs_types::Omittable::Value(true),
+            page: AdminListParams {
+                limit: openai_rs_types::Omittable::Value(20),
+                ..AdminListParams::default()
+            },
+            ..AuditLogListParams::default()
+        };
+        let pairs = encode_query(&params).expect("encode audit query");
+        assert_eq!(
+            pairs,
+            vec![
+                ("effective_at[gt]".to_owned(), "1700000000".to_owned()),
+                ("effective_at[lte]".to_owned(), "1800000000".to_owned()),
+                ("project_ids".to_owned(), "proj_1".to_owned()),
+                ("project_ids".to_owned(), "proj_2".to_owned()),
+                ("tenant_only".to_owned(), "true".to_owned()),
+                ("limit".to_owned(), "20".to_owned()),
+            ]
+        );
+
+        // Omitted bounds never emit partial `effective_at[…]` keys.
+        let omitted = encode_query(&AuditLogListParams::default()).expect("encode default");
+        assert!(
+            omitted.is_empty(),
+            "the default audit query must encode to nothing, got {omitted:?}"
+        );
     }
 
     #[derive(Clone)]
@@ -4009,6 +4066,59 @@ mod tests {
         assert_eq!(
             serde_json::from_slice::<Value>(&captured[1].body).expect("group JSON")["name"],
             "engineering"
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn audit_logs_loopback_encodes_effective_at_bounds_and_falls_back_to_last_item() {
+        let (base_url, captured, task) = spawn_server().await;
+        let client = AdminClient::builder(key())
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("build admin client");
+
+        let params = AuditLogListParams {
+            effective_at: openai_rs_types::Omittable::Value(
+                AuditEffectiveAt::default()
+                    .with_gt(1_700_000_000)
+                    .with_lte(1_800_000_000),
+            ),
+            project_ids: openai_rs_types::Omittable::Value(vec!["proj_1".to_owned()]),
+            page: AdminListParams {
+                limit: openai_rs_types::Omittable::Value(20),
+                ..AdminListParams::default()
+            },
+            ..AuditLogListParams::default()
+        };
+        let page = client
+            .audit_logs()
+            .list(&params)
+            .await
+            .expect("list audit logs");
+        assert_eq!(page.data.len(), 2);
+        assert!(page.has_more);
+
+        // The scripted page leaves `last_id` null while advertising more
+        // results; manual paging (the admin channel has no list_pages stream)
+        // recovers the D0147 cursor through the last-item fallback.
+        assert_eq!(page.next_after(), None);
+        assert_eq!(
+            page.next_after_with(page.data.last().map(|log| log.id.as_str())),
+            Some("audit_2")
+        );
+
+        let captured = captured.lock().expect("capture lock");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].method, Method::GET);
+        assert_eq!(
+            captured[0].path_and_query,
+            "/v1/organization/audit_logs?effective_at%5Bgt%5D=1700000000&effective_at%5Blte%5D=1800000000&project_ids=proj_1&limit=20"
+        );
+        assert_eq!(
+            captured[0].authorization.as_deref(),
+            Some("Bearer admin-test-placeholder-key")
         );
         task.abort();
     }

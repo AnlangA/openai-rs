@@ -5895,7 +5895,13 @@ macro_rules! impl_create_response_builders {
 
             /// Continues from `response` while copying stable prefix fields from
             /// the previous request (`instructions`, `tools`, `tool_choice`,
-            /// `text`, `reasoning`, and prompt-cache settings).
+            /// `text`, `reasoning`, `prompt_cache_key`, and
+            /// `prompt_cache_options`).
+            ///
+            /// `conversation` is deliberately not copied: the pinned contract
+            /// states that `previous_response_id` "cannot be used in
+            /// conjunction with `conversation`", so a follow-up request must
+            /// not carry the previous request's conversation reference.
             #[must_use]
             pub fn follow_up_from(
                 previous: &Self,
@@ -5910,7 +5916,6 @@ macro_rules! impl_create_response_builders {
                 value.body.reasoning = previous.body.reasoning.clone();
                 value.body.prompt_cache_key = previous.body.prompt_cache_key.clone();
                 value.body.prompt_cache_options = previous.body.prompt_cache_options.clone();
-                value.body.conversation = previous.body.conversation.clone();
                 value
             }
 
@@ -5957,6 +5962,9 @@ macro_rules! impl_create_response_builders {
             }
 
             /// Associates the response with a conversation.
+            ///
+            /// Cannot be used in conjunction with `previous_response_id` (the
+            /// pinned contract rejects the combination server-side).
             #[must_use]
             pub fn conversation(mut self, conversation: impl Into<ConversationReference>) -> Self {
                 self.body.conversation = Omittable::Value(Nullable::Value(conversation.into()));
@@ -6084,6 +6092,9 @@ macro_rules! impl_create_response_builders {
             }
 
             /// Continues from a prior response id.
+            ///
+            /// Use this to create multi-turn conversations without resending
+            /// prior items. Cannot be used in conjunction with `conversation`.
             #[must_use]
             pub fn previous_response_id(mut self, id: impl Into<String>) -> Self {
                 self.body.previous_response_id = Omittable::Value(Nullable::Value(id.into()));
@@ -6091,6 +6102,9 @@ macro_rules! impl_create_response_builders {
             }
 
             /// Sends `previous_response_id: null`.
+            ///
+            /// Clearing the field removes the pin's `previous_response_id`
+            /// versus `conversation` exclusivity concern for this request.
             #[must_use]
             pub fn previous_response_id_null(mut self) -> Self {
                 self.body.previous_response_id = Omittable::Value(Nullable::Null);
@@ -7745,8 +7759,40 @@ impl CompactedResponse {
     }
 }
 
+/// A response input-item page size below the documented floor of 1.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[error("response input item list limit must be at least 1, got {actual}")]
+pub struct ListResponseInputItemsLimitError {
+    /// Rejected page size.
+    actual: u32,
+}
+
+impl ListResponseInputItemsLimitError {
+    /// Returns the rejected page size.
+    #[must_use]
+    pub const fn actual(self) -> u32 {
+        self.actual
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+struct ListResponseInputItemsParamsWire {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    after: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    include: Vec<ResponseIncludable>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    limit: Omittable<u32>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    order: Omittable<ResponseItemOrder>,
+}
+
 /// Query parameters for a response's input-item page.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+///
+/// The pinned `limit` prose documents a 1..=100 range with a default of 20;
+/// only the `>= 1` floor is enforced here because the ceiling exists solely
+/// in that descriptive prose (see D0154/D0174 for the same stance elsewhere).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ListResponseInputItemsParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     after: Omittable<String>,
@@ -7756,6 +7802,28 @@ pub struct ListResponseInputItemsParams {
     limit: Omittable<u32>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     order: Omittable<ResponseItemOrder>,
+}
+
+impl<'de> Deserialize<'de> for ListResponseInputItemsParams {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = ListResponseInputItemsParamsWire::deserialize(deserializer)?;
+        if let Omittable::Value(limit) = wire.limit
+            && limit == 0
+        {
+            return Err(D::Error::custom(ListResponseInputItemsLimitError {
+                actual: limit,
+            }));
+        }
+        Ok(Self {
+            after: wire.after,
+            include: wire.include,
+            limit: wire.limit,
+            order: wire.order,
+        })
+    }
 }
 
 impl ListResponseInputItemsParams {
@@ -7786,10 +7854,16 @@ impl ListResponseInputItemsParams {
     }
 
     /// Sets the requested page size.
-    #[must_use]
-    pub fn limit(mut self, limit: u32) -> Self {
+    ///
+    /// The pinned prose documents a 1..=100 range with a default of 20 when
+    /// omitted; this builder rejects `0` and leaves the descriptive ceiling
+    /// unenforced.
+    pub fn limit(mut self, limit: u32) -> Result<Self, ListResponseInputItemsLimitError> {
+        if limit == 0 {
+            return Err(ListResponseInputItemsLimitError { actual: limit });
+        }
         self.limit = Omittable::Value(limit);
-        self
+        Ok(self)
     }
 
     /// Sets ascending or descending ordering.
@@ -7920,6 +7994,8 @@ impl CountInputTokensRequest {
     }
 
     /// Associates a stored conversation.
+    ///
+    /// Cannot be used in conjunction with `previous_response_id`.
     #[must_use]
     pub fn conversation(mut self, conversation: impl Into<ConversationReference>) -> Self {
         self.conversation = Omittable::Value(Nullable::Value(conversation.into()));
@@ -7995,6 +8071,8 @@ impl CountInputTokensRequest {
     }
 
     /// Continues from a stored response.
+    ///
+    /// Cannot be used in conjunction with `conversation`.
     #[must_use]
     pub fn previous_response_id(mut self, id: impl Into<String>) -> Self {
         self.previous_response_id = Omittable::Value(Nullable::Value(id.into()));
@@ -19408,6 +19486,92 @@ mod tests {
             }))
             .is_err(),
             "compact instructions are string or null, not item arrays"
+        );
+    }
+
+    #[test]
+    fn follow_up_from_does_not_carry_conversation() {
+        let response: Response = serde_json::from_value(json!({
+            "id": "resp_conv",
+            "created_at": 1,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-5.6-sol",
+            "object": "response",
+            "output": [],
+            "parallel_tool_calls": true,
+            "temperature": 1.0,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "status": "completed"
+        }))
+        .expect("stored response");
+        let previous = CreateResponseRequest::new("gpt-5.6-sol", "first")
+            .conversation("conv_1")
+            .instructions("Stay concise.");
+
+        let follow = CreateResponseRequest::follow_up_from(&previous, &response, "next");
+        let value = serde_json::to_value(&follow).expect("serialize follow-up");
+        assert_eq!(value["previous_response_id"], "resp_conv");
+        assert_eq!(value["instructions"], "Stay concise.");
+        assert!(
+            value.get("conversation").is_none(),
+            "the pin forbids previous_response_id together with conversation"
+        );
+
+        let streaming_previous = CreateStreamingResponseRequest::new("gpt-5.6-sol", "first")
+            .conversation("conv_1")
+            .instructions("Stay concise.");
+        let streaming =
+            CreateStreamingResponseRequest::follow_up_from(&streaming_previous, &response, "next");
+        let value = serde_json::to_value(&streaming).expect("serialize streaming follow-up");
+        assert_eq!(value["previous_response_id"], "resp_conv");
+        assert!(
+            value.get("conversation").is_none(),
+            "streaming follow-ups drop the conversation reference too"
+        );
+    }
+
+    #[test]
+    fn input_item_list_limit_rejects_zero_on_build_and_decode() {
+        let error = ListResponseInputItemsParams::new()
+            .limit(0)
+            .expect_err("zero page size");
+        assert_eq!(error.actual(), 0);
+
+        let params = ListResponseInputItemsParams::new()
+            .limit(1)
+            .expect("floor is inclusive")
+            .order(ResponseItemOrder::Ascending);
+        assert_eq!(
+            serde_json::to_value(&params).expect("serialize params"),
+            json!({"limit": 1, "order": "asc"})
+        );
+
+        // The pinned 1..=100 range is descriptive prose; values above the
+        // ceiling stay acceptable (D0154/D0174 stance).
+        let above_prose = ListResponseInputItemsParams::new()
+            .limit(250)
+            .expect("prose ceiling is not enforced");
+        assert_eq!(
+            serde_json::to_value(&above_prose).expect("serialize above prose"),
+            json!({"limit": 250})
+        );
+
+        assert!(
+            serde_json::from_value::<ListResponseInputItemsParams>(json!({"limit": 0})).is_err(),
+            "decode rejects a zero page size"
+        );
+        let decoded: ListResponseInputItemsParams =
+            serde_json::from_value(json!({"limit": 20})).expect("decode pinned default");
+        let value = serde_json::to_value(&decoded).expect("serialize decoded");
+        assert_eq!(value["limit"], 20);
+        assert!(
+            serde_json::from_value::<ListResponseInputItemsParams>(json!({})).is_ok(),
+            "limit stays omittable"
         );
     }
 

@@ -12,6 +12,18 @@ use crate::{
 /// MCP tool errors remain in-band and carry a normal
 /// [`FunctionCallOutput`]. Transport, timeout, cancellation, and protocol
 /// failures are returned as [`BridgeError`] instead.
+///
+/// # Output magnitude
+///
+/// The [`FunctionCallOutput`] string is produced by
+/// [`encode_tool_result`](crate::encode_tool_result), which inlines rich MCP
+/// content blocks — image, audio, and embedded-resource `data` arrive from
+/// MCP already base64-encoded — verbatim into the output string. That string
+/// is therefore bound by the Responses `function_call_output` cap of 10 MiB
+/// characters ([`openai_rs_types::responses::MAX_FUNCTION_CALL_OUTPUT_CHARS`]),
+/// which the types side enforces by validating the *next* request: an
+/// oversized result still dispatches and encodes here, and is rejected when
+/// the follow-up turn carrying the output is validated or sent.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum DispatchOutcome {
@@ -93,6 +105,19 @@ where
     E: ResponsesToolExecutor,
 {
     /// Discover tools through `executor`, then freeze their names and schemas.
+    ///
+    /// The catalog is frozen from a single
+    /// [`ResponsesToolExecutor::list_tools`] call, so the executor must
+    /// answer with the complete, page-merged tool set (see the trait method
+    /// docs); the `client`-feature `RmcpExecutor` does this by re-issuing
+    /// `tools/list` until the server stops returning a `nextCursor`. That
+    /// traversal has no protocol-level bound — the server alone decides when
+    /// pagination ends — so pass a *bounded* [`ExecutionControl`] (a
+    /// timeout, a cancellation token, or both). A stalling or endlessly
+    /// paginating peer otherwise hangs discovery, and hence this
+    /// constructor, indefinitely; [`ExecutionControl::unbounded`] is
+    /// reasonable only for in-process executors whose `list_tools` cannot
+    /// block on I/O.
     pub async fn discover(
         executor: E,
         policy: CatalogPolicy,
@@ -171,6 +196,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
+    use openai_rs_types::responses::{
+        CreateResponseConstraintError, CreateResponseRequest, MAX_FUNCTION_CALL_OUTPUT_CHARS,
+        ResponseInputItem,
+    };
     use openai_rs_types::{JsonText, responses::FunctionCallItemStatus};
     use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
     use serde_json::{Value, json};
@@ -417,5 +446,27 @@ mod tests {
             )
             .await;
         assert!(matches!(outcome, Ok(DispatchOutcome::ToolError(_))));
+    }
+
+    #[test]
+    fn oversized_rich_result_encodes_but_fails_next_turn_validation() {
+        // Pins the documented magnitude split (round-5 items 5-P2/5-28): the
+        // encoder inlines base64 media verbatim and never truncates, while
+        // the only bound is the types-side function_call_output cap, which
+        // rejects the oversized string when the follow-up request carrying
+        // the output is validated — not at dispatch or encode time.
+        let base64 = "A".repeat(MAX_FUNCTION_CALL_OUTPUT_CHARS);
+        let oversized = CallToolResult::success(vec![ContentBlock::image(base64, "image/png")]);
+        let encoded = encode_tool_result(&oversized, ResultEncoding::LosslessEnvelope)
+            .expect("the encoder accepts oversized rich results");
+        assert!(encoded.output().chars().count() > MAX_FUNCTION_CALL_OUTPUT_CHARS);
+
+        let output = FunctionCallOutput::new("call_big", encoded.into_output());
+        let follow_up =
+            CreateResponseRequest::new("gpt-5.6-sol", vec![ResponseInputItem::from(output)]);
+        assert!(matches!(
+            follow_up.validate(),
+            Err(CreateResponseConstraintError::FunctionCallOutputChars { .. })
+        ));
     }
 }

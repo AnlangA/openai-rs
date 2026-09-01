@@ -695,17 +695,36 @@ fn object_discriminator(value: &Value) -> Result<&str, &'static str> {
 /// verification succeeded by calling [`VerifiedWebhook::from_verified`].
 #[derive(Clone, PartialEq, Eq)]
 pub struct VerifiedWebhook<T> {
+    webhook_id: Box<str>,
     body: T,
 }
 
 impl<T> VerifiedWebhook<T> {
     /// Wraps a parsed body after its original bytes have been verified.
     ///
-    /// This function does not perform cryptography. Callers must invoke it only
-    /// after verification against the configured webhook secret succeeds.
+    /// `webhook_id` is the `webhook-id` delivery header that the
+    /// verification boundary read alongside the signature. It is pinned to
+    /// the verified body so receivers can deduplicate redelivered events
+    /// with [`VerifiedWebhook::webhook_id`]. This function does not perform
+    /// cryptography. Callers must invoke it only after verification against
+    /// the configured webhook secret succeeds.
     #[must_use]
-    pub const fn from_verified(body: T) -> Self {
-        Self { body }
+    pub fn from_verified(webhook_id: impl Into<Box<str>>, body: T) -> Self {
+        Self {
+            webhook_id: webhook_id.into(),
+            body,
+        }
+    }
+
+    /// Returns the `webhook-id` delivery header captured at verification
+    /// time.
+    ///
+    /// The sender retries deliveries that fail or time out, so the same
+    /// event can arrive more than once. This value is the recommended
+    /// idempotency key for de-duplicating webhook handling.
+    #[must_use]
+    pub fn webhook_id(&self) -> &str {
+        &self.webhook_id
     }
 
     /// Borrows the verified parsed body.
@@ -724,6 +743,7 @@ impl<T> VerifiedWebhook<T> {
     #[must_use]
     pub fn map<U>(self, map: impl FnOnce(T) -> U) -> VerifiedWebhook<U> {
         VerifiedWebhook {
+            webhook_id: self.webhook_id,
             body: map(self.body),
         }
     }
@@ -916,12 +936,27 @@ mod tests {
     #[test]
     fn verified_wrapper_never_debugs_the_body() -> Result<(), Box<dyn std::error::Error>> {
         let event: WebhookEvent = serde_json::from_value(fixture("response.completed"))?;
-        let verified = VerifiedWebhook::from_verified(event);
+        let verified = VerifiedWebhook::from_verified("evt_delivery_123", event);
+        assert_eq!(verified.webhook_id(), "evt_delivery_123");
         let debug = format!("{verified:?}");
         assert!(debug.contains("VerifiedWebhook"));
         assert!(!debug.contains("do-not-log"));
         assert!(!debug.contains("response.completed"));
+        assert!(!debug.contains("evt_delivery_123"));
         Ok(())
+    }
+
+    #[test]
+    fn verified_wrapper_keeps_the_webhook_id_through_mapping() {
+        let event: WebhookEvent =
+            serde_json::from_value(fixture("batch.completed")).expect("fixture event");
+        let verified = VerifiedWebhook::from_verified(String::from("evt_delivery_456"), event);
+        let mapped = verified.map(|event| event.event_type().to_owned());
+        assert_eq!(mapped.webhook_id(), "evt_delivery_456");
+        assert_eq!(mapped.body(), "batch.completed");
+        let unmapped = VerifiedWebhook::from_verified("evt_delivery_789", 7_u8);
+        assert_eq!(unmapped.webhook_id(), "evt_delivery_789");
+        assert_eq!(unmapped.into_body(), 7_u8);
     }
 
     #[test]

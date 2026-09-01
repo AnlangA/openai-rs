@@ -47,6 +47,35 @@ use crate::{
 
 const OK: &[StatusCode] = &[StatusCode::OK];
 const OK_OR_NO_CONTENT: &[StatusCode] = &[StatusCode::OK, StatusCode::NO_CONTENT];
+const BETA_HEADER: &str = "OpenAI-Beta";
+const BETA_VALUE: &str = "responses_multi_agent=v1";
+
+/// Sends the static `OpenAI-Beta: responses_multi_agent=v1` header with a
+/// JSON-decoded beta operation.
+///
+/// The pinned beta routes declare the optional `openai-beta` header (a single
+/// enum value, `responses_multi_agent=v1`) and openai-python/openai-node send
+/// it whenever the multi-agent preview is addressed, so every JSON face of
+/// the beta Responses REST surface attaches it here (the D0087 Vector Store
+/// and ChatKit pattern). The empty-or-JSON delete lane and both SSE lanes
+/// carry the header through their own static-header transport entries; the
+/// WebSocket face stays header-free (the preview is REST-only in the
+/// official SDKs).
+async fn execute_beta_json<O, Q>(
+    client: &Client,
+    path: &[PathSegment<'_>],
+    query: Option<&Q>,
+    body: Option<&O::Request>,
+) -> Result<ApiResponse<O::Response>, Error>
+where
+    O: Operation,
+    Q: Serialize + ?Sized,
+{
+    client
+        .transport()
+        .execute_json_with_static_header::<O, Q>(path, query, body, BETA_HEADER, BETA_VALUE)
+        .await
+}
 
 /// A stream of bounded beta Response input item collection pages.
 pub type BetaResponseInputItemPageStream =
@@ -102,17 +131,19 @@ impl BetaResponses {
         request: BetaCreateResponseRequest,
     ) -> Result<ApiResponse<BetaResponse>, Error> {
         let path = [PathSegment::literal("responses")];
-        self.client
-            .transport()
-            .execute_json::<CreateBetaResponse, _>(
-                &path,
-                Some(&BetaOnlyQuery::VALUE),
-                Some(&request),
-            )
-            .await
+        execute_beta_json::<CreateBetaResponse, _>(
+            &self.client,
+            &path,
+            Some(&BetaOnlyQuery::VALUE),
+            Some(&request),
+        )
+        .await
     }
 
     /// Creates a beta response and decodes its SSE events incrementally.
+    ///
+    /// The SSE lane carries the static beta header alongside the `beta=true`
+    /// query (see [`execute_beta_json`]).
     pub async fn create_stream(
         &self,
         request: BetaCreateStreamingResponseRequest,
@@ -121,10 +152,11 @@ impl BetaResponses {
         let response = self
             .client
             .transport()
-            .send::<CreateStreamingBetaResponse, _>(
+            .send_with_static_header::<CreateStreamingBetaResponse, _>(
                 &path,
                 Some(&BetaOnlyQuery::VALUE),
                 Some(&request),
+                Some((BETA_HEADER, BETA_VALUE)),
             )
             .await?;
         BetaResponseEventStream::from_response(response, self.client.transport().sse_limits())
@@ -147,13 +179,13 @@ impl BetaResponses {
     ) -> Result<ApiResponse<BetaResponse>, Error> {
         let path = response_path(response_id)?;
         let query = BetaQuery::new(&params);
-        self.client
-            .transport()
-            .execute_json::<RetrieveBetaResponse, _>(&path, Some(&query), None)
-            .await
+        execute_beta_json::<RetrieveBetaResponse, _>(&self.client, &path, Some(&query), None).await
     }
 
     /// Retrieves or resumes a stored beta response SSE stream.
+    ///
+    /// The SSE lane carries the static beta header alongside the `beta=true`
+    /// query (see [`execute_beta_json`]).
     pub async fn retrieve_stream(
         &self,
         response_id: &ResponseId,
@@ -164,12 +196,20 @@ impl BetaResponses {
         let response = self
             .client
             .transport()
-            .send::<RetrieveStreamingBetaResponse, _>(&path, Some(&query), None)
+            .send_with_static_header::<RetrieveStreamingBetaResponse, _>(
+                &path,
+                Some(&query),
+                None,
+                Some((BETA_HEADER, BETA_VALUE)),
+            )
             .await?;
         BetaResponseEventStream::from_response(response, self.client.transport().sse_limits())
     }
 
     /// Deletes a stored beta response.
+    ///
+    /// The empty-or-JSON lane also carries the static beta header (see
+    /// [`execute_beta_json`]).
     pub async fn delete(
         &self,
         response_id: &ResponseId,
@@ -178,10 +218,12 @@ impl BetaResponses {
         let response = self
             .client
             .transport()
-            .execute_optional_json::<DeleteBetaResponse, _>(
+            .execute_optional_json_with_static_header::<DeleteBetaResponse, _>(
                 &path,
                 Some(&BetaOnlyQuery::VALUE),
                 None,
+                BETA_HEADER,
+                BETA_VALUE,
             )
             .await?;
         let (body, meta) = response.into_parts();
@@ -201,10 +243,13 @@ impl BetaResponses {
             response_id_segment(response_id)?,
             PathSegment::literal("cancel"),
         ];
-        self.client
-            .transport()
-            .execute_json::<CancelBetaResponse, _>(&path, Some(&BetaOnlyQuery::VALUE), None)
-            .await
+        execute_beta_json::<CancelBetaResponse, _>(
+            &self.client,
+            &path,
+            Some(&BetaOnlyQuery::VALUE),
+            None,
+        )
+        .await
     }
 
     /// Compacts beta response context.
@@ -216,14 +261,13 @@ impl BetaResponses {
             PathSegment::literal("responses"),
             PathSegment::literal("compact"),
         ];
-        self.client
-            .transport()
-            .execute_json::<CompactBetaResponse, _>(
-                &path,
-                Some(&BetaOnlyQuery::VALUE),
-                Some(&request),
-            )
-            .await
+        execute_beta_json::<CompactBetaResponse, _>(
+            &self.client,
+            &path,
+            Some(&BetaOnlyQuery::VALUE),
+            Some(&request),
+        )
+        .await
     }
 
     /// Returns the beta input-items subresource.
@@ -315,9 +359,7 @@ impl BetaResponseInputItems {
             PathSegment::literal("input_items"),
         ];
         let query = BetaQuery::new(&params);
-        self.client
-            .transport()
-            .execute_json::<ListBetaResponseInputItems, _>(&path, Some(&query), None)
+        execute_beta_json::<ListBetaResponseInputItems, _>(&self.client, &path, Some(&query), None)
             .await
     }
 
@@ -374,14 +416,13 @@ impl BetaResponseInputTokens {
             PathSegment::literal("responses"),
             PathSegment::literal("input_tokens"),
         ];
-        self.client
-            .transport()
-            .execute_json::<CountBetaResponseInputTokens, _>(
-                &path,
-                Some(&BetaOnlyQuery::VALUE),
-                Some(&request),
-            )
-            .await
+        execute_beta_json::<CountBetaResponseInputTokens, _>(
+            &self.client,
+            &path,
+            Some(&BetaOnlyQuery::VALUE),
+            Some(&request),
+        )
+        .await
     }
 }
 
@@ -648,6 +689,7 @@ pub struct BetaResponsesWebSocket {
     meta: ResponseMeta,
     max_message_bytes: usize,
     closed: bool,
+    last_close: Option<(u16, String)>,
 }
 
 impl BetaResponsesWebSocket {
@@ -682,6 +724,7 @@ impl BetaResponsesWebSocket {
                         meta: ResponseMeta::from_headers(response.status(), response.headers()),
                         max_message_bytes: config.max_message_bytes,
                         closed: false,
+                        last_close: None,
                     });
                 }
                 Ok(Err(error))
@@ -723,6 +766,28 @@ impl BetaResponsesWebSocket {
     #[must_use]
     pub const fn is_closed(&self) -> bool {
         self.closed
+    }
+
+    /// Close status code carried by the peer's close frame, if one was
+    /// received (4-18). `None` after a frameless EOF (or before any close):
+    /// a code such as 1011 distinguishes a server-side failure close from a
+    /// clean `1000`/`1001` shutdown.
+    #[must_use]
+    pub const fn close_code(&self) -> Option<u16> {
+        match &self.last_close {
+            Some((code, _)) => Some(*code),
+            None => None,
+        }
+    }
+
+    /// Close reason text carried by the peer's close frame, if one was
+    /// received with a non-empty reason.
+    #[must_use]
+    pub fn close_reason(&self) -> Option<&str> {
+        match &self.last_close {
+            Some((_, reason)) => Some(reason.as_str()),
+            None => None,
+        }
     }
 
     /// Sends a typed beta `response.create` event.
@@ -770,6 +835,14 @@ impl BetaResponsesWebSocket {
     }
 
     /// Receives the next typed beta server event.
+    ///
+    /// Failure posture (4-19, synced by 5-04 to match the GA and Realtime
+    /// sockets): every transport or protocol failure — a broken connection, an
+    /// oversized event, or a frame that violates the beta event-transport
+    /// contract — retires the socket (`is_closed` becomes `true`, matching
+    /// openai-node, which destroys the WebSocket on any error). A failed event
+    /// *decode* is the one recoverable path: the connection stays open so a
+    /// malformed event need not take down an otherwise healthy session.
     pub async fn recv(&mut self) -> Result<Option<BetaResponsesServerEvent>, Error> {
         if self.closed {
             return Ok(None);
@@ -779,9 +852,23 @@ impl BetaResponsesWebSocket {
                 self.closed = true;
                 return Ok(None);
             };
-            match message.map_err(map_websocket_error)? {
+            // A read failure leaves the underlying connection unusable, so it
+            // retires the socket like every other non-decode error path.
+            let message = match message {
+                Ok(message) => message,
+                Err(error) => {
+                    self.closed = true;
+                    return Err(map_websocket_error(error));
+                }
+            };
+            match message {
                 Message::Text(text) => {
                     if text.len() > self.max_message_bytes {
+                        // An oversized event means the peer (or an
+                        // intermediary) already sent bytes this socket cannot
+                        // frame, so the socket retires instead of being polled
+                        // again.
+                        self.closed = true;
                         return Err(Error::WebSocketProtocol(
                             "incoming beta Responses event exceeds the configured message limit",
                         ));
@@ -796,23 +883,30 @@ impl BetaResponsesWebSocket {
                         })?;
                     return Ok(Some(event));
                 }
-                Message::Ping(payload) => {
-                    self.socket
-                        .send(Message::Pong(payload))
-                        .await
-                        .map_err(map_websocket_error)?;
-                }
+                // tungstenite queues the RFC 6455 Pong while reading the Ping
+                // and flushes it on the next poll; an explicit reply here only
+                // adds a redundant write path (D0148).
+                Message::Ping(_) => {}
                 Message::Pong(_) => {}
-                Message::Close(_) => {
+                Message::Close(frame) => {
                     self.closed = true;
+                    if let Some(frame) = frame {
+                        self.last_close =
+                            Some((u16::from(frame.code), frame.reason.as_str().to_owned()));
+                    }
                     return Ok(None);
                 }
                 Message::Binary(_) => {
+                    // A frame that violates the beta event-transport contract
+                    // retires the socket; the stream is only usable for
+                    // well-formed beta Responses frames.
+                    self.closed = true;
                     return Err(Error::WebSocketProtocol(
                         "beta Responses WebSocket sent a binary data message",
                     ));
                 }
                 Message::Frame(_) => {
+                    self.closed = true;
                     return Err(Error::WebSocketProtocol(
                         "beta Responses WebSocket exposed an unexpected raw frame",
                     ));
@@ -1116,7 +1210,14 @@ mod tests {
     };
     use serde_json::{Value, json};
     use tokio::{net::TcpListener, sync::oneshot};
-    use tokio_tungstenite::{accept_hdr_async, tungstenite::handshake::server};
+    use tokio_tungstenite::{
+        accept_hdr_async,
+        tungstenite::{
+            Utf8Bytes,
+            handshake::server,
+            protocol::frame::{CloseFrame, coding::CloseCode},
+        },
+    };
 
     use super::*;
     use crate::ApiKey;
@@ -1221,6 +1322,84 @@ mod tests {
             .expect("beta loopback client")
     }
 
+    async fn serve_sequence(
+        responses: Vec<(StatusCode, String)>,
+    ) -> (Url, tokio::sync::mpsc::Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta sequence server");
+        let address = listener.local_addr().expect("beta sequence address");
+        let responses = Arc::new(Mutex::new(std::collections::VecDeque::from(responses)));
+        let (sender, receiver) = tokio::sync::mpsc::channel(16);
+
+        tokio::spawn(async move {
+            loop {
+                if responses
+                    .lock()
+                    .expect("beta sequence queue lock")
+                    .is_empty()
+                {
+                    break;
+                }
+                let (stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+                let responses = Arc::clone(&responses);
+                let sender = sender.clone();
+                let service = service_fn(move |request: Request<Incoming>| {
+                    let responses = Arc::clone(&responses);
+                    let sender = sender.clone();
+                    async move {
+                        let method = request.method().clone();
+                        let path_and_query = request
+                            .uri()
+                            .path_and_query()
+                            .map(ToString::to_string)
+                            .unwrap_or_default();
+                        let authorization = header_string(request.headers(), header::AUTHORIZATION);
+                        let beta_header = header_string(request.headers(), "openai-beta");
+                        let body = request
+                            .into_body()
+                            .collect()
+                            .await
+                            .expect("read beta sequence body")
+                            .to_bytes()
+                            .to_vec();
+                        let _ = sender
+                            .send(CapturedRequest {
+                                method,
+                                path_and_query,
+                                authorization,
+                                beta_header,
+                                body,
+                            })
+                            .await;
+
+                        let next = responses
+                            .lock()
+                            .expect("beta sequence queue lock")
+                            .pop_front()
+                            .unwrap_or((StatusCode::OK, "{}".into()));
+                        let response = hyper::Response::builder()
+                            .status(next.0)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .header("x-request-id", "req_beta_seq")
+                            .body(Full::new(Bytes::from(next.1)))
+                            .expect("build beta sequence response");
+                        Ok::<_, Infallible>(response)
+                    }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            }
+        });
+
+        let base = Url::parse(&format!("http://{address}/v1/")).expect("beta sequence base URL");
+        (base, receiver)
+    }
+
     fn header_string(
         headers: &http::HeaderMap,
         name: impl http::header::AsHeaderName,
@@ -1232,7 +1411,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_uses_beta_query_and_typed_multi_agent_body_without_beta_header() {
+    async fn create_uses_beta_query_multi_agent_body_and_beta_header() {
         let (base_url, captured) = serve_once(
             StatusCode::OK,
             "application/json",
@@ -1262,7 +1441,7 @@ mod tests {
             captured.authorization.as_deref(),
             Some("Bearer test-placeholder-key")
         );
-        assert_eq!(captured.beta_header, None);
+        assert_eq!(captured.beta_header.as_deref(), Some(BETA_VALUE));
         let body: Value = serde_json::from_slice(&captured.body).expect("create JSON");
         assert_eq!(body["multi_agent"]["enabled"], true);
         assert_eq!(body["input"][0]["type"], "agent_message");
@@ -1293,6 +1472,7 @@ mod tests {
             request.path_and_query,
             "/v1/responses/resp%2Fa%20b?beta=true&include=file_search_call.results"
         );
+        assert_eq!(request.beta_header.as_deref(), Some(BETA_VALUE));
 
         let (base_url, captured) =
             serve_once(StatusCode::NO_CONTENT, "application/json", String::new()).await;
@@ -1308,6 +1488,9 @@ mod tests {
             request.path_and_query,
             "/v1/responses/resp%2Fa%20b?beta=true"
         );
+        // The empty-or-JSON delete lane carries the static beta header like
+        // every other beta REST operation.
+        assert_eq!(request.beta_header.as_deref(), Some(BETA_VALUE));
 
         let (base_url, captured) = serve_once(
             StatusCode::OK,
@@ -1326,6 +1509,7 @@ mod tests {
             request.path_and_query,
             "/v1/responses/resp%2Fa%20b/cancel?beta=true"
         );
+        assert_eq!(request.beta_header.as_deref(), Some(BETA_VALUE));
 
         let compacted = json!({
             "id": "resp_compact_1",
@@ -1350,6 +1534,7 @@ mod tests {
         let request = captured.await.expect("captured compact");
         assert_eq!(request.method, Method::POST);
         assert_eq!(request.path_and_query, "/v1/responses/compact?beta=true");
+        assert_eq!(request.beta_header.as_deref(), Some(BETA_VALUE));
         let body: Value = serde_json::from_slice(&request.body).expect("compact JSON");
         assert_eq!(body["model"], "gpt-test");
         assert_eq!(body["input"], "hello");
@@ -1380,6 +1565,7 @@ mod tests {
                     .after("item_0")
                     .include(BetaResponseIncludable::EncryptedReasoning)
                     .limit(20)
+                    .expect("valid limit")
                     .order(BetaResponseItemOrder::Asc),
             )
             .await
@@ -1394,6 +1580,7 @@ mod tests {
             request.path_and_query,
             "/v1/responses/resp_1/input_items?beta=true&after=item_0&include=reasoning.encrypted_content&limit=20&order=asc"
         );
+        assert_eq!(request.beta_header.as_deref(), Some(BETA_VALUE));
 
         let (base_url, captured) = serve_once(
             StatusCode::OK,
@@ -1414,6 +1601,7 @@ mod tests {
             request.path_and_query,
             "/v1/responses/input_tokens?beta=true"
         );
+        assert_eq!(request.beta_header.as_deref(), Some(BETA_VALUE));
         let body: Value = serde_json::from_slice(&request.body).expect("count JSON");
         assert_eq!(body["personality"], "friendly");
     }
@@ -1460,8 +1648,135 @@ mod tests {
 
         let request = captured.await.expect("captured SSE create");
         assert_eq!(request.path_and_query, "/v1/responses?beta=true");
+        // The SSE lane carries the static beta header alongside the
+        // `beta=true` query.
+        assert_eq!(request.beta_header.as_deref(), Some(BETA_VALUE));
         let body: Value = serde_json::from_slice(&request.body).expect("stream JSON");
         assert_eq!(body["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn beta_retrieve_stream_encodes_resume_query() {
+        let (base_url, captured) = serve_once(
+            StatusCode::OK,
+            "text/event-stream",
+            "data: [DONE]\n\n".to_owned(),
+        )
+        .await;
+        let response_id = ResponseId::new("resp_resume");
+        let params = BetaRetrieveResponseStreamParams::new()
+            .include(BetaResponseIncludable::EncryptedReasoning)
+            .starting_after(41)
+            .include_obfuscation(false);
+
+        let mut stream = client(base_url)
+            .beta_responses()
+            .retrieve_stream(&response_id, params)
+            .await
+            .expect("beta retrieve stream handshake");
+        assert!(stream.next().await.is_none());
+
+        let captured = captured.await.expect("captured beta resume request");
+        assert_eq!(captured.method, Method::GET);
+        assert_eq!(
+            captured.path_and_query,
+            "/v1/responses/resp_resume?beta=true&include=reasoning.encrypted_content&stream=true&include_obfuscation=false&starting_after=41"
+        );
+        // The SSE lane carries the static beta header (see
+        // `execute_beta_json`).
+        assert_eq!(captured.beta_header.as_deref(), Some(BETA_VALUE));
+    }
+
+    #[tokio::test]
+    async fn beta_list_input_item_pages_fails_closed_on_repeated_cursor() {
+        let page = json!({
+            "object": "list",
+            "data": [],
+            "first_id": "item_1",
+            "last_id": "item_1",
+            "has_more": true
+        });
+        let (base_url, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, page.to_string()),
+            (StatusCode::OK, page.to_string()),
+        ])
+        .await;
+
+        let mut stream = client(base_url)
+            .beta_responses()
+            .list_input_item_pages(&ResponseId::new("resp_1"), BetaListInputItemsParams::new());
+        let first = stream.next().await.expect("first beta page").expect("ok");
+        assert_eq!(first.last_id(), "item_1");
+        // The server repeats the same cursor: pagination must fail closed
+        // instead of silently re-fetching the page forever.
+        let error = stream
+            .next()
+            .await
+            .expect("repeated cursor surfaces")
+            .expect_err("repeated cursor fails closed");
+        assert!(matches!(error, Error::InvalidConfiguration(_)));
+        assert!(stream.next().await.is_none());
+        assert!(captured.recv().await.is_some());
+        assert!(captured.recv().await.is_some());
+        assert!(
+            captured.try_recv().is_err(),
+            "no third request after the repeated cursor"
+        );
+    }
+
+    #[tokio::test]
+    async fn beta_list_input_item_pages_fails_closed_when_has_more_lacks_last_id() {
+        // An empty `last_id` decodes but cannot advance: beta input items are
+        // a tagged union without a shared id accessor, so no fallback cursor
+        // exists (D0147) and the stream fails closed.
+        let empty_last_id = json!({
+            "object": "list",
+            "data": [],
+            "first_id": "",
+            "last_id": "",
+            "has_more": true
+        });
+        let (base_url, mut captured) =
+            serve_sequence(vec![(StatusCode::OK, empty_last_id.to_string())]).await;
+        let mut stream = client(base_url)
+            .beta_responses()
+            .list_input_item_pages(&ResponseId::new("resp_1"), BetaListInputItemsParams::new());
+        let error = stream
+            .next()
+            .await
+            .expect("empty cursor surfaces")
+            .expect_err("empty last_id fails closed");
+        assert!(matches!(error, Error::InvalidConfiguration(_)));
+        assert!(stream.next().await.is_none());
+        assert!(captured.recv().await.is_some());
+        assert!(
+            captured.try_recv().is_err(),
+            "no follow-up request without a cursor"
+        );
+
+        // A page that omits `last_id` entirely cannot even decode as a list
+        // envelope, which still fails the stream closed before any retry.
+        let missing_last_id = json!({
+            "object": "list",
+            "data": [],
+            "first_id": "",
+            "has_more": true
+        });
+        let (base_url, mut captured) =
+            serve_sequence(vec![(StatusCode::OK, missing_last_id.to_string())]).await;
+        let mut stream = client(base_url)
+            .beta_responses()
+            .list_input_item_pages(&ResponseId::new("resp_1"), BetaListInputItemsParams::new());
+        assert!(
+            stream
+                .next()
+                .await
+                .expect("undecodable page surfaces")
+                .is_err(),
+            "a page without last_id errors instead of advancing"
+        );
+        assert!(stream.next().await.is_none());
+        assert!(captured.recv().await.is_some());
     }
 
     #[derive(Debug)]
@@ -1568,6 +1883,9 @@ mod tests {
             handshake.authorization.as_deref(),
             Some("Bearer test-placeholder-key")
         );
+        // The WebSocket face stays header-free: openai-python exposes the
+        // multi-agent preview REST-only, and the pinned Node oracle reaches
+        // `/responses` without the REST `beta=true` query.
         assert_eq!(handshake.beta_header, None);
         let sent = sent_event.await.expect("captured inject event");
         assert_eq!(sent["type"], "response.inject");
@@ -1581,5 +1899,208 @@ mod tests {
         let base = Url::parse("https://api.openai.com/v1/").expect("official base URL");
         let url = beta_websocket_url(&base).expect("derived beta WebSocket URL");
         assert_eq!(url.as_str(), "wss://api.openai.com/v1/responses");
+    }
+
+    /// Accepts one beta WebSocket and immediately closes it with a coded
+    /// close frame, so the client's recv observes a coded close.
+    async fn coded_close_websocket_server() -> (Client, oneshot::Receiver<Option<(u16, String)>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta coded-close server");
+        let address = listener
+            .local_addr()
+            .expect("beta coded-close server address");
+        let (close_sender, close_receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept beta coded-close socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("beta coded-close server handshake");
+            socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: CloseCode::Error,
+                    reason: Utf8Bytes::from_static("beta lane failed"),
+                })))
+                .await
+                .expect("send beta coded close frame");
+            // Report before draining: the drain loop only ends when the client
+            // drops its side, so awaiting it from the test would deadlock.
+            let _ = close_sender.send(Some((1011_u16, "beta lane failed".to_owned())));
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("beta coded-close client base");
+        (client(base_url), close_receiver)
+    }
+
+    #[tokio::test]
+    async fn beta_websocket_close_code_and_reason_survive_the_close_handshake() {
+        // 5-04 mirror (4-18): an abnormal coded close on the beta socket must
+        // stay distinguishable from a clean frameless EOF.
+        let (client, server_close) = coded_close_websocket_server().await;
+        let mut socket = client
+            .beta_responses()
+            .connect()
+            .await
+            .expect("connect beta WebSocket");
+        assert_eq!(
+            socket.close_code(),
+            None,
+            "no close frame has been seen yet"
+        );
+        assert!(
+            socket.recv().await.expect("coded close").is_none(),
+            "a peer close ends the beta stream"
+        );
+        assert!(socket.is_closed());
+        assert_eq!(socket.close_code(), Some(1011));
+        assert_eq!(socket.close_reason(), Some("beta lane failed"));
+        drop(socket);
+        drop(client);
+        let observed = tokio::time::timeout(Duration::from_secs(5), server_close)
+            .await
+            .expect("timely beta server drain")
+            .expect("beta server completed its side");
+        assert_eq!(
+            observed,
+            Some((1011_u16, "beta lane failed".to_owned())),
+            "the beta server saw its coded close accepted"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_frame_retires_the_beta_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta binary-frame server");
+        let address = listener
+            .local_addr()
+            .expect("beta binary-frame server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept beta binary-frame socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("beta binary-frame server handshake");
+            socket
+                .send(Message::Binary(Bytes::from_static(b"[1,2,3]")))
+                .await
+                .expect("send beta binary frame");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("beta binary-frame client base");
+        let client = client(base_url);
+        let mut socket = client
+            .beta_responses()
+            .connect()
+            .await
+            .expect("connect beta WebSocket");
+
+        // 5-04 mirror (4-19): a frame that violates the beta event-transport
+        // contract retires the socket instead of leaving it half-alive.
+        match socket.recv().await {
+            Err(Error::WebSocketProtocol(reason)) => {
+                assert_eq!(
+                    reason,
+                    "beta Responses WebSocket sent a binary data message"
+                );
+            }
+            unexpected => panic!("expected a beta protocol rejection, got {unexpected:?}"),
+        }
+        assert!(
+            socket.is_closed(),
+            "a rejected frame must retire the beta socket"
+        );
+        assert!(
+            socket
+                .recv()
+                .await
+                .expect("recv after beta rejection")
+                .is_none(),
+            "a retired beta socket reports EOF on every later recv"
+        );
+    }
+
+    #[tokio::test]
+    async fn beta_event_decode_failure_keeps_the_socket_open() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta decode-failure server");
+        let address = listener
+            .local_addr()
+            .expect("beta decode-failure server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept beta decode-failure socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("beta decode-failure server handshake");
+            socket
+                .send(Message::text("{not json"))
+                .await
+                .expect("send malformed beta event");
+            socket
+                .send(Message::text(
+                    json!({
+                        "type": "response.inject.created",
+                        "response_id": "resp_beta_1",
+                        "sequence_number": 8,
+                        "stream_id": "lane_2"
+                    })
+                    .to_string(),
+                ))
+                .await
+                .expect("send well-formed beta event");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("beta decode-failure client base");
+        let client = client(base_url);
+        let mut socket = client
+            .beta_responses()
+            .connect()
+            .await
+            .expect("connect beta WebSocket");
+
+        // 5-04 mirror (4-19): only event decoding is recoverable; the beta
+        // socket stays open for the next frame.
+        assert!(
+            socket.recv().await.is_err(),
+            "a malformed beta event must surface as a decode error"
+        );
+        assert!(
+            !socket.is_closed(),
+            "a decode failure must not retire the beta socket"
+        );
+        let event = socket
+            .recv()
+            .await
+            .expect("the beta connection survives a decode failure")
+            .expect("the following beta event still decodes");
+        assert!(matches!(event, BetaResponsesServerEvent::InjectCreated(_)));
+        assert_eq!(event.stream_id(), Some("lane_2"));
     }
 }

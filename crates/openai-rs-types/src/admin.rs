@@ -5,7 +5,7 @@
 //! manifest so every supported route has explicit request and response schema
 //! identities.
 
-use std::{collections::BTreeMap, fmt};
+use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::{Map, Value};
@@ -182,6 +182,10 @@ crate::open_string_enum! {
 /// This is a shared send-side bag. Official list operations expose overlapping
 /// pagination plus a few operation-specific filters (`before`, `emails`,
 /// `include_archived`, `owner_project_access`). Omitted fields are not sent.
+/// Not every key is defined on every route — for example, the audit-log route
+/// defines only `after`/`before`/`limit` of these fields (its own filters live
+/// on [`AuditLogListParams`]); sending an undefined key is the caller's
+/// responsibility.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AdminListParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -219,11 +223,38 @@ pub struct AdminCursorPage<T> {
 
 impl<T> AdminCursorPage<T> {
     /// Server-provided cursor for another page.
+    ///
+    /// An empty `last_id` yields `None` (D0145): it would otherwise be dropped
+    /// by the query encoder and silently re-request the first page.
     #[must_use]
     pub fn next_after(&self) -> Option<&str> {
         if !self.has_more {
             return None;
         }
+        self.last_id_str().filter(|id| !id.is_empty())
+    }
+
+    /// Cursor for another page with the D0147 last-item fallback.
+    ///
+    /// Resolution order mirrors `pagination::next_cursor` (D0147): when
+    /// `has_more` is set, a non-empty envelope `last_id` wins; otherwise the
+    /// caller-supplied identifier of the page's final element is used (the
+    /// openai-python `data[-1].id` rule); when both are absent or empty there
+    /// is no forward cursor. The Administration channel pages by hand (it has
+    /// no `list_pages` stream), so callers pass the last item's id explicitly,
+    /// e.g. `page.data.last().and_then(|item| item.id.as_deref())`.
+    #[must_use]
+    pub fn next_after_with<'a>(&'a self, last_item_id: Option<&'a str>) -> Option<&'a str> {
+        if !self.has_more {
+            return None;
+        }
+        self.next_after()
+            .or_else(|| last_item_id.filter(|id| !id.is_empty()))
+    }
+
+    /// The envelope `last_id` when present and non-null.
+    #[must_use]
+    fn last_id_str(&self) -> Option<&str> {
         match &self.last_id {
             Omittable::Value(Nullable::Value(id)) => Some(id),
             Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
@@ -250,15 +281,33 @@ pub struct AdminRequiredCursorPage<T> {
 }
 
 impl<T> AdminRequiredCursorPage<T> {
+    /// Server-provided cursor for another page.
+    ///
+    /// An empty `last_id` yields `None` (D0145): it would otherwise be dropped
+    /// by the query encoder and silently re-request the first page.
     #[must_use]
     pub fn next_after(&self) -> Option<&str> {
         if !self.has_more {
             return None;
         }
         match &self.last_id {
-            Nullable::Value(id) => Some(id),
+            Nullable::Value(id) => Some(id.as_str()).filter(|id| !id.is_empty()),
             Nullable::Null => None,
         }
+    }
+
+    /// Cursor for another page with the D0147 last-item fallback.
+    ///
+    /// Same resolution order as [`AdminCursorPage::next_after_with`]: a
+    /// non-empty envelope `last_id` wins, then the caller-supplied last item
+    /// id, then no cursor.
+    #[must_use]
+    pub fn next_after_with<'a>(&'a self, last_item_id: Option<&'a str>) -> Option<&'a str> {
+        if !self.has_more {
+            return None;
+        }
+        self.next_after()
+            .or_else(|| last_item_id.filter(|id| !id.is_empty()))
     }
 
     #[must_use]
@@ -1139,11 +1188,76 @@ impl AuditLog {
 
 pub type ListAuditLogsResponse = AdminCursorPage<AuditLog>;
 
+/// `effective_at` bounds for `GET /organization/audit_logs`.
+///
+/// The pinned `effective_at` query parameter is an object with exactly these
+/// four comparison keys (`gt`/`gte`/`lt`/`lte`, Unix seconds); openai-python
+/// and openai-node model it as the same four-key literal type. Omitted fields
+/// are not sent, and the deep-object encoder emits them as
+/// `effective_at[gt]=…` style pairs.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AuditEffectiveAt {
+    /// Return only events whose `effective_at` is greater than this value.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub gt: Omittable<u64>,
+    /// Return only events whose `effective_at` is greater than or equal to
+    /// this value.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub gte: Omittable<u64>,
+    /// Return only events whose `effective_at` is less than this value.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub lt: Omittable<u64>,
+    /// Return only events whose `effective_at` is less than or equal to this
+    /// value.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub lte: Omittable<u64>,
+}
+
+impl AuditEffectiveAt {
+    /// Sets the exclusive lower bound (`effective_at > value`).
+    #[must_use]
+    pub fn with_gt(mut self, gt: u64) -> Self {
+        self.gt = Omittable::Value(gt);
+        self
+    }
+
+    /// Sets the inclusive lower bound (`effective_at >= value`).
+    #[must_use]
+    pub fn with_gte(mut self, gte: u64) -> Self {
+        self.gte = Omittable::Value(gte);
+        self
+    }
+
+    /// Sets the exclusive upper bound (`effective_at < value`).
+    #[must_use]
+    pub fn with_lt(mut self, lt: u64) -> Self {
+        self.lt = Omittable::Value(lt);
+        self
+    }
+
+    /// Sets the inclusive upper bound (`effective_at <= value`).
+    #[must_use]
+    pub fn with_lte(mut self, lte: u64) -> Self {
+        self.lte = Omittable::Value(lte);
+        self
+    }
+}
+
 /// Audit log filters and pagination.
+///
+/// The pinned `GET /organization/audit_logs` defines exactly `effective_at`,
+/// `project_ids`, `event_types`, `actor_ids`, `actor_emails`, `resource_ids`,
+/// `tenant_only`, `limit`, `after`, and `before`. The flattened
+/// [`AdminListParams`] bag is shared across the Administration list endpoints,
+/// so it also carries `order`, `emails`, `include_archived`, and
+/// `owner_project_access` — four filters the audit route does not define. They
+/// stay omitted unless explicitly set; sending one is the caller's
+/// responsibility, mirroring how the shared superset is documented on
+/// [`AdminListParams`] (see 5-K4).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditLogListParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub effective_at: Omittable<BTreeMap<String, u64>>,
+    pub effective_at: Omittable<AuditEffectiveAt>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub project_ids: Omittable<Vec<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -2645,6 +2759,49 @@ crate::open_string_enum! {
     }
 }
 
+crate::open_string_enum! {
+    /// Image-usage query source filter.
+    ///
+    /// The pinned `GET /organization/usage/images` `sources` item enum lists
+    /// exactly these three values; any future service value decodes as
+    /// `Unknown` and re-encodes verbatim.
+    pub enum UsageImageSource {
+        Generation = "image.generation",
+        Edit = "image.edit",
+        Variation = "image.variation"
+    }
+}
+
+crate::open_string_enum! {
+    /// Image-usage query size filter.
+    ///
+    /// The pinned `GET /organization/usage/images` `sizes` item enum lists
+    /// exactly these five values — note the pinned `1792x1792` square, which
+    /// the generation-side [`crate::media::ImageSize`] does not carry (that
+    /// domain has `1792x1024` instead). Any future service value decodes as
+    /// `Unknown` and re-encodes verbatim.
+    pub enum UsageImageSize {
+        Square256 = "256x256",
+        Square512 = "512x512",
+        Square1024 = "1024x1024",
+        Square1792 = "1792x1792",
+        Portrait1024x1792 = "1024x1792"
+    }
+}
+
+crate::open_string_enum! {
+    /// Web-search usage context-level filter.
+    ///
+    /// The pinned `GET /organization/usage/web_search_calls` `context_levels`
+    /// item enum lists exactly these three values; any future service value
+    /// decodes as `Unknown` and re-encodes verbatim.
+    pub enum UsageContextLevel {
+        Low = "low",
+        Medium = "medium",
+        High = "high"
+    }
+}
+
 /// Shared query superset for Usage endpoints.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageQueryParams {
@@ -2664,13 +2821,13 @@ pub struct UsageQueryParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub batch: Omittable<bool>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub sources: Omittable<Vec<String>>,
+    pub sources: Omittable<Vec<UsageImageSource>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub sizes: Omittable<Vec<String>>,
+    pub sizes: Omittable<Vec<UsageImageSize>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub vector_store_ids: Omittable<Vec<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub context_levels: Omittable<Vec<String>>,
+    pub context_levels: Omittable<Vec<UsageContextLevel>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub group_by: Omittable<Vec<UsageGroupBy>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -3964,6 +4121,7 @@ mod tests {
     assert_impl_all!(AdminApiKey: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(AdminApiKeyCreateResponse: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(AuditLog: Serialize, DeserializeOwned, Send, Sync);
+    assert_impl_all!(AuditEffectiveAt: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(Certificate: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(CertificateScopeResponse: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(User: Serialize, DeserializeOwned, Send, Sync);
@@ -4102,6 +4260,62 @@ mod tests {
         assert!(matches!(audit.kind, AuditEventType::TenantPolicyUpdated));
         assert!(audit.api_key_created.is_omitted());
         assert_eq!(ok(serde_json::to_value(audit)), fixture);
+    }
+
+    #[test]
+    fn audit_effective_at_pins_the_four_comparison_keys() {
+        // The pinned `effective_at` query parameter is an object with exactly
+        // gt/gte/lt/lte (Unix seconds); openai-python and openai-node type it
+        // the same way, so the previous free-form string map is gone.
+        let bounds = AuditEffectiveAt::default()
+            .with_gt(100)
+            .with_gte(101)
+            .with_lt(200)
+            .with_lte(201);
+        assert_eq!(
+            ok(serde_json::to_value(&bounds)),
+            json!({"gt": 100, "gte": 101, "lt": 200, "lte": 201})
+        );
+
+        // A partially filled filter only emits the keys that were set.
+        assert_eq!(
+            ok(serde_json::to_value(
+                AuditEffectiveAt::default().with_gte(100)
+            )),
+            json!({"gte": 100})
+        );
+
+        let audit = AuditLogListParams {
+            effective_at: Omittable::Value(AuditEffectiveAt::default().with_gt(10).with_lt(20)),
+            ..AuditLogListParams::default()
+        };
+        assert_eq!(
+            ok(serde_json::to_value(&audit)),
+            json!({"effective_at": {"gt": 10, "lt": 20}})
+        );
+
+        let decoded = ok(serde_json::from_value::<AuditLogListParams>(json!({
+            "effective_at": {"gte": 1, "lte": 2}
+        })));
+        match decoded.effective_at {
+            Omittable::Value(bounds) => {
+                assert_eq!(bounds.gte, Omittable::Value(1));
+                assert_eq!(bounds.lte, Omittable::Value(2));
+                assert!(bounds.gt.is_omitted());
+                assert!(bounds.lt.is_omitted());
+            }
+            Omittable::Omitted => panic!("official effective_at bounds must decode"),
+        }
+
+        // Three-state rule: a bound is either absent or an integer, never null.
+        assert!(
+            serde_json::from_value::<AuditEffectiveAt>(json!({"gt": null})).is_err(),
+            "explicit null is not an effective_at bound"
+        );
+        assert!(
+            serde_json::from_value::<AuditLogListParams>(json!({"effective_at": null})).is_err(),
+            "explicit null is not an effective_at filter"
+        );
     }
 
     #[test]
@@ -4643,6 +4857,112 @@ mod tests {
     }
 
     #[test]
+    fn usage_query_pins_image_and_web_search_filter_enums() {
+        const OFFICIAL_IMAGE_SOURCES: [(&str, UsageImageSource); 3] = [
+            ("image.generation", UsageImageSource::Generation),
+            ("image.edit", UsageImageSource::Edit),
+            ("image.variation", UsageImageSource::Variation),
+        ];
+        for (value, expected) in OFFICIAL_IMAGE_SOURCES {
+            let decoded = UsageImageSource::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official image source {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+        }
+
+        // The pinned `sizes` enum carries `1792x1792` (a square), unlike the
+        // generation-side `crate::media::ImageSize` which has `1792x1024`.
+        const OFFICIAL_IMAGE_SIZES: [(&str, UsageImageSize); 5] = [
+            ("256x256", UsageImageSize::Square256),
+            ("512x512", UsageImageSize::Square512),
+            ("1024x1024", UsageImageSize::Square1024),
+            ("1792x1792", UsageImageSize::Square1792),
+            ("1024x1792", UsageImageSize::Portrait1024x1792),
+        ];
+        for (value, expected) in OFFICIAL_IMAGE_SIZES {
+            let decoded = UsageImageSize::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official usage size {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+        }
+        assert!(
+            !UsageImageSize::from_raw("1792x1024").is_known(),
+            "1792x1024 belongs to the generation-side ImageSize domain"
+        );
+
+        const OFFICIAL_CONTEXT_LEVELS: [(&str, UsageContextLevel); 3] = [
+            ("low", UsageContextLevel::Low),
+            ("medium", UsageContextLevel::Medium),
+            ("high", UsageContextLevel::High),
+        ];
+        for (value, expected) in OFFICIAL_CONTEXT_LEVELS {
+            let decoded = UsageContextLevel::from_raw(value);
+            assert!(
+                decoded.is_known(),
+                "official context level {value} must be a named variant"
+            );
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_str(), value);
+        }
+
+        // Future service values stay lossless through the open enums.
+        let usage = UsageQueryParams {
+            sources: Omittable::Value(vec![
+                UsageImageSource::Edit,
+                UsageImageSource::from_raw("image.future"),
+            ]),
+            sizes: Omittable::Value(vec![UsageImageSize::from_raw("2048x2048")]),
+            context_levels: Omittable::Value(vec![
+                UsageContextLevel::Low,
+                UsageContextLevel::from_raw("auto"),
+            ]),
+            ..UsageQueryParams::new(100)
+        };
+        assert_eq!(
+            ok(serde_json::to_value(&usage)),
+            json!({
+                "start_time": 100,
+                "sources": ["image.edit", "image.future"],
+                "sizes": ["2048x2048"],
+                "context_levels": ["low", "auto"]
+            })
+        );
+
+        let decoded = ok(serde_json::from_value::<UsageQueryParams>(json!({
+            "start_time": 100,
+            "sources": ["image.generation"],
+            "sizes": ["1792x1792"],
+            "context_levels": ["medium"]
+        })));
+        match (decoded.sources, decoded.sizes, decoded.context_levels) {
+            (
+                Omittable::Value(sources),
+                Omittable::Value(sizes),
+                Omittable::Value(context_levels),
+            ) => {
+                assert!(sources[0].is_known());
+                assert!(sizes[0].is_known());
+                assert_eq!(sizes[0].as_str(), "1792x1792");
+                assert!(context_levels[0].is_known());
+            }
+            _ => panic!("official usage image/web-search filters must decode"),
+        }
+        assert!(
+            serde_json::from_value::<UsageQueryParams>(json!({
+                "start_time": 100,
+                "context_levels": null
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn admin_list_object_pins_the_single_list_constant() {
         assert_eq!(AdminListObject::from_raw("list"), AdminListObject::List);
         // Every pinned Administration list envelope uses the `list` constant;
@@ -4805,10 +5125,10 @@ mod tests {
         );
 
         let usage = UsageQueryParams {
-            sources: Omittable::Value(vec!["image.generation".to_owned()]),
-            sizes: Omittable::Value(vec!["1024x1024".to_owned()]),
+            sources: Omittable::Value(vec![UsageImageSource::Generation]),
+            sizes: Omittable::Value(vec![UsageImageSize::Square1024]),
             vector_store_ids: Omittable::Value(vec!["vs_1".to_owned()]),
-            context_levels: Omittable::Value(vec!["high".to_owned()]),
+            context_levels: Omittable::Value(vec![UsageContextLevel::High]),
             ..UsageQueryParams::new(100)
         };
         let encoded = ok(serde_json::to_value(&usage));
@@ -5401,6 +5721,7 @@ mod tests {
         assert!(matches!(page.first_id, Nullable::Null));
         assert!(matches!(page.last_id, Nullable::Null));
         assert_eq!(page.next_after(), None);
+        assert_eq!(page.next_after_with(Some("cert_1")), None);
         assert_eq!(ok(serde_json::to_value(page)), fixture);
         assert!(
             serde_json::from_value::<ListCertificatesResponse>(json!({
@@ -5409,6 +5730,82 @@ mod tests {
                 "has_more": false
             }))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn admin_cursor_pages_fall_back_to_the_last_item_id() {
+        // D0147 resolution order on the optional-id envelope: a non-empty
+        // `last_id` wins, then the caller-supplied last item id, then nothing.
+        let page = ok(serde_json::from_value::<ListAuditLogsResponse>(json!({
+            "object": "list",
+            "data": [],
+            "has_more": true,
+            "first_id": null,
+            "last_id": null
+        })));
+        assert_eq!(page.next_after(), None);
+        assert_eq!(page.next_after_with(None), None);
+        assert_eq!(page.next_after_with(Some("audit_9")), Some("audit_9"));
+        // Empty fallback ids never become cursors.
+        assert_eq!(page.next_after_with(Some("")), None);
+
+        let with_last = ok(serde_json::from_value::<ListAuditLogsResponse>(json!({
+            "object": "list",
+            "data": [],
+            "has_more": true,
+            "last_id": "audit_7"
+        })));
+        assert_eq!(with_last.next_after(), Some("audit_7"));
+        assert_eq!(
+            with_last.next_after_with(Some("audit_9")),
+            Some("audit_7"),
+            "the envelope last_id outranks the last item id"
+        );
+
+        // D0145: an empty-string last_id would be dropped by the query encoder
+        // and silently re-request the first page, so both getters treat it as
+        // absent — `next_after_with` still recovers via the fallback.
+        let empty_last = ok(serde_json::from_value::<ListAuditLogsResponse>(json!({
+            "object": "list",
+            "data": [],
+            "has_more": true,
+            "last_id": ""
+        })));
+        assert_eq!(empty_last.next_after(), None);
+        assert_eq!(empty_last.next_after_with(Some("audit_9")), Some("audit_9"));
+
+        // Without `has_more` there is no next page regardless of ids.
+        let done = ok(serde_json::from_value::<ListAuditLogsResponse>(json!({
+            "object": "list",
+            "data": [],
+            "has_more": false,
+            "last_id": "audit_7"
+        })));
+        assert_eq!(done.next_after(), None);
+        assert_eq!(done.next_after_with(Some("audit_9")), None);
+
+        // The required-id envelope shares the rule.
+        let required = ok(serde_json::from_value::<ListCertificatesResponse>(json!({
+            "object": "list",
+            "data": [],
+            "first_id": null,
+            "last_id": null,
+            "has_more": true
+        })));
+        assert_eq!(required.next_after_with(Some("cert_1")), Some("cert_1"));
+        let required_empty = ok(serde_json::from_value::<ListCertificatesResponse>(json!({
+            "object": "list",
+            "data": [],
+            "first_id": null,
+            "last_id": "",
+            "has_more": true
+        })));
+        assert_eq!(required_empty.next_after(), None);
+        assert_eq!(required_empty.next_after_with(Some("")), None);
+        assert_eq!(
+            required_empty.next_after_with(Some("cert_1")),
+            Some("cert_1")
         );
     }
 

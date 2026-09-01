@@ -128,6 +128,24 @@ impl Files {
 }
 
 /// Operations on multipart Upload sessions.
+///
+/// # Upload constraints
+///
+/// The service imposes three limits on an Upload session (documented in the
+/// official SDK docstrings rather than the OpenAPI schemas, and enforced
+/// server-side):
+///
+/// - **Part size.** Each [`Uploads::add_part`] call carries at most 64 MB
+///   (64 × 1,048,576 bytes; `DEFAULT_PART_SIZE` upstream). Split larger
+///   inputs across several parts.
+/// - **Total size.** One Upload accepts at most 8 GB in total across all of
+///   its parts; declare the final count with
+///   [`CreateUploadRequest::bytes`].
+/// - **Session lifetime.** The session expires about one hour after
+///   creation. The exact deadline returned by the service is exposed as
+///   [`Upload::expires_at`]; finish
+///   adding parts and call [`Uploads::complete`] before it passes, since
+///   parts can no longer be added to an expired Upload.
 #[derive(Clone, Debug)]
 pub struct Uploads {
     client: Client,
@@ -139,6 +157,11 @@ impl Uploads {
     }
 
     /// Creates an Upload session with the declared final byte count.
+    ///
+    /// The session can accept at most 8 GB in total and expires about an hour
+    /// after creation; see the [struct documentation](Uploads) for all three
+    /// upload constraints and [`Upload::expires_at`]
+    /// for the exact deadline.
     pub async fn create(&self, request: CreateUploadRequest) -> Result<ApiResponse<Upload>, Error> {
         if request.bytes() < 0 {
             return Err(Error::InvalidConfiguration(
@@ -153,6 +176,11 @@ impl Uploads {
     }
 
     /// Adds a replayable bytes or filesystem-path part to an Upload.
+    ///
+    /// The part must carry at most 64 MB; the Upload accepts at most 8 GB in
+    /// total and expires about an hour after creation, so complete it before
+    /// [`Upload::expires_at`] passes. See the
+    /// [struct documentation](Uploads) for the full constraint list.
     pub async fn add_part(
         &self,
         upload_id: &UploadId,
@@ -165,6 +193,11 @@ impl Uploads {
     }
 
     /// Adds a reader or stream part exactly once and never retries it.
+    ///
+    /// The same session constraints apply as for [`Uploads::add_part`]: at
+    /// most 64 MB per part, at most 8 GB in total, and completion before the
+    /// roughly one-hour expiry reported by
+    /// [`Upload::expires_at`].
     pub async fn add_part_one_shot(
         &self,
         upload_id: &UploadId,

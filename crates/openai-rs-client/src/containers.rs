@@ -802,6 +802,123 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn container_page_stream_falls_back_to_the_last_container_id() {
+        // D0147: `has_more=true` with an empty `last_id` advances via
+        // data[-1].id instead of silently repeating the first page.
+        let (client, captures) = serve_script(vec![
+            StubResponse::json(
+                json!({
+                    "object": "list",
+                    "data": [{
+                        "id": "cntr_fallback",
+                        "object": "container",
+                        "name": "sandbox",
+                        "created_at": 1,
+                        "status": "running"
+                    }],
+                    "first_id": "cntr_fallback",
+                    "last_id": "",
+                    "has_more": true
+                })
+                .to_string(),
+            ),
+            StubResponse::json(
+                json!({
+                    "object":"list","data":[],"first_id":"cntr_fallback",
+                    "last_id":"cntr_fallback","has_more":false
+                })
+                .to_string(),
+            ),
+        ])
+        .await;
+        let pages = Containers::new(client)
+            .list_pages(ContainerListParams::default())
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().all(Result::is_ok));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 2);
+        let second = Url::parse(&format!("http://loopback{}", captures[1].path_and_query))
+            .expect("second page URL");
+        let query = second.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("after".into(), "cntr_fallback".into())));
+    }
+
+    #[tokio::test]
+    async fn container_page_stream_fails_closed_when_no_cursor_can_be_resolved() {
+        // `has_more=true` with an empty `last_id` and no data cannot name a
+        // cursor; the stream fails closed after exactly one request instead
+        // of refetching the first page.
+        let (client, captures) = serve_script(vec![StubResponse::json(
+            json!({
+                "object":"list","data":[],"first_id":"","last_id":"","has_more":true
+            })
+            .to_string(),
+        )])
+        .await;
+        let mut pages = Containers::new(client).list_pages(ContainerListParams::default());
+        let error = pages
+            .next()
+            .await
+            .expect("stream fails closed")
+            .expect_err("no resolvable cursor");
+        assert!(matches!(error, Error::InvalidConfiguration(_)));
+        drop(pages);
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn container_file_page_stream_falls_back_to_the_last_file_id() {
+        let (client, captures) = serve_script(vec![
+            StubResponse::json(
+                json!({
+                    "object": "list",
+                    "data": [{
+                        "id": "cfile_fallback",
+                        "object": "container.file",
+                        "container_id": "cntr_1",
+                        "created_at": 1,
+                        "bytes": 4,
+                        "path": "/a",
+                        "source": "user"
+                    }],
+                    "first_id": "cfile_fallback",
+                    "last_id": "",
+                    "has_more": true
+                })
+                .to_string(),
+            ),
+            StubResponse::json(
+                json!({
+                    "object":"list","data":[],"first_id":"cfile_fallback",
+                    "last_id":"cfile_fallback","has_more":false
+                })
+                .to_string(),
+            ),
+        ])
+        .await;
+        let pages = ContainerFiles::new(client)
+            .list_pages(
+                ContainerId::new("cntr_1"),
+                ContainerFileListParams::default(),
+            )
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().all(Result::is_ok));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 2);
+        let second = Url::parse(&format!("http://loopback{}", captures[1].path_and_query))
+            .expect("second file page URL");
+        let query = second.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("after".into(), "cfile_fallback".into())));
+    }
+
+    #[tokio::test]
     async fn container_file_attach_list_retrieve_and_delete_match_contract() {
         let container_id = ContainerId::new("cntr/a b");
         let file_id = ContainerFileId::new("cfile/x y");

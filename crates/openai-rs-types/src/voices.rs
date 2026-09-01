@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use thiserror::Error;
 
 use crate::{ExtraFields, Nullable, Omittable, ReplayableMultipartSource};
@@ -301,13 +301,77 @@ impl DeletedVoiceConsent {
     }
 }
 
+/// A voice-consent list page size below the documented minimum of 1.
+///
+/// The pinned `limit` parameter documents a prose range of 1..=100 with a
+/// default of 20 but carries no `maximum`, so only the schema-backed lower
+/// bound of 1 is enforced (D0154/D0174). The bound fires when the parameters
+/// are encoded or decoded, so a zero page size can never reach the wire.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[error("voice-consent list limit must be at least 1, got {actual}")]
+pub struct VoiceConsentListLimitError {
+    actual: u32,
+}
+
+impl VoiceConsentListLimitError {
+    /// Rejected page size.
+    #[must_use]
+    pub const fn actual(self) -> u32 {
+        self.actual
+    }
+}
+
+/// Page size that refuses to encode or decode a value of zero.
+///
+/// [`ListVoiceConsentsParams::limit`] stays infallible, so the rejected value
+/// is stored and surfaced as [`VoiceConsentListLimitError`] through the serde
+/// boundary instead — the send-time half of the two-phase split documented on
+/// [`VoiceRequestError`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ValidatedListLimit(u32);
+
+impl ValidatedListLimit {
+    fn validate(value: u32) -> Result<(), VoiceConsentListLimitError> {
+        if value == 0 {
+            Err(VoiceConsentListLimitError { actual: value })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Serialize for ValidatedListLimit {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        Self::validate(self.0).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_u32(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ValidatedListLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = u32::deserialize(deserializer)?;
+        Self::validate(value).map_err(D::Error::custom)?;
+        Ok(Self(value))
+    }
+}
+
 /// Query parameters for listing voice consents.
+///
+/// The pinned `limit` parameter documents a prose range of 1..=100 with a
+/// default of 20 but carries no `maximum`, so only the schema-backed lower
+/// bound of 1 is enforced, and it is enforced on both encode and decode.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListVoiceConsentsParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     after: Omittable<VoiceConsentId>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    limit: Omittable<u32>,
+    limit: Omittable<ValidatedListLimit>,
 }
 
 impl ListVoiceConsentsParams {
@@ -325,9 +389,15 @@ impl ListVoiceConsentsParams {
     }
 
     /// Sets page size.
+    ///
+    /// The pinned schema documents a prose range of 1..=100 with a default of
+    /// 20 but carries no `maximum`, so no upper bound is applied. A page size
+    /// of zero cannot be encoded or decoded: it fails with
+    /// [`VoiceConsentListLimitError`] at the serde boundary instead of being
+    /// sent to the service.
     #[must_use]
     pub fn limit(mut self, limit: u32) -> Self {
-        self.limit = Omittable::Value(limit);
+        self.limit = Omittable::Value(ValidatedListLimit(limit));
         self
     }
 
@@ -599,6 +669,60 @@ mod tests {
         assert_eq!(
             serde_json::to_value(list).expect("round-trip list"),
             fixture
+        );
+    }
+
+    #[test]
+    fn consent_list_limit_enforces_the_schema_backed_minimum() {
+        // The pinned `limit` parameter documents "between 1 and 100" in prose
+        // but carries no `maximum`, and the official Python SDK forwards
+        // unbounded integers, so only the schema-backed lower bound of 1 is
+        // enforced (D0154/D0174).
+        let error = VoiceConsentListLimitError { actual: 0 };
+        assert_eq!(error.actual(), 0);
+        assert_eq!(
+            error.to_string(),
+            "voice-consent list limit must be at least 1, got 0"
+        );
+
+        // The builder stays infallible, so a zero page size is stored and then
+        // rejected at both serde boundaries before it can reach the wire.
+        let encode_error = serde_json::to_value(ListVoiceConsentsParams::new().limit(0))
+            .expect_err("zero page size must not encode");
+        assert!(
+            encode_error
+                .to_string()
+                .contains("voice-consent list limit must be at least 1, got 0")
+        );
+        let decode_error = serde_json::from_value::<ListVoiceConsentsParams>(json!({"limit": 0}))
+            .expect_err("zero page size must not decode");
+        assert!(
+            decode_error
+                .to_string()
+                .contains("voice-consent list limit must be at least 1, got 0")
+        );
+
+        assert_eq!(
+            serde_json::to_value(ListVoiceConsentsParams::new().limit(1))
+                .expect("minimum page size encodes"),
+            json!({"limit": 1})
+        );
+        let above_ceiling =
+            serde_json::from_value::<ListVoiceConsentsParams>(json!({"limit": 101}))
+                .expect("value above the documented prose ceiling stays valid");
+        assert_eq!(
+            serde_json::to_value(above_ceiling).expect("re-encode page size above the ceiling"),
+            json!({"limit": 101})
+        );
+        let cursored = serde_json::from_value::<ListVoiceConsentsParams>(json!({
+            "after": "cons_1",
+            "limit": u32::MAX
+        }))
+        .expect("no invented upper bound");
+        assert_eq!(cursored.after_ref().map(|id| id.as_str()), Some("cons_1"));
+        assert_eq!(
+            serde_json::to_value(cursored).expect("re-encode cursored parameters"),
+            json!({"after": "cons_1", "limit": u32::MAX})
         );
     }
 

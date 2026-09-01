@@ -4148,3 +4148,182 @@ until a decision is recorded here and its fixtures pass.
 - Impact: documentation of existing behavior.
 - Overrides: none
 - Tests: existing redaction and constraint tests.
+
+## D0209 — follow_up_from drops conversation; previous_response_id documents the mutual exclusion
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `CreateResponseRequest::follow_up_from`, `previous_response_id`/`conversation` builders (GA+beta create and count faces)
+- Sources: pinned `ResponseProperties.previous_response_id` — "Cannot be used in conjunction with `conversation`." — carried by both official SDKs' parameter docs; the follow-up helper copied `conversation` after setting `previous_response_id`, producing the rejected combination.
+- Decision: the follow-up constructor copies only the seven stable prefix fields and never `conversation`; the mutual-exclusion sentence now appears on both builders in both directions across GA and beta create/count faces.
+- Reason: conversation-mode callers invoking the continuation helper got a request the service rejects with 400.
+- Impact: `openai-rs-types` Responses construction (behavior change on the helper; docs).
+- Overrides: none
+- Tests: `follow_up_from_does_not_carry_conversation`.
+
+## D0210 — Beta Responses REST face sends the OpenAI-Beta preview header on every lane
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BetaResponses` REST operations (create/retrieve/delete/cancel/compact/input_items/input_tokens and both SSE lanes); `Transport::execute_optional_json_with_static_header`, `send_with_static_header`
+- Sources: the pinned `?beta=true` routes declare the optional `openai-beta` header (enum `["responses_multi_agent=v1"]`); openai-python's `betas` parameter and openai-node's `betas` option send it on every beta method, streaming and delete included.
+- Decision: all JSON, empty-or-JSON, and SSE beta lanes carry `OpenAI-Beta: responses_multi_agent=v1` via the static-header transport entries (two new entry points were added for the empty-or-JSON and raw-send lanes); the WebSocket face stays header-free (python exposes the preview REST-only). The header value is the enum's single member — the only expressible setting.
+- Reason: the header is the documented preview gate in the official SDKs; three of nine operations previously lacked it with no escape hatch.
+- Impact: `openai-rs-client` beta transport headers (additive wire header on delete and SSE lanes).
+- Overrides: none
+- Tests: `create_uses_beta_query_multi_agent_body_and_beta_header` and per-lane assertions in `beta_responses.rs` tests.
+
+## D0211 — create_call sends a bare application/sdp request when no session is attached
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `Realtime::create_call`
+- Sources: the pinned `POST /realtime/calls` requestBody lists both `multipart/form-data` and `application/sdp`; openai-python's `encode_multipart(raw_body_field="sdp")` and openai-node's `encodedMultipartFormRequestOptions(..., 'sdp')` both switch to the bare SDP body when it is the only field.
+- Decision: an attached session keeps the pinned two-part multipart (sdp + session); an omitted session sends the SDP text with `Content-Type: application/sdp` (Accept stays `application/sdp`; 201/Location handling and the single-shot retry classification are unchanged). Unknown request keys are documented as not sent (the pinned encoding table defines only the two parts; decode stays lossless).
+- Impact: `openai-rs-client` realtime call transport (wire form for the session-less case).
+- Overrides: none
+- Tests: `create_call_without_session_sends_a_bare_sdp_request`, existing `create_call_sends_multipart_and_returns_sdp_location`.
+
+## D0212 — All three WebSocket recv loops share one failure posture
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `BetaResponsesWebSocket`, `ResponsesWebSocket::recv`, `RealtimeWebSocket::recv`
+- Sources: round-4's D0198 stated "both WS clients" while the crate has three; the beta loop dropped close frames, kept an explicit Pong write, and left the socket open after protocol errors; the GA loop left non-decode failures unretired.
+- Decision: every transport/protocol failure (read error, oversized text, Binary/Frame rejection, keepalive timeout, probe write failure) retires the socket (`closed = true`); event decode failures keep it open (node parity); close frames are recorded and exposed via `close_code()`/`close_reason()` with the unframed-EOF-stays-None distinction; the beta loop's explicit Pong write was removed (tungstenite 0.29 auto-replies, per D0148).
+- Impact: `openai-rs-client` beta/GA WebSocket failure semantics tightened; additive accessors.
+- Overrides: extends D0198 to all three clients
+- Tests: `beta_websocket_close_code_and_reason_survive_the_close_handshake`, `rejected_frame_retires_the_beta_socket`, `beta_event_decode_failure_keeps_the_socket_open`, `binary_frame_retires_the_responses_socket`.
+
+## D0213 — Realtime connection targets reject empty strings
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `realtime_websocket_url`
+- Sources: openai-node's `buildRealtimeURL` throws on empty model/callID targets; an empty target otherwise derives `?model=` / `?call_id=` onto the wire.
+- Decision: the URL derivation rejects empty target values with `InvalidConfiguration`; enforcement sits at the derivation layer so `From<ModelId>` and direct enum construction are covered too (the named constructors stay infallible — their Debug shape is pinned by facade re-export tests).
+- Impact: `openai-rs-client` realtime connect validation (additive).
+- Overrides: none
+- Tests: `websocket_url_rejects_empty_target_values`.
+
+## D0214 — Usage image and web-search filters are typed enums (completes the D0178 family)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `UsageImageSource`, `UsageImageSize`, `UsageContextLevel`, `UsageQueryParams`
+- Sources: the pinned `/organization/usage/images` `sources` (3 values) and `sizes` (5 values — including `1792x1792`, which differs from the generation-side `ImageSize` domain) and `/organization/usage/web_search_calls` `context_levels` (3 values) item enums; both official SDKs type them as Literal unions.
+- Decision: three open string enums narrow the shared bag's vector fields; the usage-side image size keeps its own domain rather than aliasing the generation enum.
+- Impact: `openai-rs-types` Admin usage query (breaking: field types).
+- Overrides: none
+- Tests: `usage_query_pins_image_and_web_search_filter_enums`, updated `admin_query_filters_match_openapi`.
+
+## D0215 — Audit effective_at pins the four comparison keys
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `AuditEffectiveAt`, `AuditLogListParams.effective_at`
+- Sources: the pinned audit-logs `effective_at` object carries exactly gt/gte/lt/lte (integer); both official SDKs model the same four-key typed dict; the previous `BTreeMap<String, u64>` accepted arbitrary keys onto the wire.
+- Decision: a dedicated four-field structure with per-bound builders; the deep-object encoder unchanged (`effective_at[gt]=…`).
+- Impact: `openai-rs-types` Admin audit query (breaking: field type).
+- Overrides: none
+- Tests: `audit_effective_at_pins_the_four_comparison_keys`, `audit_effective_at_encodes_as_deep_object_bounds`.
+
+## D0216 — Manual pagination getters share the D0147 cursor rule
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `next_after` on stored-chat (×2), container (×2), and admin (×2) page envelopes; `next_after_with` on the admin envelopes; `ChatCompletions::next_page`
+- Sources: D0147 set last_id → last-item-id → fail-closed for the streaming channel only; the getters returned `Some("")` for empty cursors, which D0145 drops from the query, silently re-fetching the first page; python's page helpers advance via `data[-1].id`.
+- Decision: every `next_after` filters empty cursors and falls back to the page's last item id (None when neither resolves); `next_page` builds on the getter and returns `None` instead of re-requesting; the admin envelopes gain `next_after_with(last_item_id)` for manual paging.
+- Impact: `openai-rs-types` chat/containers/admin envelopes; `openai-rs-client` next_page paths.
+- Overrides: extends D0147
+- Tests: `stored_completion_and_message_pages_fall_back_to_the_last_item_id`, `container_and_file_pages_fall_back_to_the_last_item_id`, `admin_cursor_pages_fall_back_to_the_last_item_id`, `stored_list_next_page_falls_back_to_the_final_completion_id`, `stored_list_next_page_stops_without_a_resolvable_cursor`, `stored_messages_next_page_follows_the_same_cursor_fallback`, `container_page_stream_falls_back_to_the_last_container_id`, `container_file_page_stream_falls_back_to_the_last_file_id`.
+
+## D0217 — Conversations and voice-consent list limits enforce only the schema-backed lower bound
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ConversationListLimit` handling (`InvalidListLimit.actual`), `ListVoiceConsentsParams.limit`
+- Sources: both pinned `limit` parameters carry only `default: 20` (the 1..=100 range is prose); D0154/D0174 established the same treatment for Files/Batches/Vector Stores; D0203 fixed rejected maxima to report `actual`.
+- Decision: the conversations ceiling is dropped (≥1 in builder and decode; variant field renamed to `actual`); voice consents gain the missing ≥1 floor at both serde boundaries (the chained client call site pins the infallible builder signature, so zero surfaces as an `EncodeQuery` failure before transport — the D0204 two-phase pattern).
+- Impact: `openai-rs-types` Conversations/Voices query surfaces (breaking: variant field rename; additive error type).
+- Overrides: none
+- Tests: extended `request_validation_enforces_item_metadata_and_page_limits`, `consent_list_limit_enforces_the_schema_backed_minimum`.
+
+## D0218 — Proxy posture: environment proxies never read; one explicitly declared proxy
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ClientBuilder::proxy`, `X509ClientBuilder::proxy`, `WorkloadIdentityAuth` (exchange coverage), the `no_proxy` call sites
+- Sources: openai-node reads no environment proxies; openai-python honors `trust_env` by default — an unrecorded divergence; all four reqwest builders hard-coded `.no_proxy()` with no escape hatch for proxy-locked networks.
+- Reason: an explicitly declared proxy is a chosen hop, compatible with the credentials-never-cross-invisible-hops stance (D0163's redirect rationale).
+- Decision: the default stays `no_proxy()` (HTTP(S)_PROXY/ALL_PROXY are never honored); `ClientBuilder::proxy(Some(..))` is the single escape hatch and its value is propagated to the workload token exchange; the x509 builder gains its own `proxy` face (mTLS still terminates at the pinned origin through the CONNECT tunnel); Debug output redacts the proxy. The admin channel deliberately offers no proxy face (documented at its build site).
+- Impact: `openai-rs-client` client surface (additive builder methods).
+- Overrides: none
+- Tests: `explicit_proxy_builds_and_none_restores_the_no_proxy_default`, `explicit_proxy_carries_traffic_so_no_proxy_no_longer_applies`, `builder_proxy_covers_the_token_exchange_too`, `explicit_proxy_face_is_accepted_and_redacted_from_debug`.
+
+## D0219 — Client::with_request_timeout derives a budget-scoped client
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `Client::with_request_timeout`, `Inner`/`TransportDerivation`
+- Sources: D0199 established `request_timeout` as a total budget (node parity) whose 600s default truncates long jobs; both official SDKs offer per-request timeout overrides, which the typed-first surface lacked.
+- Decision: budgets belong to clients, not requests: the method derives a new `Client` from a stored construction blueprint (the transports are rebuilt to carry the overridden budget while sharing the connection pool and credentials); a zero budget fails closed immediately (`DeadlineExceeded`) since the non-fallible signature cannot reject it.
+- Impact: `openai-rs-client` client surface (additive method).
+- Overrides: none
+- Tests: `with_request_timeout_narrows_only_the_derived_client`, `zero_derived_budget_fails_closed_immediately`.
+
+## D0220 — Codex app-server: kill before locking the writer; writes join the request budget
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `AppServerClient::terminate`/`request_value`/`notify`, `Error::RequestPayloadTooLarge`, `ThreadStartParams.cwd` and environment docs, `AppServerLimits::event_queue_capacity`
+- Sources: terminate locked the writer before killing the child, so a blocked stdin write (full pipe) deadlocked teardown against the stdout reader — leaking the child and making a later `close()` report success without killing; the request timeout covered only the response wait, leaving writes unbounded; the `initialized` notification carried a pin-undefined `params: {}`; outbound frame overflow reused `InvalidConfiguration` (diverging from the platform-side D0204 category).
+- Decision: terminate kills and reaps the child (bounded by the shutdown timeout) before taking the writer — the broken pipe releases every unbounded write (`notify`, `respond_*`); the request timeout wraps the write-plus-response exchange; `initialized` is method-only; oversized frames report `RequestPayloadTooLarge { limit_bytes }`; the child cwd (CODEX_HOME when `ThreadStartParams.cwd` is unset), the HOME-less environment allowlist, and the event-queue fail-stop posture are documented.
+- Impact: `openai-rs-codex` shutdown/timeout/error surfaces (additive variant; behavior fixes).
+- Overrides: none
+- Tests: `close_releases_a_blocked_writer_by_killing_the_child_first`, `request_write_phase_shares_the_request_timeout_budget`, `server_request_responses_roundtrip_string_and_numeric_ids`, `oversized_outbound_frame_reports_request_payload_too_large`, `oversized_outbound_frame_has_a_dedicated_category`, handshake no-params assertion.
+
+## D0221 — Webhook results carry the delivery id; verify declares the raw-body requirement
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `VerifiedWebhook` (`webhook_id` field/accessor, `from_verified` signature), verifier docs
+- Sources: the official delivery contract — non-2xx or slow responses retry with exponential backoff for up to 72 hours, 3xx counts as failure, duplicates are possible, and `webhook-id` is the recommended idempotency key (node's docs spell all of this out); the verifier read the id for signature purposes and then discarded it; re-serialized JSON changes the signed bytes (node documents the raw-body requirement).
+- Decision: the verified wrapper pins the delivery id behind `webhook_id()` (single-entry construction preserved; Debug stays silent); module docs state the delivery semantics; `verify`/`verify_at` warn that the payload must be the original request bytes taken before any JSON middleware.
+- Impact: `openai-rs-types`/`openai-rs-client` webhook surfaces (breaking: `from_verified` gained a parameter).
+- Overrides: none
+- Tests: `verified_delivery_exposes_the_webhook_id_as_the_deduplication_key`, `verified_wrapper_keeps_the_webhook_id_through_mapping`, extended `verified_wrapper_never_debugs_the_body`.
+
+## D0222 — RMCP discovery pagination is caller-bounded; result magnitude is types-side enforced
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ResponsesToolExecutor::list_tools`, `RmcpExecutor::list_tools`, `ResponsesToolBridge::discover`, `DispatchOutcome`, `encode_tool_result`
+- Sources: rmcp 3.1.4's `list_all_tools` re-issues `tools/list` with each `nextCursor` until the server omits one — a traversal with no protocol-level bound; the pinned Responses API caps `function_call_output` strings at 10 MiB characters, and MCP media `data` arrives already base64-encoded, so envelope output grows by the full inflated payload.
+- Decision: documented (no behavior change) — custom executors must return the complete page-merged tool set (first-page-only answers freeze a truncated catalog); `ExecutionControl`'s timeout/cancellation is the only bound on discovery, so `discover` callers should pass a bounded control (`unbounded()` is reserved for in-process executors); the encoder neither truncates nor checks the 10 MiB cap, which the types side enforces when the follow-up request is validated on the next turn.
+- Impact: documentation of existing behavior; one cross-crate pin test.
+- Overrides: none
+- Tests: `oversized_rich_result_encodes_but_fails_next_turn_validation`.
+
+## D0223 — Round-5 recorded positions (docs/decisions only)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: success-status lanes; containers DELETE Accept; X-Stainless headers; compression; connection pool/HTTP2; admin pagination surface; admin JSON content-type gate; `safety_identifier.blocked`; upload constraint docs; timeout docs
+- Sources: python/node accept any 2xx while the platform lane requires the exact pinned status (multipart accepts 200+201, admin exactly 200); python sends `Accept: */*` on the containers deletes while the EmptyOrJson lane sends `application/json`; both official SDKs send X-Stainless platform/retry/read-timeout headers this crate omits entirely; both negotiate compression (this crate sends no `Accept-Encoding`); reqwest defaults (90s idle, unlimited per-host, h2-by-ALPN) differ from both baselines' pool settings; the admin channel offers no auto-pagination (python/node pages automatically); the admin lane enforces an exact `application/json` content type (and rejects a missing header) where the platform lane never checks; python alone types a `safety_identifier.blocked` webhook the pin lacks (node has 16 events, the pin 18); python docstrings carry the 64MB/8GB/1h upload constraints.
+- Decision: all positions recorded as deliberate: exact-status fail-stop (with the multipart 201 tolerance noted); `application/json` on EmptyOrJson; no X-Stainless telemetry (the read-timeout hint is forgone with it); no compression negotiation (bandwidth-for-CPU); default reqwest pool/h2 posture; admin stays manual-paging (`next_after_with` being the helper) with its strict content-type gate as anti-misrouting hardening; the pinned 18-event webhook set stands with `Unknown` absorbing python-only discriminators; upload and timeout constraints now live in rustdoc.
+- Impact: documentation only.
+- Overrides: none
+- Tests: existing lane/content-type/webhook tests.
+
+## D0224 — Responses input-items limits fallible at ≥1; beta stream params pin stream=true (extends D0217/D0154)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ListResponseInputItemsParams::limit`, `BetaListInputItemsParams::limit` (`ListResponseInputItemsLimitError`), `BetaRetrieveResponseStreamParams.stream`
+- Sources: the pinned input-items `limit` carries only `default: 20` (the 1..=100 range is prose), matching the D0154/D0174/D0217 family; the GA stream-params guard (`deserialize_true`) already rejected `stream=false` on decode while the beta twin accepted it, deferring the failure to a runtime content-type error.
+- Decision: both input-items limit builders return `Result` and reject zero at the decode boundary too (prose ceilings not enforced); the beta stream params gain the same `stream=true` guard as GA. Completes the round-5 review's ledger gap for these breaking signature changes.
+- Impact: `openai-rs-types` Responses/beta Responses list params (breaking: `limit()` builders now fallible).
+- Overrides: none
+- Tests: `input_item_list_limit_rejects_zero_on_build_and_decode`, `beta_input_item_list_limit_rejects_zero_on_build_and_decode`, `beta_retrieve_stream_params_pin_stream_true`.

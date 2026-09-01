@@ -42,7 +42,10 @@ const DEFAULT_LINE_LIMIT: usize = 32 * 1024 * 1024;
 const DEFAULT_STDERR_LIMIT: usize = 64 * 1024;
 const DEFAULT_PENDING_LIMIT: usize = 128;
 const DEFAULT_EVENT_CAPACITY: usize = 512;
-/// Bytes of the rolling stderr tail attached to a reaped child-exit failure.
+/// Characters of the rolling stderr tail attached to a reaped child-exit
+/// failure. The snippet truncation is char-based, never byte-based (5-22), so
+/// a multi-byte UTF-8 sequence in the tail is never split mid-codepoint; the
+/// tail itself stays byte-bounded by [`AppServerLimits::max_stderr_bytes`].
 const CHILD_EXIT_STDERR_SNIPPET: usize = 2048;
 
 /// Hard resource limits for one app-server child.
@@ -51,7 +54,20 @@ pub struct AppServerLimits {
     pub max_line_bytes: usize,
     pub max_stderr_bytes: usize,
     pub max_pending_requests: usize,
+    /// Bounded capacity of the channel that carries notifications,
+    /// server-initiated requests, and orphan responses to the consumer of
+    /// [`AppServerClient::next_event`]. This is a fail-stop bound (5-O7): a
+    /// consumer that stops draining the queue does not block or silently drop
+    /// events — once the queue fills, the connection is torn down with
+    /// [`ConnectionFailureKind::EventQueueFull`]. Raise the capacity to ride
+    /// out longer consumer pauses, not to remove the fail-stop stance.
     pub event_queue_capacity: usize,
+    /// Per-request budget covering the whole exchange (5-19): writing the
+    /// outbound JSONL frame to the child's stdin and waiting for the matching
+    /// response. A child that stops reading its stdin therefore fails the
+    /// request with [`Error::RequestTimeout`] instead of hanging the public
+    /// API forever. Acquiring a pending-request slot is budgeted separately
+    /// through [`Error::PendingCapacityTimeout`].
     pub request_timeout: Duration,
     pub shutdown_timeout: Duration,
 }
@@ -297,7 +313,9 @@ where
     C: CodexCredentialMarker,
 {
     /// Spawn the owned child, complete `initialize`, and send exactly one
-    /// `initialized` notification before returning.
+    /// `initialized` notification before returning. The notification is a
+    /// method-only frame — the pinned `ClientNotification` schema defines no
+    /// `params` key for it, so none is sent (5-20).
     pub async fn spawn(config: AppServerConfig<C>, client_info: ClientInfo) -> Result<Self, Error> {
         let span = tracing::debug_span!("codex.app_server.connection");
         let stdout_span = span.clone();
@@ -398,10 +416,7 @@ where
                     return Err(error);
                 }
             };
-            if let Err(error) = provisional
-                .notify("initialized", Some(EmptyResponse::default()))
-                .await
-            {
+            if let Err(error) = provisional.notify("initialized").await {
                 let _ = provisional.close().await;
                 return Err(error);
             }
@@ -594,18 +609,26 @@ where
             object.insert("params".to_owned(), params);
         }
 
-        if let Err(error) = self.write_message(&Value::Object(object)).await {
-            lock(&self.inner.pending).remove(&id);
-            return Err(error);
-        }
-
-        let result = tokio::time::timeout(self.inner.limits.request_timeout, receiver).await;
-        match result {
-            Ok(Ok(PendingResult::Result(value))) => Ok(value),
-            Ok(Ok(PendingResult::RpcError(error))) => Err(Error::from(error)),
-            Ok(Ok(PendingResult::Connection(error))) => Err(Error::Connection(error)),
-            Ok(Err(_)) => Err(Error::ResponseChannelClosed(id)),
-            Err(_) => {
+        // 5-19: the request timeout budgets the whole exchange — the outbound
+        // write included — not just the response wait. A child that stops
+        // reading its stdin leaves `write_all` blocked on a full pipe while
+        // holding the writer lock; bounding it here fails the request with the
+        // same `RequestTimeout` semantics (and dropping the cancelled future
+        // releases the lock, so `terminate` cannot wedge against it).
+        let exchange = async {
+            if let Err(error) = self.write_message(&Value::Object(object)).await {
+                lock(&self.inner.pending).remove(&id);
+                return Err(error);
+            }
+            match receiver.await {
+                Ok(result) => Ok(result),
+                Err(_channel_closed) => Err(Error::ResponseChannelClosed(id)),
+            }
+        };
+        let outcome = match tokio::time::timeout(self.inner.limits.request_timeout, exchange).await
+        {
+            Ok(outcome) => outcome,
+            Err(_elapsed) => {
                 lock(&self.inner.pending).remove(&id);
                 Err(Error::RequestTimeout {
                     method,
@@ -613,18 +636,22 @@ where
                     timeout: self.inner.limits.request_timeout,
                 })
             }
+        };
+        match outcome {
+            Ok(PendingResult::Result(value)) => Ok(value),
+            Ok(PendingResult::RpcError(error)) => Err(Error::from(error)),
+            Ok(PendingResult::Connection(error)) => Err(Error::Connection(error)),
+            Err(error) => Err(error),
         }
     }
 
-    async fn notify<P>(&self, method: &'static str, params: Option<P>) -> Result<(), Error>
-    where
-        P: Serialize,
-    {
+    /// Send a client notification. The pinned `ClientNotification` schema
+    /// declares exactly one notification (`initialized`) whose object carries
+    /// only the `method` key, so the frame is method-only and no `params` key
+    /// is ever invented (5-20).
+    async fn notify(&self, method: &'static str) -> Result<(), Error> {
         let mut object = serde_json::Map::new();
         object.insert("method".to_owned(), Value::String(method.to_owned()));
-        if let Some(params) = params {
-            object.insert("params".to_owned(), serde_json::to_value(params)?);
-        }
         self.write_message(&Value::Object(object)).await
     }
 
@@ -637,11 +664,13 @@ where
         }
         let mut encoded = serde_json::to_vec(message)?;
         if encoded.len() > self.inner.limits.max_line_bytes {
-            return Err(Error::InvalidConfiguration(format!(
-                "outbound JSONL frame is {} bytes, limit is {}",
-                encoded.len(),
-                self.inner.limits.max_line_bytes
-            )));
+            // 5-21: a frame-size rejection is a payload problem discovered at
+            // send time, not a client-configuration problem — the dedicated
+            // variant mirrors the platform-side D0204 stance instead of
+            // reusing the configuration category.
+            return Err(Error::RequestPayloadTooLarge {
+                limit_bytes: self.inner.limits.max_line_bytes,
+            });
         }
         encoded.push(b'\n');
 
@@ -885,6 +914,18 @@ fn prepare_codex_home(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// Copy an explicit allowlist of ambient variables into the child (5-O7).
+///
+/// Stance: the child is intentionally isolated from the embedding process's
+/// environment. Credentials reach it only through `apply_credential` and all
+/// file state lives under the dedicated CODEX_HOME, so everything else is
+/// dropped rather than inherited. `HOME` is deliberately absent: a home
+/// directory would let the child (and anything it execs) resolve user-level
+/// config, shell history, and credential stores outside CODEX_HOME, breaking
+/// the isolation boundary — app-server treats CODEX_HOME as its home. `PATH`
+/// survives so a system codex can still locate helper binaries; the locale,
+/// terminal, and Windows variables keep runtime behavior predictable across
+/// platforms.
 fn copy_allowlisted_environment(command: &mut Command) {
     const NAMES: &[&str] = &[
         "PATH",
@@ -1132,7 +1173,8 @@ async fn stdout_end_failure(inner: &Arc<Inner>) -> ConnectionFailure {
 }
 
 /// Build the `ChildExit` terminal failure for a reaped child exit status,
-/// attaching a truncated stderr tail when one was captured.
+/// attaching a stderr tail (truncated to `CHILD_EXIT_STDERR_SNIPPET`
+/// characters, so no UTF-8 sequence is split) when one was captured.
 fn child_exit_failure(inner: &Arc<Inner>, status: &std::process::ExitStatus) -> ConnectionFailure {
     let stderr = lock(&inner.stderr).lossy_string();
     let mut message = format!("app-server child exited with status {status}");
@@ -1197,27 +1239,37 @@ async fn terminate(inner: &Arc<Inner>, failure: ConnectionFailure) -> Result<(),
             .send(PendingResult::Connection(failure.clone()));
     }
     inner.pending_slots.close();
-    inner.writer.lock().await.take();
 
+    // 5-06: kill and reap the child *before* waiting on the writer lock. A
+    // peer that stopped reading leaves an outbound write blocked on a full
+    // stdin pipe while holding the writer lock — taking that lock first would
+    // wedge this shutdown against the blocked write (the child leaks and
+    // close() never returns). Killing the child closes the pipe's read end, so
+    // the blocked write fails with BrokenPipe and releases the lock itself.
+    // This ordering covers every unbounded write face (`notify`,
+    // `respond_result`, `respond_error`), not just requests, whose write phase
+    // already carries its own request-timeout budget.
     let child = inner.child.lock().await.take();
-    let Some(mut child) = child else {
-        return Ok(());
-    };
-    // The exit status of an already-exited child was folded into the terminal
-    // failure above; this branch only has to stop a live child.
-    if child.try_wait().map_err(Error::Io)?.is_some() {
-        return Ok(());
+    if let Some(mut child) = child {
+        // The exit status of an already-exited child was folded into the
+        // terminal failure above; this branch only has to stop a live child.
+        if child.try_wait().map_err(Error::Io)?.is_none() {
+            child.start_kill().map_err(Error::Io)?;
+            tokio::time::timeout(inner.limits.shutdown_timeout, child.wait())
+                .await
+                .map_err(|_| {
+                    Error::Connection(ConnectionFailure::new(
+                        ConnectionFailureKind::ChildExit,
+                        "timed out while waiting for the app-server child to exit",
+                    ))
+                })?
+                .map_err(Error::Io)?;
+        }
     }
-    child.start_kill().map_err(Error::Io)?;
-    tokio::time::timeout(inner.limits.shutdown_timeout, child.wait())
-        .await
-        .map_err(|_| {
-            Error::Connection(ConnectionFailure::new(
-                ConnectionFailureKind::ChildExit,
-                "timed out while waiting for the app-server child to exit",
-            ))
-        })?
-        .map_err(Error::Io)?;
+    // The pipe is gone now, so a previously blocked writer has already failed
+    // (or was cancelled by its request timeout) and dropped its guard; this
+    // take only clears the handle.
+    inner.writer.lock().await.take();
     Ok(())
 }
 
@@ -1240,8 +1292,8 @@ mod tests {
     };
     use crate::{
         BrowserLoginOptions, CancelLoginStatus, ClientInfo, ConnectionFailureKind, Error,
-        Notification, PlanType, RateLimitReachedType, RuntimeCompatibility, RuntimeIdentity,
-        ThreadStartParams, TurnInterruptParams, TurnStartParams, TurnStatus,
+        Notification, PlanType, RateLimitReachedType, RpcError, RpcId, RuntimeCompatibility,
+        RuntimeIdentity, ThreadStartParams, TurnInterruptParams, TurnStartParams, TurnStatus,
     };
     use openai_rs_types::kernel::{Nullable, Omittable};
 
@@ -1469,6 +1521,9 @@ mod tests {
             IFS= read -r initialized || exit 14
             case "$initialized" in *'"method":"initialized"'*) ;; *) exit 15 ;; esac
             case "$initialized" in *'"id"'*) exit 16 ;; esac
+            # 5-20: the pinned ClientNotification defines no params key, so
+            # the initialized frame must be method-only.
+            case "$initialized" in *params*) exit 30 ;; esac
             IFS= read -r first || exit 17
             IFS= read -r second || exit 18
             printf '%s\n' '{"method":"future/event","params":{"kept":true},"futureEnvelopeField":7}'
@@ -1690,6 +1745,245 @@ mod tests {
             other => return Err(format!("unexpected device login result: {other:?}").into()),
         }
 
+        client.close().await?;
+        Ok(())
+    }
+
+    /// 5-06 regression: an outbound write blocked on a full stdin pipe holds
+    /// the writer lock, and `close()` used to wait on that lock before killing
+    /// the child — a three-way wedge that leaked the process and made close()
+    /// never return. The kill now happens first: the broken pipe fails the
+    /// blocked write, the lock is released, and the shutdown completes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn close_releases_a_blocked_writer_by_killing_the_child_first()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        // `exec sleep` never reads stdin again but keeps stdout open, and the
+        // kill hits the paused process itself instead of a shell parent whose
+        // child would go on holding the pipe's read end.
+        let script = r#"
+            IFS= read -r init || exit 91
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 92
+            printf '%s\n' '{"id":"srv-block","method":"future/blocking"}'
+            exec sleep 60
+        "#;
+        let limits = AppServerLimits {
+            shutdown_timeout: std::time::Duration::from_secs(5),
+            ..AppServerLimits::default()
+        };
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client =
+            AppServerClient::spawn(config.with_limits(limits), ClientInfo::new("test", "1.0.0"))
+                .await?;
+
+        let event = client.next_event().await.ok_or("missing server request")?;
+        let request = match event {
+            AppServerEvent::ServerRequest(request) => *request,
+            other => return Err(format!("unexpected event: {other:?}").into()),
+        };
+        assert_eq!(request.id, RpcId::String("srv-block".to_owned()));
+
+        // respond_* carries no request-timeout budget, so this write stays
+        // blocked on the full pipe while holding the writer lock for good.
+        let writer = client.clone();
+        let payload = json!({"blob": "x".repeat(512 * 1024)});
+        let request_id = request.id;
+        let mut respond =
+            tokio::spawn(async move { writer.respond_result(request_id, payload).await });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(300), &mut respond)
+                .await
+                .is_err(),
+            "the respond write should still be blocked on the full stdin pipe"
+        );
+
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(10), client.close());
+        match closed.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(format!("close failed: {error:?}").into()),
+            Err(_) => return Err("close() wedged against the blocked writer lock".into()),
+        }
+        match respond.await.map_err(|error| error.to_string())? {
+            Err(Error::Connection(failure)) => {
+                assert_eq!(failure.kind, ConnectionFailureKind::Io);
+                assert!(
+                    failure.message.contains("app-server stdin"),
+                    "unexpected message: {}",
+                    failure.message
+                );
+            }
+            other => return Err(format!("unexpected respond result: {other:?}").into()),
+        }
+        assert!(client.is_closed());
+        assert_eq!(
+            client.connection_failure().map(|failure| failure.kind),
+            Some(ConnectionFailureKind::Closed)
+        );
+        Ok(())
+    }
+
+    /// 5-19: the request timeout budgets the outbound write too. A child that
+    /// stops reading its stdin fails the request with `RequestTimeout`
+    /// instead of hanging the public API forever.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn request_write_phase_shares_the_request_timeout_budget()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 95
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 96
+            exec sleep 60
+        "#;
+        let limits = AppServerLimits {
+            request_timeout: std::time::Duration::from_millis(500),
+            shutdown_timeout: std::time::Duration::from_secs(5),
+            ..AppServerLimits::default()
+        };
+        let expected_timeout = limits.request_timeout;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client =
+            AppServerClient::spawn(config.with_limits(limits), ClientInfo::new("test", "1.0.0"))
+                .await?;
+
+        let params = json!({"blob": "x".repeat(512 * 1024)});
+        match client.request_value("test/big", Some(params)).await {
+            Err(Error::RequestTimeout {
+                method,
+                id,
+                timeout,
+            }) => {
+                assert_eq!(method, "test/big");
+                assert_eq!(id, 2, "initialize consumed id 1");
+                assert_eq!(timeout, expected_timeout);
+            }
+            other => return Err(format!("unexpected blocked-write result: {other:?}").into()),
+        }
+        client.close().await?;
+        Ok(())
+    }
+
+    /// 5-22: server-initiated requests are answered through the raw respond
+    /// face; string and numeric ids round-trip losslessly and the framed
+    /// payloads reach the peer verbatim.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn server_request_responses_roundtrip_string_and_numeric_ids()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 97
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 98
+            printf '%s\n' '{"id":"srv-alpha","method":"future/serverCall","params":{"asked":true},"futureEnvelopeField":"kept"}'
+            IFS= read -r reply || exit 99
+            case "$reply" in *'"id":"srv-alpha"'*) ;; *) exit 100 ;; esac
+            case "$reply" in *'"result":{"applied":true}'*) ;; *) exit 101 ;; esac
+            case "$reply" in *'"method"'*) exit 102 ;; esac
+            printf '%s\n' '{"id":7,"method":"future/serverCall"}'
+            IFS= read -r reply || exit 103
+            case "$reply" in *'"id":7,'*) ;; *) exit 104 ;; esac
+            case "$reply" in *'"error":{"code":-32001,"message":"denied","data":{"why":"no"}}'*) ;; *) exit 105 ;; esac
+            printf '%s\n' '{"method":"future/allReplied"}'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        let event = client
+            .next_event()
+            .await
+            .ok_or("missing first server request")?;
+        match event {
+            AppServerEvent::ServerRequest(request) => {
+                assert_eq!(request.id, RpcId::String("srv-alpha".to_owned()));
+                assert_eq!(request.method, "future/serverCall");
+                assert_eq!(request.params, Some(json!({"asked": true})));
+                assert_eq!(request.raw["futureEnvelopeField"], Value::from("kept"));
+                client
+                    .respond_result(request.id, json!({"applied": true}))
+                    .await?;
+            }
+            other => return Err(format!("unexpected event: {other:?}").into()),
+        }
+
+        let event = client
+            .next_event()
+            .await
+            .ok_or("missing second server request")?;
+        match event {
+            AppServerEvent::ServerRequest(request) => {
+                assert_eq!(request.id, RpcId::Number(7));
+                client
+                    .respond_error(
+                        request.id,
+                        RpcError {
+                            code: -32001,
+                            message: "denied".to_owned(),
+                            data: Omittable::Value(Nullable::Value(json!({"why": "no"}))),
+                            extra: serde_json::Map::new(),
+                        },
+                    )
+                    .await?;
+            }
+            other => return Err(format!("unexpected event: {other:?}").into()),
+        }
+
+        // The child emits this notification only after both replies passed its
+        // assertions, proving the respond frames reached the peer intact.
+        let event = client
+            .next_event()
+            .await
+            .ok_or("missing trailing notification")?;
+        assert!(matches!(event, AppServerEvent::Notification(_)));
+        client.close().await?;
+        Ok(())
+    }
+
+    /// 5-21: an outbound frame over `max_line_bytes` is a payload-size
+    /// rejection (`Error::RequestPayloadTooLarge`, mirroring the platform-side
+    /// D0204 stance), not a client-configuration error.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn oversized_outbound_frame_reports_request_payload_too_large()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 106
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 107
+            IFS= read -r until_eof
+        "#;
+        let limits = AppServerLimits {
+            max_line_bytes: 256,
+            request_timeout: std::time::Duration::from_secs(2),
+            shutdown_timeout: std::time::Duration::from_secs(2),
+            ..AppServerLimits::default()
+        };
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client =
+            AppServerClient::spawn(config.with_limits(limits), ClientInfo::new("test", "1.0.0"))
+                .await?;
+
+        let params = json!({"blob": "x".repeat(4096)});
+        match client.request_value("test/big", Some(params)).await {
+            Err(Error::RequestPayloadTooLarge { limit_bytes }) => {
+                assert_eq!(limit_bytes, 256);
+            }
+            other => return Err(format!("unexpected oversized-frame result: {other:?}").into()),
+        }
         client.close().await?;
         Ok(())
     }

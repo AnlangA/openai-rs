@@ -1273,6 +1273,122 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn single_shot_lists_send_the_before_query_key() {
+        // Single-shot listings keep the pinned `before` cursor on the wire so
+        // callers can page backwards manually; only the automatic pagination
+        // streams reject it.
+        let responses = vec![
+            json!({
+                "object":"list","data":[],"first_id":"vs_first",
+                "last_id":"vs_last","has_more":false
+            })
+            .to_string(),
+            json!({
+                "object":"list","data":[],"first_id":"file_first",
+                "last_id":"file_last","has_more":false
+            })
+            .to_string(),
+            json!({
+                "object":"list","data":[],"first_id":"batch_file_first",
+                "last_id":"batch_file_last","has_more":false
+            })
+            .to_string(),
+        ];
+        let (client, captures) = serve_script(responses).await;
+        let stores = client.vector_stores();
+        let store_id = VectorStoreId::new("vs/a b");
+
+        stores
+            .list(VectorStoreListParams::new().before(VectorStoreId::new("vs cursor")))
+            .await
+            .expect("list stores backwards");
+        stores
+            .files()
+            .list(
+                &store_id,
+                VectorStoreFileListParams::new().before(FileId::new("file cursor")),
+            )
+            .await
+            .expect("list attached files backwards");
+        stores
+            .file_batches()
+            .list_files(
+                &store_id,
+                &VectorStoreFileBatchId::new("batch/x y"),
+                VectorStoreFileListParams::new().before(FileId::new("file cursor")),
+            )
+            .await
+            .expect("list file-batch files backwards");
+
+        let captures = captures.lock().expect("capture lock").clone();
+        assert_eq!(captures.len(), 3);
+        let expected = [
+            ("/v1/vector_stores", "vs cursor"),
+            ("/v1/vector_stores/vs%2Fa%20b/files", "file cursor"),
+            (
+                "/v1/vector_stores/vs%2Fa%20b/file_batches/batch%2Fx%20y/files",
+                "file cursor",
+            ),
+        ];
+        for (capture, (path, cursor)) in captures.iter().zip(expected) {
+            assert_eq!(capture.method, Method::GET);
+            let url = Url::parse(&format!("http://loopback{}", capture.path_and_query))
+                .expect("backward list URL");
+            assert_eq!(url.path(), path);
+            assert!(
+                url.query_pairs()
+                    .any(|(name, value)| name == "before" && value == cursor),
+                "backward cursor {cursor} must travel as `before=` on {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_pagination_rejects_before_cursors_without_sending() {
+        let (client, captures) = serve_script(Vec::new()).await;
+        let stores = client.vector_stores();
+
+        let store_error = stores
+            .list_pages(VectorStoreListParams::new().before(VectorStoreId::new("vs cursor")))
+            .next()
+            .await
+            .expect("store page stream must yield the rejection")
+            .expect_err("automatic store pagination rejects a before cursor");
+        assert!(matches!(&store_error, Error::InvalidConfiguration(message)
+                if message.contains("automatic vector-store pagination does not accept a before cursor")));
+
+        let file_error = stores
+            .files()
+            .list_pages(
+                VectorStoreId::new("vs/a b"),
+                VectorStoreFileListParams::new().before(FileId::new("file cursor")),
+            )
+            .next()
+            .await
+            .expect("file page stream must yield the rejection")
+            .expect_err("automatic file pagination rejects a before cursor");
+        assert!(matches!(&file_error, Error::InvalidConfiguration(message)
+                if message.contains("automatic vector-store file pagination does not accept a before cursor")));
+
+        let batch_error = stores
+            .file_batches()
+            .list_file_pages(
+                VectorStoreId::new("vs/a b"),
+                VectorStoreFileBatchId::new("batch/x y"),
+                VectorStoreFileListParams::new().before(FileId::new("file cursor")),
+            )
+            .next()
+            .await
+            .expect("file-batch page stream must yield the rejection")
+            .expect_err("automatic file-batch pagination rejects a before cursor");
+        assert!(matches!(&batch_error, Error::InvalidConfiguration(message)
+                if message.contains("automatic vector-store file pagination does not accept a before cursor")));
+
+        // The rejection happens before any request leaves the client.
+        assert!(captures.lock().expect("capture lock").is_empty());
+    }
+
     #[test]
     fn operation_manifest_covers_every_pinned_vector_store_route() {
         let contracts = [

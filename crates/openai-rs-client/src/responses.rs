@@ -902,6 +902,7 @@ mod tests {
             .after("item cursor")
             .include(ResponseIncludable::ReasoningEncryptedContent)
             .limit(2)
+            .expect("valid limit")
             .order(ResponseItemOrder::Ascending);
 
         let response = client(base_url)
@@ -1234,6 +1235,101 @@ mod tests {
         assert!(stream.next().await.is_none());
 
         assert!(captured.recv().await.is_some());
+        assert!(captured.recv().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn list_input_item_pages_fails_closed_on_repeated_cursor() {
+        let page = json!({
+            "object": "list",
+            "data": [],
+            "first_id": "item_1",
+            "last_id": "item_1",
+            "has_more": true
+        });
+        let (base_url, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, page.to_string()),
+            (StatusCode::OK, page.to_string()),
+        ])
+        .await;
+
+        let mut stream = client(base_url).responses().list_input_item_pages(
+            &ResponseId::new("resp_1"),
+            ListResponseInputItemsParams::new(),
+        );
+        let first = stream.next().await.expect("page 1").expect("ok");
+        assert_eq!(first.last_id(), "item_1");
+        // The server repeats the same cursor: pagination must fail closed
+        // instead of silently re-fetching the page forever.
+        let error = stream
+            .next()
+            .await
+            .expect("repeated cursor surfaces")
+            .expect_err("repeated cursor fails closed");
+        assert!(matches!(error, Error::InvalidConfiguration(_)));
+        assert!(stream.next().await.is_none());
+        assert!(captured.recv().await.is_some());
+        assert!(captured.recv().await.is_some());
+        assert!(
+            captured.try_recv().is_err(),
+            "no third request after the repeated cursor"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_input_item_pages_fails_closed_when_has_more_lacks_last_id() {
+        // An empty `last_id` decodes but cannot advance: response input items
+        // are a tagged union without a shared id accessor, so no fallback
+        // cursor exists (D0147) and the stream fails closed.
+        let empty_last_id = json!({
+            "object": "list",
+            "data": [],
+            "first_id": "",
+            "last_id": "",
+            "has_more": true
+        });
+        let (base_url, mut captured) =
+            serve_sequence(vec![(StatusCode::OK, empty_last_id.to_string())]).await;
+        let mut stream = client(base_url).responses().list_input_item_pages(
+            &ResponseId::new("resp_1"),
+            ListResponseInputItemsParams::new(),
+        );
+        let error = stream
+            .next()
+            .await
+            .expect("empty cursor surfaces")
+            .expect_err("empty last_id fails closed");
+        assert!(matches!(error, Error::InvalidConfiguration(_)));
+        assert!(stream.next().await.is_none());
+        assert!(captured.recv().await.is_some());
+        assert!(
+            captured.try_recv().is_err(),
+            "no follow-up request without a cursor"
+        );
+
+        // A page that omits `last_id` entirely cannot decode as a list
+        // envelope, which still fails the stream closed before any retry.
+        let missing_last_id = json!({
+            "object": "list",
+            "data": [],
+            "first_id": "",
+            "has_more": true
+        });
+        let (base_url, mut captured) =
+            serve_sequence(vec![(StatusCode::OK, missing_last_id.to_string())]).await;
+        let mut stream = client(base_url).responses().list_input_item_pages(
+            &ResponseId::new("resp_1"),
+            ListResponseInputItemsParams::new(),
+        );
+        assert!(
+            stream
+                .next()
+                .await
+                .expect("undecodable page surfaces")
+                .is_err(),
+            "a page without last_id errors instead of advancing"
+        );
+        assert!(stream.next().await.is_none());
         assert!(captured.recv().await.is_some());
     }
 }

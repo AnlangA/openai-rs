@@ -138,6 +138,23 @@ fn flattenable_structured_content(envelope: &ToolResultEnvelope) -> Option<&Valu
 }
 
 /// Encode one RMCP tool result according to `policy`.
+///
+/// # Payload magnitude
+///
+/// Rich content blocks inline their media verbatim: MCP delivers image,
+/// audio, and embedded-resource `data` already base64-encoded, and the
+/// envelope (or a kept-alive rich block under
+/// [`ResultEncoding::CompactWhenPossible`]) copies those strings straight
+/// into the returned output string, whose length therefore grows by the
+/// full base64 payload (roughly 4/3 of the raw bytes). The Responses API
+/// caps `function_call_output` strings at 10 MiB characters
+/// ([`openai_rs_types::responses::MAX_FUNCTION_CALL_OUTPUT_CHARS`]). This
+/// encoder neither truncates nor checks that cap: an oversized rich result
+/// still encodes, and the types side rejects it when the follow-up request
+/// carrying the output is validated on the next turn. Applications exposing
+/// media-heavy tools should budget for the expansion — or surface media to
+/// the model through a different channel — instead of relying on this
+/// encoder to clamp the size.
 pub fn encode_tool_result(
     result: &CallToolResult,
     policy: ResultEncoding,

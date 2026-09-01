@@ -2367,6 +2367,9 @@ impl BetaCreateResponseRequest {
     }
 
     /// Associates the response with a conversation.
+    ///
+    /// Cannot be used in conjunction with `previous_response_id` (the
+    /// pinned contract rejects the combination server-side).
     #[must_use]
     pub fn conversation(mut self, conversation: impl Into<ConversationReference>) -> Self {
         self.base = self.base.conversation(conversation);
@@ -2517,6 +2520,8 @@ impl BetaCreateResponseRequest {
     }
 
     /// Continues from a prior response.
+    ///
+    /// Cannot be used in conjunction with `conversation`.
     #[must_use]
     pub fn previous_response_id(mut self, id: impl Into<String>) -> Self {
         self.base = self.base.previous_response_id(id);
@@ -3313,10 +3318,15 @@ impl BetaRetrieveResponseParams {
 }
 
 /// Query for resuming a beta response SSE stream.
+///
+/// `stream` is pinned to `true`: resuming requests ride the SSE lane, so the
+/// field both defaults to and must decode as `true` (mirroring the GA
+/// retrieve-stream guard).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BetaRetrieveResponseStreamParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     include: Vec<BetaResponseIncludable>,
+    #[serde(default = "true_value", deserialize_with = "deserialize_true")]
     stream: bool,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     include_obfuscation: Omittable<bool>,
@@ -3363,8 +3373,57 @@ impl Default for BetaRetrieveResponseStreamParams {
     }
 }
 
+const fn true_value() -> bool {
+    true
+}
+
+fn deserialize_true<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    if bool::deserialize(deserializer)? {
+        Ok(true)
+    } else {
+        Err(D::Error::custom(
+            "BetaRetrieveResponseStreamParams requires stream=true",
+        ))
+    }
+}
+
+/// A beta input-item page size below the documented floor of 1.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[error("beta response input item list limit must be at least 1, got {actual}")]
+pub struct BetaListInputItemsLimitError {
+    /// Rejected page size.
+    actual: u32,
+}
+
+impl BetaListInputItemsLimitError {
+    /// Returns the rejected page size.
+    #[must_use]
+    pub const fn actual(self) -> u32 {
+        self.actual
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+struct BetaListInputItemsParamsWire {
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    after: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    include: Vec<BetaResponseIncludable>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    limit: Omittable<u32>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    order: Omittable<BetaResponseItemOrder>,
+}
+
 /// Query for one beta input-item page.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+///
+/// The pinned `limit` prose documents a 1..=100 range with a default of 20;
+/// only the `>= 1` floor is enforced here because the ceiling exists solely
+/// in that descriptive prose (see D0154/D0174 for the same stance elsewhere).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct BetaListInputItemsParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     after: Omittable<String>,
@@ -3374,6 +3433,28 @@ pub struct BetaListInputItemsParams {
     limit: Omittable<u32>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     order: Omittable<BetaResponseItemOrder>,
+}
+
+impl<'de> Deserialize<'de> for BetaListInputItemsParams {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = BetaListInputItemsParamsWire::deserialize(deserializer)?;
+        if let Omittable::Value(limit) = wire.limit
+            && limit == 0
+        {
+            return Err(D::Error::custom(BetaListInputItemsLimitError {
+                actual: limit,
+            }));
+        }
+        Ok(Self {
+            after: wire.after,
+            include: wire.include,
+            limit: wire.limit,
+            order: wire.order,
+        })
+    }
 }
 
 impl BetaListInputItemsParams {
@@ -3394,10 +3475,23 @@ impl BetaListInputItemsParams {
         self
     }
 
+    /// Returns the response fields requested for inclusion.
     #[must_use]
-    pub const fn limit(mut self, limit: u32) -> Self {
+    pub fn includes(&self) -> &[BetaResponseIncludable] {
+        &self.include
+    }
+
+    /// Sets the requested page size.
+    ///
+    /// The pinned prose documents a 1..=100 range with a default of 20 when
+    /// omitted; this builder rejects `0` and leaves the descriptive ceiling
+    /// unenforced.
+    pub fn limit(mut self, limit: u32) -> Result<Self, BetaListInputItemsLimitError> {
+        if limit == 0 {
+            return Err(BetaListInputItemsLimitError { actual: limit });
+        }
         self.limit = Omittable::Value(limit);
-        self
+        Ok(self)
     }
 
     #[must_use]
@@ -3450,6 +3544,12 @@ impl BetaResponseItemList {
     #[must_use]
     pub fn last_id(&self) -> &str {
         &self.last_id
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -3532,6 +3632,9 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Associates the token count with a conversation.
+    ///
+    /// Cannot be used in conjunction with `previous_response_id`.
     #[must_use]
     pub fn conversation(mut self, conversation: impl Into<ConversationReference>) -> Self {
         self.conversation = Omittable::Value(Nullable::Value(conversation.into()));
@@ -3564,6 +3667,9 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Continues from a prior response.
+    ///
+    /// Cannot be used in conjunction with `conversation`.
     #[must_use]
     pub fn previous_response_id(mut self, id: impl Into<String>) -> Self {
         self.previous_response_id = Omittable::Value(Nullable::Value(id.into()));
@@ -5673,6 +5779,123 @@ mod tests {
             serde_json::to_value(&decoded).expect("re-encode")["data"][0]["id"],
             "msg_abc123"
         );
+        assert!(
+            decoded.extra_fields().is_empty(),
+            "no unknown envelope fields in the fixture"
+        );
+    }
+
+    #[test]
+    fn beta_item_list_retains_unknown_envelope_fields() {
+        let decoded: BetaResponseItemList = serde_json::from_value(json!({
+            "object": "list",
+            "data": [],
+            "first_id": "",
+            "last_id": "",
+            "has_more": false,
+            "future_envelope_field": {"nested": true}
+        }))
+        .expect("unknown envelope fields decode");
+        assert_eq!(
+            decoded.extra_fields().get("future_envelope_field"),
+            Some(&json!({"nested": true}))
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode")["future_envelope_field"]["nested"],
+            true
+        );
+    }
+
+    #[test]
+    fn beta_retrieve_stream_params_pin_stream_true() {
+        let params = BetaRetrieveResponseStreamParams::new()
+            .include(BetaResponseIncludable::EncryptedReasoning)
+            .starting_after(7)
+            .include_obfuscation(false);
+        assert_eq!(
+            serde_json::to_value(&params).expect("serialize resume query"),
+            json!({
+                "include": ["reasoning.encrypted_content"],
+                "stream": true,
+                "include_obfuscation": false,
+                "starting_after": 7
+            })
+        );
+
+        let decoded: BetaRetrieveResponseStreamParams = serde_json::from_value(json!({
+            "include": [],
+            "stream": true
+        }))
+        .expect("explicit stream=true decodes");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode")["stream"],
+            true
+        );
+
+        let defaulted: BetaRetrieveResponseStreamParams =
+            serde_json::from_value(json!({})).expect("stream defaults to true");
+        assert_eq!(
+            serde_json::to_value(&defaulted).expect("re-encode")["stream"],
+            true
+        );
+
+        assert!(
+            serde_json::from_value::<BetaRetrieveResponseStreamParams>(json!({"stream": false}))
+                .is_err(),
+            "stream=false cannot reach the SSE resume lane"
+        );
+    }
+
+    #[test]
+    fn beta_input_item_list_limit_rejects_zero_on_build_and_decode() {
+        let error = BetaListInputItemsParams::new()
+            .limit(0)
+            .expect_err("zero page size");
+        assert_eq!(error.actual(), 0);
+
+        let params = BetaListInputItemsParams::new()
+            .limit(1)
+            .expect("floor is inclusive")
+            .order(BetaResponseItemOrder::Asc);
+        assert_eq!(
+            serde_json::to_value(&params).expect("serialize params"),
+            json!({"limit": 1, "order": "asc"})
+        );
+
+        // The pinned 1..=100 range is descriptive prose; values above the
+        // ceiling stay acceptable (D0154/D0174 stance).
+        let above_prose = BetaListInputItemsParams::new()
+            .limit(250)
+            .expect("prose ceiling is not enforced");
+        assert_eq!(
+            serde_json::to_value(&above_prose).expect("serialize above prose"),
+            json!({"limit": 250})
+        );
+
+        assert!(
+            serde_json::from_value::<BetaListInputItemsParams>(json!({"limit": 0})).is_err(),
+            "decode rejects a zero page size"
+        );
+        let decoded: BetaListInputItemsParams =
+            serde_json::from_value(json!({"limit": 20})).expect("decode pinned default");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("serialize decoded")["limit"],
+            20
+        );
+        assert!(
+            serde_json::from_value::<BetaListInputItemsParams>(json!({})).is_ok(),
+            "limit stays omittable"
+        );
+    }
+
+    #[test]
+    fn beta_input_item_params_expose_includes() {
+        let params = BetaListInputItemsParams::new()
+            .include(BetaResponseIncludable::EncryptedReasoning)
+            .include(BetaResponseIncludable::WebSearchResults);
+        assert_eq!(params.includes().len(), 2);
+        assert_eq!(params.includes()[0].as_str(), "reasoning.encrypted_content");
+        assert!(BetaListInputItemsParams::new().includes().is_empty());
     }
 
     #[test]

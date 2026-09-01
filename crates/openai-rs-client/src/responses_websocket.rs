@@ -319,6 +319,14 @@ impl ResponsesWebSocket {
 
     /// Receives the next typed server event. Ping/pong control frames are
     /// handled internally. `None` means the peer completed the close handshake.
+    ///
+    /// Failure posture (4-19, unified by 5-08 with the Realtime socket):
+    /// every transport or protocol failure — a broken connection, an oversized
+    /// event, or a frame that violates the Responses event-transport contract —
+    /// retires the socket (`is_closed` becomes `true`, matching openai-node,
+    /// which destroys the WebSocket on any error). A failed event *decode* is
+    /// the one recoverable path: the connection stays open so a malformed
+    /// event need not take down an otherwise healthy session.
     pub async fn recv(&mut self) -> Result<Option<ResponsesServerEvent>, Error> {
         if self.closed {
             return Ok(None);
@@ -328,9 +336,23 @@ impl ResponsesWebSocket {
                 self.closed = true;
                 return Ok(None);
             };
-            match message.map_err(map_websocket_error)? {
+            // A read failure leaves the underlying connection unusable, so it
+            // retires the socket like every other non-decode error path.
+            let message = match message {
+                Ok(message) => message,
+                Err(error) => {
+                    self.closed = true;
+                    return Err(map_websocket_error(error));
+                }
+            };
+            match message {
                 Message::Text(text) => {
                     if text.len() > self.max_message_bytes {
+                        // An oversized event means the peer (or an
+                        // intermediary) already sent bytes this socket cannot
+                        // frame, so the socket retires instead of being polled
+                        // again.
+                        self.closed = true;
                         return Err(Error::WebSocketProtocol(
                             "incoming Responses event exceeds the configured message limit",
                         ));
@@ -359,11 +381,16 @@ impl ResponsesWebSocket {
                     return Ok(None);
                 }
                 Message::Binary(_) => {
+                    // A frame that violates the Responses event-transport
+                    // contract retires the socket; the stream is only usable
+                    // for well-formed Responses frames.
+                    self.closed = true;
                     return Err(Error::WebSocketProtocol(
                         "Responses WebSocket sent a binary data message",
                     ));
                 }
                 Message::Frame(_) => {
+                    self.closed = true;
                     return Err(Error::WebSocketProtocol(
                         "Responses WebSocket exposed an unexpected raw frame",
                     ));
@@ -601,6 +628,7 @@ fn invalid_configuration(message: impl Into<Box<str>>) -> Error {
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use bytes::Bytes;
     use http::StatusCode;
     use openai_rs_types::responses::ResponseStreamEvent;
     use serde_json::{Value, json};
@@ -927,5 +955,59 @@ mod tests {
         assert!(socket.is_closed());
         assert_eq!(socket.close_code(), Some(1011));
         assert_eq!(socket.close_reason(), Some("response failed"));
+    }
+
+    #[tokio::test]
+    async fn binary_frame_retires_the_responses_socket() {
+        // 5-08: a frame that violates the Responses event-transport contract
+        // must retire the socket instead of leaving it half-alive, matching
+        // the Realtime recv posture.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind binary-frame server");
+        let address = listener.local_addr().expect("binary-frame server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept binary-frame socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("binary-frame server handshake");
+            socket
+                .send(Message::Binary(Bytes::from_static(b"[1,2,3]")))
+                .await
+                .expect("send binary frame");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("binary-frame client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("binary-frame client");
+        let mut socket = client
+            .responses()
+            .connect()
+            .await
+            .expect("connect Responses WebSocket");
+
+        match socket.recv().await {
+            Err(Error::WebSocketProtocol(reason)) => {
+                assert_eq!(reason, "Responses WebSocket sent a binary data message");
+            }
+            unexpected => panic!("expected a protocol rejection, got {unexpected:?}"),
+        }
+        assert!(
+            socket.is_closed(),
+            "a rejected frame must retire the Responses socket"
+        );
+        assert!(
+            socket.recv().await.expect("recv after rejection").is_none(),
+            "a retired socket reports EOF on every later recv"
+        );
     }
 }

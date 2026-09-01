@@ -205,6 +205,32 @@ impl Transport {
         self.decode_optional_json(response).await
     }
 
+    /// Executes an empty-or-JSON operation with one operation-owned static
+    /// header. Callers cannot use this to override authentication or codec
+    /// headers.
+    pub(crate) async fn execute_optional_json_with_static_header<O, Q>(
+        &self,
+        path: &[PathSegment<'_>],
+        query: Option<&Q>,
+        body: Option<&O::Request>,
+        name: &'static str,
+        value: &'static str,
+    ) -> Result<ApiResponse<Option<O::Response>>, Error>
+    where
+        O: Operation,
+        Q: Serialize + ?Sized,
+    {
+        if O::META.response_mode != crate::operation::ResponseMode::EmptyOrJson {
+            return Err(Error::InvalidConfiguration(
+                "empty-or-JSON decoder used for an incompatible operation".into(),
+            ));
+        }
+        let response = self
+            .send_with_static_header::<O, Q>(path, query, body, Some((name, value)))
+            .await?;
+        self.decode_optional_json(response).await
+    }
+
     #[cfg(feature = "realtime")]
     pub(crate) async fn execute_empty<O, Q>(
         &self,
@@ -257,7 +283,7 @@ impl Transport {
             retry.count = tracing::field::Empty,
         )
     )]
-    async fn send_with_static_header<O, Q>(
+    pub(crate) async fn send_with_static_header<O, Q>(
         &self,
         path: &[PathSegment<'_>],
         query: Option<&Q>,

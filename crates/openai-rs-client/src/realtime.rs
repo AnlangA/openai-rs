@@ -154,6 +154,18 @@ impl Realtime {
     /// SDP answer. Media capture, codecs, ICE, DTLS, RTP, and peer-connection
     /// management remain the caller's responsibility.
     ///
+    /// Encoding (5-03): with a session configuration the request is the pinned
+    /// two-part `multipart/form-data` body (`sdp` as `application/sdp`,
+    /// `session` as `application/json`); with the session omitted it is the
+    /// bare SDP text under `Content-Type: application/sdp` — the switch both
+    /// official baselines make for a sdp-only body — never a one-part
+    /// multipart. `Accept` stays `application/sdp` in both shapes. Unknown
+    /// keys captured in [`RealtimeCallCreateRequest`]'s extra fields are
+    /// dropped: the pinned encoding table defines exactly the `sdp` and
+    /// `session` parts, so the multipart path sends those two alone and the
+    /// bare path carries the SDP text by itself (decode still keeps extras
+    /// lossless for round-tripping).
+    ///
     /// Retry classification (3-20): this operation is the equivalent of
     /// `RetryClass::Never`. Creating a call is a side-effecting mutation — a
     /// replayed attempt could place two live calls — so it keeps the same
@@ -171,37 +183,50 @@ impl Realtime {
             PathSegment::literal("calls"),
         ])?;
         let RealtimeCallCreateRequest { sdp, session, .. } = request;
-        let sdp_part = Part::text(sdp.0)
-            .mime_str("application/sdp")
-            .map_err(Error::from_reqwest)?;
-        let mut form = Form::new().part("sdp", sdp_part);
-        match session {
+        let authorization = transport.authorization().await?;
+        let builder = match session {
             Omittable::Value(session) => {
                 let session = serde_json::to_string(&session).map_err(Error::Encode)?;
-                let part = Part::text(session)
+                let sdp_part = Part::text(sdp.0)
+                    .mime_str("application/sdp")
+                    .map_err(Error::from_reqwest)?;
+                let session_part = Part::text(session)
                     .mime_str("application/json")
                     .map_err(Error::from_reqwest)?;
-                form = form.part("session", part);
+                transport
+                    .request_builder(
+                        reqwest::Method::POST,
+                        url,
+                        "application/sdp",
+                        authorization.header.clone(),
+                    )
+                    .timeout(transport.overall_timeout())
+                    .multipart(
+                        Form::new()
+                            .part("sdp", sdp_part)
+                            .part("session", session_part),
+                    )
             }
-            Omittable::Omitted => {}
+            // 5-03: with no session part the pinned encoding table leaves the
+            // SDP alone, and both official clients send the bare sdp text
+            // under `application/sdp` instead of a one-part multipart.
+            Omittable::Omitted => transport
+                .request_builder(
+                    reqwest::Method::POST,
+                    url,
+                    "application/sdp",
+                    authorization.header.clone(),
+                )
+                .timeout(transport.overall_timeout())
+                .header(header::CONTENT_TYPE, "application/sdp")
+                .body(sdp.0),
             _ => {
                 return Err(Error::InvalidConfiguration(
                     "unsupported Realtime call session state".into(),
                 ));
             }
-        }
-        let authorization = transport.authorization().await?;
-        let request = transport
-            .request_builder(
-                reqwest::Method::POST,
-                url,
-                "application/sdp",
-                authorization.header.clone(),
-            )
-            .timeout(transport.overall_timeout())
-            .multipart(form)
-            .build()
-            .map_err(Error::from_reqwest)?;
+        };
+        let request = builder.build().map_err(Error::from_reqwest)?;
         transport.ensure_same_origin(request.url())?;
         // This multipart SDP exchange cannot ride the transport's `send` loop
         // (JSON-only request encoding; 201 + Location + SDP-text response
@@ -547,13 +572,19 @@ pub enum RealtimeConnectTarget {
 }
 
 impl RealtimeConnectTarget {
-    /// Targets a model-backed session.
+    /// Targets a model-backed session. An empty model id is refused when the
+    /// connection URL is derived (the connect entry points return
+    /// [`Error::InvalidConfiguration`]) rather than reaching the wire as a
+    /// bare `?model=` key (5-09).
     #[must_use]
     pub fn model(model: impl Into<ModelId>) -> Self {
         Self::Model(model.into())
     }
 
-    /// Targets a sideband control connection for one in-progress call.
+    /// Targets a sideband control connection for one in-progress call. An
+    /// empty call id is refused when the connection URL is derived (the
+    /// connect entry points return [`Error::InvalidConfiguration`]) rather
+    /// than reaching the wire as a bare `?call_id=` key (5-09).
     #[must_use]
     pub fn call_id(call_id: impl Into<String>) -> Self {
         Self::CallId(call_id.into())
@@ -948,6 +979,15 @@ fn realtime_websocket_url(base: &Url, target: &RealtimeConnectTarget) -> Result<
         ));
     }
     let (key, value) = target.query_pair();
+    // 5-09: an empty `model` or `call_id` would reach the wire as a bare
+    // `?model=` / `?call_id=` key. openai-node rejects empty targets outright,
+    // so the empty value is refused here (the connect entry points surface it
+    // as `Error::InvalidConfiguration`) instead of being encoded.
+    if value.is_empty() {
+        return Err(Error::InvalidConfiguration(
+            "Realtime connection target must not be an empty string".into(),
+        ));
+    }
     url.query_pairs_mut().append_pair(key, value);
     Ok(url)
 }
@@ -2130,6 +2170,29 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn websocket_url_rejects_empty_target_values() {
+        // 5-09: an empty model or call id must never reach the wire as a bare
+        // `?model=` / `?call_id=` key; every connect entry point surfaces
+        // InvalidConfiguration instead (openai-node rejects empty targets
+        // outright). The guard also covers the `From<ModelId>` path and direct
+        // enum construction, which bypass the named constructors.
+        let base = Url::parse("https://api.openai.com/v1/").expect("platform base");
+        for target in [
+            RealtimeConnectTarget::model(""),
+            RealtimeConnectTarget::call_id(""),
+            RealtimeConnectTarget::from(ModelId::new("")),
+        ] {
+            assert!(
+                matches!(
+                    realtime_websocket_url(&base, &target),
+                    Err(Error::InvalidConfiguration(_))
+                ),
+                "an empty target must be rejected, got {target:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn transcription_intent_connection_uses_intent_query_without_model() {
         let (client, handshake, events) = websocket_server().await;
@@ -2281,6 +2344,42 @@ mod tests {
         assert!(body.contains("a=offer"));
         assert!(body.contains("application/json"));
         assert!(body.contains("gpt-realtime"));
+    }
+
+    #[tokio::test]
+    async fn create_call_without_session_sends_a_bare_sdp_request() {
+        // 5-03: omitting the session switches to the sdp-only content type —
+        // the raw offer text under `application/sdp`, not a one-part
+        // multipart. `RealtimeCallCreateRequest::new` starts omitted.
+        let (client, captured) = http_server(
+            StatusCode::CREATED,
+            "application/sdp",
+            "v=0\r\na=answer\r\n",
+            Some("/v1/realtime/calls/call_bare"),
+        )
+        .await;
+        let response = client
+            .realtime()
+            .create_call(RealtimeCallCreateRequest::new("v=0\r\na=offer\r\n"))
+            .await
+            .expect("created bare Realtime call");
+        assert_eq!(response.call_id(), "call_bare");
+        assert_eq!(response.sdp().as_str(), "v=0\r\na=answer\r\n");
+
+        let captured = captured.await.expect("captured bare call request");
+        assert_eq!(captured.method, reqwest::Method::POST);
+        assert_eq!(captured.path, "/v1/realtime/calls");
+        assert_eq!(
+            captured.content_type.as_deref(),
+            Some("application/sdp"),
+            "the sdp-only body must ride a bare content type, got {:?}",
+            captured.content_type
+        );
+        assert_eq!(
+            captured.body,
+            b"v=0\r\na=offer\r\n".as_slice(),
+            "the body must be the raw SDP text"
+        );
     }
 
     #[tokio::test]

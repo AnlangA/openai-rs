@@ -91,6 +91,12 @@ impl ChatCompletions {
     }
 
     /// Fetches the next stored-completion page without following a server URL.
+    ///
+    /// Returns `None` once the page has no further results. The cursor is
+    /// resolved like automatic pagination (D0147): a non-empty `last_id`
+    /// wins, an empty one falls back to the page's final completion id, and
+    /// neither being available stops instead of refetching the first page
+    /// with an empty `after`.
     pub async fn next_page(
         &self,
         mut params: ChatCompletionListParams,
@@ -201,6 +207,13 @@ impl ChatCompletionMessages {
             .await
     }
 
+    /// Fetches the next stored-message page without following a server URL.
+    ///
+    /// Returns `None` once the page has no further results. The cursor is
+    /// resolved like automatic pagination (D0147): a non-empty `last_id`
+    /// wins, an empty one falls back to the page's final message id, and
+    /// neither being available stops instead of refetching the first page
+    /// with an empty `after`.
     pub async fn next_page(
         &self,
         completion_id: &str,
@@ -698,6 +711,138 @@ mod tests {
         let captured = captured.await.expect("captured stored list request");
         assert_eq!(captured.path_and_query, "/v1/chat/completions");
         assert!(captured.body.is_none());
+    }
+
+    #[tokio::test]
+    async fn stored_list_next_page_falls_back_to_the_final_completion_id() {
+        // D0147: `has_more=true` with an empty `last_id` advances via
+        // data[-1].id instead of sending an empty `after` cursor that would
+        // silently refetch the first page.
+        let page = serde_json::from_value::<ChatCompletionList>(json!({
+            "object": "list",
+            "data": [{
+                "id": "chatcmpl_9",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "test-model",
+                "choices": []
+            }],
+            "first_id": "chatcmpl_9",
+            "last_id": "",
+            "has_more": true
+        }))
+        .expect("decode stored Chat page");
+        let (client, captured) = serve_once(
+            "application/json",
+            r#"{"object":"list","data":[],"first_id":"chatcmpl_9","last_id":"chatcmpl_9","has_more":false}"#,
+        )
+        .await;
+        let next = client
+            .chat_completions()
+            .next_page(ChatCompletionListParams::default(), &page)
+            .await
+            .expect("advance stored Chat page")
+            .expect("cursor fell back to the final completion id");
+        assert_eq!(next.request_id(), Some("req_chat"));
+
+        let captured = captured.await.expect("captured next-page request");
+        let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
+            .expect("next-page URL");
+        assert_eq!(url.path(), "/v1/chat/completions");
+        let query = url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("after".into(), "chatcmpl_9".into())));
+    }
+
+    #[tokio::test]
+    async fn stored_list_next_page_stops_without_a_resolvable_cursor() {
+        // `has_more=true` with an empty `last_id` and no data cannot name a
+        // cursor, so `next_page` stops instead of refetching the first page.
+        let page = serde_json::from_value::<ChatCompletionList>(json!({
+            "object": "list",
+            "data": [],
+            "first_id": "",
+            "last_id": "",
+            "has_more": true
+        }))
+        .expect("decode unresolvable stored Chat page");
+        let (client, mut captured) = serve_once(
+            "application/json",
+            r#"{"object":"list","data":[],"first_id":"","last_id":"","has_more":false}"#,
+        )
+        .await;
+        assert!(
+            client
+                .chat_completions()
+                .next_page(ChatCompletionListParams::default(), &page)
+                .await
+                .expect("stop pagination")
+                .is_none()
+        );
+        assert!(captured.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn stored_messages_next_page_follows_the_same_cursor_fallback() {
+        let page = serde_json::from_value::<ChatCompletionMessageList>(json!({
+            "object": "list",
+            "data": [{"id": "msg_9", "role": "assistant", "content": null}],
+            "first_id": "msg_9",
+            "last_id": "",
+            "has_more": true
+        }))
+        .expect("decode stored Chat message page");
+        let (client, captured) = serve_once(
+            "application/json",
+            r#"{"object":"list","data":[],"first_id":"msg_9","last_id":"msg_9","has_more":false}"#,
+        )
+        .await;
+        let next = client
+            .chat_completions()
+            .messages()
+            .next_page(
+                "chatcmpl_1",
+                ChatCompletionMessageListParams::default(),
+                &page,
+            )
+            .await
+            .expect("advance stored Chat message page")
+            .expect("cursor fell back to the final message id");
+        assert_eq!(next.request_id(), Some("req_chat"));
+
+        let captured = captured.await.expect("captured message next-page request");
+        let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
+            .expect("message next-page URL");
+        assert_eq!(url.path(), "/v1/chat/completions/chatcmpl_1/messages");
+        let query = url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("after".into(), "msg_9".into())));
+
+        let unresolved = serde_json::from_value::<ChatCompletionMessageList>(json!({
+            "object": "list",
+            "data": [],
+            "first_id": "",
+            "last_id": "",
+            "has_more": true
+        }))
+        .expect("decode unresolvable stored Chat message page");
+        let (client, mut captured) = serve_once(
+            "application/json",
+            r#"{"object":"list","data":[],"first_id":"","last_id":"","has_more":false}"#,
+        )
+        .await;
+        assert!(
+            client
+                .chat_completions()
+                .messages()
+                .next_page(
+                    "chatcmpl_1",
+                    ChatCompletionMessageListParams::default(),
+                    &unresolved
+                )
+                .await
+                .expect("stop message pagination")
+                .is_none()
+        );
+        assert!(captured.try_recv().is_err());
     }
 
     #[tokio::test]

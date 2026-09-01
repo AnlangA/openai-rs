@@ -83,6 +83,14 @@ pub enum Error {
     #[error("invalid app-server configuration: {0}")]
     InvalidConfiguration(String),
 
+    /// An outbound JSONL frame exceeded the configured line limit before it
+    /// reached the child's stdin (5-21). This is a payload-size rejection
+    /// discovered at send time, not a client-configuration problem: it mirrors
+    /// the platform-side `RequestPayloadTooLarge` stance of D0204 instead of
+    /// reusing the configuration category.
+    #[error("app-server outbound frame exceeds the {limit_bytes}-byte limit before transport")]
+    RequestPayloadTooLarge { limit_bytes: usize },
+
     #[error("could not prepare the dedicated CODEX_HOME: {0}")]
     CodexHome(#[source] std::io::Error),
 
@@ -234,6 +242,22 @@ mod tests {
         assert_eq!(
             failure.to_string(),
             "app-server child exited with status exit status: 1"
+        );
+    }
+
+    /// 5-21: an oversized outbound frame reports its own payload-size
+    /// category, distinct from `InvalidConfiguration` (D0204 platform parity).
+    #[test]
+    fn oversized_outbound_frame_has_a_dedicated_category() {
+        let error = Error::RequestPayloadTooLarge { limit_bytes: 4096 };
+        assert_eq!(
+            error.to_string(),
+            "app-server outbound frame exceeds the 4096-byte limit before transport"
+        );
+        assert!(
+            !error
+                .to_string()
+                .contains("invalid app-server configuration")
         );
     }
 }

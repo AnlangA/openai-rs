@@ -762,11 +762,38 @@ pub struct ContainerListResource {
     extra: ExtraFields,
 }
 
+/// Resolves the next-page cursor of a `first_id`/`last_id` list envelope.
+///
+/// Mirrors the shared auto-pagination rule (D0147): when `has_more` is set, a
+/// non-empty envelope `last_id` wins, an empty one falls back to the id of the
+/// page's final element, and pagination stops when neither names a cursor so
+/// an empty `last_id` cannot silently refetch the first page.
+fn list_next_after<'a>(
+    has_more: bool,
+    last_id: &'a str,
+    last_item_id: Option<&'a str>,
+) -> Option<&'a str> {
+    if !has_more {
+        return None;
+    }
+    if !last_id.is_empty() {
+        return Some(last_id);
+    }
+    last_item_id.filter(|id| !id.is_empty())
+}
+
 impl ContainerListResource {
     /// Cursor for the next page.
+    ///
+    /// A non-empty `last_id` wins; an empty one falls back to the id of the
+    /// page's final Container (D0147).
     #[must_use]
     pub fn next_after(&self) -> Option<&str> {
-        self.has_more.then_some(self.last_id.as_str())
+        list_next_after(
+            self.has_more,
+            &self.last_id,
+            self.data.last().map(|container| container.id.as_str()),
+        )
     }
 
     /// Future fields retained during decode.
@@ -869,9 +896,16 @@ pub struct ContainerFileListResource {
 
 impl ContainerFileListResource {
     /// Cursor for the next page.
+    ///
+    /// A non-empty `last_id` wins; an empty one falls back to the id of the
+    /// page's final Container File (D0147).
     #[must_use]
     pub fn next_after(&self) -> Option<&str> {
-        self.has_more.then_some(self.last_id.as_str())
+        list_next_after(
+            self.has_more,
+            &self.last_id,
+            self.data.last().map(|file| file.id.as_str()),
+        )
     }
 
     /// Future fields retained during decode.
@@ -1057,6 +1091,75 @@ mod tests {
         }
         assert!(page.extra().contains_key("page_future"));
         assert_eq!(ok(serde_json::to_value(page)), fixture);
+    }
+
+    #[test]
+    fn container_and_file_pages_fall_back_to_the_last_item_id() {
+        // D0147: a page advertising more results with an empty last_id must
+        // still name a cursor via data[-1].id instead of yielding an empty
+        // cursor that silently refetches the first page.
+        let container = json!({
+            "id": "cntr_9",
+            "object": "container",
+            "name": "sandbox",
+            "created_at": 1,
+            "status": "running"
+        });
+        let file = json!({
+            "id": "cfile_9",
+            "object": "container.file",
+            "container_id": "cntr_9",
+            "created_at": 1,
+            "bytes": 4,
+            "path": "/mnt/data/file.bin",
+            "source": "user"
+        });
+        let page = ok(serde_json::from_value::<ContainerListResource>(json!({
+            "object": "list",
+            "data": [container],
+            "first_id": "cntr_9",
+            "last_id": "",
+            "has_more": true
+        })));
+        assert_eq!(page.next_after(), Some("cntr_9"));
+
+        let file_page = ok(serde_json::from_value::<ContainerFileListResource>(json!({
+            "object": "list",
+            "data": [file],
+            "first_id": "cfile_9",
+            "last_id": "",
+            "has_more": true
+        })));
+        assert_eq!(file_page.next_after(), Some("cfile_9"));
+
+        // A non-empty server cursor still wins over the fallback, and neither
+        // an empty cursor with empty data nor a terminal page advances.
+        let server_cursor = ok(serde_json::from_value::<ContainerListResource>(json!({
+            "object": "list",
+            "data": [container],
+            "first_id": "cntr_9",
+            "last_id": "cntr_server",
+            "has_more": true
+        })));
+        assert_eq!(server_cursor.next_after(), Some("cntr_server"));
+
+        let unresolved = ok(serde_json::from_value::<ContainerFileListResource>(json!({
+            "object": "list",
+            "data": [],
+            "first_id": "",
+            "last_id": "",
+            "has_more": true
+        })));
+        assert_eq!(unresolved.next_after(), None);
+
+        let terminal = ok(serde_json::from_value::<ContainerListResource>(json!({
+            "object": "list",
+            "data": [container],
+            "first_id": "cntr_9",
+            "last_id": "cntr_9",
+            "has_more": false
+        })));
+        assert_eq!(terminal.next_after(), None);
     }
 
     #[test]
