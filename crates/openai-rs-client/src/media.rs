@@ -1427,6 +1427,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn image_generation_stream_completes_with_usage_and_ends_cleanly() {
+        // The generation lane's happy path: one partial frame, then the
+        // terminal `image_generation.completed` event carrying the required
+        // usage object, after which the stream must end without a trailing
+        // error or EOF complaint.
+        let body = Bytes::from_static(
+            concat!(
+                "event: image_generation.partial_image\n",
+                "data: {\"type\":\"image_generation.partial_image\",\"b64_json\":\"UE5H\",\"created_at\":1,\"size\":\"1024x1024\",\"quality\":\"high\",\"background\":\"opaque\",\"output_format\":\"png\",\"partial_image_index\":0}\n\n",
+                "event: image_generation.completed\n",
+                "data: {\"type\":\"image_generation.completed\",\"b64_json\":\"RklOQUw=\",\"created_at\":2,\"size\":\"1024x1024\",\"quality\":\"high\",\"background\":\"opaque\",\"output_format\":\"png\",\"usage\":{\"input_tokens\":4,\"output_tokens\":5,\"total_tokens\":9,\"input_tokens_details\":{\"text_tokens\":3,\"image_tokens\":1},\"output_tokens_details\":{\"image_tokens\":5,\"text_tokens\":0}}}\n\n"
+            )
+            .as_bytes(),
+        );
+        let (client, captured) = serve_once(SSE_MIME, body).await;
+        let request = CreateImageRequest::new("A lighthouse")
+            .into_streaming()
+            .with_partial_images(PartialImageCount::new(1).expect("partial count"));
+        let mut stream = client
+            .images()
+            .generate_stream(request)
+            .await
+            .expect("generation SSE");
+        assert!(matches!(
+            stream
+                .next()
+                .await
+                .expect("partial")
+                .expect("typed partial"),
+            ImageGenerationStreamEvent::Partial(_)
+        ));
+        let completed = stream
+            .next()
+            .await
+            .expect("completed")
+            .expect("typed completed event");
+        match &completed {
+            ImageGenerationStreamEvent::Completed(event) => {
+                assert!(completed.is_terminal());
+                assert_eq!(event.usage.input_tokens, 4);
+                assert_eq!(event.usage.total_tokens, 9);
+                assert_eq!(event.usage.input_tokens_details.text_tokens, 3);
+                match &event.usage.output_tokens_details {
+                    Omittable::Value(details) => {
+                        assert_eq!((details.image_tokens, details.text_tokens), (5, 0));
+                    }
+                    state => panic!("expected output token details, got {state:?}"),
+                }
+            }
+            other => panic!("expected a completed event, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+        let captured = captured.await.expect("captured generation SSE");
+        assert_eq!(captured.accept.as_deref(), Some(SSE_MIME));
+    }
+
+    #[tokio::test]
+    async fn image_edit_stream_completes_with_usage_and_ends_cleanly() {
+        // Edit-side twin of the generation test: the same partial → completed
+        // (with usage) → clean-end shape through the JSON edit lane.
+        let body = Bytes::from_static(
+            concat!(
+                "event: image_edit.partial_image\n",
+                "data: {\"type\":\"image_edit.partial_image\",\"b64_json\":\"UE5H\",\"created_at\":1,\"size\":\"1024x1024\",\"quality\":\"high\",\"background\":\"opaque\",\"output_format\":\"png\",\"partial_image_index\":0}\n\n",
+                "event: image_edit.completed\n",
+                "data: {\"type\":\"image_edit.completed\",\"b64_json\":\"RklOQUw=\",\"created_at\":2,\"size\":\"1024x1024\",\"quality\":\"high\",\"background\":\"opaque\",\"output_format\":\"png\",\"usage\":{\"input_tokens\":4,\"output_tokens\":5,\"total_tokens\":9,\"input_tokens_details\":{\"text_tokens\":3,\"image_tokens\":1}}}\n\n"
+            )
+            .as_bytes(),
+        );
+        let (client, captured) = serve_once(SSE_MIME, body).await;
+        let request = CreateImageEditJsonRequest::new(ImageReference::file("file_1"), "Add snow")
+            .into_streaming()
+            .with_partial_images(PartialImageCount::new(1).expect("partial count"));
+        let mut stream = client
+            .images()
+            .edit_json_stream(request)
+            .await
+            .expect("JSON edit SSE");
+        assert!(matches!(
+            stream
+                .next()
+                .await
+                .expect("partial")
+                .expect("typed partial"),
+            ImageEditStreamEvent::Partial(_)
+        ));
+        let completed = stream
+            .next()
+            .await
+            .expect("completed")
+            .expect("typed completed event");
+        match &completed {
+            ImageEditStreamEvent::Completed(event) => {
+                assert!(completed.is_terminal());
+                assert_eq!(event.usage.input_tokens, 4);
+                assert_eq!(event.usage.output_tokens, 5);
+                assert_eq!(event.usage.input_tokens_details.image_tokens, 1);
+                assert!(event.usage.output_tokens_details.is_omitted());
+            }
+            other => panic!("expected a completed event, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+        let captured = captured.await.expect("captured JSON edit SSE");
+        assert_eq!(captured.accept.as_deref(), Some(SSE_MIME));
+        let body: Value = serde_json::from_slice(&captured.body).expect("edit stream JSON");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["partial_images"], 1);
+    }
+
+    #[tokio::test]
     async fn transcription_multipart_drops_explicit_null_metadata_fields() {
         let (client, captured) =
             serve_once(JSON_MIME, Bytes::from_static(br#"{"text":"hello"}"#)).await;

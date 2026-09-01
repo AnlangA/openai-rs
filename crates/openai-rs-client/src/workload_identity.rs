@@ -385,46 +385,53 @@ impl WorkloadIdentityAuth {
                 && now < cached.expires_at
             {
                 if now >= cached.refresh_at && state.refreshing.is_none() {
-                    let refresh = begin_refresh(&mut state);
-                    let auth = Arc::clone(self);
-                    tokio::spawn(
-                        async move {
-                            let result = auth.exchange(refresh.token_generation).await;
-                            auth.finish_refresh(refresh, result).await;
-                        }
-                        .instrument(tracing::debug_span!("openai.workload_identity.refresh")),
-                    );
+                    self.spawn_refresh(&mut state);
                 }
                 return token_lease(&cached);
             }
 
-            if let Some(refreshing) = &state.refreshing {
-                let refresh_id = refreshing.id;
-                let notified = self.notify.notified();
-                tokio::pin!(notified);
-                notified.as_mut().enable();
-                drop(state);
-                notified.await;
-                let state = self.state.lock().await;
-                if let Some((completed_id, error)) = &state.completed_failure
-                    && *completed_id == refresh_id
-                {
-                    return Err(Error::from(Arc::clone(error)));
-                }
-                drop(state);
-                continue;
-            }
-
-            let refresh = begin_refresh(&mut state);
-            drop(state);
-            let result = self.exchange(refresh.token_generation).await;
-            let caller_result = result.clone();
-            self.finish_refresh(refresh, result).await;
-            return match caller_result {
-                Ok(token) => token_lease(&token),
-                Err(error) => Err(Error::from(error)),
+            // The exchange always runs in a spawned task (the same detached
+            // pattern as the X.509 token refresh): `token()` must stay
+            // cancellation-safe, so a caller dropped at any await point — an
+            // outer `tokio::time::timeout` or `select!` — cannot strand the
+            // single-flight slot. The detached task still reaches
+            // `finish_refresh`, which clears the slot and wakes every waiter;
+            // without it the slot leaked and all later `token()` calls parked
+            // on `notified()` forever (7-01).
+            let refresh_id = match state.refreshing.as_ref() {
+                Some(refreshing) => refreshing.id,
+                None => self.spawn_refresh(&mut state),
             };
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            drop(state);
+            notified.await;
+            let state = self.state.lock().await;
+            if let Some((completed_id, error)) = &state.completed_failure
+                && *completed_id == refresh_id
+            {
+                return Err(Error::from(Arc::clone(error)));
+            }
+            drop(state);
         }
+    }
+
+    /// Occupies the single-flight slot and spawns the detached exchange task
+    /// that always finishes it. The caller must hold the state lock so the
+    /// slot and the returned id stay in sync.
+    fn spawn_refresh(self: &Arc<Self>, state: &mut TokenState) -> u64 {
+        let refresh = begin_refresh(state);
+        let refresh_id = refresh.id;
+        let auth = Arc::clone(self);
+        tokio::spawn(
+            async move {
+                let result = auth.exchange(refresh.token_generation).await;
+                auth.finish_refresh(refresh, result).await;
+            }
+            .instrument(tracing::debug_span!("openai.workload_identity.refresh")),
+        );
+        refresh_id
     }
 
     pub(crate) async fn invalidate_if_generation(&self, generation: u64) -> bool {
@@ -924,6 +931,83 @@ mod tests {
             assert!(task.await.expect("join provider waiter").is_err());
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelled_first_token_call_does_not_leak_the_refresh_slot() {
+        let (exchange_url, exchanges, _) = exchange_server(vec![
+            Reply {
+                status: StatusCode::OK,
+                body: r#"{"access_token":"access_one","expires_in":3600}"#.to_owned(),
+                location: None,
+            },
+            Reply {
+                status: StatusCode::OK,
+                body: r#"{"access_token":"access_two","expires_in":3600}"#.to_owned(),
+                location: None,
+            },
+        ])
+        .await;
+        let providers = Arc::new(AtomicUsize::new(0));
+        let first_call_providers = Arc::clone(&providers);
+        let provider = SubjectTokenProviderFn::new(SubjectTokenType::Jwt, move || {
+            let provider_calls = Arc::clone(&first_call_providers);
+            async move {
+                let call = provider_calls.fetch_add(1, Ordering::SeqCst);
+                if call == 0 {
+                    // Hold the first exchange open long enough for its caller
+                    // to be dropped mid-flight below.
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
+                SubjectToken::new("subject.jwt.token").map_err(|_| SubjectTokenProviderError::new())
+            }
+        });
+        let config = WorkloadIdentityConfig::new("idp_test", "svc_test", provider)
+            .expect("workload config")
+            .with_client_id("client_test")
+            .expect("client id")
+            .with_token_exchange_url(exchange_url);
+        let auth = WorkloadIdentityAuth::new(
+            config,
+            None,
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+            None,
+        )
+        .expect("workload auth");
+
+        // An outer timeout drops the caller while the exchange is in flight
+        // (7-01). Before the spawn-based fix this stranded the single-flight
+        // slot and every later `token()` parked on `notified()` forever.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), auth.token())
+                .await
+                .is_err(),
+            "the first token call must be cancelled mid-exchange"
+        );
+
+        // The slot must not have leaked: the next call still completes, and it
+        // rides the in-flight exchange instead of duplicating it.
+        let second = tokio::time::timeout(Duration::from_secs(2), auth.token())
+            .await
+            .expect("a cancelled caller must not wedge later token calls")
+            .expect("second token call succeeds");
+        assert_eq!(second.header.to_str().ok(), Some("Bearer access_one"));
+        assert_eq!(exchanges.load(Ordering::SeqCst), 1);
+        assert_eq!(providers.load(Ordering::SeqCst), 1);
+
+        // A later invalidation still starts a genuinely new exchange.
+        assert!(
+            auth.invalidate_if_generation(second.generation.expect("workload generation"))
+                .await
+        );
+        let third = tokio::time::timeout(Duration::from_secs(2), auth.token())
+            .await
+            .expect("third token call completes a new exchange")
+            .expect("third token call succeeds");
+        assert_eq!(third.header.to_str().ok(), Some("Bearer access_two"));
+        assert_eq!(exchanges.load(Ordering::SeqCst), 2);
+        assert_eq!(providers.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

@@ -2552,6 +2552,23 @@ impl VectorStoreSearchRequest {
         self
     }
 
+    /// Checks the pinned search constraints without sending the request.
+    ///
+    /// [`VectorStoreSearchQuery`] is an open enum, so a `Texts(vec![])` value
+    /// can be assembled directly and bypass the `minItems: 1` rule that
+    /// [`VectorStoreSearchQuery::multiple`] enforces at construction and
+    /// decode. This opt-in hook re-reports that state as
+    /// [`VectorStoreValidationError::EmptySearchQueries`] before the body is
+    /// transmitted, mirroring the other request-level `validate` hooks.
+    pub fn validate(&self) -> Result<(), VectorStoreValidationError> {
+        if let VectorStoreSearchQuery::Texts(queries) = &self.query
+            && queries.is_empty()
+        {
+            return Err(VectorStoreValidationError::EmptySearchQueries);
+        }
+        Ok(())
+    }
+
     /// Effective result limit.
     #[must_use]
     pub const fn effective_max_results(&self) -> u8 {
@@ -3311,6 +3328,27 @@ mod tests {
         assert_eq!(value["query"], "quarterly revenue");
         assert_eq!(value["filters"]["type"], "gt");
         assert_eq!(value["ranking_options"]["score_threshold"], 0.4);
+    }
+
+    #[test]
+    fn search_request_validate_closes_the_direct_empty_query_array_hole() {
+        // `VectorStoreSearchQuery::Texts` is a public variant, so an empty
+        // query array can be assembled directly and would otherwise reach the
+        // wire (minItems is enforced only by the constructor and decode).
+        let empty = VectorStoreSearchRequest {
+            query: VectorStoreSearchQuery::Texts(Vec::new()),
+            ..VectorStoreSearchRequest::new("placeholder")
+        };
+        assert_eq!(
+            empty.validate(),
+            Err(VectorStoreValidationError::EmptySearchQueries)
+        );
+
+        // Every constructible shape that respects minItems stays valid.
+        assert_eq!(VectorStoreSearchRequest::new("single").validate(), Ok(()));
+        let multiple = VectorStoreSearchQuery::multiple(vec!["one".to_owned(), "two".to_owned()])
+            .expect("non-empty queries");
+        assert_eq!(VectorStoreSearchRequest::new(multiple).validate(), Ok(()));
     }
 
     #[test]

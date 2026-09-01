@@ -194,29 +194,96 @@ where
 }
 
 /// Non-streaming legacy completion body.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CreateCompletionRequest {
     #[serde(flatten)]
     body: CompletionRequestBody,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     best_of: Omittable<Nullable<u8>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Omittable::is_omitted",
-        deserialize_with = "deserialize_non_streaming_flag"
-    )]
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     stream: Omittable<Nullable<bool>>,
 }
 
+/// Wire capture for the non-streaming body.
+///
+/// Mirrors the chat typestate decode guard: the streaming-only
+/// `stream_options` key is captured here so its presence is a typed decode
+/// error instead of being silently dropped before the flatten.
+#[derive(Deserialize)]
+struct CreateCompletionRequestWire {
+    #[serde(flatten)]
+    body: CompletionRequestBody,
+    #[serde(default)]
+    best_of: Omittable<Nullable<u8>>,
+    #[serde(default, deserialize_with = "deserialize_non_streaming_flag")]
+    stream: Omittable<Nullable<bool>>,
+    #[serde(default)]
+    stream_options: Omittable<serde_json::Value>,
+}
+
+impl<'de> Deserialize<'de> for CreateCompletionRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = CreateCompletionRequestWire::deserialize(deserializer)?;
+        if wire.stream_options.is_value() {
+            return Err(D::Error::custom(
+                "non-streaming legacy completion request cannot carry `stream_options`",
+            ));
+        }
+        Ok(Self {
+            body: wire.body,
+            best_of: wire.best_of,
+            stream: wire.stream,
+        })
+    }
+}
+
 /// Streaming legacy completion body.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CreateStreamingCompletionRequest {
+    #[serde(flatten)]
+    body: CompletionRequestBody,
+    stream: bool,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    stream_options: Omittable<Nullable<CompletionStreamOptions>>,
+}
+
+/// Wire capture for the streaming body.
+///
+/// `best_of` is server-side only and cannot be streamed; capturing the key
+/// keeps the illegal combination a decode error rather than a round-trip
+/// that silently loses the field.
+#[derive(Deserialize)]
+struct CreateStreamingCompletionRequestWire {
     #[serde(flatten)]
     body: CompletionRequestBody,
     #[serde(deserialize_with = "deserialize_true")]
     stream: bool,
-    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    #[serde(default)]
     stream_options: Omittable<Nullable<CompletionStreamOptions>>,
+    #[serde(default)]
+    best_of: Omittable<serde_json::Value>,
+}
+
+impl<'de> Deserialize<'de> for CreateStreamingCompletionRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = CreateStreamingCompletionRequestWire::deserialize(deserializer)?;
+        if wire.best_of.is_value() {
+            return Err(D::Error::custom(
+                "streaming legacy completion request cannot carry `best_of`",
+            ));
+        }
+        Ok(Self {
+            body: wire.body,
+            stream: wire.stream,
+            stream_options: wire.stream_options,
+        })
+    }
 }
 
 macro_rules! common_builders {
@@ -1030,6 +1097,65 @@ mod tests {
         assert!(serde_json::from_value::<CreateCompletionRequest>(value.clone()).is_err());
         serde_json::from_value::<CreateStreamingCompletionRequest>(value)
             .expect("decode streaming request");
+    }
+
+    #[test]
+    fn request_decode_rejects_mode_owned_field_combinations() {
+        // The streaming-only `stream_options` key must not ride on a
+        // non-streaming decode, whatever its value: silently dropping it
+        // would lose the field on round-trip.
+        for stream_options in [json!({"include_usage": true}), Value::Null] {
+            let error = serde_json::from_value::<CreateCompletionRequest>(json!({
+                "model": "gpt-3.5-turbo-instruct",
+                "prompt": "hello",
+                "stream_options": stream_options
+            }))
+            .expect_err("stream_options cannot ride on a non-streaming request");
+            assert!(
+                error.to_string().contains("stream_options"),
+                "unexpected error: {error}"
+            );
+        }
+
+        // The non-streaming-only `best_of` key must not ride on a streaming
+        // decode for the same reason.
+        for best_of in [json!(2), Value::Null] {
+            let error = serde_json::from_value::<CreateStreamingCompletionRequest>(json!({
+                "model": "gpt-3.5-turbo-instruct",
+                "prompt": "hello",
+                "stream": true,
+                "best_of": best_of
+            }))
+            .expect_err("best_of cannot ride on a streaming request");
+            assert!(
+                error.to_string().contains("best_of"),
+                "unexpected error: {error}"
+            );
+        }
+
+        // Legal combinations still decode and re-encode without loss.
+        let non_streaming = serde_json::from_value::<CreateCompletionRequest>(json!({
+            "model": "gpt-3.5-turbo-instruct",
+            "prompt": "hello",
+            "best_of": 3
+        }))
+        .expect("best_of decodes on the non-streaming body");
+        assert_eq!(
+            serde_json::to_value(&non_streaming).expect("re-encode non-streaming")["best_of"],
+            json!(3)
+        );
+
+        let streaming = serde_json::from_value::<CreateStreamingCompletionRequest>(json!({
+            "model": "gpt-3.5-turbo-instruct",
+            "prompt": "hello",
+            "stream": true,
+            "stream_options": {"include_usage": true}
+        }))
+        .expect("stream_options decodes on the streaming body");
+        assert_eq!(
+            serde_json::to_value(&streaming).expect("re-encode streaming")["stream_options"],
+            json!({"include_usage": true})
+        );
     }
 
     #[test]

@@ -19,6 +19,8 @@ Run these from the workspace root before opening a pull request:
 ```console
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo clippy -p openai-rs-sdk --all-targets --locked -- -D warnings
+cargo clippy -p openai-rs-client --no-default-features --features rustls-tls --locked -- -D warnings
 cargo test --workspace --all-features --locked
 cargo check -p openai-rs-sdk --all-targets --no-default-features --locked
 cargo check --workspace --all-targets --all-features --locked
@@ -29,8 +31,11 @@ cargo deny --all-features check
 ```
 
 The checks intentionally cover default features, no-default-features, and all
-features. `all-features` is a compile/test pressure test; it does not change the
-stability level of experimental features.
+features. Clippy must also run on the default and minimal feature sets rather
+than only with `--all-features`: code reachable only through optional features
+(the static-lane span helper, the multi-agent transport lane) otherwise looks
+dead under the default build (7-02). `all-features` is a compile/test pressure
+test; it does not change the stability level of experimental features.
 
 These are local maintainer and pre-release gates. This repository intentionally
 does not define GitHub CI/CD workflows.

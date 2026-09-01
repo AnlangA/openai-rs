@@ -527,6 +527,13 @@ enum VoiceObjectTag {
 }
 
 /// Custom voice metadata.
+///
+/// To synthesize speech with a custom voice, convert its id into the speech
+/// voice union: `SpeechVoice::from(voice.id())` produces the
+/// `{"id": "..."}` object form expected by `POST /audio/speech` (see
+/// [`crate::media::SpeechVoice::custom`]). The reverse direction has no
+/// bridge: a speech `Custom` voice value is not necessarily a Custom Voice
+/// API resource id.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Voice {
     #[serde(rename = "object")]
@@ -540,6 +547,9 @@ pub struct Voice {
 
 impl Voice {
     /// Returns voice id.
+    ///
+    /// Converts into `crate::media::SpeechVoice` by reference for speech
+    /// synthesis (`From<&VoiceId>`).
     #[must_use]
     pub const fn id(&self) -> &VoiceId {
         &self.id

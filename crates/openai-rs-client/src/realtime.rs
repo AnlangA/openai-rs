@@ -34,8 +34,8 @@ use crate::{
         private::Sealed,
     },
     responses_websocket::{
-        Socket, connect_socket, is_unauthorized_websocket_error, map_websocket_error,
-        websocket_connector, websocket_request,
+        Socket, connect_socket, derive_websocket_url, is_unauthorized_websocket_error,
+        map_websocket_error, websocket_connector, websocket_request,
     },
     trace,
     transport::{PathSegment, deserialize_json},
@@ -386,6 +386,12 @@ impl fmt::Debug for RealtimeCallCreated {
 /// flowing. A keepalive timeout retires the socket with an error and is never
 /// followed by an automatic reconnect (D0122/D0148).
 ///
+/// The silence window only counts while `recv` is being awaited (7-09): an
+/// application that stops polling `recv` also stops probing and stops the
+/// window, and when polling resumes after a gap of at least one ping interval
+/// the window is re-anchored to the resume instant — time spent away from
+/// `recv` is never held against the connection.
+///
 /// The openai-python Realtime client ships defaults of a 20s ping interval
 /// with a 20s pong timeout; this crate keeps keepalive opt-in (disabled by
 /// default) and treats those values only as a tuning reference.
@@ -612,6 +618,11 @@ struct RealtimeKeepaliveState {
     config: RealtimeKeepalive,
     ticker: tokio::time::Interval,
     last_inbound: Instant,
+    /// When the `recv` loop last ran (7-09). The silence window only counts
+    /// while `recv` is being awaited, so `recv` compares this against the ping
+    /// interval on entry to detect a polling gap and re-anchor `last_inbound`
+    /// instead of judging the window against a stale, pre-pause anchor.
+    last_poll: Instant,
 }
 
 /// A typed GA Realtime WebSocket.
@@ -689,6 +700,7 @@ impl RealtimeWebSocket {
                 config,
                 ticker,
                 last_inbound: Instant::now(),
+                last_poll: Instant::now(),
             }
         });
         Ok(Self {
@@ -739,6 +751,15 @@ impl RealtimeWebSocket {
         }
     }
 
+    /// Sends one typed client event.
+    ///
+    /// A transport failure while *writing* the frame retires the socket
+    /// (`is_closed` becomes `true`), extending the recv-side posture (4-19,
+    /// D0212): a connection that cannot be written to is not usable again, so
+    /// later `send`/`recv` calls report the closed state instead of polling a
+    /// half-broken socket. Local validation failures — an event that fails to
+    /// encode or exceeds the configured message limit — leave the connection
+    /// open, because nothing reached the wire and the socket remains healthy.
     pub async fn send(&mut self, event: RealtimeClientEvent) -> Result<(), Error> {
         if self.closed {
             return Err(Error::WebSocketProtocol(
@@ -751,10 +772,13 @@ impl RealtimeWebSocket {
                 "outgoing Realtime event exceeds the configured message limit",
             ));
         }
-        self.socket
-            .send(Message::text(encoded))
-            .await
-            .map_err(map_websocket_error)
+        match self.socket.send(Message::text(encoded)).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.closed = true;
+                Err(map_websocket_error(error))
+            }
+        }
     }
 
     /// Appends raw audio bytes; the typed event performs base64 encoding.
@@ -779,7 +803,10 @@ impl RealtimeWebSocket {
     /// [`Error::WebSocketProtocol`] once the silence window elapses with no
     /// inbound frame of any kind. Keepalive is therefore recv-driven — an
     /// application that stops polling `recv` also opts out of liveness
-    /// detection. The connection is never reconnected automatically.
+    /// detection, and the window is re-anchored when polling resumes after a
+    /// gap of at least one ping interval, so a pause never retires an
+    /// otherwise healthy connection (7-09). The connection is never
+    /// reconnected automatically.
     ///
     /// Failure posture (4-19): every transport or protocol failure — a broken
     /// connection, a keepalive timeout, a failed probe write, or a frame that
@@ -793,6 +820,21 @@ impl RealtimeWebSocket {
             return Ok(None);
         }
         loop {
+            if let Some(keepalive) = self.keepalive.as_mut() {
+                // 7-09: the silence window only counts while `recv` is being
+                // awaited. When polling resumes after a gap of at least one
+                // ping interval — the application was busy elsewhere, so no
+                // probe was sent and no frame was read — the window is
+                // re-anchored to *now* before any tick can judge it. Without
+                // this reset, the first post-gap tick would compare against
+                // the pre-pause `last_inbound` and retire an otherwise
+                // healthy connection on the spot.
+                let now = Instant::now();
+                if keepalive.last_poll.elapsed() >= keepalive.config.ping_interval {
+                    keepalive.last_inbound = now;
+                }
+                keepalive.last_poll = now;
+            }
             let message = match self.keepalive.as_mut() {
                 Some(keepalive) => {
                     tokio::select! {
@@ -951,25 +993,10 @@ fn classify_realtime_inbound(message: Message) -> RealtimeInbound {
 const TARGET_QUERY_KEYS: [&str; 3] = ["model", "intent", "call_id"];
 
 fn realtime_websocket_url(base: &Url, target: &RealtimeConnectTarget) -> Result<Url, Error> {
-    let mut url = base.clone();
-    let scheme = match url.scheme() {
-        "https" => "wss",
-        "http" => "ws",
-        _ => {
-            return Err(Error::InvalidConfiguration(
-                "Realtime WebSocket requires an HTTP(S) base URL".into(),
-            ));
-        }
-    };
-    url.set_scheme(scheme).map_err(|()| {
-        Error::InvalidConfiguration("failed to derive Realtime WebSocket scheme".into())
-    })?;
-    {
-        let mut segments = url.path_segments_mut().map_err(|()| {
-            Error::InvalidConfiguration("Realtime base URL cannot encode a path".into())
-        })?;
-        segments.pop_if_empty().push("realtime");
-    }
+    // 7-22: scheme mapping, the `realtime` path segment, fragment dropping,
+    // and base-query preservation come from the shared derivation used by all
+    // three WebSocket faces; only the target key handling below is Realtime's.
+    let mut url = derive_websocket_url(base, "realtime", "Realtime")?;
     // Exactly one target key may appear on the wire, so a base URL that already
     // pins `model`, `intent`, or `call_id` is rejected instead of being merged
     // into a conflicting pair such as `intent=transcription&model=...`.
@@ -1409,6 +1436,47 @@ mod tests {
             .build()
             .expect("keepalive server client");
         (client, release_sender, pings_receiver)
+    }
+
+    /// Accepts one WebSocket and then only *reads* — never writing an event —
+    /// so the peer stays live but quiet: tungstenite answers every probe with
+    /// its automatic `Pong` while the inbound lane never carries an event.
+    /// The read loop ends when the client goes away, and every ping payload
+    /// seen meanwhile is reported.
+    async fn live_quiet_websocket_server() -> (Client, oneshot::Receiver<Vec<Bytes>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind live-quiet server");
+        let address = listener.local_addr().expect("live-quiet server address");
+        let (pings_sender, pings_receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept live-quiet socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("live-quiet server handshake");
+            let mut pings = Vec::new();
+            while let Some(message) = socket.next().await {
+                match message {
+                    Ok(Message::Ping(payload)) => pings.push(payload),
+                    Ok(Message::Close(_)) | Err(_) => break,
+                    _ => {}
+                }
+            }
+            let _ = pings_sender.send(pings);
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("live-quiet client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("live-quiet client");
+        (client, pings_receiver)
     }
 
     #[tokio::test]
@@ -2082,6 +2150,102 @@ mod tests {
             !pings.is_empty(),
             "the idle tail must still have probed the peer"
         );
+    }
+
+    #[tokio::test]
+    async fn keepalive_reanchors_when_recv_polling_resumes_after_a_gap() {
+        // 7-09: the silence window only counts while `recv` is being awaited.
+        // The peer stays live and answers probes, so leaving `recv` unpolled
+        // for three silence windows must not be held against the connection:
+        // the window re-anchors to the resume instant instead of the first
+        // post-gap tick judging the stale pre-pause anchor and retiring a
+        // healthy socket essentially immediately.
+        let (client, pings) = live_quiet_websocket_server().await;
+        let keepalive =
+            RealtimeKeepalive::new(Duration::from_millis(40), Duration::from_millis(60))
+                .expect("valid keepalive");
+        let mut socket = client
+            .realtime()
+            .connect_with(
+                "gpt-realtime/test",
+                RealtimeWebSocketConfig::new().with_keepalive(Some(keepalive)),
+            )
+            .await
+            .expect("connect Realtime WebSocket with keepalive");
+        tokio::time::sleep(keepalive.silence_window() * 3).await;
+        // Resumed polling must stay pending against the live peer: the probes
+        // it sends are answered by the automatic Pong, which refreshes the
+        // window like any inbound frame.
+        let outcome = tokio::time::timeout(Duration::from_millis(250), socket.recv()).await;
+        assert!(
+            outcome.is_err(),
+            "recv must stay pending on the live peer instead of timing out on the stale anchor, got {outcome:?}"
+        );
+        assert!(
+            !socket.is_closed(),
+            "a paused recv must not retire a healthy socket"
+        );
+        drop(socket);
+        drop(client);
+        let pings = tokio::time::timeout(Duration::from_secs(5), pings)
+            .await
+            .expect("timely server drain")
+            .expect("captured keepalive pings");
+        assert!(
+            !pings.is_empty(),
+            "probing must resume together with recv polling"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_write_failure_retires_the_realtime_socket() {
+        // 7-22: a failed send write leaves the socket unusable in both
+        // directions, so it is retired like every recv-side failure (4-19,
+        // D0212) instead of staying half-open. The write fails
+        // deterministically against a `max_write_buffer_size` smaller than one
+        // text frame (a 12+-byte frame against an 8-byte cap).
+        let (client, pings) = live_quiet_websocket_server().await;
+        let mut socket = client
+            .realtime()
+            .connect_with(
+                "gpt-realtime/test",
+                RealtimeWebSocketConfig::new()
+                    .write_buffer_bytes(1)
+                    .max_queued_write_bytes(8),
+            )
+            .await
+            .expect("connect Realtime WebSocket with a tiny write buffer");
+        match socket.append_audio(vec![0, 1, 2]).await {
+            Err(Error::WebSocketTransport(reason)) => {
+                assert!(
+                    reason.to_lowercase().contains("buffer"),
+                    "expected a write-buffer failure, got {reason}"
+                );
+            }
+            unexpected => panic!("expected a send write failure, got {unexpected:?}"),
+        }
+        assert!(
+            socket.is_closed(),
+            "a failed send must retire the Realtime socket"
+        );
+        assert!(
+            socket
+                .recv()
+                .await
+                .expect("recv after the send failure")
+                .is_none(),
+            "a retired socket reports EOF on every later recv"
+        );
+        assert!(
+            matches!(
+                socket.append_audio(vec![3]).await,
+                Err(Error::WebSocketProtocol(_))
+            ),
+            "a later send must report the closed socket"
+        );
+        drop(socket);
+        drop(client);
+        let _ = tokio::time::timeout(Duration::from_secs(5), pings).await;
     }
 
     #[test]

@@ -2573,14 +2573,25 @@ fn encode_query<Q: Serialize + ?Sized>(query: &Q) -> Result<Vec<(String, String)
 
 /// Appends one serialized query value as `name=value` pairs.
 ///
-/// Mirrors openai-python's `_qs.py::_stringify_item` (the D0145 rule that
-/// `transport.rs::append_query`/`query_scalar` also implement): an explicit
-/// `null` and an empty string both serialize to nothing, so the query key is
-/// omitted entirely rather than sent as `key=`. Other falsy scalars (`0`,
-/// `false`) still encode, because only the serialized string being empty drops
-/// the key. Arrays recurse through the same leaf rule, so `null`/`""` items
-/// inside an array are dropped just like top-level fields, and nested object
-/// leaves behave identically.
+/// Mirrors the official client-level query serializers rather than
+/// openai-python's `_qs.py::_stringify_item` defaults: the D0145 drop rule
+/// (`null` and the empty string serialize to nothing, so the key is
+/// omitted entirely rather than sent as `key=`; other falsy scalars like
+/// `0`/`false` still encode) comes from `_qs.py`, while arrays take the
+/// bracketed spelling `name[]` from openai-node's client-level
+/// `stringifyQuery` (`qs.stringify(query, { arrayFormat: 'brackets' })`)
+/// and from the pinned OpenAPI's own spelling of the five audit-log
+/// filters (`actor_emails[]`/`actor_ids[]`/`event_types[]`/
+/// `project_ids[]`/`resource_ids[]`; the pin spells the remaining
+/// Administration/Usage array filters — usage `project_ids`/`sources`/
+/// `sizes`/`vector_store_ids`/`context_levels`, users `emails`,
+/// certificates `include` — without the suffix, and openai-python's
+/// client-level `Querystring()` still repeats those plain keys, so the
+/// two official SDKs disagree; this channel follows node and the audit
+/// spelling, uniformly bracketed). Nested object leaves keep the
+/// `name[child]` form (`effective_at[gt]`). Arrays recurse through the
+/// same leaf rule, so `null`/`""` items inside an array are dropped just
+/// like top-level fields.
 fn append_query_value(
     pairs: &mut Vec<(String, String)>,
     name: &str,
@@ -2596,8 +2607,9 @@ fn append_query_value(
             }
         }
         Value::Array(values) => {
+            let bracketed = format!("{name}[]");
             for value in values {
-                append_query_value(pairs, name, value)?;
+                append_query_value(pairs, &bracketed, value)?;
             }
         }
         Value::Object(fields) => {
@@ -3676,8 +3688,13 @@ mod tests {
             "after": null
         });
         let pairs = encode_query(&query).expect("encode query");
-        assert!(pairs.contains(&("project_ids".to_owned(), "proj_1".to_owned())));
-        assert!(pairs.contains(&("project_ids".to_owned(), "proj_2".to_owned())));
+        // Administration/Usage arrays take the bracketed spelling of the
+        // official runtime baselines: node's `stringifyQuery` runs qs with
+        // `arrayFormat: 'brackets'` and the pin spells the audit filters
+        // `project_ids[]`, so `project_ids[]=` — not python's plain repeat
+        // spelling `project_ids=`.
+        assert!(pairs.contains(&("project_ids[]".to_owned(), "proj_1".to_owned())));
+        assert!(pairs.contains(&("project_ids[]".to_owned(), "proj_2".to_owned())));
         assert!(pairs.contains(&("metadata[team]".to_owned(), "sdk".to_owned())));
         // D0145: an explicit null is equivalent to omitting the key; the
         // admin-only Nullable query field (`after`) never sends `after=`.
@@ -3717,7 +3734,7 @@ mod tests {
             vec![
                 ("limit".to_owned(), "0".to_owned()),
                 ("active".to_owned(), "false".to_owned()),
-                ("emails".to_owned(), "user@example.com".to_owned()),
+                ("emails[]".to_owned(), "user@example.com".to_owned()),
                 ("filters[env]".to_owned(), "prod".to_owned()),
             ]
         );
@@ -3765,8 +3782,8 @@ mod tests {
             vec![
                 ("effective_at[gt]".to_owned(), "1700000000".to_owned()),
                 ("effective_at[lte]".to_owned(), "1800000000".to_owned()),
-                ("project_ids".to_owned(), "proj_1".to_owned()),
-                ("project_ids".to_owned(), "proj_2".to_owned()),
+                ("project_ids[]".to_owned(), "proj_1".to_owned()),
+                ("project_ids[]".to_owned(), "proj_2".to_owned()),
                 ("tenant_only".to_owned(), "true".to_owned()),
                 ("limit".to_owned(), "20".to_owned()),
             ]
@@ -4171,9 +4188,12 @@ mod tests {
         let captured = captured.lock().expect("capture lock");
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].method, Method::GET);
+        // The audit filters go out with the pinned `[]` spelling
+        // (`project_ids%5B%5D=proj_1` once URL-encoded), matching the
+        // OpenAPI parameter name and node's brackets array format.
         assert_eq!(
             captured[0].path_and_query,
-            "/v1/organization/audit_logs?effective_at%5Bgt%5D=1700000000&effective_at%5Blte%5D=1800000000&project_ids=proj_1&limit=20"
+            "/v1/organization/audit_logs?effective_at%5Bgt%5D=1700000000&effective_at%5Blte%5D=1800000000&project_ids%5B%5D=proj_1&limit=20"
         );
         assert_eq!(
             captured[0].authorization.as_deref(),

@@ -36,6 +36,12 @@ impl RetryReason {
 
 /// Creates the shared outbound HTTP span for lanes whose route template is a
 /// static literal (no computation to defer).
+///
+/// Only the realtime, workload-identity, and X.509 lanes build spans with a
+/// static literal route, so the helper is gated to exactly that feature set
+/// (7-02); every other lane goes through the macro declarations in
+/// `transport.rs`/`admin.rs` or the lazy variant below.
+#[cfg(any(feature = "realtime", feature = "workload-identity", feature = "x509"))]
 pub(crate) fn http_request_span(operation_id: &str, method: &str, route: &str) -> tracing::Span {
     http_request_span_lazy(operation_id, method, || route)
 }

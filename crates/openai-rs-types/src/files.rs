@@ -1134,6 +1134,15 @@ impl CreateUploadRequest {
     }
 }
 
+/// Maximum size of one multipart Upload part.
+///
+/// The 64 MB (64 × 1,048,576 bytes) per-part ceiling is documented in the
+/// official SDK docstrings (`DEFAULT_PART_SIZE`) rather than the OpenAPI
+/// schemas and is enforced server-side after a part is uploaded; the client
+/// additionally rejects parts above this size locally, before any bytes are
+/// transmitted.
+pub const MAX_UPLOAD_PART_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Multipart request for `POST /uploads/{upload_id}/parts`.
 ///
 /// This request has no Serde implementation because `data` is a multipart
@@ -1350,9 +1359,9 @@ mod tests {
         AddUploadPartRequest, CompleteUploadRequest, CreateFileRequest, CreateUploadRequest,
         DeleteFileResponse, FileContent, FileExpirationAfter, FileListLimit, FileListPage,
         FileListParams, FileObject, FileObjectPurpose, FilePurpose, FileSortOrder, FileStatus,
-        MAX_FILE_EXPIRATION_SECONDS, MIN_FILE_EXPIRATION_SECONDS, MultipartFileName,
-        MultipartMediaType, ReplayableMultipartSource, Upload, UploadPart, UploadPartId,
-        UploadStatus,
+        MAX_FILE_EXPIRATION_SECONDS, MAX_UPLOAD_PART_BYTES, MIN_FILE_EXPIRATION_SECONDS,
+        MultipartFileName, MultipartMediaType, ReplayableMultipartSource, Upload, UploadPart,
+        UploadPartId, UploadStatus,
     };
     use crate::{Nullable, Omittable};
 
@@ -1663,6 +1672,15 @@ mod tests {
         assert_eq!(request.file().path(), Some(Path::new("training.jsonl")));
         assert_eq!(request.purpose(), &FilePurpose::FineTune);
         assert_eq!(part.data().path(), Some(Path::new("training.jsonl")));
+    }
+
+    #[test]
+    fn upload_part_ceiling_pins_the_official_part_size() {
+        // `DEFAULT_PART_SIZE` upstream is 64 × 1,048,576 bytes, a binary
+        // (not decimal) megabyte multiple, and is enforced locally by the
+        // client before transport.
+        assert_eq!(MAX_UPLOAD_PART_BYTES, 64 * 1024 * 1024);
+        assert_eq!(MAX_UPLOAD_PART_BYTES, 67_108_864);
     }
 
     #[test]

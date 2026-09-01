@@ -1,8 +1,9 @@
 //! Fine-tuning Jobs, events, checkpoints, permissions, and wire configuration.
 //!
-//! This module models the stable Jobs HTTP surface. Experimental grader DTOs
-//! live in [`experimental_graders`] and intentionally contain no HTTP client or
-//! route implementation.
+//! This module models the stable Jobs HTTP surface. The grader wire types in
+//! [`experimental_graders`] exist only to support reinforcement fine-tuning
+//! job creation; the alpha grader run/validate endpoint DTOs live solely in
+//! [`crate::evals::experimental`] (single-track, 7-19).
 
 use std::collections::BTreeMap;
 
@@ -73,16 +74,6 @@ fn discriminator(value: &Value) -> Result<&str, &'static str> {
         .ok_or("tagged fine-tuning object is missing string field `type`")?
         .as_str()
         .ok_or("tagged fine-tuning object field `type` must be a string")
-}
-
-fn serialize_object<T: Serialize>(
-    value: &T,
-    context: &'static str,
-) -> Result<Map<String, Value>, serde_json::Error> {
-    match serde_json::to_value(value)? {
-        Value::Object(object) => Ok(object),
-        _ => Err(<serde_json::Error as serde::ser::Error>::custom(context)),
-    }
 }
 
 crate::open_string_enum! {
@@ -173,10 +164,12 @@ impl From<f64> for AutoOrNumber {
     }
 }
 
-/// Experimental, feature-neutral grader wire types.
+/// Grader wire types shared with reinforcement fine-tuning.
 ///
-/// These DTOs support reinforcement fine-tuning and the alpha grader schemas.
-/// They do not expose alpha HTTP operations, authentication, or routing.
+/// These DTOs support the reinforcement fine-tuning method only. The alpha
+/// grader run/validate endpoint DTOs (including the object-shaped
+/// `token_usage` of official examples) are tracked solely in
+/// [`crate::evals::experimental`] — see 7-19 for the single-track decision.
 pub mod experimental_graders {
     use super::*;
 
@@ -512,9 +505,10 @@ pub mod experimental_graders {
     strict_tagged_union! {
         /// Grader definition accepted by reinforcement and alpha wire schemas.
         ///
-        /// Mirrors the pinned top-level grader unions (reinforcement method,
-        /// validate, and run): exactly five variants with no `label_model`,
-        /// which the pinned schema only allows nested inside
+        /// Mirrors the pinned top-level grader unions (reinforcement method and
+        /// the alpha run/validate schemas tracked in
+        /// [`crate::evals::experimental`]): exactly five variants with no
+        /// `label_model`, which the pinned schema only allows nested inside
         /// [`MultiGrader::graders`] as a [`ReinforcementGraderMember`].
         pub enum Grader {
             StringCheck(StringCheckGrader) = "string_check",
@@ -668,144 +662,6 @@ pub mod experimental_graders {
     impl From<LabelModelGrader> for ReinforcementGraderMember {
         fn from(value: LabelModelGrader) -> Self {
             Self::LabelModel(Box::new(value))
-        }
-    }
-
-    /// Experimental wire request for validating a grader.
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-    pub struct ValidateGraderRequest {
-        /// Grader definition to validate.
-        pub grader: Grader,
-    }
-
-    /// Experimental wire response from grader validation.
-    #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-    pub struct ValidateGraderResponse {
-        /// Validated grader when returned.
-        #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-        pub grader: Omittable<Grader>,
-        /// Future response fields.
-        #[serde(default, flatten)]
-        extra: ExtraFields,
-    }
-
-    impl ValidateGraderResponse {
-        /// Future fields retained during decode.
-        #[must_use]
-        pub const fn extra(&self) -> &ExtraFields {
-            &self.extra
-        }
-    }
-
-    /// Experimental wire request for running a grader locally on one sample.
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-    pub struct RunGraderRequest {
-        /// Grader definition.
-        pub grader: Grader,
-        /// Optional semantic item object.
-        #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-        pub item: Omittable<Map<String, Value>>,
-        /// Model output being graded.
-        pub model_sample: String,
-    }
-
-    impl RunGraderRequest {
-        /// Construct a grader run request without an item object.
-        #[must_use]
-        pub fn new(grader: Grader, model_sample: impl Into<String>) -> Self {
-            Self {
-                grader,
-                item: Omittable::Omitted,
-                model_sample: model_sample.into(),
-            }
-        }
-
-        /// Serialize a typed item into the required JSON object shape.
-        pub fn with_item<T: Serialize>(mut self, item: &T) -> Result<Self, serde_json::Error> {
-            self.item = Omittable::Value(serialize_object(
-                item,
-                "grader item must serialize as a JSON object",
-            )?);
-            Ok(self)
-        }
-    }
-
-    /// Detailed error flags from an experimental grader run.
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-    pub struct GraderRunErrors {
-        pub formula_parse_error: bool,
-        pub sample_parse_error: bool,
-        pub truncated_observation_error: bool,
-        pub unresponsive_reward_error: bool,
-        pub invalid_variable_error: bool,
-        pub other_error: bool,
-        pub python_grader_server_error: bool,
-        pub python_grader_server_error_type: Nullable<String>,
-        pub python_grader_runtime_error: bool,
-        pub python_grader_runtime_error_details: Nullable<String>,
-        #[serde(rename = "model_grader_server_error")]
-        pub api_model_grader_server_error: bool,
-        #[serde(rename = "model_grader_refusal_error")]
-        pub api_model_grader_refusal_error: bool,
-        #[serde(rename = "model_grader_parse_error")]
-        pub api_model_grader_parse_error: bool,
-        #[serde(rename = "model_grader_server_error_details")]
-        pub api_model_grader_server_error_details: Nullable<String>,
-        /// Future response fields.
-        #[serde(default, flatten)]
-        extra: ExtraFields,
-    }
-
-    impl GraderRunErrors {
-        /// Future fields retained during decode.
-        #[must_use]
-        pub const fn extra(&self) -> &ExtraFields {
-            &self.extra
-        }
-    }
-
-    /// Metadata from an experimental grader run.
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-    pub struct GraderRunMetadata {
-        pub name: String,
-        #[serde(rename = "type")]
-        pub kind: String,
-        pub errors: GraderRunErrors,
-        pub execution_time: f64,
-        pub scores: BTreeMap<String, Value>,
-        pub token_usage: Nullable<u64>,
-        pub sampled_model_name: Nullable<String>,
-        /// Future response fields.
-        #[serde(default, flatten)]
-        extra: ExtraFields,
-    }
-
-    impl GraderRunMetadata {
-        /// Future fields retained during decode.
-        #[must_use]
-        pub const fn extra(&self) -> &ExtraFields {
-            &self.extra
-        }
-    }
-
-    /// Experimental wire response from running a grader.
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-    pub struct RunGraderResponse {
-        pub reward: f64,
-        pub metadata: GraderRunMetadata,
-        pub sub_rewards: BTreeMap<String, Value>,
-        #[serde(rename = "model_grader_token_usage_per_model")]
-        pub api_model_grader_token_usage_per_model: BTreeMap<String, Value>,
-        /// Future response fields.
-        #[serde(default, flatten)]
-        extra: ExtraFields,
-    }
-
-    impl RunGraderResponse {
-        /// Future fields retained during decode.
-        #[must_use]
-        pub const fn extra(&self) -> &ExtraFields {
-            &self.extra
         }
     }
 }
@@ -2155,8 +2011,6 @@ mod tests {
     assert_impl_all!(Grader: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(ReinforcementGraderMember: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(GraderCollection: Serialize, DeserializeOwned, Send, Sync);
-    assert_impl_all!(RunGraderRequest: Serialize, DeserializeOwned, Send, Sync);
-    assert_impl_all!(RunGraderResponse: Serialize, DeserializeOwned, Send, Sync);
 
     fn ok<T, E: std::fmt::Display>(result: Result<T, E>) -> T {
         match result {
@@ -2238,13 +2092,8 @@ mod tests {
         content: &'a str,
     }
 
-    #[derive(Serialize)]
-    struct GraderItem<'a> {
-        label: &'a str,
-    }
-
     #[test]
-    fn reinforcement_and_alpha_grader_builders_need_no_json() {
+    fn reinforcement_grader_builders_need_no_json() {
         let exact = StringCheckGrader::new(
             "exact",
             "{{sample.output_text}}",
@@ -2272,6 +2121,9 @@ mod tests {
         assert_eq!(value["method"]["type"], "reinforcement");
         assert!(value["method"]["reinforcement"]["grader"]["graders"].is_array());
 
+        // The alpha run/validate endpoint DTOs are single-tracked in
+        // `evals::experimental`; a score-model grader built here is only ever
+        // embedded in a reinforcement method.
         let score = ok(ScoreModelGrader::from_serializable_inputs(
             "judge",
             "gpt-5-mini",
@@ -2281,11 +2133,8 @@ mod tests {
             }],
         ))
         .with_range(0.0, 1.0);
-        let run = ok(RunGraderRequest::new(score.into(), "candidate")
-            .with_item(&GraderItem { label: "answer" }));
-        let run_value = ok(serde_json::to_value(run));
-        assert_eq!(run_value["grader"]["input"][0]["role"], "user");
-        assert_eq!(run_value["item"]["label"], "answer");
+        let score_value = ok(serde_json::to_value(Grader::from(score)));
+        assert_eq!(score_value["input"][0]["role"], "user");
 
         assert!(
             serde_json::from_value::<Grader>(json!({
@@ -2683,53 +2532,6 @@ mod tests {
         ));
         assert!(matches!(decoded, FineTuningIntegration::Unknown(_)));
         assert_eq!(ok(serde_json::to_value(decoded)), future);
-    }
-
-    #[test]
-    fn experimental_grader_run_response_is_complete_and_lossless() {
-        let fixture = json!({
-            "reward": 1.0,
-            "metadata": {
-                "name": "exact",
-                "type": "string_check",
-                "errors": {
-                    "formula_parse_error": false,
-                    "sample_parse_error": false,
-                    "truncated_observation_error": false,
-                    "unresponsive_reward_error": false,
-                    "invalid_variable_error": false,
-                    "other_error": false,
-                    "python_grader_server_error": false,
-                    "python_grader_server_error_type": null,
-                    "python_grader_runtime_error": false,
-                    "python_grader_runtime_error_details": null,
-                    "model_grader_server_error": false,
-                    "model_grader_refusal_error": false,
-                    "model_grader_parse_error": false,
-                    "model_grader_server_error_details": null,
-                    "errors_future": true
-                },
-                "execution_time": 0.1,
-                "scores": {"exact": 1.0},
-                "token_usage": null,
-                "sampled_model_name": null,
-                "metadata_future": true
-            },
-            "sub_rewards": {"exact": 1.0},
-            "model_grader_token_usage_per_model": {},
-            "response_future": true
-        });
-        let response = ok(serde_json::from_value::<RunGraderResponse>(fixture.clone()));
-        assert!(response.extra().contains_key("response_future"));
-        assert!(response.metadata.extra().contains_key("metadata_future"));
-        assert!(
-            response
-                .metadata
-                .errors
-                .extra()
-                .contains_key("errors_future")
-        );
-        assert_eq!(ok(serde_json::to_value(response)), fixture);
     }
 
     #[test]

@@ -163,6 +163,11 @@ impl ContainerFiles {
 
     /// Uploads immutable bytes or a snapshotted path. Every permitted retry
     /// rebuilds the form and reopens/revalidates path-backed sources.
+    ///
+    /// When the request names the file
+    /// ([`CreateContainerFileUploadRequest::with_file_id`]), that name is
+    /// sent as an additional `file_id` text part beside the binary `file`
+    /// part, per the pinned multipart schema.
     pub async fn upload(
         &self,
         container_id: &ContainerId,
@@ -170,7 +175,11 @@ impl ContainerFiles {
     ) -> Result<ApiResponse<ContainerFileResource>, Error> {
         let path = container_files_path(container_id)?;
         let source = PreparedReplayableSource::prepare(request.file()).await?;
-        let form = ReplayableMultipartForm::new().part("file", source);
+        let mut form = ReplayableMultipartForm::new();
+        if let Some(file_id) = request.file_id() {
+            form = form.text("file_id", file_id.to_owned());
+        }
+        let form = form.part("file", source);
         let response = self
             .client
             .multipart_transport()
@@ -1087,6 +1096,37 @@ mod tests {
         let body = String::from_utf8_lossy(&captures[0].body);
         assert!(body.contains("name=\"file\""));
         assert!(body.contains("filename=\"data.bin\""));
+        assert!(body.contains("DATA"));
+        // Without a name, the optional `file_id` field is absent entirely.
+        assert!(!body.contains("file_id"));
+    }
+
+    #[tokio::test]
+    async fn container_file_upload_sends_the_optional_file_id_text_part() {
+        // The pinned multipart schema accepts an optional `file_id` ("Name of
+        // the file to create") beside the binary `file` part; when set, both
+        // parts must appear in one request.
+        let (client, captures) =
+            serve_script(vec![StubResponse::json(file_json("cntr_1", "cfile_1"))]).await;
+        let source = ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(b"DATA".as_slice()))
+            .try_with_file_name("report.csv")
+            .expect("filename");
+        let request = CreateContainerFileUploadRequest::new(source).with_file_id("report.csv");
+        ContainerFiles::new(client)
+            .upload(&ContainerId::new("cntr_1"), request)
+            .await
+            .expect("upload named file");
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures[0].path_and_query, "/v1/containers/cntr_1/files");
+        let content_type = captures[0]
+            .content_type
+            .clone()
+            .expect("multipart content type");
+        assert!(content_type.starts_with("multipart/form-data; boundary="));
+        let body = String::from_utf8_lossy(&captures[0].body);
+        assert!(body.contains("name=\"file_id\"\r\n\r\nreport.csv"));
+        assert!(body.contains("name=\"file\"; filename=\"report.csv\""));
         assert!(body.contains("DATA"));
     }
 

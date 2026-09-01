@@ -1,9 +1,22 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use rmcp::model::{CallToolResult, JsonObject, Tool};
 
 #[cfg(feature = "client")]
 use crate::control::{wait_for_cancellation, wait_for_timeout};
 use crate::{BridgeError, ExecutionControl};
+
+/// Bound on the best-effort `notifications/cancelled` delivery in the cancel
+/// branches of [`RmcpExecutor::call_tool`] (7-25).
+///
+/// Cancellation is a fait accompli by the time the notification is sent, so a
+/// peer whose write direction is wedged must not be allowed to hold the
+/// dispatch — and, through the response future it shares, the caller — past
+/// its deadline: the delivery is awaited for at most this long and then
+/// abandoned, mirroring the `let _ =` failure stance.
+#[cfg(feature = "client")]
+const CANCEL_DELIVERY_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Credential- and transport-independent execution surface used by the
 /// Responses bridge.
@@ -31,6 +44,32 @@ pub trait ResponsesToolExecutor: Send + Sync {
     async fn list_tools(&self, control: &ExecutionControl) -> Result<Vec<Tool>, BridgeError>;
 
     /// Execute a single MCP tool with an already validated argument object.
+    ///
+    /// # Contract
+    ///
+    /// - **Control obligations (7-25).** `control` is not advisory: an
+    ///   implementation must check it before issuing any I/O (an already
+    ///   cancelled token or a zero deadline answers
+    ///   [`BridgeError::Cancelled`]/[`BridgeError::Timeout`] without
+    ///   contacting the peer), must race the in-flight request against both
+    ///   the cancellation token and the deadline, and must return promptly
+    ///   when either fires instead of waiting for the peer. Best-effort
+    ///   `notifications/cancelled` delivery must itself be bounded — a peer
+    ///   whose write direction is wedged must not extend the dispatch past
+    ///   its deadline.
+    /// - **Arguments are already a JSON object.** The bridge validates and
+    ///   decodes the model's arguments before calling this method, so
+    ///   `arguments` is always a decoded JSON object
+    ///   (`arguments: JsonObject`), never a JSON-encoded string.
+    /// - **Error classification.** A tool that *ran and reported failure*
+    ///   (`isError: true`) is an in-band result, not an error — surface it
+    ///   as an `Ok(CallToolResult)` so the bridge can return it to the model
+    ///   as a function output. Reserve errors for failures of the *exchange*
+    ///   itself: protocol-level rejections map to [`BridgeError::Protocol`],
+    ///   transport/stream failures to [`BridgeError::Transport`], local
+    ///   bounds to [`BridgeError::Cancelled`]/[`BridgeError::Timeout`], and
+    ///   result kinds the bridge cannot represent to
+    ///   [`BridgeError::UnsupportedResult`].
     async fn call_tool(
         &self,
         name: &str,
@@ -52,7 +91,10 @@ pub trait ResponsesToolExecutor: Send + Sync {
 /// notification when local cancellation or the deadline wins the race, but a
 /// failure to deliver it (for example because the transport already closed)
 /// is ignored so the caller still observes [`BridgeError::Cancelled`] or
-/// [`BridgeError::Timeout`]. During [`ResponsesToolExecutor::list_tools`]
+/// [`BridgeError::Timeout`]. The delivery itself is awaited for at most one
+/// second (7-25): a peer whose write direction is wedged — a stuck write,
+/// not a failing one — must not hold the dispatch past its deadline. During
+/// [`ResponsesToolExecutor::list_tools`]
 /// no cancellation notification is sent at all: discovery only freezes a
 /// catalog, so the local result is simply dropped and the outstanding
 /// `tools/list` request is left to complete on its own.
@@ -117,14 +159,24 @@ impl RmcpExecutor {
                 let reason = control.cancellation().and_then(crate::CancellationToken::reason);
                 // Cancellation is already a fait accompli, so a failure to
                 // deliver `notifications/cancelled` (for example when the
-                // transport already closed) must not mask it. The timeout
-                // branch below follows the same rule.
-                let _ = handle.cancel(reason.clone()).await;
+                // transport already closed) must not mask it. The delivery is
+                // also bounded: a peer whose write direction is wedged must
+                // not hold the dispatch past its deadline (7-25). The timeout
+                // branch below follows the same rules.
+                let _ = tokio::time::timeout(
+                    CANCEL_DELIVERY_TIMEOUT,
+                    handle.cancel(reason.clone()),
+                )
+                .await;
                 Err(BridgeError::Cancelled { reason })
             }
             () = wait_for_timeout(control.timeout()) => {
                 let timeout = control.timeout().unwrap_or_default();
-                let _ = handle.cancel(Some("openai-rs RMCP execution timeout".to_owned())).await;
+                let _ = tokio::time::timeout(
+                    CANCEL_DELIVERY_TIMEOUT,
+                    handle.cancel(Some("openai-rs RMCP execution timeout".to_owned())),
+                )
+                .await;
                 Err(BridgeError::Timeout { timeout })
             }
         }

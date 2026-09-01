@@ -4427,3 +4427,124 @@ until a decision is recorded here and its fixtures pass.
 - Impact: documentation and ledger hygiene only.
 - Overrides: notes on D0187, D0225, D0227, D0229
 - Tests: none (documentation).
+
+## D0234 — Workload-identity token exchange is cancellation-safe; clippy gates cover default features
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `WorkloadIdentityAuth::token` (`spawn_refresh`), `trace::http_request_span` and `transport::execute_optional_json_with_static_header` cfg gates, docs/development.md gate list
+- Sources: round-7 items 7-01/7-02 — the inline exchange leaked the single-flight slot when the caller's future was dropped (outer timeout/select), permanently blocking every later `token()` on the un-timed `notified().await`; x509's `TokenManager::lease` already used the detached-task pattern; the round-6 tracing/optional-lane helpers produced dead_code warnings under the default feature set that the all-features-only gate list could not see (development.md claimed default coverage it did not have).
+- Decision: workload-identity adopts the x509 spawn pattern (detached task runs the exchange and unconditionally finishes the refresh, waking waiters; callers only register); the two helpers gain precise cfg gates matching their callers; the gate list adds default- and minimal-feature clippy commands and the coverage claim is corrected.
+- Impact: `openai-rs-client` workload-identity internals; documentation.
+- Overrides: none
+- Tests: `cancelled_first_token_call_does_not_leak_the_refresh_slot`.
+
+## D0235 — Webhook verification signs once and compares in constant time
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `WebhookVerifier::verify_at` candidate loop
+- Sources: round-7 item 7-04 — node's bounded path (`selectMatchingSignature`) signs the payload once and compares candidate tags with a constant-time XOR, verifying only the selected candidate; the previous per-candidate HMAC loop allowed a public unauthenticated endpoint to force up to 182 × 16 MiB ≈ 2.9 GiB of hashing per request (candidates need only decode to 32 bytes, not be valid signatures).
+- Decision: the expected tag is computed once; every candidate inside the 8 KiB header bound is compared with a full 32-byte XOR-and-fold (no short-circuit, no count rejection — D0225's acceptance semantics unchanged); the selected candidate is verified once more through the HMAC implementation as defense in depth. Total cryptographic work per delivery: one signature plus one verify.
+- Impact: `openai-rs-client` webhook verification (performance/DoS posture only; verdicts unchanged).
+- Overrides: refines D0225's work description
+- Tests: `the_worst_usable_candidate_count_stays_at_bounded_hmac_work`, existing slot-33/1600 tests.
+
+## D0236 — Codex direct lanes: 600s non-streaming budget knob, streaming unbudgeted; SSE decoder matches the platform
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `DirectCodexResponsesClient` (timeout knob, lane semantics), `direct/sse.rs`, `dispatch_sse_items`
+- Sources: round-7 items 7-03/7-07 — reqwest 0.12's client-level timeout covers streaming bodies end-to-end and has no per-request "None" override, so the hardcoded 120s truncated every long turn (the platform's 600s knob and D0199 stance existed only in the client crate); the private SSE decoder mishandled lone CRs, stream-start BOMs, and continued dispatching after a decode failure, with a 4 MiB event cap contradicting D0144/D0226.
+- Decision: the client carries no total timeout (10s connect only); non-streaming `create` applies `request_timeout` per request (default 600s, `with_request_timeout` knob, zero = immediate timeout per the platform stance); streaming runs unbudgeted (bounded by SSE terminators, EOF, decoder limits, or caller drop — no read-idle timeout, since long silent turns are legitimate); the private decoder is rewritten as a WHATWG byte state machine (lone CR terminates, split CRLF counts once, stream-start BOM stripped, exact `[DONE]` match, line/event limits split with `>` comparisons, default 32 MiB, `with_sse_limits` knob, explicit empty `data:` dispatches); decode failures stop dispatch after yielding the error once (fail-stop, D0194 parity).
+- Impact: `openai-rs-codex` direct surface (additive knobs; default non-streaming budget 120s→600s; `[DONE]` with whitespace and silent empty-`data` frames now error instead of pass).
+- Overrides: none
+- Tests: the eleven direct tests cited in the round record.
+
+## D0237 — ThreadItem is typed; apiKey login joins the typed login methods
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `ThreadItem` (18 branches) + ten supporting enums, `ItemLifecycleNotification.item`, `Turn.items`, `AppServerClient::account_login_api_key`
+- Sources: pinned 0.144.5 `v2/ThreadItem` oneOf (the protocol's main content surface was raw `Value`); `v2/LoginAccountParams` apiKey branch `{type, apiKey}` was unreachable because `request`/`request_value` are private. Round-7 items 7-05/7-06.
+- Decision: ThreadItem becomes an open tagged union — every branch models its pinned core fields with flatten extra and redacted Debug; unknown tags, missing/non-string tags, non-object payloads, and malformed known branches all degrade to `Unknown(Value)` losslessly (the outer notification never fails to decode); nested unions are closed per the pin with whole-item degradation for future nested tags. The apiKey login takes a `SecretString`, exposes it only inside the single request frame, retains nothing on the client, and never echoes it in errors or Debug.
+- Impact: `openai-rs-codex` protocol surface (additive typing; `Turn.items`/lifecycle notifications gain typed access).
+- Overrides: none
+- Tests: `thread_item_decodes_and_round_trips_every_pinned_branch`, `thread_item_unknown_tags_and_malformed_branches_stay_lossless`, `thread_item_status_enums_decode_known_and_unknown_values`, `turn_and_item_lifecycle_carry_the_typed_thread_item`, `fake_child_api_key_login_sends_the_pinned_branch_and_never_echoes_the_key`.
+
+## D0238 — Admin query arrays use bracketed keys (pin spelling + both SDK runtimes)
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `append_query_value` array branch, the five audit-log filters
+- Sources: round-7 item 7-10 — the pinned spec spells the five audit filters `project_ids[]`/`event_types[]`/`actor_ids[]`/`actor_emails[]`/`resource_ids[]`, and both official SDKs override their serializers at the client level to brackets (python `_client.py` Querystring(brackets); node `qs.stringify(arrayFormat: 'brackets')`); D0059's repeat-style decision had cited only the `_qs.py` module default and the bare parameter names, missing both runtime overrides. The admin channel is corrected; the platform channel (python's client-level override applies there too) is left for a maintainer decision since no pinned parameter name carries brackets there.
+- Decision: admin-channel arrays emit `name[]` (audit filters thereby match the pin's own spelling); the encoder comment cites the client-level overrides; tests assert the bracketed keys.
+- Impact: `openai-rs-client` admin query encoding (wire-visible key change).
+- Overrides: revises D0059's array-style finding (admin channel)
+- Tests: updated `query_encoder_supports_arrays_null_and_deep_objects`, `audit_logs_loopback_encodes_effective_at_bounds_and_falls_back_to_last_item`.
+
+## D0239 — Keepalive counts only polled time; WS send failures retire the socket; InitialConnect retries REST statuses
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `RealtimeKeepaliveState` (`last_poll` re-anchoring), the three WS clients' send paths, `derive_websocket_url`, `retryable_connect_error`
+- Sources: round-7 items 7-08/7-09/7-22 — the silence window anchored on the last inbound frame, so a recv pause longer than the window killed a healthy connection on the first resumed tick with zero probes sent; send-path write failures left `is_closed()` false contrary to the D0198/D0212 posture; GA/beta URL derivation cleared base-query parameters while realtime preserved them (three copies of near-identical code); InitialConnect retried only Io/Tls, dropping the handshake statuses REST retries (408/429/5xx), with zero parameter documentation.
+- Decision: the silence window counts only time spent awaiting recv — a poll gap of at least one ping interval re-anchors the window at resume; send transport failures retire the socket (local validation failures do not, as the connection was never touched); one `derive_websocket_url` helper serves all three clients, GA/beta now preserve base query like realtime (realtime additionally drops base fragments), and beta still never adds `beta=true`; InitialConnect additionally retries HTTP 408/429/5xx handshakes (409 and `x-should-retry` remain REST-only — handshakes replay no mutation), with max_retries/delay semantics documented.
+- Impact: `openai-rs-client` WebSocket surfaces (keepalive no longer punishes paused pollers — the documented contract; gateway base URLs with query parameters now behave identically across the three clients, a behavior correction).
+- Overrides: extends D0171/D0198/D0212
+- Tests: `keepalive_reanchors_when_recv_polling_resumes_after_a_gap`, `send_write_failure_retires_{the_realtime_socket,the_responses_socket,the_beta_socket}`, `retryable_connect_error_covers_the_rest_retry_statuses`, `initial_connect_retries_a_503_handshake_rejection`, `initial_connect_retries_429_rejections_until_the_budget_is_spent`, `beta_initial_connect_retries_a_503_handshake_rejection`, updated URL derivation tests.
+
+## D0240 — Resource replay carries resource-only fields through extra; legacy typestate decode guards mode-owned keys
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `Response::to_input_items` (ten branches), `ConversationMessage::to_response_input_item`, `StoredInputMessage::with_retained_extra`, legacy `CreateCompletionRequest`/`CreateStreamingCompletionRequest` decode
+- Sources: round-7 items 7-11/7-12/7-14 — resource→input conversion took three different wire shapes for `created_by` (dropped, kept via shared struct, passed via conversation round-trip); the rebuilt user/system/developer branches discarded top-level extras while the assistant branch kept them; the legacy typestate silently dropped the other mode's keys on decode (chat's guard existed), breaking round-trips.
+- Decision: D0030's "no sendable copy" is scoped to typed fields/constructors — replay paths are lossless: `created_by` merges into the input item's extra across all ten branches and the rebuilt message branches retain the source extras; the legacy wire structs capture the opposing mode's keys (null counts as present) and reject them with explicit errors mirroring chat.
+- Impact: `openai-rs-types` Responses/Conversations replay semantics; legacy decode strictness (breaking: previously-accepted invalid combinations now error).
+- Overrides: clarifies D0030-3's scope
+- Tests: `to_input_items_replays_resource_only_created_by_into_extra`, `user_message_conversion_retains_top_level_extra_fields`, `accumulator_reduces_part_level_lifecycle_across_content_indexes`, `request_decode_rejects_mode_owned_field_combinations`.
+
+## D0241 — Upload part ceiling, object-only batch bodies, search-empty guard, container file_id, speech voice bridge
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `MAX_UPLOAD_PART_BYTES`, `Uploads::add_part*` length checks, `BatchJsonlError::NonObjectBody`, `BatchSubmissionError::Io` mapping, `VectorStoreSearchRequest::validate`, `CreateContainerFileUploadRequest.file_id`, `SpeechVoice::custom`/`From<&VoiceId>`
+- Sources: round-7 items 7-16/7-17/7-18 — the uploads documentation stated the 64 MB part ceiling but never enforced it locally although the replay lane freezes the length at prepare; non-object batch bodies passed every local check and only failed asynchronously on the server; `Texts(vec![])` was constructible past the minItems guard; the pinned multipart container-file schema (and both SDKs) carry an optional `file_id` form field; custom-voice ids had no bridge into `SpeechVoice::Custom`.
+- Decision: a public 64 MiB constant and pre-transport `RequestPayloadTooLarge` rejection on the replay lane (path sources measured with the same freeze semantics as prepare; one-shot checked only when a length is declared); batch bodies must encode to JSON objects (`NonObjectBody` with the line number); JSONL writer IO errors map to the `Io` submission variant (other rule violations stay structured); `VectorStoreSearchRequest::validate()` closes the direct empty-array hole; the container upload gains an optional string `file_id` (distinct from the JSON lane's `FileId`) sent as a text part; `SpeechVoice::custom` plus a custom-voice-gated `From<&VoiceId>` bridge the voice APIs (one-way — a decoded Custom id need not be a Custom Voice resource).
+- Impact: `openai-rs-types` files/batches/vector-stores/containers/media surfaces; `openai-rs-client` files/batches/containers (breaking: `add_part_one_shot` takes the source directly).
+- Overrides: none
+- Tests: the round-7 additions cited in the group reports.
+
+## D0242 — Alpha grader DTOs are single-tracked; audit parity derives from the pin; codex extras conflict-check; structured rejects malformed keyword shapes; embeddings decode
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: `fine_tuning::experimental_graders` (endpoint DTOs removed), the audit parity test (pinned derivation), codex `validate_extra`/`Error::ExtraFieldConflict`, structured malformed-keyword errors, `EncodedEmbedding::decode_f32_vec`
+- Sources: round-7 items 7-19/7-20/7-21 — the unwired FT-side grader DTOs modeled `token_usage` as `Nullable<u64>` and could not decode the pinned official example (object form) while `evals::experimental` was correct; the 147-event/55-payload parity guard was self-referential; codex's public extra maps could shadow typed keys in serialized output (serde flatten does not deduplicate); structured silently skipped `items` arrays, non-array `anyOf`, and non-object `$defs`; base64 embeddings had no decode helper.
+- Decision: the alpha run/validate endpoint DTOs live only in `evals::experimental` (the FT module keeps the grader types reinforcement uses); the audit test derives the event enum and payload keys from the pinned OpenAPI via include_str and asserts both directions (the binary-size cost is test-only, matching the realtime precedent); codex send paths validate that extras do not collide with typed keys (activating the kernel conflict check, which was previously dead) and report `ExtraFieldConflict`; the malformed keyword shapes return `UnsupportedKeyword` with paths; `decode_f32_vec` validates little-endian f32 length.
+- Impact: `openai-rs-types` fine-tuning (breaking: endpoint DTOs removed, no callers), admin tests, structured/core surfaces; `openai-rs-codex` send validation (new error variant).
+- Overrides: none
+- Tests: the round-7 additions cited in the group reports.
+
+## D0243 — Codex facade alias covers both features; rmcp cancel delivery is bounded
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: facade `codex` alias cfg, feature-status documentation, rmcp `CANCEL_DELIVERY_TIMEOUT` + trait/catalog docs + paginated ProbeServer
+- Sources: round-7 items 7-24/7-25 — enabling `experimental-codex-direct` compiled the codex crate without exposing anything through the facade (the alias was gated on `codex-app-server` only); rmcp's cancel-delivery await was unbounded, so a wedged write path held dispatch past its deadline forever (rmcp's own internal timeout path is equally unbounded); the tool adaptation dropped fields silently and the executor contract was undocumented.
+- Decision: the codex alias is visible under either feature (documented, tested); the direct feature's users are still pointed at a direct dependency for the full surface; rmcp's cancel-notification delivery is bounded at one second (timeout keeps the `let _ =` semantics and returns `Cancelled`/`Timeout` as decided); the trait documents control obligations, the "decoded to a JSON object" wording, and the error-variant guidance; the catalog documents its dropped-fields list with the `mcp_tool()` escape; the ProbeServer paginates `tools/list` and a stalled discovery e2e is covered.
+- Impact: facade gating; rmcp documentation and bounded cancellation; test fixtures.
+- Overrides: none
+- Tests: `codex_alias_is_nameable_under_either_codex_feature`, `cancellation_returns_promptly_when_the_cancel_write_is_wedged`, `discovery_deadline_ends_a_stalled_tools_list_traversal`, `discovery_merges_every_paginated_tools_list_page`.
+
+## D0244 — Round-7 recorded positions
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: webhook base64 strictness; secret construction buffers; beta agent extras; validate_stream_id dedup; streaming retry documentation; with_request_timeout scope; platform array-style finding
+- Sources: round-7 audit items 7-15/7-23/7-26 and the residual observations.
+- Decision: webhook candidate and secret decoding stays strict-canonical (real deliveries are canonical; node's tolerance is a `Buffer.from` side effect, not a contract); secret construction's intermediate String buffers are an accepted window (secrecy's `From<String>` semantics; the holder itself zeroizes on drop); BetaAgent stays a strict single-field leaf pending a need for agent metadata forward-compat (noted, not changed); the duplicated validate_stream_id was not deduplicated this round (the shared helper landed for URL derivation; the validator remains two copies pending a maintainer preference); streaming methods document that no retry happens after the handshake (transport errors are terminal) and the request budget excludes credential acquisition (token exchanges carry their own budgets — documented); the platform-channel array style repeats (python's client-level brackets override applies there too, but no pinned platform parameter name carries brackets, so a change needs a maintainer decision and a live-traffic confirmation).
+- Impact: documentation and ledger only.
+- Overrides: none
+- Tests: existing suites.

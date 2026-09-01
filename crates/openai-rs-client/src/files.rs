@@ -6,13 +6,16 @@ use futures_core::Stream;
 use http::{Method, StatusCode};
 use openai_rs_types::{
     AddUploadPartRequest, CompleteUploadRequest, CreateFileRequest, CreateUploadRequest,
-    DeleteFileResponse, FileId, FileListPage, FileListParams, FileObject, Omittable, Upload,
-    UploadId, UploadPart,
+    DeleteFileResponse, FileId, FileListPage, FileListParams, FileObject, MAX_UPLOAD_PART_BYTES,
+    Omittable, ReplayableMultipartSource, Upload, UploadId, UploadPart,
 };
 
 use crate::{
     ApiResponse, Client, Error,
-    multipart::{AddUploadPartOneShotRequest, CreateFileOneShotRequest, FileContentStream},
+    multipart::{
+        AddUploadPartOneShotRequest, CreateFileOneShotRequest, FileContentStream,
+        OneShotMultipartSource,
+    },
     operation::{
         AuthScope, Operation, OperationMeta, RequestEncoding, ResponseMode, RetryClass,
         private::Sealed,
@@ -135,9 +138,13 @@ impl Files {
 /// official SDK docstrings rather than the OpenAPI schemas, and enforced
 /// server-side):
 ///
-/// - **Part size.** Each [`Uploads::add_part`] call carries at most 64 MB
-///   (64 × 1,048,576 bytes; `DEFAULT_PART_SIZE` upstream). Split larger
-///   inputs across several parts.
+/// - **Part size.** Each part carries at most 64 MB (64 × 1,048,576 bytes;
+///   `DEFAULT_PART_SIZE` upstream; [`MAX_UPLOAD_PART_BYTES`]). Parts above
+///   that size are rejected locally before any bytes are transmitted: the
+///   replay lane measures the length it freezes at preparation time, and the
+///   one-shot lane checks a length declared through
+///   [`OneShotMultipartSource::with_length`]. Split larger inputs across
+///   several parts.
 /// - **Total size.** One Upload accepts at most 8 GB in total across all of
 ///   its parts; declare the final count with
 ///   [`CreateUploadRequest::bytes`].
@@ -183,15 +190,24 @@ impl Uploads {
     /// was prepared) before each attempt, so a part can never silently upload
     /// different bytes than were snapshotted.
     ///
-    /// The part must carry at most 64 MB; the Upload accepts at most 8 GB in
-    /// total and expires about an hour after creation, so complete it before
-    /// [`Upload::expires_at`] passes. See the
+    /// A part above [`MAX_UPLOAD_PART_BYTES`] is rejected locally with
+    /// [`Error::RequestPayloadTooLarge`] before any bytes are transmitted,
+    /// using the length the replay lane freezes when it prepares the source
+    /// (the in-memory length, or the path-snapshot length). The Upload
+    /// accepts at most 8 GB in total and expires about an hour after
+    /// creation, so complete it before [`Upload::expires_at`] passes. See the
     /// [struct documentation](Uploads) for the full constraint list.
     pub async fn add_part(
         &self,
         upload_id: &UploadId,
         request: AddUploadPartRequest,
     ) -> Result<ApiResponse<UploadPart>, Error> {
+        if replayable_source_length(request.data())
+            .await
+            .is_some_and(|length| length > MAX_UPLOAD_PART_BYTES)
+        {
+            return Err(upload_part_too_large());
+        }
         self.client
             .multipart_transport()
             .add_upload_part(upload_id, &request)
@@ -204,18 +220,27 @@ impl Uploads {
     /// attempt: the single send opens the file once and validates it against
     /// the identity snapshot taken when the part was prepared.
     ///
-    /// The same session constraints apply as for [`Uploads::add_part`]: at
-    /// most 64 MB per part, at most 8 GB in total, and completion before the
-    /// roughly one-hour expiry reported by
-    /// [`Upload::expires_at`].
+    /// The 64 MB per-part ceiling ([`MAX_UPLOAD_PART_BYTES`]) can only be
+    /// checked locally when the source declares its byte length through
+    /// [`OneShotMultipartSource::with_length`]; a reader or stream without a
+    /// declared length is streamed as-is and left to the service's own
+    /// enforcement, since measuring it would consume the one-shot source. The
+    /// 8 GB session total and the roughly one-hour expiry reported by
+    /// [`Upload::expires_at`] also apply.
     pub async fn add_part_one_shot(
         &self,
         upload_id: &UploadId,
-        request: AddUploadPartOneShotRequest,
+        data: OneShotMultipartSource,
     ) -> Result<ApiResponse<UploadPart>, Error> {
+        if data
+            .length()
+            .is_some_and(|length| length > MAX_UPLOAD_PART_BYTES)
+        {
+            return Err(upload_part_too_large());
+        }
         self.client
             .multipart_transport()
-            .add_upload_part_one_shot(upload_id, request)
+            .add_upload_part_one_shot(upload_id, AddUploadPartOneShotRequest::new(data))
             .await
     }
 
@@ -260,6 +285,37 @@ fn file_path(file_id: &FileId) -> Result<[PathSegment<'_>; 2], Error> {
 
 fn upload_id_segment(upload_id: &UploadId) -> Result<PathSegment<'_>, Error> {
     PathSegment::parameter("upload_id", upload_id.as_str())
+}
+
+/// Measures the byte length the replay lane freezes when it prepares this
+/// source: the in-memory length for byte sources, or the snapshot length for
+/// path sources (the same `symlink_metadata` the preparation reads).
+///
+/// Returns `None` when the value cannot be observed without the transport's
+/// own fail-closed preparation — an unreadable path, or a future source
+/// variant — so those cases keep surfacing the transport's error unchanged.
+async fn replayable_source_length(source: &ReplayableMultipartSource) -> Option<u64> {
+    match source {
+        ReplayableMultipartSource::Bytes { data, .. } => u64::try_from(data.len()).ok(),
+        ReplayableMultipartSource::Path { path, .. } => tokio::fs::symlink_metadata(path)
+            .await
+            .ok()
+            .map(|metadata| metadata.len()),
+        _ => None,
+    }
+}
+
+/// Local rejection for a part above [`MAX_UPLOAD_PART_BYTES`].
+///
+/// Mirrors the send-time half of the custom-voice audio bound
+/// (`prepare_bounded` in `voices.rs`): the failure is a client-side input
+/// problem discovered before transport, so it reports through
+/// [`Error::RequestPayloadTooLarge`] like every other pre-transport body
+/// bound.
+fn upload_part_too_large() -> Error {
+    Error::RequestPayloadTooLarge {
+        limit_bytes: MAX_UPLOAD_PART_BYTES as usize,
+    }
 }
 
 macro_rules! operation {
@@ -783,5 +839,125 @@ mod tests {
         assert!(stream.next().await.is_none());
         assert!(captured.recv().await.is_some());
         assert!(captured.recv().await.is_some());
+    }
+
+    // A client pointed at a loopback port with no listener: a part that slips
+    // past the local size check fails with a connection error instead of ever
+    // reaching a real endpoint, while the local rejections below return
+    // before any transport work.
+    fn dead_endpoint_client() -> Client {
+        let base_url = Url::parse("http://127.0.0.1:9/v1/").expect("dead base URL");
+        Client::builder(ApiKey::new("test-placeholder-key").expect("test API key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(RetryPolicy::disabled())
+            .build()
+            .expect("dead endpoint client")
+    }
+
+    #[tokio::test]
+    async fn add_part_rejects_oversized_bytes_part_before_transport() {
+        let client = dead_endpoint_client();
+        let oversized = Arc::<[u8]>::from(vec![0; MAX_UPLOAD_PART_BYTES as usize + 1]);
+        let error = client
+            .uploads()
+            .add_part(
+                &UploadId::new("upload_1"),
+                AddUploadPartRequest::new(ReplayableMultipartSource::from_bytes(oversized)),
+            )
+            .await
+            .expect_err("oversized part must be rejected locally");
+        assert!(
+            matches!(
+                &error,
+                Error::RequestPayloadTooLarge { limit_bytes }
+                    if *limit_bytes == MAX_UPLOAD_PART_BYTES as usize
+            ),
+            "expected the local part-size rejection, got {error:?}"
+        );
+        assert!(error.status().is_none() && error.request_id().is_none());
+    }
+
+    #[tokio::test]
+    async fn add_part_accepts_a_part_exactly_at_the_local_ceiling() {
+        // A part exactly at 64 MB must pass the local gate; the failure below
+        // comes only from the dead endpoint, proving the boundary is `>`.
+        let client = dead_endpoint_client();
+        let exact = Arc::<[u8]>::from(vec![0; MAX_UPLOAD_PART_BYTES as usize]);
+        let error = client
+            .uploads()
+            .add_part(
+                &UploadId::new("upload_1"),
+                AddUploadPartRequest::new(ReplayableMultipartSource::from_bytes(exact)),
+            )
+            .await
+            .expect_err("dead endpoint must fail after the local gate");
+        assert!(
+            !matches!(error, Error::RequestPayloadTooLarge { .. }),
+            "a part at the ceiling must not be rejected locally: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_shot_part_checks_only_a_declared_length() {
+        let client = dead_endpoint_client();
+
+        // A declared length above the ceiling is rejected locally without
+        // touching the one-shot source.
+        let declared_oversized = OneShotMultipartSource::from_reader(tokio::io::empty())
+            .with_length(MAX_UPLOAD_PART_BYTES + 1);
+        let error = client
+            .uploads()
+            .add_part_one_shot(&UploadId::new("upload_1"), declared_oversized)
+            .await
+            .expect_err("declared oversized one-shot part must fail locally");
+        assert!(
+            matches!(
+                &error,
+                Error::RequestPayloadTooLarge { limit_bytes }
+                    if *limit_bytes == MAX_UPLOAD_PART_BYTES as usize
+            ),
+            "expected the local part-size rejection, got {error:?}"
+        );
+
+        // Without a declared length there is nothing measurable to check, and
+        // a declared length exactly at the ceiling passes; both proceed to
+        // the single send and fail here only because the endpoint is dead.
+        for source in [
+            OneShotMultipartSource::from_reader(tokio::io::empty()),
+            OneShotMultipartSource::from_reader(tokio::io::empty())
+                .with_length(MAX_UPLOAD_PART_BYTES),
+        ] {
+            let error = client
+                .uploads()
+                .add_part_one_shot(&UploadId::new("upload_1"), source)
+                .await
+                .expect_err("dead endpoint must fail after the local gate");
+            assert!(
+                !matches!(error, Error::RequestPayloadTooLarge { .. }),
+                "undeclared and exact-ceiling lengths must not be rejected locally: {error:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn replayable_source_length_mirrors_the_prepare_time_freeze() {
+        let bytes = ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(&b"abc"[..]));
+        assert_eq!(replayable_source_length(&bytes).await, Some(3));
+
+        let temporary = tempfile::NamedTempFile::new().expect("temporary part source");
+        tokio::fs::write(temporary.path(), b"abcdef")
+            .await
+            .expect("write path source");
+        let from_path = ReplayableMultipartSource::from_path(temporary.path().to_path_buf());
+        assert_eq!(replayable_source_length(&from_path).await, Some(6));
+        drop(temporary);
+
+        // Unreadable paths defer to the transport's fail-closed preparation
+        // instead of inventing a length.
+        let missing = ReplayableMultipartSource::from_path(
+            std::env::temp_dir().join("openai-rs-definitely-missing-part-source"),
+        );
+        assert_eq!(replayable_source_length(&missing).await, None);
     }
 }

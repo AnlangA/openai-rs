@@ -23,15 +23,54 @@ use super::{CODEX_RESPONSES_ENDPOINT, DirectError};
 
 const MAX_JSON_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ERROR_BYTES: usize = 64 * 1024;
-const MAX_SSE_EVENT_BYTES: usize = 4 * 1024 * 1024;
+/// Default maximum size of one physical SSE line, matching the platform
+/// decoder's `DEFAULT_MAX_SSE_LINE_BYTES` (D0144): Codex Responses frames are
+/// single physical `data:` lines, so the line cap must live in the same
+/// magnitude class as the event cap that actually bounds memory.
+const DEFAULT_MAX_SSE_LINE_BYTES: usize = 32 * 1024 * 1024;
+/// Default maximum size of the joined `data:` value of one SSE event (D0144:
+/// 32 MiB, up from the earlier 4 MiB hardcode).
+const DEFAULT_MAX_SSE_EVENT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ERROR_MESSAGE_CHARS: usize = 256;
 const STREAM_QUEUE_CAPACITY: usize = 64;
 
+/// Default total budget for a non-streaming request.
+///
+/// 600s mirrors the platform client's `DEFAULT_REQUEST_TIMEOUT` (D0199
+/// total-budget semantics); the previous 120s hardcode was sized for a
+/// transport that also truncated streaming turns, which no longer applies.
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+/// Connection-establishment budget shared by both lanes.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Host-locked executor for the private Codex Responses operation.
+///
+/// # Timeout lanes
+///
+/// The two operations run under deliberately different time budgets:
+///
+/// - [`create`](Self::create) runs under one total request budget
+///   ([`request_timeout`](Self::request_timeout), default 600s), applied per
+///   request and configurable through
+///   [`with_request_timeout`](Self::with_request_timeout).
+/// - [`stream`](Self::stream) applies **no** total budget. A long streaming
+///   turn is bounded by the SSE protocol itself — the `[DONE]`/lifecycle
+///   terminal, EOF, or a decoder limit — and by the caller dropping the
+///   [`DirectResponseStream`]. Connection establishment is still bounded by
+///   the shared 10s connect timeout.
+///
+/// This split is why the inner `reqwest::Client` carries no client-level
+/// total timeout: reqwest 0.12 offers no per-request "no timeout" override
+/// (`RequestBuilder::timeout` only replaces a duration with another), so the
+/// total budget is attached to the non-streaming request alone. The knob on
+/// this type therefore never widens or narrows the streaming lane.
 pub struct DirectCodexResponsesClient<S: CredentialStore> {
     http: reqwest::Client,
     tokens: Arc<TokenManager<S>>,
     endpoint: Url,
+    request_timeout: Duration,
+    max_sse_line_bytes: usize,
+    max_sse_event_bytes: usize,
 }
 
 impl<S: CredentialStore> std::fmt::Debug for DirectCodexResponsesClient<S> {
@@ -39,6 +78,9 @@ impl<S: CredentialStore> std::fmt::Debug for DirectCodexResponsesClient<S> {
         formatter
             .debug_struct("DirectCodexResponsesClient")
             .field("endpoint", &CODEX_RESPONSES_ENDPOINT)
+            .field("request_timeout", &self.request_timeout)
+            .field("max_sse_line_bytes", &self.max_sse_line_bytes)
+            .field("max_sse_event_bytes", &self.max_sse_event_bytes)
             .field("credentials", &"<redacted>")
             .finish()
     }
@@ -48,7 +90,9 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
     pub fn new(tokens: Arc<TokenManager<S>>) -> Result<Self, DirectError> {
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(120))
+            // No client-level total timeout: the streaming lane must not be
+            // truncated by one (see the type-level "Timeout lanes" docs).
+            .connect_timeout(CONNECT_TIMEOUT)
             .user_agent(concat!("openai-rs/", env!("CARGO_PKG_VERSION")))
             .build()?;
         let endpoint = Url::parse(CODEX_RESPONSES_ENDPOINT)
@@ -57,10 +101,74 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
             http,
             tokens,
             endpoint,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            max_sse_line_bytes: DEFAULT_MAX_SSE_LINE_BYTES,
+            max_sse_event_bytes: DEFAULT_MAX_SSE_EVENT_BYTES,
         })
     }
 
+    /// Override the total budget for [`create`](Self::create) requests.
+    ///
+    /// This is the escape hatch for deliberately slow non-streaming turns (or
+    /// tight callers wanting a narrower budget). It does not affect
+    /// [`stream`](Self::stream), which runs without a total budget by design.
+    /// A zero duration mirrors the platform `Client::with_request_timeout`
+    /// posture: it cannot be rejected on this infallible surface and fails
+    /// every non-streaming request immediately with a timeout error.
+    #[must_use]
+    pub fn with_request_timeout(mut self, request_timeout: Duration) -> Self {
+        self.request_timeout = request_timeout;
+        self
+    }
+
+    /// Override the SSE decoder resource limits.
+    ///
+    /// `max_line_bytes` bounds one physical line and `max_event_bytes` bounds
+    /// the joined `data:` value of one event; both must be non-zero and both
+    /// fail a stream only when a completed length strictly exceeds the limit.
+    /// Defaults are 32 MiB / 32 MiB, matching the platform decoder (D0144).
+    pub fn with_sse_limits(
+        mut self,
+        max_line_bytes: usize,
+        max_event_bytes: usize,
+    ) -> Result<Self, DirectError> {
+        if max_line_bytes == 0 {
+            return Err(DirectError::Configuration(
+                "max_line_bytes must be non-zero".to_owned(),
+            ));
+        }
+        if max_event_bytes == 0 {
+            return Err(DirectError::Configuration(
+                "max_event_bytes must be non-zero".to_owned(),
+            ));
+        }
+        self.max_sse_line_bytes = max_line_bytes;
+        self.max_sse_event_bytes = max_event_bytes;
+        Ok(self)
+    }
+
+    /// The total budget applied to [`create`](Self::create) requests.
+    pub const fn request_timeout(&self) -> Duration {
+        self.request_timeout
+    }
+
+    /// Maximum size of one physical SSE line accepted by
+    /// [`stream`](Self::stream).
+    pub const fn max_sse_line_bytes(&self) -> usize {
+        self.max_sse_line_bytes
+    }
+
+    /// Maximum joined `data:` size of one SSE event accepted by
+    /// [`stream`](Self::stream).
+    pub const fn max_sse_event_bytes(&self) -> usize {
+        self.max_sse_event_bytes
+    }
+
     /// Execute the only supported non-streaming operation.
+    ///
+    /// Runs under the [`request_timeout`](Self::request_timeout) total budget
+    /// (default 600s): connection establishment, the request, and the full
+    /// JSON response body must all fit inside it.
     pub async fn create(&self, request: &CreateResponseRequest) -> Result<Response, DirectError> {
         let body = serde_json::to_value(request)?;
         validate_body(&body, false)?;
@@ -76,6 +184,13 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
     }
 
     /// Execute the only supported streaming operation.
+    ///
+    /// Runs with **no** total time budget: connection establishment is bounded
+    /// by the shared 10s connect timeout, but the streamed body may take as
+    /// long as the turn needs. The stream ends on the `[DONE]`/lifecycle
+    /// terminal, on EOF, on a decoder or decoding error (fail-stop), or when
+    /// the caller drops the returned stream. Resource bounds are spatial, not
+    /// temporal: see [`with_sse_limits`](Self::with_sse_limits).
     pub async fn stream(
         &self,
         request: &CreateStreamingResponseRequest,
@@ -111,11 +226,13 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
             ));
         }
 
+        let max_sse_line_bytes = self.max_sse_line_bytes;
+        let max_sse_event_bytes = self.max_sse_event_bytes;
         let (sender, receiver) = mpsc::channel(STREAM_QUEUE_CAPACITY);
         tokio::spawn(
             async move {
                 let mut body = response.bytes_stream();
-                let mut decoder = SseDecoder::new(MAX_SSE_EVENT_BYTES);
+                let mut decoder = SseDecoder::new(max_sse_line_bytes, max_sse_event_bytes);
                 while let Some(chunk) = body.next().await {
                     let items = match chunk {
                         Ok(chunk) => decoder.feed(&chunk),
@@ -184,9 +301,14 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
             retry.count = tracing::field::Empty,
         );
         async move {
-            let response = self
-                .http
-                .post(self.endpoint.clone())
+            let mut request = self.http.post(self.endpoint.clone());
+            if !streaming {
+                // Total budget for the non-streaming lane only. The streaming
+                // lane deliberately gets no total timeout: attaching one here
+                // (or on the client) would truncate long turns mid-body.
+                request = request.timeout(self.request_timeout);
+            }
+            let response = request
                 .header(reqwest::header::AUTHORIZATION, authorization)
                 .header("ChatGPT-Account-Id", account_id)
                 .header("originator", "openai-rs")
@@ -241,6 +363,13 @@ impl Stream for DirectResponseStream {
     }
 }
 
+/// Dispatch decoded SSE items to the bounded stream channel.
+///
+/// Returns `true` when dispatching must stop: the `[DONE]` terminal was seen,
+/// the receiver was dropped, or — fail-stop, matching the platform decoder's
+/// D0194 posture — a `data` frame did not decode into a typed event, in which
+/// case the codec error is surfaced once and everything after it (including
+/// later valid frames) is discarded.
 async fn dispatch_sse_items(
     sender: &mpsc::Sender<Result<ResponseStreamEvent, DirectError>>,
     items: Vec<SseItem>,
@@ -249,8 +378,14 @@ async fn dispatch_sse_items(
         match item {
             SseItem::Done => return true,
             SseItem::Data(data) => {
-                let event = serde_json::from_str(&data).map_err(DirectError::Json);
-                if sender.send(event).await.is_err() {
+                let event = match serde_json::from_str(&data) {
+                    Ok(event) => event,
+                    Err(error) => {
+                        let _ = sender.send(Err(DirectError::Json(error))).await;
+                        return true;
+                    }
+                };
+                if sender.send(Ok(event)).await.is_err() {
                     return true;
                 }
             }
@@ -381,10 +516,12 @@ async fn status_error(response: reqwest::Response) -> DirectError {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use openai_rs_types::responses::{CreateResponseRequest, ResponseInput, ResponseStreamEvent};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::sync::mpsc;
 
     use super::DirectCodexResponsesClient;
     use crate::direct::DirectError;
@@ -392,6 +529,7 @@ mod tests {
         CredentialStore, DirectAuthClient, EphemeralStore, StoredCodexSession, TokenManager,
     };
     use crate::direct::jwt::ChatGptAccountId;
+    use crate::direct::sse::SseItem;
 
     /// Serve exactly one HTTP response carrying `status`/`body` and return the
     /// `DirectError` the sealed transport produced for it.
@@ -503,6 +641,191 @@ mod tests {
         assert!(lower.contains("chatgpt-account-id: acct-123"));
         assert!(lower.contains("originator: openai-rs"));
         assert!(!captured.contains("refresh-secret"));
+        Ok(())
+    }
+
+    /// 7-03: the request-timeout knob defaults to the documented two-lane
+    /// posture (600s total budget, 32 MiB decoder limits) and validates its
+    /// inputs.
+    #[test]
+    fn timeout_and_sse_limit_knobs_have_defaults_and_validation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let manager = Arc::new(TokenManager::new(
+            Arc::new(EphemeralStore::default()),
+            DirectAuthClient::new()?,
+        ));
+        let endpoint = url::Url::parse("http://127.0.0.1:1/backend-api/codex/responses")?;
+        let client =
+            DirectCodexResponsesClient::with_test_endpoint(manager.clone(), endpoint.clone())?;
+        assert_eq!(client.request_timeout(), Duration::from_secs(600));
+        assert_eq!(client.max_sse_line_bytes(), 32 * 1024 * 1024);
+        assert_eq!(client.max_sse_event_bytes(), 32 * 1024 * 1024);
+
+        let tuned = client
+            .with_request_timeout(Duration::from_secs(30))
+            .with_sse_limits(1024, 2048)?;
+        assert_eq!(tuned.request_timeout(), Duration::from_secs(30));
+        assert_eq!(tuned.max_sse_line_bytes(), 1024);
+        assert_eq!(tuned.max_sse_event_bytes(), 2048);
+
+        assert!(matches!(
+            DirectCodexResponsesClient::with_test_endpoint(manager.clone(), endpoint.clone())?
+                .with_sse_limits(0, 2048),
+            Err(DirectError::Configuration(_))
+        ));
+        assert!(matches!(
+            DirectCodexResponsesClient::with_test_endpoint(manager, endpoint)?
+                .with_sse_limits(1024, 0),
+            Err(DirectError::Configuration(_))
+        ));
+        Ok(())
+    }
+
+    /// 7-03: the total budget applies to the non-streaming lane — a server
+    /// slower than `request_timeout` fails with a timeout error instead of
+    /// hanging until the platform-wide ceiling.
+    #[tokio::test]
+    async fn non_streaming_request_times_out_under_its_budget()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = vec![0_u8; 16 * 1024];
+            let _ = stream.read(&mut request).await?;
+            tokio::time::sleep(Duration::from_millis(750)).await;
+            // The client has already timed out; a failed write to the closed
+            // socket is expected and irrelevant here.
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+            )
+            .await;
+            Ok::<_, std::io::Error>(())
+        });
+        let endpoint = url::Url::parse(&format!("http://{address}/backend-api/codex/responses"))?;
+        let client = test_client(endpoint)
+            .await?
+            .with_request_timeout(Duration::from_millis(150));
+        let request = CreateResponseRequest::new("gpt-test", ResponseInput::Text("hello".into()));
+        let error = client
+            .create(&request)
+            .await
+            .err()
+            .ok_or("expected a timeout error")?;
+        assert!(
+            matches!(&error, DirectError::Http(error) if error.is_timeout()),
+            "unexpected error: {error:?}"
+        );
+        server.await??;
+        Ok(())
+    }
+
+    /// 7-03: the streaming lane carries no total budget — events keep
+    /// arriving well past the point where the non-streaming budget would
+    /// have expired, and the stream still terminates cleanly.
+    #[tokio::test]
+    async fn streaming_body_outlives_the_request_timeout_budget()
+    -> Result<(), Box<dyn std::error::Error>> {
+        const EVENT_GAP: Duration = Duration::from_millis(100);
+        const EVENTS: usize = 4;
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = vec![0_u8; 16 * 1024];
+            let _ = stream.read(&mut request).await?;
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")
+                .await?;
+            for index in 0..EVENTS {
+                let frame = format!(
+                    "data: {{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"{index}\",\"sequence_number\":{index},\"logprobs\":[]}}\n\n"
+                );
+                stream.write_all(frame.as_bytes()).await?;
+                tokio::time::sleep(EVENT_GAP).await;
+            }
+            stream.write_all(b"data: [DONE]\n\n").await?;
+            Ok::<_, std::io::Error>(())
+        });
+        let endpoint = url::Url::parse(&format!("http://{address}/backend-api/codex/responses"))?;
+        // Tighter than the total streaming duration: the last event lands at
+        // ~4x the budget, so a lane that still applied the budget would fail
+        // the stream mid-body.
+        let client = test_client(endpoint)
+            .await?
+            .with_request_timeout(EVENT_GAP + Duration::from_millis(50));
+        let request = CreateResponseRequest::new("gpt-test", ResponseInput::Text("hello".into()))
+            .into_streaming();
+        let mut stream = client.stream(&request).await?;
+        let mut deltas = Vec::new();
+        while let Some(event) = stream.next_event().await {
+            match event? {
+                ResponseStreamEvent::OutputTextDelta(delta) => {
+                    deltas.push(delta.delta().to_owned())
+                }
+                other => return Err(format!("unexpected SSE event: {other:?}").into()),
+            }
+        }
+        let expected = (0..EVENTS)
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(deltas, expected);
+        server.await??;
+        Ok(())
+    }
+
+    /// 7-07(d): dispatch is fail-stop — an undecodable `data` frame surfaces
+    /// its codec error once and discards every later item, including valid
+    /// ones.
+    #[tokio::test]
+    async fn dispatch_stops_after_an_undecodable_frame() {
+        let (sender, mut receiver) = mpsc::channel(8);
+        let valid = "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hi\",\"sequence_number\":1,\"logprobs\":[]}";
+        let items = vec![
+            SseItem::Data("not json".to_owned()),
+            SseItem::Data(valid.to_owned()),
+            SseItem::Done,
+        ];
+        assert!(super::dispatch_sse_items(&sender, items).await);
+        drop(sender);
+        assert!(matches!(
+            receiver.recv().await,
+            Some(Err(DirectError::Json(_)))
+        ));
+        assert!(receiver.recv().await.is_none());
+    }
+
+    /// 7-07(d): the same fail-stop posture end to end — after an invalid
+    /// frame the stream yields exactly one error and then ends, even though
+    /// later frames and `[DONE]` were well-formed.
+    #[tokio::test]
+    async fn stream_fails_stop_after_an_invalid_frame() -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = vec![0_u8; 16 * 1024];
+            let _ = stream.read(&mut request).await?;
+            let body = b"data: not-json\n\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hi\",\"sequence_number\":1,\"logprobs\":[]}\n\ndata: [DONE]\n\n";
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(headers.as_bytes()).await?;
+            stream.write_all(body).await?;
+            Ok::<_, std::io::Error>(())
+        });
+        let endpoint = url::Url::parse(&format!("http://{address}/backend-api/codex/responses"))?;
+        let client = test_client(endpoint).await?;
+        let request = CreateResponseRequest::new("gpt-test", ResponseInput::Text("hello".into()))
+            .into_streaming();
+        let mut stream = client.stream(&request).await?;
+        assert!(matches!(
+            stream.next_event().await,
+            Some(Err(DirectError::Json(_)))
+        ));
+        assert!(stream.next_event().await.is_none());
+        server.await??;
         Ok(())
     }
 

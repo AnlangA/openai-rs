@@ -35,6 +35,26 @@ macro_rules! redacted_extra_debug {
 
 pub(crate) use redacted_extra_debug;
 
+/// Rejects flattened `extra` keys that collide with a typed wire key (7-21).
+///
+/// `#[serde(flatten)]` merges the extra map over the typed fields of the same
+/// object, so a colliding key would silently overwrite a typed value (or
+/// manufacture one the typed surface never set). Send paths call this before
+/// encoding, reusing the kernel collision check that guards handwritten
+/// serializers elsewhere in the workspace.
+pub(crate) fn ensure_no_reserved(
+    extra: &serde_json::Map<String, Value>,
+    method: &'static str,
+    reserved: &[&str],
+) -> Result<(), crate::Error> {
+    openai_rs_types::ExtraFields::try_from_map(extra.clone(), reserved.iter().copied())
+        .map(|_| ())
+        .map_err(|conflict| crate::Error::ExtraFieldConflict {
+            method,
+            key: conflict.key().to_owned(),
+        })
+}
+
 /// W3C Trace Context attached to outbound JSON-RPC requests.
 ///
 /// Wire shape of the pinned `W3cTraceContext`: `traceparent` and
@@ -121,7 +141,8 @@ pub struct InitializeCapabilities {
     /// `x-oai-attestation`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub request_attestation: Omittable<bool>,
-    /// Future capability properties, retained losslessly.
+    /// Future capability properties, retained losslessly. Send paths reject a
+    /// key that collides with a typed capability (7-21).
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -147,6 +168,28 @@ impl InitializeParams {
         Self {
             client_info,
             capabilities: None,
+        }
+    }
+
+    /// Typed wire keys of [`InitializeCapabilities`] that its `extra` map must
+    /// not shadow when the params are encoded for `initialize`.
+    pub const CAPABILITY_RESERVED_KEYS: &'static [&'static str] = &[
+        "experimentalApi",
+        "mcpServerOpenaiFormElicitation",
+        "optOutNotificationMethods",
+        "requestAttestation",
+    ];
+
+    /// Ensures no flattened `extra` key shadows a typed key of this request
+    /// (7-21). Called by the send path before encoding.
+    pub fn validate_extra(&self) -> Result<(), crate::Error> {
+        match &self.capabilities {
+            Some(capabilities) => ensure_no_reserved(
+                &capabilities.extra,
+                "initialize",
+                Self::CAPABILITY_RESERVED_KEYS,
+            ),
+            None => Ok(()),
         }
     }
 }
@@ -734,7 +777,9 @@ pub struct ThreadStartParams {
     pub config: Option<serde_json::Map<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ephemeral: Option<bool>,
-    /// Future `thread/start` properties, retained losslessly.
+    /// Future `thread/start` properties, retained losslessly. Send paths
+    /// reject a key that collides with a typed `thread/start` field via
+    /// [`ThreadStartParams::validate_extra`] (7-21).
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -755,6 +800,34 @@ redacted_extra_debug!(ThreadStartParams secret [config] {
     session_start_source,
     ephemeral
 });
+
+impl ThreadStartParams {
+    /// Typed wire keys that [`ThreadStartParams::extra`] must not shadow when
+    /// the params are encoded for `thread/start`.
+    pub const RESERVED_KEYS: &'static [&'static str] = &[
+        "model",
+        "modelProvider",
+        "cwd",
+        "approvalPolicy",
+        "approvalsReviewer",
+        "sandbox",
+        "personality",
+        "serviceName",
+        "serviceTier",
+        "baseInstructions",
+        "developerInstructions",
+        "threadSource",
+        "sessionStartSource",
+        "config",
+        "ephemeral",
+    ];
+
+    /// Ensures no flattened `extra` key shadows a typed `thread/start` key
+    /// (7-21). Called by the send path before encoding.
+    pub fn validate_extra(&self) -> Result<(), crate::Error> {
+        ensure_no_reserved(&self.extra, "thread/start", Self::RESERVED_KEYS)
+    }
+}
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -950,7 +1023,9 @@ pub struct TurnStartParams {
     /// types this as a plain nullable string.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
-    /// Future `turn/start` properties, retained losslessly.
+    /// Future `turn/start` properties, retained losslessly. Send paths reject
+    /// a key that collides with a typed `turn/start` field via
+    /// [`TurnStartParams::validate_extra`] (7-21).
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -972,6 +1047,30 @@ redacted_extra_debug!(TurnStartParams {
 });
 
 impl TurnStartParams {
+    /// Typed wire keys that [`TurnStartParams::extra`] must not shadow when
+    /// the params are encoded for `turn/start`.
+    pub const RESERVED_KEYS: &'static [&'static str] = &[
+        "threadId",
+        "input",
+        "clientUserMessageId",
+        "cwd",
+        "model",
+        "effort",
+        "summary",
+        "personality",
+        "outputSchema",
+        "sandboxPolicy",
+        "approvalPolicy",
+        "approvalsReviewer",
+        "serviceTier",
+    ];
+
+    /// Ensures no flattened `extra` key shadows a typed `turn/start` key
+    /// (7-21). Called by the send path before encoding.
+    pub fn validate_extra(&self) -> Result<(), crate::Error> {
+        ensure_no_reserved(&self.extra, "turn/start", Self::RESERVED_KEYS)
+    }
+
     #[must_use]
     pub fn text(thread_id: impl Into<String>, text: impl Into<String>) -> Self {
         Self {
@@ -1116,12 +1215,1069 @@ redacted_extra_debug!(TurnError {
     codex_error_info
 });
 
+// --- Thread items (pinned 0.144.5 `v2/ThreadItem`) -------------------------
+//
+// The eighteen-branch `oneOf` below is discriminated by each branch's `type`
+// tag. Open string enums keep values a newer app-server introduces lossless;
+// nested closed unions stay pin-faithful because a tag they do not know makes
+// the whole item degrade to `ThreadItem::Unknown` instead of failing the
+// surrounding `Turn` or `ItemLifecycleNotification` decode.
+
+openai_rs_types::open_string_enum! {
+    /// Classifies an assistant message as interim commentary or final answer.
+    ///
+    /// The pinned `v2/MessagePhase` enumerates exactly `commentary` and
+    /// `final_answer`; phases introduced later decode losslessly as
+    /// [`MessagePhase::Unknown`]. Providers emit the phase inconsistently, so
+    /// an absent key (`None`) means "phase unknown".
+    pub enum MessagePhase {
+        Commentary = "commentary",
+        FinalAnswer = "final_answer"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Lifecycle state of a `commandExecution` thread item.
+    ///
+    /// The pinned `v2/CommandExecutionStatus` enumerates exactly `inProgress`,
+    /// `completed`, `failed`, and `declined`; statuses introduced later decode
+    /// losslessly as [`CommandExecutionStatus::Unknown`].
+    pub enum CommandExecutionStatus {
+        InProgress = "inProgress",
+        Completed = "completed",
+        Failed = "failed",
+        Declined = "declined"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Who initiated a `commandExecution` thread item.
+    ///
+    /// The pinned `v2/CommandExecutionSource` enumerates exactly the four
+    /// values below; sources introduced later decode losslessly as
+    /// [`CommandExecutionSource::Unknown`].
+    pub enum CommandExecutionSource {
+        Agent = "agent",
+        UserShell = "userShell",
+        UnifiedExecStartup = "unifiedExecStartup",
+        UnifiedExecInteraction = "unifiedExecInteraction"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Lifecycle state of a `fileChange` thread item.
+    ///
+    /// The pinned `v2/PatchApplyStatus` enumerates exactly `inProgress`,
+    /// `completed`, `failed`, and `declined`; statuses introduced later decode
+    /// losslessly as [`PatchApplyStatus::Unknown`].
+    pub enum PatchApplyStatus {
+        InProgress = "inProgress",
+        Completed = "completed",
+        Failed = "failed",
+        Declined = "declined"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Lifecycle state of an `mcpToolCall` thread item.
+    ///
+    /// The pinned `v2/McpToolCallStatus` enumerates exactly `inProgress`,
+    /// `completed`, and `failed`; statuses introduced later decode losslessly
+    /// as [`McpToolCallStatus::Unknown`].
+    pub enum McpToolCallStatus {
+        InProgress = "inProgress",
+        Completed = "completed",
+        Failed = "failed"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Lifecycle state of a `dynamicToolCall` thread item.
+    ///
+    /// The pinned `v2/DynamicToolCallStatus` enumerates exactly `inProgress`,
+    /// `completed`, and `failed`; statuses introduced later decode losslessly
+    /// as [`DynamicToolCallStatus::Unknown`].
+    pub enum DynamicToolCallStatus {
+        InProgress = "inProgress",
+        Completed = "completed",
+        Failed = "failed"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Lifecycle state of a `collabAgentToolCall` thread item.
+    ///
+    /// The pinned `v2/CollabAgentToolCallStatus` enumerates exactly
+    /// `inProgress`, `completed`, and `failed`; statuses introduced later
+    /// decode losslessly as [`CollabAgentToolCallStatus::Unknown`].
+    pub enum CollabAgentToolCallStatus {
+        InProgress = "inProgress",
+        Completed = "completed",
+        Failed = "failed"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Last known state of one collab agent.
+    ///
+    /// The pinned `v2/CollabAgentStatus` enumerates exactly the seven values
+    /// below; states introduced later decode losslessly as
+    /// [`CollabAgentStatus::Unknown`].
+    pub enum CollabAgentStatus {
+        PendingInit = "pendingInit",
+        Running = "running",
+        Interrupted = "interrupted",
+        Completed = "completed",
+        Errored = "errored",
+        Shutdown = "shutdown",
+        NotFound = "notFound"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Name of the collab tool invoked by a `collabAgentToolCall` item.
+    ///
+    /// The pinned `v2/CollabAgentTool` enumerates exactly the five values
+    /// below; tools introduced later decode losslessly as
+    /// [`CollabAgentTool::Unknown`].
+    pub enum CollabAgentTool {
+        SpawnAgent = "spawnAgent",
+        SendInput = "sendInput",
+        ResumeAgent = "resumeAgent",
+        Wait = "wait",
+        CloseAgent = "closeAgent"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Kind of activity a `subAgentActivity` thread item records.
+    ///
+    /// The pinned `v2/SubAgentActivityKind` enumerates exactly `started`,
+    /// `interacted`, and `interrupted`; kinds introduced later decode
+    /// losslessly as [`SubAgentActivityKind::Unknown`].
+    pub enum SubAgentActivityKind {
+        Started = "started",
+        Interacted = "interacted",
+        Interrupted = "interrupted"
+    }
+}
+
+/// One rendered fragment of a `hookPrompt` thread item.
+///
+/// Wire shape of the pinned `v2/HookPromptFragment`: both `hookRunId` and
+/// `text` are required strings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookPromptFragment {
+    pub hook_run_id: String,
+    pub text: String,
+}
+
+/// One memory citation range attached to an `agentMessage` thread item.
+///
+/// Wire shape of the pinned `v2/MemoryCitationEntry`: `lineStart`/`lineEnd`
+/// are required `uint32` values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryCitationEntry {
+    pub line_start: u32,
+    pub line_end: u32,
+    pub note: String,
+    pub path: String,
+}
+
+/// Memory threads an `agentMessage` thread item drew from.
+///
+/// Wire shape of the pinned `v2/MemoryCitation`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryCitation {
+    pub entries: Vec<MemoryCitationEntry>,
+    pub thread_ids: Vec<String>,
+}
+
+/// Best-effort parse of one action inside a command line.
+///
+/// Mirrors the four-branch `oneOf` of the pinned `v2/CommandAction`. The
+/// union is closed exactly as pinned: a tag 0.144.5 does not enumerate fails
+/// the branch decode and the whole thread item degrades to
+/// [`ThreadItem::Unknown`] with its payload intact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum CommandAction {
+    /// Reading one file.
+    Read {
+        command: String,
+        name: String,
+        /// Pinned `v2/AbsolutePathBuf`, kept as its lossless string form.
+        path: String,
+    },
+    /// Listing a directory.
+    ListFiles {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    /// Searching a directory tree.
+    Search {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+    /// Anything the parser did not recognize.
+    Unknown { command: String },
+}
+
+/// Kind of one change inside a `fileChange` thread item.
+///
+/// Mirrors the three-branch `oneOf` of the pinned `v2/PatchChangeKind`. The
+/// `move_path` property keeps its pinned snake_case wire key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PatchChangeKind {
+    /// Newly added file.
+    Add,
+    /// Deleted file.
+    Delete,
+    /// Modified file, with its post-move location when it moved.
+    Update {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        move_path: Option<String>,
+    },
+}
+
+/// One file diff inside a `fileChange` thread item.
+///
+/// Wire shape of the pinned `v2/FileUpdateChange`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileUpdateChange {
+    pub diff: String,
+    pub kind: PatchChangeKind,
+    pub path: String,
+}
+
+/// Connector application context of an `mcpToolCall` thread item.
+///
+/// Wire shape of the pinned `v2/McpToolCallAppContext`: only `connectorId`
+/// is required; every other property is an optional nullable string, so
+/// absent and `null` both decode to `None` and `None` sends no key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolCallAppContext {
+    pub connector_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_id: Option<String>,
+}
+
+/// Failure detail of an `mcpToolCall` thread item.
+///
+/// Wire shape of the pinned `v2/McpToolCallError`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpToolCallError {
+    pub message: String,
+}
+
+/// Result of a completed `mcpToolCall` thread item.
+///
+/// Wire shape of the pinned `v2/McpToolCallResult`: `content` is a required
+/// array of unconstrained JSON values, while `structuredContent` and `_meta`
+/// stay verbatim [`Value`]s because the pin declares no inner structure.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolCallResult {
+    pub content: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<Value>,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
+}
+
+/// One output chunk of a `dynamicToolCall` thread item.
+///
+/// Mirrors the two-branch `oneOf` of the pinned
+/// `v2/DynamicToolCallOutputContentItem` (`inputText`/`inputImage`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum DynamicToolCallOutputContentItem {
+    InputText { text: String },
+    InputImage { image_url: String },
+}
+
+/// Last known state of one target agent of a collab tool call.
+///
+/// Wire shape of the pinned `v2/CollabAgentState`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollabAgentState {
+    pub status: CollabAgentStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Web-search action of a `webSearch` thread item.
+///
+/// Mirrors the four-branch `oneOf` of the pinned `v2/WebSearchAction`
+/// (`search`/`openPage`/`findInPage`/`other`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum WebSearchAction {
+    /// Run one or more search queries.
+    Search {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queries: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+    /// Open a page in the browser view.
+    OpenPage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
+    /// Find a pattern inside an open page.
+    FindInPage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pattern: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
+    /// Any action the pin does not name.
+    Other,
+}
+
+/// A `userMessage` thread item.
+///
+/// Wire shape of the pinned `UserMessageThreadItem` branch: `id` and the
+/// `content` array of [`UserInput`] are required; `clientId` is an optional
+/// nullable string, so absent and `null` both decode to `None` and `None`
+/// sends no key.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserMessageThreadItem {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    pub content: Vec<UserInput>,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(UserMessageThreadItem {
+    id,
+    client_id,
+    content
+});
+
+/// A `hookPrompt` thread item.
+///
+/// Wire shape of the pinned `HookPromptThreadItem` branch: `id` and the
+/// `fragments` array are required.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookPromptThreadItem {
+    pub id: String,
+    pub fragments: Vec<HookPromptFragment>,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(HookPromptThreadItem { id, fragments });
+
+/// An `agentMessage` thread item.
+///
+/// Wire shape of the pinned `AgentMessageThreadItem` branch: `id` and `text`
+/// are required; `phase` and `memoryCitation` are optional nulls.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentMessageThreadItem {
+    pub id: String,
+    pub text: String,
+    /// Interim commentary versus terminal answer; absent means unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<MessagePhase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_citation: Option<MemoryCitation>,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(AgentMessageThreadItem {
+    id,
+    text,
+    phase,
+    memory_citation
+});
+
+/// A `plan` thread item (experimental).
+///
+/// Wire shape of the pinned `PlanThreadItem` branch. The completed item is
+/// authoritative and may not match the concatenation of `PlanDelta` text.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanThreadItem {
+    pub id: String,
+    pub text: String,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(PlanThreadItem { id, text });
+
+/// A `reasoning` thread item.
+///
+/// Wire shape of the pinned `ReasoningThreadItem` branch: only `id` is
+/// required; `content` and `summary` default to empty arrays server-side, so
+/// an absent key decodes to an empty vector and both arrays always serialize
+/// (their pinned default *is* `[]`).
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningThreadItem {
+    pub id: String,
+    #[serde(default)]
+    pub content: Vec<String>,
+    #[serde(default)]
+    pub summary: Vec<String>,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(ReasoningThreadItem {
+    id,
+    content,
+    summary
+});
+
+/// A `commandExecution` thread item.
+///
+/// Wire shape of the pinned `CommandExecutionThreadItem` branch: `id`,
+/// `command`, `commandActions`, `cwd`, and `status` are required;
+/// `aggregatedOutput`, `durationMs`, `exitCode`, and `processId` are optional
+/// nulls and `source` defaults to `agent` server-side.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecutionThreadItem {
+    pub id: String,
+    /// The command to be executed.
+    pub command: String,
+    /// Best-effort parsing of the actions the command performs.
+    pub command_actions: Vec<CommandAction>,
+    /// Pinned `v2/LegacyAppPathString`, kept as its lossless string form.
+    pub cwd: String,
+    pub status: CommandExecutionStatus,
+    /// The command's output, aggregated from stdout and stderr.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregated_output: Option<String>,
+    /// Duration of the execution in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+    /// The command's exit code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Identifier of the underlying PTY process, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<String>,
+    /// Who initiated the command; `None` lets app-server apply its `agent`
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<CommandExecutionSource>,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(CommandExecutionThreadItem {
+    id,
+    command,
+    command_actions,
+    cwd,
+    status,
+    aggregated_output,
+    duration_ms,
+    exit_code,
+    process_id,
+    source
+});
+
+/// A `fileChange` thread item.
+///
+/// Wire shape of the pinned `FileChangeThreadItem` branch: `id`, `changes`,
+/// and `status` are required.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChangeThreadItem {
+    pub id: String,
+    pub changes: Vec<FileUpdateChange>,
+    pub status: PatchApplyStatus,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(FileChangeThreadItem {
+    id,
+    changes,
+    status
+});
+
+/// An `mcpToolCall` thread item.
+///
+/// Wire shape of the pinned `McpToolCallThreadItem` branch: `id`, `server`,
+/// `tool`, `status`, and the unconstrained `arguments` value are required;
+/// every remaining property is optional. `mcpAppResourceUri` is deprecated
+/// upstream in favour of `appContext.resourceUri` and stays modelled because
+/// 0.144.5 still emits it.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolCallThreadItem {
+    pub id: String,
+    pub server: String,
+    /// Name of the invoked MCP tool.
+    pub tool: String,
+    pub status: McpToolCallStatus,
+    /// Tool arguments; the pin declares no structure, so the value stays raw.
+    pub arguments: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_context: Option<McpToolCallAppContext>,
+    /// Duration of the call in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<McpToolCallError>,
+    /// Deprecated upstream: prefer `appContext.resourceUri`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_app_resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<McpToolCallResult>,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(McpToolCallThreadItem {
+    id,
+    server,
+    tool,
+    status,
+    arguments,
+    app_context,
+    duration_ms,
+    error,
+    mcp_app_resource_uri,
+    plugin_id,
+    result
+});
+
+/// A `dynamicToolCall` thread item.
+///
+/// Wire shape of the pinned `DynamicToolCallThreadItem` branch: `id`, `tool`,
+/// `status`, and the unconstrained `arguments` value are required.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicToolCallThreadItem {
+    pub id: String,
+    pub tool: String,
+    pub status: DynamicToolCallStatus,
+    /// Tool arguments; the pin declares no structure, so the value stays raw.
+    pub arguments: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_items: Option<Vec<DynamicToolCallOutputContentItem>>,
+    /// Duration of the call in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success: Option<bool>,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(DynamicToolCallThreadItem {
+    id,
+    tool,
+    status,
+    arguments,
+    content_items,
+    duration_ms,
+    namespace,
+    success
+});
+
+/// A `collabAgentToolCall` thread item.
+///
+/// Wire shape of the pinned `CollabAgentToolCallThreadItem` branch: `id`,
+/// `agentsStates`, `receiverThreadIds`, `senderThreadId`, `status`, and
+/// `tool` are required. `reasoningEffort` stays a plain string because the
+/// pinned `v2/ReasoningEffort` is a `minLength 1` string with no enumerated
+/// values.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollabAgentToolCallThreadItem {
+    pub id: String,
+    /// Last known status of the target agents, keyed by thread id.
+    pub agents_states: BTreeMap<String, CollabAgentState>,
+    /// Thread ids of the receiving agents; a spawn lists the new agent.
+    pub receiver_thread_ids: Vec<String>,
+    /// Thread id of the agent issuing the collab request.
+    pub sender_thread_id: String,
+    pub status: CollabAgentToolCallStatus,
+    pub tool: CollabAgentTool,
+    /// Model requested for the spawned agent, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Prompt text sent as part of the collab tool call, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// Reasoning effort requested for the spawned agent, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(CollabAgentToolCallThreadItem {
+    id,
+    agents_states,
+    receiver_thread_ids,
+    sender_thread_id,
+    status,
+    tool,
+    model,
+    prompt,
+    reasoning_effort
+});
+
+/// A `subAgentActivity` thread item.
+///
+/// Wire shape of the pinned `SubAgentActivityThreadItem` branch: `id`,
+/// `agentPath`, `agentThreadId`, and `kind` are required.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubAgentActivityThreadItem {
+    pub id: String,
+    pub agent_path: String,
+    pub agent_thread_id: String,
+    pub kind: SubAgentActivityKind,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(SubAgentActivityThreadItem {
+    id,
+    agent_path,
+    agent_thread_id,
+    kind
+});
+
+/// A `webSearch` thread item.
+///
+/// Wire shape of the pinned `WebSearchThreadItem` branch: `id` and `query`
+/// are required; `action` is an optional null.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearchThreadItem {
+    pub id: String,
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<WebSearchAction>,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(WebSearchThreadItem { id, query, action });
+
+/// An `imageView` thread item.
+///
+/// Wire shape of the pinned `ImageViewThreadItem` branch: `id` and `path`
+/// (pinned `v2/LegacyAppPathString`, kept as its lossless string form) are
+/// required.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageViewThreadItem {
+    pub id: String,
+    pub path: String,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(ImageViewThreadItem { id, path });
+
+/// A `sleep` thread item.
+///
+/// Wire shape of the pinned `SleepThreadItem` branch: `id` and the `uint64`
+/// `durationMs` are required.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SleepThreadItem {
+    pub id: String,
+    pub duration_ms: u64,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(SleepThreadItem { id, duration_ms });
+
+/// An `imageGeneration` thread item.
+///
+/// Wire shape of the pinned `ImageGenerationThreadItem` branch: `id`,
+/// `result`, and `status` are required. The pin types `status` as a plain
+/// string rather than an enum, so it stays a free-form [`String`];
+/// `revisedPrompt` is an optional nullable string and `savedPath` an optional
+/// nullable `v2/AbsolutePathBuf`, both kept as their lossless string form.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationThreadItem {
+    pub id: String,
+    pub result: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revised_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_path: Option<String>,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(ImageGenerationThreadItem {
+    id,
+    result,
+    status,
+    revised_prompt,
+    saved_path
+});
+
+/// An `enteredReviewMode` thread item.
+///
+/// Wire shape of the pinned `EnteredReviewModeThreadItem` branch: `id` and
+/// the review id `review` are required.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnteredReviewModeThreadItem {
+    pub id: String,
+    pub review: String,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(EnteredReviewModeThreadItem { id, review });
+
+/// An `exitedReviewMode` thread item.
+///
+/// Wire shape of the pinned `ExitedReviewModeThreadItem` branch: `id` and
+/// the review id `review` are required.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExitedReviewModeThreadItem {
+    pub id: String,
+    pub review: String,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(ExitedReviewModeThreadItem { id, review });
+
+/// A `contextCompaction` thread item.
+///
+/// Wire shape of the pinned `ContextCompactionThreadItem` branch: only `id`
+/// is required.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextCompactionThreadItem {
+    pub id: String,
+    /// Future branch properties, retained losslessly.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(ContextCompactionThreadItem { id });
+
+/// An item inside a turn's thread history, tagged by its `type` property.
+///
+/// Wire shape of the eighteen-branch `oneOf` of the pinned 0.144.5
+/// `v2/ThreadItem`. Every branch models the pinned required and optional
+/// properties and keeps everything a newer app-server adds losslessly in its
+/// `extra` map. A tag the pin does not enumerate — or a payload that no
+/// longer matches its branch shape — decodes to [`ThreadItem::Unknown`]
+/// carrying the entire payload verbatim, so one unrecognized item can never
+/// fail the surrounding [`Turn`] or [`ItemLifecycleNotification`] decode.
+/// Matching the [`Notification`] stance, the enum is `#[non_exhaustive]` and
+/// every branch payload is boxed so a `Vec<ThreadItem>` keeps one pointer
+/// per item regardless of branch width.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ThreadItem {
+    /// Message the user sent (`userMessage`).
+    UserMessage(Box<UserMessageThreadItem>),
+    /// Prompt text injected by a hook run (`hookPrompt`).
+    HookPrompt(Box<HookPromptThreadItem>),
+    /// Assistant message text (`agentMessage`).
+    AgentMessage(Box<AgentMessageThreadItem>),
+    /// Experimental proposed-plan text (`plan`).
+    Plan(Box<PlanThreadItem>),
+    /// Model reasoning (`reasoning`).
+    Reasoning(Box<ReasoningThreadItem>),
+    /// A shell command execution (`commandExecution`).
+    CommandExecution(Box<CommandExecutionThreadItem>),
+    /// A file patch application (`fileChange`).
+    FileChange(Box<FileChangeThreadItem>),
+    /// A call into an MCP server tool (`mcpToolCall`).
+    McpToolCall(Box<McpToolCallThreadItem>),
+    /// A call into a client-registered dynamic tool (`dynamicToolCall`).
+    DynamicToolCall(Box<DynamicToolCallThreadItem>),
+    /// A call into a collab-agent tool (`collabAgentToolCall`).
+    CollabAgentToolCall(Box<CollabAgentToolCallThreadItem>),
+    /// Lifecycle event of a sub-agent (`subAgentActivity`).
+    SubAgentActivity(Box<SubAgentActivityThreadItem>),
+    /// A web search (`webSearch`).
+    WebSearch(Box<WebSearchThreadItem>),
+    /// An image opened in the client's viewer (`imageView`).
+    ImageView(Box<ImageViewThreadItem>),
+    /// A pause between actions (`sleep`).
+    Sleep(Box<SleepThreadItem>),
+    /// A generated image (`imageGeneration`).
+    ImageGeneration(Box<ImageGenerationThreadItem>),
+    /// Review mode was entered (`enteredReviewMode`).
+    EnteredReviewMode(Box<EnteredReviewModeThreadItem>),
+    /// Review mode was exited (`exitedReviewMode`).
+    ExitedReviewMode(Box<ExitedReviewModeThreadItem>),
+    /// Context compaction happened (`contextCompaction`).
+    ContextCompaction(Box<ContextCompactionThreadItem>),
+    /// An item this crate has not modelled; the payload stays verbatim.
+    Unknown(Value),
+}
+
+/// Serialize one typed branch under its pinned `type` tag.
+///
+/// The branch struct is buffered through [`Value`] and the tag is inserted
+/// afterwards, mirroring how the decode side separates the tag from the
+/// branch body (and keeping the tag out of the branch's `extra` map).
+fn serialize_thread_item_branch<S, T>(
+    tag: &'static str,
+    item: &T,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+    T: Serialize,
+{
+    let mut value = serde_json::to_value(item).map_err(serde::ser::Error::custom)?;
+    let Some(object) = value.as_object_mut() else {
+        return Err(serde::ser::Error::custom(
+            "thread item branch must serialize to a JSON object",
+        ));
+    };
+    object.insert("type".to_owned(), Value::String(tag.to_owned()));
+    value.serialize(serializer)
+}
+
+/// Decode one branch body after its `type` tag was matched.
+///
+/// The tag is removed before decoding so it cannot leak into the branch's
+/// `extra` map — the same separation serde applies to internally tagged
+/// enums.
+fn decode_thread_item_branch<T: serde::de::DeserializeOwned>(
+    mut value: Value,
+) -> Result<T, serde_json::Error> {
+    if let Some(object) = value.as_object_mut() {
+        object.remove("type");
+    }
+    serde_json::from_value(value)
+}
+
+impl Serialize for ThreadItem {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::UserMessage(item) => {
+                serialize_thread_item_branch("userMessage", item, serializer)
+            }
+            Self::HookPrompt(item) => serialize_thread_item_branch("hookPrompt", item, serializer),
+            Self::AgentMessage(item) => {
+                serialize_thread_item_branch("agentMessage", item, serializer)
+            }
+            Self::Plan(item) => serialize_thread_item_branch("plan", item, serializer),
+            Self::Reasoning(item) => serialize_thread_item_branch("reasoning", item, serializer),
+            Self::CommandExecution(item) => {
+                serialize_thread_item_branch("commandExecution", item, serializer)
+            }
+            Self::FileChange(item) => serialize_thread_item_branch("fileChange", item, serializer),
+            Self::McpToolCall(item) => {
+                serialize_thread_item_branch("mcpToolCall", item, serializer)
+            }
+            Self::DynamicToolCall(item) => {
+                serialize_thread_item_branch("dynamicToolCall", item, serializer)
+            }
+            Self::CollabAgentToolCall(item) => {
+                serialize_thread_item_branch("collabAgentToolCall", item, serializer)
+            }
+            Self::SubAgentActivity(item) => {
+                serialize_thread_item_branch("subAgentActivity", item, serializer)
+            }
+            Self::WebSearch(item) => serialize_thread_item_branch("webSearch", item, serializer),
+            Self::ImageView(item) => serialize_thread_item_branch("imageView", item, serializer),
+            Self::Sleep(item) => serialize_thread_item_branch("sleep", item, serializer),
+            Self::ImageGeneration(item) => {
+                serialize_thread_item_branch("imageGeneration", item, serializer)
+            }
+            Self::EnteredReviewMode(item) => {
+                serialize_thread_item_branch("enteredReviewMode", item, serializer)
+            }
+            Self::ExitedReviewMode(item) => {
+                serialize_thread_item_branch("exitedReviewMode", item, serializer)
+            }
+            Self::ContextCompaction(item) => {
+                serialize_thread_item_branch("contextCompaction", item, serializer)
+            }
+            Self::Unknown(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ThreadItem {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        // A payload without a string `type` tag (missing key, non-string
+        // value, or not an object at all) is not an error: it stays verbatim
+        // in the Unknown variant, exactly like an unrecognized tag.
+        let tag = value.get("type").and_then(Value::as_str).map(str::to_owned);
+        let decoded = match tag.as_deref() {
+            Some("userMessage") => {
+                decode_thread_item_branch::<UserMessageThreadItem>(value.clone())
+                    .map(Box::new)
+                    .map(Self::UserMessage)
+            }
+            Some("hookPrompt") => decode_thread_item_branch::<HookPromptThreadItem>(value.clone())
+                .map(Box::new)
+                .map(Self::HookPrompt),
+            Some("agentMessage") => {
+                decode_thread_item_branch::<AgentMessageThreadItem>(value.clone())
+                    .map(Box::new)
+                    .map(Self::AgentMessage)
+            }
+            Some("plan") => decode_thread_item_branch::<PlanThreadItem>(value.clone())
+                .map(Box::new)
+                .map(Self::Plan),
+            Some("reasoning") => decode_thread_item_branch::<ReasoningThreadItem>(value.clone())
+                .map(Box::new)
+                .map(Self::Reasoning),
+            Some("commandExecution") => {
+                decode_thread_item_branch::<CommandExecutionThreadItem>(value.clone())
+                    .map(Box::new)
+                    .map(Self::CommandExecution)
+            }
+            Some("fileChange") => decode_thread_item_branch::<FileChangeThreadItem>(value.clone())
+                .map(Box::new)
+                .map(Self::FileChange),
+            Some("mcpToolCall") => {
+                decode_thread_item_branch::<McpToolCallThreadItem>(value.clone())
+                    .map(Box::new)
+                    .map(Self::McpToolCall)
+            }
+            Some("dynamicToolCall") => {
+                decode_thread_item_branch::<DynamicToolCallThreadItem>(value.clone())
+                    .map(Box::new)
+                    .map(Self::DynamicToolCall)
+            }
+            Some("collabAgentToolCall") => {
+                decode_thread_item_branch::<CollabAgentToolCallThreadItem>(value.clone())
+                    .map(Box::new)
+                    .map(Self::CollabAgentToolCall)
+            }
+            Some("subAgentActivity") => {
+                decode_thread_item_branch::<SubAgentActivityThreadItem>(value.clone())
+                    .map(Box::new)
+                    .map(Self::SubAgentActivity)
+            }
+            Some("webSearch") => decode_thread_item_branch::<WebSearchThreadItem>(value.clone())
+                .map(Box::new)
+                .map(Self::WebSearch),
+            Some("imageView") => decode_thread_item_branch::<ImageViewThreadItem>(value.clone())
+                .map(Box::new)
+                .map(Self::ImageView),
+            Some("sleep") => decode_thread_item_branch::<SleepThreadItem>(value.clone())
+                .map(Box::new)
+                .map(Self::Sleep),
+            Some("imageGeneration") => {
+                decode_thread_item_branch::<ImageGenerationThreadItem>(value.clone())
+                    .map(Box::new)
+                    .map(Self::ImageGeneration)
+            }
+            Some("enteredReviewMode") => {
+                decode_thread_item_branch::<EnteredReviewModeThreadItem>(value.clone())
+                    .map(Box::new)
+                    .map(Self::EnteredReviewMode)
+            }
+            Some("exitedReviewMode") => {
+                decode_thread_item_branch::<ExitedReviewModeThreadItem>(value.clone())
+                    .map(Box::new)
+                    .map(Self::ExitedReviewMode)
+            }
+            Some("contextCompaction") => {
+                decode_thread_item_branch::<ContextCompactionThreadItem>(value.clone())
+                    .map(Box::new)
+                    .map(Self::ContextCompaction)
+            }
+            _ => return Ok(Self::Unknown(value)),
+        };
+        // A known tag whose payload no longer matches the pinned branch
+        // shape — a renamed required field, a new nested-union tag — degrades
+        // to the same lossless Unknown instead of failing the surrounding
+        // notification decode.
+        Ok(decoded.unwrap_or_else(|_| Self::Unknown(value)))
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
     pub id: String,
+    /// Thread items currently included in this turn payload, typed as the
+    /// pinned `v2/ThreadItem` union; unrecognized items stay verbatim as
+    /// [`ThreadItem::Unknown`] instead of failing the turn decode (7-05).
     #[serde(default)]
-    pub items: Vec<Value>,
+    pub items: Vec<ThreadItem>,
     pub status: TurnStatus,
     /// Populated when [`Turn::status`] is `failed`; typed as the pinned
     /// `v2/TurnError` payload with unknown properties retained losslessly.
@@ -1287,12 +2443,19 @@ pub struct TurnCompletedNotification {
 
 redacted_extra_debug!(TurnCompletedNotification { thread_id, turn });
 
+/// Item lifecycle broadcast on `item/started` and `item/completed`.
+///
+/// Wire shape of the pinned `v2/ItemStartedNotification` and
+/// `v2/ItemCompletedNotification`: `threadId`, `turnId`, and the
+/// [`ThreadItem`] are required while `startedAtMs`/`completedAtMs` are
+/// optional. An item this crate has not modelled decodes losslessly as
+/// [`ThreadItem::Unknown`] instead of failing the notification.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemLifecycleNotification {
     pub thread_id: String,
     pub turn_id: String,
-    pub item: Value,
+    pub item: ThreadItem,
     #[serde(default)]
     pub started_at_ms: Option<i64>,
     #[serde(default)]
@@ -1423,15 +2586,26 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AccountUpdatedNotification, ActiveTurnNotSteerableDetails, ApprovalsReviewer,
-        AskForApproval, AskForApprovalMode, AuthMode, ByteRange, CancelLoginResponse,
-        CancelLoginStatus, ClientInfo, CodexErrorCode, CodexErrorInfo, ErrorNotification,
-        ForwardedHttpStatus, GranularAskForApproval, ImageDetail, InitializeCapabilities,
-        InitializeParams, LoginAccountResponse, NetworkAccess, NonSteerableTurnKind, Notification,
-        Nullable, Omittable, Personality, PlanType, RateLimitReachedType, RateLimitSnapshot,
-        ReasoningSummary, SandboxMode, SandboxPolicy, SessionStartSource, TextElement, Thread,
-        ThreadStartParams, Turn, TurnError, TurnStartParams, TurnStatus, UserInput,
-        W3cTraceContext, decode_notification,
+        AccountUpdatedNotification, ActiveTurnNotSteerableDetails, AgentMessageThreadItem,
+        ApprovalsReviewer, AskForApproval, AskForApprovalMode, AuthMode, ByteRange,
+        CancelLoginResponse, CancelLoginStatus, ClientInfo, CodexErrorCode, CodexErrorInfo,
+        CollabAgentState, CollabAgentStatus, CollabAgentTool, CollabAgentToolCallStatus,
+        CollabAgentToolCallThreadItem, CommandAction, CommandExecutionSource,
+        CommandExecutionStatus, CommandExecutionThreadItem, ContextCompactionThreadItem,
+        DynamicToolCallOutputContentItem, DynamicToolCallStatus, DynamicToolCallThreadItem,
+        EnteredReviewModeThreadItem, ErrorNotification, ExitedReviewModeThreadItem,
+        FileChangeThreadItem, FileUpdateChange, ForwardedHttpStatus, GranularAskForApproval,
+        HookPromptFragment, HookPromptThreadItem, ImageDetail, ImageGenerationThreadItem,
+        ImageViewThreadItem, InitializeCapabilities, InitializeParams, ItemLifecycleNotification,
+        LoginAccountResponse, McpToolCallAppContext, McpToolCallResult, McpToolCallStatus,
+        McpToolCallThreadItem, MemoryCitation, MemoryCitationEntry, MessagePhase, NetworkAccess,
+        NonSteerableTurnKind, Notification, Nullable, Omittable, PatchApplyStatus, PatchChangeKind,
+        Personality, PlanThreadItem, PlanType, RateLimitReachedType, RateLimitSnapshot,
+        ReasoningSummary, ReasoningThreadItem, SandboxMode, SandboxPolicy, SessionStartSource,
+        SleepThreadItem, SubAgentActivityKind, SubAgentActivityThreadItem, TextElement, Thread,
+        ThreadItem, ThreadStartParams, Turn, TurnError, TurnStartParams, TurnStatus, UserInput,
+        UserMessageThreadItem, W3cTraceContext, WebSearchAction, WebSearchThreadItem,
+        decode_notification,
     };
 
     #[test]
@@ -1444,6 +2618,143 @@ mod tests {
                 "threadId": "thr_123",
                 "input": [{"type": "text", "text": "hello"}]
             })
+        );
+        Ok(())
+    }
+
+    /// 7-21: a flattened `extra` key that would shadow a typed wire key is
+    /// rejected before encoding instead of silently overwriting the typed
+    /// value, while future keys stay lossless.
+    #[test]
+    fn send_params_extra_collisions_are_rejected() {
+        let mut thread_params = ThreadStartParams::default();
+        thread_params
+            .extra
+            .insert("modelProvider".to_owned(), json!("shadowed"));
+        match thread_params.validate_extra() {
+            Err(crate::Error::ExtraFieldConflict { method, key }) => {
+                assert_eq!((method, key.as_str()), ("thread/start", "modelProvider"));
+            }
+            other => panic!("expected ExtraFieldConflict, got {other:?}"),
+        }
+
+        let mut turn_params = TurnStartParams::text("thr_1", "hello");
+        turn_params
+            .extra
+            .insert("outputSchema".to_owned(), json!({"type": "object"}));
+        match turn_params.validate_extra() {
+            Err(crate::Error::ExtraFieldConflict { method, key }) => {
+                assert_eq!((method, key.as_str()), ("turn/start", "outputSchema"));
+            }
+            other => panic!("expected ExtraFieldConflict, got {other:?}"),
+        }
+
+        // Future keys are retained losslessly and pass the check.
+        let mut future = TurnStartParams::text("thr_1", "hello");
+        future
+            .extra
+            .insert("futureTurnOption".to_owned(), json!(true));
+        future.validate_extra().expect("future key is retained");
+        let encoded = serde_json::to_value(&future).expect("serialize");
+        assert_eq!(encoded["futureTurnOption"], json!(true));
+
+        // `initialize` has no top-level extra; the nested capabilities map is
+        // the checked surface.
+        let bare = InitializeParams::new(ClientInfo::new("test", "0.0.0"));
+        bare.validate_extra()
+            .expect("no capabilities is trivially valid");
+
+        let mut capabilities = InitializeCapabilities::default();
+        capabilities
+            .extra
+            .insert("experimentalApi".to_owned(), json!(true));
+        let nested = InitializeParams {
+            capabilities: Some(capabilities),
+            ..bare
+        };
+        match nested.validate_extra() {
+            Err(crate::Error::ExtraFieldConflict { method, key }) => {
+                assert_eq!((method, key.as_str()), ("initialize", "experimentalApi"));
+            }
+            other => panic!("expected ExtraFieldConflict, got {other:?}"),
+        }
+    }
+
+    /// 7-21: the hand-maintained reserved-key lists must cover exactly the
+    /// typed wire keys each params object serializes, so a newly modelled
+    /// field cannot silently fall out of the collision check.
+    #[test]
+    fn reserved_key_lists_match_the_serialized_typed_fields() -> Result<(), serde_json::Error> {
+        fn sorted_keys(encoded: &serde_json::Value) -> Vec<String> {
+            let mut keys: Vec<String> = encoded
+                .as_object()
+                .expect("params serialize to an object")
+                .keys()
+                .cloned()
+                .collect();
+            keys.sort();
+            keys
+        }
+
+        let thread = ThreadStartParams {
+            model: Some("gpt-5-codex".to_owned()),
+            model_provider: Some("openai".to_owned()),
+            cwd: Some(PathBuf::from("/tmp")),
+            approval_policy: Some(AskForApproval::Mode(AskForApprovalMode::OnRequest)),
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            sandbox: Some(SandboxMode::WorkspaceWrite),
+            personality: Some(Personality::Friendly),
+            service_name: Some("svc".to_owned()),
+            service_tier: Some("flex".to_owned()),
+            base_instructions: Some("base".to_owned()),
+            developer_instructions: Some("dev".to_owned()),
+            thread_source: Some("vscode".to_owned()),
+            session_start_source: Some(SessionStartSource::Startup),
+            config: Some(serde_json::Map::new()),
+            ephemeral: Some(true),
+            extra: serde_json::Map::new(),
+        };
+        let mut thread_reserved = ThreadStartParams::RESERVED_KEYS.to_vec();
+        thread_reserved.sort();
+        assert_eq!(
+            sorted_keys(&serde_json::to_value(&thread)?),
+            thread_reserved
+        );
+
+        let turn = TurnStartParams {
+            thread_id: "thr_1".to_owned(),
+            input: vec![UserInput::text("hello")],
+            client_user_message_id: Some("msg_1".to_owned()),
+            cwd: Some(PathBuf::from("/tmp")),
+            model: Some("gpt-5-codex".to_owned()),
+            effort: Some("medium".to_owned()),
+            summary: Some(ReasoningSummary::Auto),
+            personality: Some(Personality::Friendly),
+            output_schema: Some(json!({"type": "object"})),
+            sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+            approval_policy: Some(AskForApproval::Mode(AskForApprovalMode::Never)),
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            service_tier: Some("flex".to_owned()),
+            extra: serde_json::Map::new(),
+        };
+        let mut turn_reserved = TurnStartParams::RESERVED_KEYS.to_vec();
+        turn_reserved.sort();
+        assert_eq!(sorted_keys(&serde_json::to_value(&turn)?), turn_reserved);
+
+        let capabilities = InitializeCapabilities {
+            experimental_api: Omittable::Value(true),
+            mcp_server_openai_form_elicitation: Omittable::Value(true),
+            opt_out_notification_methods: Omittable::Value(Nullable::Value(vec![
+                "thread/started".to_owned(),
+            ])),
+            request_attestation: Omittable::Value(true),
+            extra: serde_json::Map::new(),
+        };
+        let mut capability_reserved = InitializeParams::CAPABILITY_RESERVED_KEYS.to_vec();
+        capability_reserved.sort();
+        assert_eq!(
+            sorted_keys(&serde_json::to_value(&capabilities)?),
+            capability_reserved
         );
         Ok(())
     }
@@ -1555,6 +2866,626 @@ mod tests {
             }))
             .is_err()
         );
+        Ok(())
+    }
+
+    /// 7-05: every branch of the pinned 0.144.5 `v2/ThreadItem` eighteen-way
+    /// `oneOf` decodes to its typed model and serializes back to the exact
+    /// official wire form (including keys retained through `extra`).
+    #[test]
+    fn thread_item_decodes_and_round_trips_every_pinned_branch() -> Result<(), serde_json::Error> {
+        let extra =
+            |key: &str, value: serde_json::Value| [(key.to_owned(), value)].into_iter().collect();
+        let cases: Vec<(serde_json::Value, ThreadItem)> = vec![
+            (
+                json!({
+                    "type": "userMessage",
+                    "id": "item_user",
+                    "clientId": "client-9",
+                    "content": [{"type": "text", "text": "hello"}],
+                    "futureUserField": true
+                }),
+                ThreadItem::UserMessage(Box::new(UserMessageThreadItem {
+                    id: "item_user".to_owned(),
+                    client_id: Some("client-9".to_owned()),
+                    content: vec![UserInput::text("hello")],
+                    extra: extra("futureUserField", json!(true)),
+                })),
+            ),
+            (
+                json!({
+                    "type": "hookPrompt",
+                    "id": "item_hook",
+                    "fragments": [{"hookRunId": "run_1", "text": "review prompt"}]
+                }),
+                ThreadItem::HookPrompt(Box::new(HookPromptThreadItem {
+                    id: "item_hook".to_owned(),
+                    fragments: vec![HookPromptFragment {
+                        hook_run_id: "run_1".to_owned(),
+                        text: "review prompt".to_owned(),
+                    }],
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({
+                    "type": "agentMessage",
+                    "id": "item_agent",
+                    "text": "the answer",
+                    "phase": "final_answer",
+                    "memoryCitation": {
+                        "entries": [{
+                            "lineStart": 3,
+                            "lineEnd": 9,
+                            "note": "source",
+                            "path": "/tmp/a.md"
+                        }],
+                        "threadIds": ["thr_1", "thr_2"]
+                    }
+                }),
+                ThreadItem::AgentMessage(Box::new(AgentMessageThreadItem {
+                    id: "item_agent".to_owned(),
+                    text: "the answer".to_owned(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: Some(MemoryCitation {
+                        entries: vec![MemoryCitationEntry {
+                            line_start: 3,
+                            line_end: 9,
+                            note: "source".to_owned(),
+                            path: "/tmp/a.md".to_owned(),
+                        }],
+                        thread_ids: vec!["thr_1".to_owned(), "thr_2".to_owned()],
+                    }),
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({"type": "plan", "id": "item_plan", "text": "1. read\n2. write"}),
+                ThreadItem::Plan(Box::new(PlanThreadItem {
+                    id: "item_plan".to_owned(),
+                    text: "1. read\n2. write".to_owned(),
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({"type": "reasoning", "id": "item_reason", "content": ["step one"],
+                       "summary": ["because"]}),
+                ThreadItem::Reasoning(Box::new(ReasoningThreadItem {
+                    id: "item_reason".to_owned(),
+                    content: vec!["step one".to_owned()],
+                    summary: vec!["because".to_owned()],
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({
+                    "type": "commandExecution",
+                    "id": "item_cmd",
+                    "command": "cat notes.md | wc -l",
+                    "commandActions": [
+                        {"type": "read", "command": "cat", "name": "notes.md",
+                         "path": "/tmp/notes.md"},
+                        {"type": "listFiles", "command": "ls"}
+                    ],
+                    "cwd": "/tmp",
+                    "status": "completed",
+                    "aggregatedOutput": "42 /tmp/notes.md",
+                    "durationMs": 1200,
+                    "exitCode": 0,
+                    "source": "agent"
+                }),
+                ThreadItem::CommandExecution(Box::new(CommandExecutionThreadItem {
+                    id: "item_cmd".to_owned(),
+                    command: "cat notes.md | wc -l".to_owned(),
+                    command_actions: vec![
+                        CommandAction::Read {
+                            command: "cat".to_owned(),
+                            name: "notes.md".to_owned(),
+                            path: "/tmp/notes.md".to_owned(),
+                        },
+                        CommandAction::ListFiles {
+                            command: "ls".to_owned(),
+                            path: None,
+                        },
+                    ],
+                    cwd: "/tmp".to_owned(),
+                    status: CommandExecutionStatus::Completed,
+                    aggregated_output: Some("42 /tmp/notes.md".to_owned()),
+                    duration_ms: Some(1200),
+                    exit_code: Some(0),
+                    process_id: None,
+                    source: Some(CommandExecutionSource::Agent),
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({
+                    "type": "fileChange",
+                    "id": "item_diff",
+                    "status": "completed",
+                    "changes": [
+                        {"diff": "@@ -1 +1 @@", "kind": {"type": "add"}, "path": "/tmp/new.rs"},
+                        {"diff": "@@ -3 +3 @@", "kind": {"type": "update", "move_path": "/tmp/r.rs"},
+                         "path": "/tmp/old.rs"}
+                    ]
+                }),
+                ThreadItem::FileChange(Box::new(FileChangeThreadItem {
+                    id: "item_diff".to_owned(),
+                    changes: vec![
+                        FileUpdateChange {
+                            diff: "@@ -1 +1 @@".to_owned(),
+                            kind: PatchChangeKind::Add,
+                            path: "/tmp/new.rs".to_owned(),
+                        },
+                        FileUpdateChange {
+                            diff: "@@ -3 +3 @@".to_owned(),
+                            kind: PatchChangeKind::Update {
+                                move_path: Some("/tmp/r.rs".to_owned()),
+                            },
+                            path: "/tmp/old.rs".to_owned(),
+                        },
+                    ],
+                    status: PatchApplyStatus::Completed,
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({
+                    "type": "mcpToolCall",
+                    "id": "item_mcp",
+                    "server": "github",
+                    "tool": "create_issue",
+                    "status": "completed",
+                    "arguments": {"title": "fix"},
+                    "appContext": {"connectorId": "conn_1", "appName": "GitHub"},
+                    "durationMs": 900,
+                    "result": {
+                        "content": [{"type": "text", "text": "issue #7"}],
+                        "structuredContent": {"n": 1},
+                        "_meta": {"trace": "t"}
+                    }
+                }),
+                ThreadItem::McpToolCall(Box::new(McpToolCallThreadItem {
+                    id: "item_mcp".to_owned(),
+                    server: "github".to_owned(),
+                    tool: "create_issue".to_owned(),
+                    status: McpToolCallStatus::Completed,
+                    arguments: json!({"title": "fix"}),
+                    app_context: Some(McpToolCallAppContext {
+                        connector_id: "conn_1".to_owned(),
+                        action_name: None,
+                        app_name: Some("GitHub".to_owned()),
+                        link_id: None,
+                        resource_uri: None,
+                        template_id: None,
+                    }),
+                    duration_ms: Some(900),
+                    error: None,
+                    mcp_app_resource_uri: None,
+                    plugin_id: None,
+                    result: Some(McpToolCallResult {
+                        content: vec![json!({"type": "text", "text": "issue #7"})],
+                        structured_content: Some(json!({"n": 1})),
+                        meta: Some(json!({"trace": "t"})),
+                    }),
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({
+                    "type": "dynamicToolCall",
+                    "id": "item_dyn",
+                    "tool": "render_chart",
+                    "status": "completed",
+                    "arguments": {"kind": "bar"},
+                    "namespace": "viz",
+                    "success": true,
+                    "durationMs": 42,
+                    "contentItems": [
+                        {"type": "inputText", "text": "chart rendered"},
+                        {"type": "inputImage", "imageUrl": "https://example.test/c.png"}
+                    ]
+                }),
+                ThreadItem::DynamicToolCall(Box::new(DynamicToolCallThreadItem {
+                    id: "item_dyn".to_owned(),
+                    tool: "render_chart".to_owned(),
+                    status: DynamicToolCallStatus::Completed,
+                    arguments: json!({"kind": "bar"}),
+                    content_items: Some(vec![
+                        DynamicToolCallOutputContentItem::InputText {
+                            text: "chart rendered".to_owned(),
+                        },
+                        DynamicToolCallOutputContentItem::InputImage {
+                            image_url: "https://example.test/c.png".to_owned(),
+                        },
+                    ]),
+                    duration_ms: Some(42),
+                    namespace: Some("viz".to_owned()),
+                    success: Some(true),
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({
+                    "type": "collabAgentToolCall",
+                    "id": "item_collab",
+                    "senderThreadId": "thr_main",
+                    "receiverThreadIds": ["thr_spawn"],
+                    "tool": "spawnAgent",
+                    "status": "completed",
+                    "agentsStates": {"thr_spawn": {"status": "completed", "message": "done"}},
+                    "model": "gpt-5-codex",
+                    "prompt": "investigate",
+                    "reasoningEffort": "high"
+                }),
+                ThreadItem::CollabAgentToolCall(Box::new(CollabAgentToolCallThreadItem {
+                    id: "item_collab".to_owned(),
+                    agents_states: [(
+                        "thr_spawn".to_owned(),
+                        CollabAgentState {
+                            status: CollabAgentStatus::Completed,
+                            message: Some("done".to_owned()),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    receiver_thread_ids: vec!["thr_spawn".to_owned()],
+                    sender_thread_id: "thr_main".to_owned(),
+                    status: CollabAgentToolCallStatus::Completed,
+                    tool: CollabAgentTool::SpawnAgent,
+                    model: Some("gpt-5-codex".to_owned()),
+                    prompt: Some("investigate".to_owned()),
+                    reasoning_effort: Some("high".to_owned()),
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({
+                    "type": "subAgentActivity",
+                    "id": "item_sub",
+                    "agentPath": "/thr_main>thr_spawn",
+                    "agentThreadId": "thr_spawn",
+                    "kind": "started"
+                }),
+                ThreadItem::SubAgentActivity(Box::new(SubAgentActivityThreadItem {
+                    id: "item_sub".to_owned(),
+                    agent_path: "/thr_main>thr_spawn".to_owned(),
+                    agent_thread_id: "thr_spawn".to_owned(),
+                    kind: SubAgentActivityKind::Started,
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({
+                    "type": "webSearch",
+                    "id": "item_web",
+                    "query": "rust serde",
+                    "action": {"type": "search", "queries": ["rust serde", "serde json"]}
+                }),
+                ThreadItem::WebSearch(Box::new(WebSearchThreadItem {
+                    id: "item_web".to_owned(),
+                    query: "rust serde".to_owned(),
+                    action: Some(WebSearchAction::Search {
+                        queries: Some(vec!["rust serde".to_owned(), "serde json".to_owned()]),
+                        query: None,
+                    }),
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({"type": "imageView", "id": "item_img", "path": "/tmp/shot.png"}),
+                ThreadItem::ImageView(Box::new(ImageViewThreadItem {
+                    id: "item_img".to_owned(),
+                    path: "/tmp/shot.png".to_owned(),
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({"type": "sleep", "id": "item_sleep", "durationMs": 1500}),
+                ThreadItem::Sleep(Box::new(SleepThreadItem {
+                    id: "item_sleep".to_owned(),
+                    duration_ms: 1500,
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({
+                    "type": "imageGeneration",
+                    "id": "item_gen",
+                    "status": "completed",
+                    "result": "/home/codex/sessions/img.png",
+                    "revisedPrompt": "a cat",
+                    "savedPath": "/home/codex/sessions/img.png"
+                }),
+                ThreadItem::ImageGeneration(Box::new(ImageGenerationThreadItem {
+                    id: "item_gen".to_owned(),
+                    result: "/home/codex/sessions/img.png".to_owned(),
+                    status: "completed".to_owned(),
+                    revised_prompt: Some("a cat".to_owned()),
+                    saved_path: Some("/home/codex/sessions/img.png".to_owned()),
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({"type": "enteredReviewMode", "id": "item_rev_in", "review": "rev_1"}),
+                ThreadItem::EnteredReviewMode(Box::new(EnteredReviewModeThreadItem {
+                    id: "item_rev_in".to_owned(),
+                    review: "rev_1".to_owned(),
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({"type": "exitedReviewMode", "id": "item_rev_out", "review": "rev_1"}),
+                ThreadItem::ExitedReviewMode(Box::new(ExitedReviewModeThreadItem {
+                    id: "item_rev_out".to_owned(),
+                    review: "rev_1".to_owned(),
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+            (
+                json!({"type": "contextCompaction", "id": "item_compact"}),
+                ThreadItem::ContextCompaction(Box::new(ContextCompactionThreadItem {
+                    id: "item_compact".to_owned(),
+                    extra: serde_json::Map::new(),
+                })),
+            ),
+        ];
+        assert_eq!(
+            cases.len(),
+            18,
+            "the pin enumerates exactly eighteen branches"
+        );
+        for (wire, expected) in cases {
+            let decoded: ThreadItem = serde_json::from_value(wire.clone())?;
+            assert_eq!(
+                decoded, expected,
+                "wire {wire} did not decode to its typed branch model"
+            );
+            assert_eq!(
+                serde_json::to_value(&decoded)?,
+                wire,
+                "typed branch model did not serialize back to the official form {wire}"
+            );
+        }
+        Ok(())
+    }
+
+    /// 7-05: a tag the pin does not enumerate, a payload without a usable
+    /// `type` tag, and a known tag whose body no longer matches the pinned
+    /// branch shape all degrade to `ThreadItem::Unknown` with the payload
+    /// verbatim — never an error that would fail the surrounding decode.
+    #[test]
+    fn thread_item_unknown_tags_and_malformed_branches_stay_lossless()
+    -> Result<(), serde_json::Error> {
+        let payloads = [
+            json!({"type": "futureThing", "id": "i_1", "blob": {"deep": [1, 2]}}),
+            json!({"id": "i_2"}),
+            json!({"type": 7, "id": "i_3"}),
+            json!("not an object"),
+            json!({"type": "agentMessage", "id": "i_4"}),
+            json!({"type": "sleep", "id": "i_5", "durationMs": "soon"}),
+            json!({"type": "userMessage", "id": "i_6", "content": [
+                {"type": "futureInput", "text": "x"}
+            ]}),
+        ];
+        for payload in payloads {
+            let decoded: ThreadItem = serde_json::from_value(payload.clone())?;
+            match &decoded {
+                ThreadItem::Unknown(value) => assert_eq!(*value, payload),
+                other => panic!("payload {payload} decoded to a typed branch {other:?}"),
+            }
+            assert_eq!(
+                serde_json::to_value(&decoded)?,
+                payload,
+                "Unknown must re-serialize the payload byte-for-byte in JSON terms"
+            );
+        }
+        Ok(())
+    }
+
+    /// 7-05: the item-carried open string enums keep values a newer
+    /// app-server introduces lossless, so an unknown status never degrades
+    /// the whole item to `Unknown`.
+    #[test]
+    fn thread_item_status_enums_decode_known_and_unknown_values() {
+        for (wire, expected) in [
+            ("commentary", MessagePhase::Commentary),
+            ("final_answer", MessagePhase::FinalAnswer),
+        ] {
+            assert_eq!(MessagePhase::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        for (wire, expected) in [
+            ("inProgress", CommandExecutionStatus::InProgress),
+            ("completed", CommandExecutionStatus::Completed),
+            ("failed", CommandExecutionStatus::Failed),
+            ("declined", CommandExecutionStatus::Declined),
+        ] {
+            assert_eq!(CommandExecutionStatus::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        for (wire, expected) in [
+            ("agent", CommandExecutionSource::Agent),
+            ("userShell", CommandExecutionSource::UserShell),
+            (
+                "unifiedExecStartup",
+                CommandExecutionSource::UnifiedExecStartup,
+            ),
+            (
+                "unifiedExecInteraction",
+                CommandExecutionSource::UnifiedExecInteraction,
+            ),
+        ] {
+            assert_eq!(CommandExecutionSource::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        for (wire, expected) in [
+            ("inProgress", PatchApplyStatus::InProgress),
+            ("completed", PatchApplyStatus::Completed),
+            ("failed", PatchApplyStatus::Failed),
+            ("declined", PatchApplyStatus::Declined),
+        ] {
+            assert_eq!(PatchApplyStatus::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        for (wire, expected) in [
+            ("inProgress", McpToolCallStatus::InProgress),
+            ("completed", McpToolCallStatus::Completed),
+            ("failed", McpToolCallStatus::Failed),
+        ] {
+            assert_eq!(McpToolCallStatus::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        for (wire, expected) in [
+            ("inProgress", DynamicToolCallStatus::InProgress),
+            ("completed", DynamicToolCallStatus::Completed),
+            ("failed", DynamicToolCallStatus::Failed),
+        ] {
+            assert_eq!(DynamicToolCallStatus::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        for (wire, expected) in [
+            ("inProgress", CollabAgentToolCallStatus::InProgress),
+            ("completed", CollabAgentToolCallStatus::Completed),
+            ("failed", CollabAgentToolCallStatus::Failed),
+        ] {
+            assert_eq!(CollabAgentToolCallStatus::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        for (wire, expected) in [
+            ("pendingInit", CollabAgentStatus::PendingInit),
+            ("running", CollabAgentStatus::Running),
+            ("interrupted", CollabAgentStatus::Interrupted),
+            ("completed", CollabAgentStatus::Completed),
+            ("errored", CollabAgentStatus::Errored),
+            ("shutdown", CollabAgentStatus::Shutdown),
+            ("notFound", CollabAgentStatus::NotFound),
+        ] {
+            assert_eq!(CollabAgentStatus::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        for (wire, expected) in [
+            ("spawnAgent", CollabAgentTool::SpawnAgent),
+            ("sendInput", CollabAgentTool::SendInput),
+            ("resumeAgent", CollabAgentTool::ResumeAgent),
+            ("wait", CollabAgentTool::Wait),
+            ("closeAgent", CollabAgentTool::CloseAgent),
+        ] {
+            assert_eq!(CollabAgentTool::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        for (wire, expected) in [
+            ("started", SubAgentActivityKind::Started),
+            ("interacted", SubAgentActivityKind::Interacted),
+            ("interrupted", SubAgentActivityKind::Interrupted),
+        ] {
+            assert_eq!(SubAgentActivityKind::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+
+        // An unknown status stays a typed item carrying the raw value.
+        let decoded: ThreadItem = serde_json::from_value(json!({
+            "type": "commandExecution",
+            "id": "item_cmd",
+            "command": "ls",
+            "commandActions": [],
+            "cwd": "/tmp",
+            "status": "queued"
+        }))
+        .unwrap_or_else(|error| panic!("unknown status must not fail the item: {error}"));
+        let ThreadItem::CommandExecution(item) = &decoded else {
+            panic!("unexpected branch {decoded:?}");
+        };
+        assert!(!item.status.is_known());
+        assert_eq!(item.status.unknown_value(), Some("queued"));
+        assert_eq!(
+            serde_json::to_value(&decoded).unwrap_or_else(|error| panic!("{error}"))["status"],
+            json!("queued")
+        );
+    }
+
+    /// 7-05: `Turn.items` and the `item/started`/`item/completed`
+    /// notifications carry the typed [`ThreadItem`]; mixed known and unknown
+    /// items stay lossless through both surfaces.
+    #[test]
+    fn turn_and_item_lifecycle_carry_the_typed_thread_item() -> Result<(), serde_json::Error> {
+        let turn: Turn = serde_json::from_value(json!({
+            "id": "turn_456",
+            "items": [
+                {"type": "agentMessage", "id": "item_1", "text": "working on it"},
+                {"type": "futureThing", "id": "item_2", "kept": [1, 2]}
+            ],
+            "status": "inProgress"
+        }))?;
+        assert_eq!(turn.items.len(), 2);
+        assert_eq!(
+            turn.items[0],
+            ThreadItem::AgentMessage(Box::new(AgentMessageThreadItem {
+                id: "item_1".to_owned(),
+                text: "working on it".to_owned(),
+                phase: None,
+                memory_citation: None,
+                extra: serde_json::Map::new(),
+            }))
+        );
+        assert_eq!(
+            turn.items[1],
+            ThreadItem::Unknown(json!({"type": "futureThing", "id": "item_2", "kept": [1, 2]}))
+        );
+        let encoded = serde_json::to_value(&turn)?;
+        assert_eq!(encoded["items"][0]["text"], json!("working on it"));
+        assert_eq!(encoded["items"][1]["type"], json!("futureThing"));
+
+        let params = json!({
+            "threadId": "thr_123",
+            "turnId": "turn_456",
+            "item": {
+                "type": "commandExecution",
+                "id": "item_cmd",
+                "command": "cargo test",
+                "commandActions": [{"type": "unknown", "command": "cargo test"}],
+                "cwd": "/src",
+                "status": "inProgress"
+            },
+            "startedAtMs": 1730947200000_i64,
+            // The DTO keeps the pinned null-carrying optional keys on the
+            // wire, so the round-trip emits this key explicitly.
+            "completedAtMs": null
+        });
+        let notification = decode_notification(
+            "item/started".to_owned(),
+            Some(params.clone()),
+            json!({"method": "item/started"}),
+        );
+        let Notification::ItemStarted(started) = notification else {
+            panic!("expected an item lifecycle notification, got {notification:?}");
+        };
+        assert_eq!(
+            *started,
+            ItemLifecycleNotification {
+                thread_id: "thr_123".to_owned(),
+                turn_id: "turn_456".to_owned(),
+                item: ThreadItem::CommandExecution(Box::new(CommandExecutionThreadItem {
+                    id: "item_cmd".to_owned(),
+                    command: "cargo test".to_owned(),
+                    command_actions: vec![CommandAction::Unknown {
+                        command: "cargo test".to_owned(),
+                    }],
+                    cwd: "/src".to_owned(),
+                    status: CommandExecutionStatus::InProgress,
+                    aggregated_output: None,
+                    duration_ms: None,
+                    exit_code: None,
+                    process_id: None,
+                    source: None,
+                    extra: serde_json::Map::new(),
+                })),
+                started_at_ms: Some(1730947200000),
+                completed_at_ms: None,
+                extra: serde_json::Map::new(),
+            }
+        );
+        assert_eq!(serde_json::to_value(&*started)?, params);
         Ok(())
     }
 

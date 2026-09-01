@@ -157,6 +157,15 @@ pub enum Error {
     #[error("app-server response channel closed before request {0} completed")]
     ResponseChannelClosed(u64),
 
+    /// A flattened `extra` property would shadow a typed wire key of the same
+    /// app-server object (7-21). `#[serde(flatten)]` merges the extra map over
+    /// the typed fields, so send paths reject the collision before encoding
+    /// instead of silently overwriting a typed value.
+    #[error(
+        "app-server {method} params extra field `{key}` collides with a typed field of the same object"
+    )]
+    ExtraFieldConflict { method: &'static str, key: String },
+
     #[error("unexpected app-server response: {0}")]
     UnexpectedResponse(String),
 }

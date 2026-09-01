@@ -324,6 +324,11 @@ impl Client {
     /// budgets stay a property of the client that owns them. Derive one
     /// client per budget instead.
     ///
+    /// The budget covers connect, write, server processing, body read,
+    /// and any retry backoff — it does **not** cover credential
+    /// acquisition: token exchanges (workload identity, X.509) run under
+    /// their own construction-time budgets (D0244).
+    ///
     /// Unlike [`ClientBuilder::build`], a zero duration cannot be rejected
     /// here (no fallible surface); a client derived with zero fails every
     /// request immediately with [`Error::DeadlineExceeded`].

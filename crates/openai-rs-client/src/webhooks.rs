@@ -30,10 +30,14 @@ use thiserror::Error;
 const DEFAULT_TOLERANCE: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 // The joined `webhook-signature` header bound is the only limiter on the
-// candidate count (a full 8 KiB header of `v1,<44-char tag>` candidates
-// admits about 170 slots): node's `webhook-signature-amplification` test
-// pins that every slot inside the bound is evaluated, with no per-slot
-// count rejection.
+// candidate count: a full 8 KiB header admits at most 182 usable
+// candidates (44-character tags that decode to the 32-byte tag length,
+// about 170 when each carries the `v1,` prefix). Node's
+// `webhook-signature-amplification` test pins that every slot inside the
+// bound is evaluated, with no per-slot count rejection. The bound caps how
+// many constant-time comparisons run, not how much cryptographic work a
+// delivery can force: verification signs the payload once and verifies one
+// selected candidate once (see `WebhookVerifier::verify_at`).
 const MAX_SIGNATURE_HEADER_BYTES: usize = 8 * 1024;
 const MAX_WEBHOOK_ID_BYTES: usize = 512;
 const MAX_TIMESTAMP_BYTES: usize = 32;
@@ -180,18 +184,49 @@ impl WebhookVerifier {
         signed.push(b'.');
         signed.extend_from_slice(payload);
 
-        let mut matched = false;
-        for signature in signatures {
-            let mut mac = Hmac::<Sha256>::new_from_slice(&signing_key)
-                .map_err(|_| WebhookVerificationError::InvalidSecret)?;
-            mac.update(&signed);
-            // Evaluate every candidate inside the 8 KiB header bound rather
-            // than returning on the first match, mirroring node's bounded
-            // verification path: the HMAC work stays independent of the
-            // matching index and of how many candidates precede it.
-            matched |= mac.verify_slice(&signature).is_ok();
+        // Node's bounded-verification shape (`selectMatchingSignature` plus
+        // the final provider verify): the expected tag is computed once
+        // over the signed payload, then every candidate inside the 8 KiB
+        // bound is compared against it — no early return on the first
+        // match and no per-slot count rejection (D0225) — and the
+        // selected candidate is finally verified once more as defense in
+        // depth. The total cryptographic work is therefore one signature
+        // plus one verify regardless of the candidate count the header
+        // carries; each additional candidate costs only the constant-time
+        // comparison below.
+        let mut mac = Hmac::<Sha256>::new_from_slice(&signing_key)
+            .map_err(|_| WebhookVerificationError::InvalidSecret)?;
+        mac.update(&signed);
+        let expected: [u8; HMAC_SHA256_BYTES] = mac.finalize().into_bytes().into();
+
+        let mut selected: Option<[u8; HMAC_SHA256_BYTES]> = None;
+        for signature in &signatures {
+            // XOR-and-fold over all 32 tag bytes: a mismatching byte never
+            // short-circuits the comparison, so the time spent per
+            // candidate reveals nothing about how many bytes it shares
+            // with the expected tag.
+            let difference = expected
+                .iter()
+                .zip(signature.iter())
+                .fold(0_u8, |difference, (expected, candidate)| {
+                    difference | (expected ^ candidate)
+                });
+            if difference == 0 {
+                selected = Some(*signature);
+            }
         }
-        if !matched {
+        let Some(signature) = selected else {
+            return Err(WebhookVerificationError::SignatureMismatch);
+        };
+
+        // Defense in depth, mirroring node's final provider verify: the
+        // matching candidate is checked once more through the HMAC
+        // implementation's own tag verification, so acceptance never
+        // rests on the hand-rolled comparison alone.
+        let mut mac = Hmac::<Sha256>::new_from_slice(&signing_key)
+            .map_err(|_| WebhookVerificationError::InvalidSecret)?;
+        mac.update(&signed);
+        if mac.verify_slice(&signature).is_err() {
             return Err(WebhookVerificationError::SignatureMismatch);
         }
 
@@ -559,6 +594,70 @@ mod tests {
         verifier
             .verify_at(PAYLOAD, &flooded, NOW)
             .expect("trailing valid signature after 1600 invalid candidates verifies");
+    }
+
+    #[test]
+    fn the_worst_usable_candidate_count_stays_at_bounded_hmac_work() {
+        // 8192 / 45 = 182: filling the joined-header bound with
+        // 44-character candidates that decode to the 32-byte tag length
+        // (43 data characters plus one `=` pad) is the maximum usable
+        // candidate count the bound admits. Every one of them passes the
+        // decode filter, so all 182 are evaluated. Under the previous
+        // per-candidate HMAC loop this forced 182 full-payload signatures
+        // (up to 182 × 16 MiB of hashing at the default body limit); the
+        // node-style path signs once and verifies once no matter how many
+        // candidates arrive, so even the worst case against a megabyte
+        // body completes immediately. The assertions below are functional
+        // (the right verdict per header), not timing measurements.
+        let secret = b"webhook-test-secret";
+        let verifier = WebhookVerifier::new("webhook-test-secret").expect("verifier");
+
+        let bulky = format!(
+            "{{\"type\":\"future.event\",\"pad\":\"{}\"}}",
+            "x".repeat(1024 * 1024)
+        );
+        let bulky = bulky.as_bytes();
+        let valid = signature(secret, NOW, bulky);
+        let filler = format!("{}=", "A".repeat(43));
+        assert_eq!(filler.len(), 44);
+
+        // 182 usable-but-wrong candidates fill the bound to its ceiling
+        // (182 × 44 characters + 181 separators = 8189 bytes) and are
+        // rejected as a signature mismatch, not a header failure: each
+        // candidate is individually usable, none is correct.
+        let worst = vec![filler.clone(); 182].join(" ");
+        assert!(
+            worst.len() <= MAX_SIGNATURE_HEADER_BYTES,
+            "test header must stay inside the joined-header bound"
+        );
+        let mut rejected = headers(secret, NOW, bulky);
+        rejected.insert(
+            "webhook-signature",
+            HeaderValue::from_str(&worst).expect("worst-case test header"),
+        );
+        assert!(matches!(
+            verifier.verify_at(bulky, &rejected, NOW),
+            Err(WebhookVerificationError::SignatureMismatch)
+        ));
+
+        // The same ceiling with the valid tag in the last slot: 181
+        // fillers plus `v1,<tag>` land exactly on the 8192-byte bound,
+        // and the delivery still verifies.
+        let flooded = format!("{} v1,{valid}", vec![filler; 181].join(" "));
+        assert_eq!(
+            flooded.len(),
+            MAX_SIGNATURE_HEADER_BYTES,
+            "the valid-tag variant sits exactly on the joined-header bound"
+        );
+        let mut accepted = headers(secret, NOW, bulky);
+        accepted.insert(
+            "webhook-signature",
+            HeaderValue::from_str(&flooded).expect("worst-case valid header"),
+        );
+        let verified = verifier
+            .verify_at(bulky, &accepted, NOW)
+            .expect("valid tag inside the worst usable-candidate count verifies");
+        assert_eq!(verified.webhook_id(), ID);
     }
 
     #[test]

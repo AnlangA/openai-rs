@@ -113,6 +113,24 @@ impl CatalogEntry {
     /// MCP schemas are not marked `strict` automatically. OpenAI strict mode
     /// has additional recursive schema constraints which cannot be inferred
     /// merely from an MCP tool declaration.
+    ///
+    /// # Fields dropped by the adaptation
+    ///
+    /// The OpenAI function-tool shape has nowhere to carry the rest of the
+    /// MCP `Tool` declaration, so the following fields are intentionally
+    /// dropped here and remain reachable only through
+    /// [`CatalogEntry::mcp_tool`]:
+    ///
+    /// - `outputSchema` — the Responses function tool has no output-schema
+    ///   slot; callers that need it must read it from the raw declaration.
+    /// - `annotations` — hints such as `readOnlyHint`/`destructiveHint` are
+    ///   advisory metadata, not part of the function definition.
+    /// - `execution` — task-support configuration has no Responses function
+    ///   counterpart.
+    /// - `icons` — presentation-only metadata.
+    /// - `_meta` — server-specific extension metadata.
+    /// - `title` — used only as the fallback description when `description`
+    ///   is absent; when a description exists the title is not carried over.
     pub fn function_tool(&self) -> FunctionTool {
         let mut function =
             FunctionTool::new(&self.openai_name).parameters(Value::Object(self.parameters.clone()));

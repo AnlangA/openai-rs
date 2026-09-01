@@ -1079,6 +1079,7 @@ impl ConversationMessage {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(responses::StoredInputMessage::new(role, content)
                     .status(responses::MessageStatus::from_raw(self.status.as_str()))
+                    .with_retained_extra(&self.extra)
                     .into())
             }
             _ => Err(ConversationItemConversionError::UnsupportedMessageRole {
@@ -2356,6 +2357,64 @@ mod tests {
         assert_eq!(
             serde_json::to_value(input).expect("serialize converted assistant item")["phase"],
             "final_answer"
+        );
+    }
+
+    #[test]
+    fn user_message_conversion_retains_top_level_extra_fields() {
+        // The user/system/developer rebuild must carry unknown top-level
+        // fields through, exactly like the assistant JSON round-trip branch.
+        let user: ConversationMessage =
+            serde_json::from_value(user_message_fixture()).expect("decode user message");
+        let input = user
+            .to_response_input_item()
+            .expect("convert user message to Responses input");
+        let value = serde_json::to_value(&input).expect("serialize converted user input");
+        assert_eq!(value["type"], "message");
+        assert_eq!(value["role"], "user");
+        assert_eq!(value["status"], "completed");
+        assert_eq!(
+            value["future_message"], true,
+            "top-level unknown fields must survive the rebuild"
+        );
+
+        let developer: ConversationMessage = serde_json::from_value(json!({
+            "type": "message",
+            "id": "msg_dev",
+            "status": "completed",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "prefer tabs"}],
+            "future_dev_metadata": {"kept": [1, 2]}
+        }))
+        .expect("decode developer message");
+        let input = developer
+            .to_response_input_item()
+            .expect("convert developer message to Responses input");
+        assert_eq!(
+            serde_json::to_value(&input).expect("serialize converted developer input")["future_dev_metadata"],
+            json!({"kept": [1, 2]})
+        );
+
+        // Messages without extra fields stay byte-identical to before.
+        let plain: ConversationMessage = serde_json::from_value(json!({
+            "type": "message",
+            "id": "msg_plain",
+            "status": "completed",
+            "role": "system",
+            "content": [{"type": "input_text", "text": "be brief"}]
+        }))
+        .expect("decode system message");
+        let input = plain
+            .to_response_input_item()
+            .expect("convert system message to Responses input");
+        assert_eq!(
+            serde_json::to_value(&input).expect("serialize converted system input"),
+            json!({
+                "type": "message",
+                "role": "system",
+                "status": "completed",
+                "content": [{"type": "input_text", "text": "be brief"}]
+            })
         );
     }
 

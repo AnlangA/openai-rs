@@ -407,6 +407,18 @@ crate::open_string_enum! {
 }
 
 /// Built-in or custom speech voice.
+///
+/// `Named` covers the built-in names (and any future named voice) as a bare
+/// string, while `Custom` addresses a Custom Voice by identifier using the
+/// `{"id": "..."}` object form. Build the `Custom` variant through
+/// [`SpeechVoice::custom`] rather than constructing [`SpeechCustomVoice`]
+/// directly.
+///
+/// With the `custom-voice` feature enabled, ids returned by the Custom Voice
+/// API (`crate::voices::VoiceId`) convert into this type, so a retrieved
+/// `crate::voices::Voice` can be passed to
+/// [`CreateSpeechRequest::new`] by reference: `voice.id()` satisfies
+/// `impl Into<SpeechVoice>` through `From<&VoiceId>`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 #[non_exhaustive]
@@ -415,6 +427,20 @@ pub enum SpeechVoice {
     Named(String),
     /// Custom voice identifier.
     Custom(SpeechCustomVoice),
+}
+
+impl SpeechVoice {
+    /// Creates a custom-voice reference from its identifier.
+    ///
+    /// The value encodes as the `{"id": "..."}` object form required by the
+    /// pinned speech `voice` schema, instead of the bare string used for
+    /// built-in names. With the `custom-voice` feature enabled, a
+    /// `crate::voices::VoiceId` converts into this same variant through
+    /// `From<&VoiceId>`.
+    #[must_use]
+    pub fn custom(id: impl Into<String>) -> Self {
+        Self::Custom(SpeechCustomVoice { id: id.into() })
+    }
 }
 
 impl From<String> for SpeechVoice {
@@ -426,6 +452,18 @@ impl From<String> for SpeechVoice {
 impl From<&str> for SpeechVoice {
     fn from(value: &str) -> Self {
         Self::Named(value.to_owned())
+    }
+}
+
+/// Bridges a Custom Voice API identifier into the speech `Custom` variant.
+///
+/// Available with the `custom-voice` feature. The reverse direction has no
+/// bridge: a decoded [`SpeechVoice::Custom`] is not necessarily a Custom Voice
+/// API resource id, so it stays a plain [`SpeechCustomVoice`].
+#[cfg(feature = "custom-voice")]
+impl From<&crate::voices::VoiceId> for SpeechVoice {
+    fn from(value: &crate::voices::VoiceId) -> Self {
+        Self::custom(value.as_str())
     }
 }
 
@@ -3074,6 +3112,46 @@ mod tests {
             "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
         })));
         assert!(done.is_terminal());
+    }
+
+    #[test]
+    fn speech_custom_voice_constructs_and_round_trips_wire_object() {
+        // The untagged union encodes built-in names as a bare string and
+        // custom voices as the `{"id": "..."}` object form; the constructor
+        // must produce exactly that object without a tag.
+        let custom = SpeechVoice::custom("voice_1");
+        let wire = json!({"id": "voice_1"});
+        assert_eq!(ok(serde_json::to_value(&custom)), wire);
+        assert_eq!(
+            ok(serde_json::from_value::<SpeechVoice>(wire.clone())),
+            custom
+        );
+        // Decoding accepts the object form, while the untagged union keeps
+        // decoding a bare string as the named variant, so the two remain
+        // distinguishable in both directions.
+        assert_eq!(
+            ok(serde_json::from_value::<SpeechVoice>(json!("coral"))),
+            SpeechVoice::Named("coral".to_owned())
+        );
+        assert_eq!(
+            ok(serde_json::to_value(SpeechVoice::Named("coral".to_owned()))),
+            json!("coral")
+        );
+    }
+
+    #[cfg(feature = "custom-voice")]
+    #[test]
+    fn speech_custom_voice_bridges_custom_voice_api_ids() {
+        use crate::voices::VoiceId;
+
+        let voice_id = VoiceId::new("voice_1");
+        let bridged = SpeechVoice::from(&voice_id);
+        assert_eq!(bridged, SpeechVoice::custom("voice_1"));
+        assert_eq!(ok(serde_json::to_value(&bridged)), json!({"id": "voice_1"}));
+        // The bridge feeds the speech request builder directly.
+        let request = CreateSpeechRequest::new("gpt-4o-mini-tts", "hello", &voice_id);
+        let value = ok(serde_json::to_value(&request));
+        assert_eq!(value["voice"], json!({"id": "voice_1"}));
     }
 
     #[test]

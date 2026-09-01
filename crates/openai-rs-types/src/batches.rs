@@ -1167,6 +1167,15 @@ pub struct BatchLine<O> {
 
 impl<O> BatchLine<O> {
     /// Creates a `POST` line for a typed endpoint body.
+    ///
+    /// `custom_id` must be non-empty, and `body` must serialize to a JSON
+    /// object: the official input format defines `body` as an object, and the
+    /// service rejects any other shape (a scalar, array, or `null`)
+    /// asynchronously, after the batch was already uploaded. Because `O` is
+    /// any [`Serialize`] type, this constructor cannot check the shape; the
+    /// constraint is enforced when the line is encoded by
+    /// [`BatchJsonlWriter::write_line`], which reports
+    /// [`BatchJsonlError::NonObjectBody`] for a non-object body.
     pub fn new(
         custom_id: impl Into<Box<str>>,
         endpoint: BatchEndpoint,
@@ -1595,6 +1604,18 @@ pub enum BatchJsonlError {
         #[source]
         source: serde_json::Error,
     },
+    /// A request body did not encode as a JSON object.
+    ///
+    /// The official input format defines each line's `body` as a JSON object;
+    /// any other shape (a scalar, array, or `null`) is rejected by the service
+    /// asynchronously, after the whole batch was uploaded and while the batch
+    /// is already failing. [`BatchJsonlWriter::write_line`] rejects it at
+    /// encode time instead, so the caller learns before anything is uploaded.
+    #[error("batch JSONL body at line {line} is not a JSON object")]
+    NonObjectBody {
+        /// One-based line number.
+        line: usize,
+    },
     /// A line was not valid for the requested type.
     #[error("batch JSONL decode failed at line {line}: {source}")]
     Decode {
@@ -1747,6 +1768,21 @@ impl<W: Write> BatchJsonlWriter<W> {
             line: next_line,
             source,
         })?;
+        // The service defines `body` as a JSON object and rejects other
+        // shapes asynchronously, once the batch has already been uploaded and
+        // accepted. Re-checking the encoded envelope here keeps a generic
+        // `BatchLine<Value>` (or a future DTO) from encoding a scalar, array,
+        // or null body that would only fail the batch later.
+        if !serde_json::from_slice::<Value>(&encoded)
+            .map_err(|source| BatchJsonlError::Encode {
+                line: next_line,
+                source,
+            })?
+            .get("body")
+            .is_some_and(Value::is_object)
+        {
+            return Err(BatchJsonlError::NonObjectBody { line: next_line });
+        }
         if encoded.len() > self.max_line_bytes {
             return Err(BatchJsonlError::LineTooLong {
                 line: next_line,
@@ -2421,6 +2457,43 @@ mod tests {
         exact
             .write_line(&line)
             .expect("line at the exact bound passes");
+    }
+
+    #[test]
+    fn writer_rejects_bodies_that_are_not_json_objects() {
+        // The official input format defines `body` as a JSON object; scalars,
+        // arrays, and null are rejected by the service only after the batch
+        // was uploaded, so the writer refuses them at encode time.
+        for body in [
+            json!(42),
+            json!([1, 2]),
+            json!(null),
+            json!("text"),
+            json!(true),
+        ] {
+            let line = BatchLine::new("scalar", BatchEndpoint::Responses, body).expect("line");
+            let mut writer = BatchJsonlWriter::new(Vec::new());
+            assert!(
+                matches!(
+                    writer.write_line(&line),
+                    Err(BatchJsonlError::NonObjectBody { line: 1 })
+                ),
+                "expected a non-object body rejection"
+            );
+            assert_eq!(writer.line_count(), 0);
+            assert!(writer.into_inner().is_empty());
+        }
+
+        // An empty object stays valid, and the rejection reports the position
+        // of the offending line within a multi-line file.
+        let first = BatchLine::new("one", BatchEndpoint::Responses, json!({})).expect("line");
+        let second = BatchLine::new("two", BatchEndpoint::Responses, json!(42)).expect("line");
+        let mut writer = BatchJsonlWriter::new(Vec::new());
+        writer.write_line(&first).expect("object body accepted");
+        assert!(matches!(
+            writer.write_line(&second),
+            Err(BatchJsonlError::NonObjectBody { line: 2 })
+        ));
     }
 
     #[test]

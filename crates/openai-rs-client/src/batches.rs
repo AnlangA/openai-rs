@@ -188,8 +188,9 @@ impl Batches {
     ///
     /// Each line is written through [`BatchJsonlWriter`], so the documented
     /// input budget (50,000 request lines and 200 decimal megabytes) and the
-    /// per-line checks (unique `custom_id`, one endpoint per file) are
-    /// enforced before anything is uploaded. Two documented rules remain
+    /// per-line checks (unique `custom_id`, one endpoint per file, and a body
+    /// that encodes as a JSON object) are enforced before anything is
+    /// uploaded. Two documented rules remain
     /// caller-side: `/v1/embeddings` batches are additionally capped at
     /// 50,000 embedding inputs across all requests in the batch, which the
     /// writer cannot count inside opaque typed bodies, and the metadata
@@ -330,7 +331,12 @@ pub enum BatchSubmissionError {
     /// Typed JSONL encoding or validation failed.
     #[error(transparent)]
     Jsonl(#[from] BatchJsonlError),
-    /// A temporary file could not be created or flushed.
+    /// A temporary file could not be created, written, or flushed.
+    ///
+    /// Both the temp-file plumbing and the underlying writer's I/O failures
+    /// land here (see the `BatchJsonlError::Io` passthrough in
+    /// `into_submission_error`), while every other JSONL rule stays
+    /// classified as [`BatchSubmissionError::Jsonl`].
     #[error("batch temporary-file I/O failed")]
     Io(#[source] std::io::Error),
     /// The blocking JSONL worker could not complete.
@@ -345,6 +351,19 @@ pub enum BatchSubmissionError {
     /// A Platform Files or Batch request failed.
     #[error(transparent)]
     Client(#[from] Error),
+}
+
+/// Classifies a writer error from the temporary JSONL file.
+///
+/// An underlying [`BatchJsonlError::Io`] is unwrapped into
+/// [`BatchSubmissionError::Io`] so every temporary-file I/O failure surfaces
+/// through one variant, matching its documentation; every other JSONL rule
+/// keeps its structured shape as [`BatchSubmissionError::Jsonl`].
+fn into_submission_error(error: BatchJsonlError) -> BatchSubmissionError {
+    match error {
+        BatchJsonlError::Io { source, .. } => BatchSubmissionError::Io(source),
+        other => BatchSubmissionError::Jsonl(other),
+    }
 }
 
 fn write_temporary_jsonl<O, I>(
@@ -368,12 +387,12 @@ where
                 }
                 .into());
             }
-            writer.write_line(&line)?;
+            writer.write_line(&line).map_err(into_submission_error)?;
         }
         if writer.line_count() == 0 {
             return Err(BatchSubmissionError::EmptyInput);
         }
-        writer.flush()?;
+        writer.flush().map_err(into_submission_error)?;
         let mut buffered = writer.into_inner();
         buffered.flush().map_err(BatchSubmissionError::Io)?;
     }
@@ -837,6 +856,46 @@ mod tests {
         let error = write_temporary_jsonl(lines, &BatchEndpoint::Responses)
             .expect_err("empty batch must fail");
         assert!(matches!(error, BatchSubmissionError::EmptyInput));
+    }
+
+    #[test]
+    fn typed_submission_rejects_non_object_bodies_before_upload() {
+        // The service validates the `body` object shape only after the batch
+        // was uploaded; the writer re-checks it at encode time so a scalar
+        // body never leaves the machine.
+        let line = BatchLine::new("request-1", BatchEndpoint::Responses, json!(42))
+            .expect("typed line with a scalar body");
+        let error = write_temporary_jsonl([line], &BatchEndpoint::Responses)
+            .expect_err("non-object body must fail");
+        assert!(matches!(
+            error,
+            BatchSubmissionError::Jsonl(BatchJsonlError::NonObjectBody { line: 1 })
+        ));
+    }
+
+    #[test]
+    fn writer_io_errors_surface_as_temporary_file_io() {
+        // I/O failures from the underlying writer are unwrapped into the
+        // temporary-file I/O variant, while structured JSONL rules keep the
+        // Jsonl classification; the variant documentation promises exactly
+        // this split.
+        let io_error = into_submission_error(BatchJsonlError::Io {
+            line: 1,
+            source: std::io::Error::other("disk full"),
+        });
+        assert!(matches!(io_error, BatchSubmissionError::Io(_)));
+
+        for structured in [
+            BatchJsonlError::NonObjectBody { line: 1 },
+            BatchJsonlError::DuplicateCustomId {
+                line: 2,
+                custom_id: "request-1".to_owned(),
+            },
+            BatchJsonlError::TooManyLines { limit: 1 },
+        ] {
+            let classified = into_submission_error(structured);
+            assert!(matches!(classified, BatchSubmissionError::Jsonl(_)));
+        }
     }
 
     #[tokio::test]

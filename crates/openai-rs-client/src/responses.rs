@@ -143,6 +143,11 @@ impl Responses {
     }
 
     /// Creates a model response and incrementally decodes its SSE events.
+    ///
+    /// Once the SSE handshake succeeds, transport errors (including
+    /// mid-stream timeouts) are terminal: the stream yields the error and
+    /// ends, and no automatic retry happens. Re-issue the request to
+    /// recover (D0244).
     pub async fn create_stream(
         &self,
         request: CreateStreamingResponseRequest,

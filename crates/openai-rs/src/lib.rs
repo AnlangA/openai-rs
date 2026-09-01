@@ -126,7 +126,13 @@ pub mod admin {
     pub use openai_rs_types::admin::*;
 }
 
-#[cfg(feature = "codex-app-server")]
+/// Codex backend surface.
+///
+/// 7-24: the alias exists whenever any Codex feature pulls the crate in —
+/// `codex-app-server` for the stdio app-server client and
+/// `experimental-codex-direct` for the experimental direct transport — so
+/// enabling the direct feature alone no longer leaves the facade silent.
+#[cfg(any(feature = "codex-app-server", feature = "experimental-codex-direct"))]
 pub use openai_rs_codex as codex;
 
 #[cfg(feature = "rmcp")]
@@ -147,5 +153,17 @@ mod tests {
             proxy
         }
         assert!(assert_proxy_nameable(None).is_none());
+    }
+
+    /// 7-24: the `codex` alias is compiled in under either Codex feature, so
+    /// enabling `experimental-codex-direct` alone (without
+    /// `codex-app-server`) still exposes the backend through the facade.
+    #[cfg(any(feature = "codex-app-server", feature = "experimental-codex-direct"))]
+    #[test]
+    fn codex_alias_is_nameable_under_either_codex_feature() {
+        fn assert_alias_nameable(id: Option<crate::codex::RpcId>) -> Option<crate::codex::RpcId> {
+            id
+        }
+        assert!(assert_alias_nameable(None).is_none());
     }
 }

@@ -1901,6 +1901,16 @@ impl StoredInputMessage {
         self
     }
 
+    /// Carries retained unknown properties through a replay conversion.
+    ///
+    /// Mirrors the JSON round-trip used for assistant messages, where
+    /// source-only top-level fields survive inside `extra` instead of being
+    /// dropped by the field-by-field rebuild.
+    pub(crate) fn with_retained_extra(mut self, retained: &ExtraFields) -> Self {
+        self.extra = merge_extra_fields(&self.extra, retained);
+        self
+    }
+
     /// Returns content parts.
     #[must_use]
     pub fn content(&self) -> &[InputContent] {
@@ -7240,6 +7250,12 @@ impl Response {
     }
 
     /// Converts replayable output items into the corresponding input items.
+    ///
+    /// Resource-only fields such as `created_by` have no typed slot on the
+    /// sendable input schemas and are deliberately not given builder copies
+    /// (D0030-3). Replay stays lossless anyway: those fields are carried
+    /// through the input item's `extra`, matching the bytes the conversation
+    /// JSON round-trip path and the shared item structs retain.
     #[must_use]
     pub fn to_input_items(&self) -> Vec<ResponseInputItem> {
         self.output
@@ -7261,7 +7277,7 @@ impl Response {
                         namespace: value.namespace.clone(),
                         caller: value.caller.clone(),
                         status: Omittable::Value(Nullable::Value(value.status.clone())),
-                        extra: value.extra.clone(),
+                        extra: replay_created_by(&value.extra, &value.created_by),
                     })
                 }
                 ResponseOutputItem::FileSearchCall(value) => {
@@ -7281,7 +7297,7 @@ impl Response {
                         id: Omittable::Value(Nullable::Value(value.id.clone())),
                         status: Omittable::Value(Nullable::Value(value.status.clone())),
                         acknowledged_safety_checks: value.acknowledged_safety_checks.clone(),
-                        extra: value.extra.clone(),
+                        extra: replay_created_by(&value.extra, &value.created_by),
                     })
                 }
                 ResponseOutputItem::Reasoning(value) => ResponseInputItem::Reasoning(value.clone()),
@@ -7297,7 +7313,7 @@ impl Response {
                         call_id: Omittable::Value(value.call_id.clone()),
                         execution: Omittable::Value(value.execution.clone()),
                         status: Omittable::Value(Nullable::Value(value.status.clone())),
-                        extra: value.extra.clone(),
+                        extra: replay_created_by(&value.extra, &value.created_by),
                     })
                 }
                 ResponseOutputItem::ToolSearchOutput(value) => {
@@ -7308,7 +7324,7 @@ impl Response {
                         call_id: Omittable::Value(value.call_id.clone()),
                         execution: Omittable::Value(value.execution.clone()),
                         status: Omittable::Value(Nullable::Value(value.status.clone())),
-                        extra: value.extra.clone(),
+                        extra: replay_created_by(&value.extra, &value.created_by),
                     })
                 }
                 ResponseOutputItem::AdditionalTools(value) => {
@@ -7325,7 +7341,7 @@ impl Response {
                         kind: CompactionSummaryInputTag::Compaction,
                         encrypted_content: value.encrypted_content.clone(),
                         id: Omittable::Value(Nullable::Value(value.id.clone())),
-                        extra: value.extra.clone(),
+                        extra: replay_created_by(&value.extra, &value.created_by),
                     })
                 }
                 ResponseOutputItem::ImageGenerationCall(value) => {
@@ -7349,7 +7365,7 @@ impl Response {
                         caller: value.caller.clone(),
                         status: Omittable::Value(Nullable::Value(value.status.clone())),
                         environment: Omittable::Value(value.environment.clone()),
-                        extra: value.extra.clone(),
+                        extra: replay_created_by(&value.extra, &value.created_by),
                     })
                 }
                 ResponseOutputItem::FunctionShellCallOutput(value) => {
@@ -7361,7 +7377,7 @@ impl Response {
                         caller: value.caller.clone(),
                         status: Omittable::Value(Nullable::Value(value.status.clone())),
                         max_output_length: Omittable::Value(value.max_output_length),
-                        extra: value.extra.clone(),
+                        extra: replay_created_by(&value.extra, &value.created_by),
                     })
                 }
                 ResponseOutputItem::ApplyPatchCall(value) => {
@@ -7372,7 +7388,7 @@ impl Response {
                         operation: value.operation.clone(),
                         id: Omittable::Value(Nullable::Value(value.id.clone())),
                         caller: value.caller.clone(),
-                        extra: value.extra.clone(),
+                        extra: replay_created_by(&value.extra, &value.created_by),
                     })
                 }
                 ResponseOutputItem::ApplyPatchCallOutput(value) => {
@@ -7383,7 +7399,7 @@ impl Response {
                         output: value.output.clone(),
                         id: Omittable::Value(Nullable::Value(value.id.clone())),
                         caller: value.caller.clone(),
-                        extra: value.extra.clone(),
+                        extra: replay_created_by(&value.extra, &value.created_by),
                     })
                 }
                 ResponseOutputItem::McpListTools(value) => {
@@ -7414,7 +7430,7 @@ impl Response {
                         id: Omittable::Value(value.id.clone()),
                         caller: value.caller.clone(),
                         status: Omittable::Value(Nullable::Value(value.status.clone())),
-                        extra: value.extra.clone(),
+                        extra: replay_created_by(&value.extra, &value.created_by),
                     })
                 }
                 ResponseOutputItem::Unknown(value) => ResponseInputItem::Unknown(value.clone()),
@@ -7445,6 +7461,51 @@ impl Response {
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
     }
+}
+
+/// Merges one resource-only replay field into an input item's extra map.
+///
+/// Resource-only keys decode into named fields of the resource struct, so
+/// they can never already exist in `extra`; the reserved-key check is a
+/// structural assertion that never fires.
+fn replay_resource_field(extra: &ExtraFields, key: &str, value: &str) -> ExtraFields {
+    let mut fields = Map::with_capacity(extra.len() + 1);
+    for (extra_key, extra_value) in extra.iter() {
+        fields.insert(extra_key.to_owned(), extra_value.clone());
+    }
+    fields.insert(key.to_owned(), Value::String(value.to_owned()));
+    ExtraFields::try_from_map(fields, std::iter::empty::<&str>()).unwrap_or_else(|_| extra.clone())
+}
+
+/// Replays a resource `created_by` through the input item's extra map.
+///
+/// D0030-3 keeps `created_by` resource-side without a sendable input copy;
+/// replay conversions stay lossless by carrying it in `extra`, matching the
+/// conversation JSON round-trip and the shared item structs.
+fn replay_created_by(extra: &ExtraFields, created_by: &Omittable<String>) -> ExtraFields {
+    match created_by {
+        Omittable::Value(value) => replay_resource_field(extra, "created_by", value),
+        Omittable::Omitted => extra.clone(),
+    }
+}
+
+/// Merges retained unknown properties from a replay source into an input
+/// item's extra map.
+///
+/// Used by cross-API replay conversions (for example the Conversations to
+/// Responses message path) so top-level future fields survive the rebuild.
+pub(crate) fn merge_extra_fields(base: &ExtraFields, retained: &ExtraFields) -> ExtraFields {
+    if retained.is_empty() {
+        return base.clone();
+    }
+    let mut fields = Map::with_capacity(base.len() + retained.len());
+    for (key, value) in base.iter() {
+        fields.insert(key.to_owned(), value.clone());
+    }
+    for (key, value) in retained.iter() {
+        fields.insert(key.to_owned(), value.clone());
+    }
+    ExtraFields::try_from_map(fields, std::iter::empty::<&str>()).unwrap_or_else(|_| base.clone())
 }
 
 /// JSON body returned by deployments that represent response deletion.
@@ -17727,6 +17788,228 @@ mod tests {
     }
 
     #[test]
+    fn accumulator_reduces_part_level_lifecycle_across_content_indexes() {
+        let mut accumulator = ResponseAccumulator::new();
+        let fixtures = [
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "msg_parts",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": []
+                },
+                "sequence_number": 1
+            }),
+            // content 0 opens as an empty output_text part.
+            json!({
+                "type": "response.content_part.added",
+                "item_id": "msg_parts",
+                "output_index": 0,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": [], "logprobs": []},
+                "sequence_number": 2
+            }),
+            // annotations arrive mid-part before any done snapshot.
+            json!({
+                "type": "response.output_text.annotation.added",
+                "item_id": "msg_parts",
+                "output_index": 0,
+                "content_index": 0,
+                "annotation_index": 0,
+                "annotation": {
+                    "type": "url_citation",
+                    "url": "https://example.com",
+                    "start_index": 0,
+                    "end_index": 4,
+                    "title": "Example"
+                },
+                "sequence_number": 3
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg_parts",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Anch",
+                "sequence_number": 4,
+                "logprobs": []
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg_parts",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "ored",
+                "sequence_number": 5,
+                "logprobs": []
+            }),
+            // The part-level done snapshot must replace, not duplicate, the
+            // accumulated deltas.
+            json!({
+                "type": "response.content_part.done",
+                "item_id": "msg_parts",
+                "output_index": 0,
+                "content_index": 0,
+                "part": {
+                    "type": "output_text",
+                    "text": "Anchored",
+                    "annotations": [{
+                        "type": "url_citation",
+                        "url": "https://example.com",
+                        "start_index": 0,
+                        "end_index": 4,
+                        "title": "Example"
+                    }],
+                    "logprobs": []
+                },
+                "sequence_number": 6
+            }),
+            json!({
+                "type": "response.output_text.done",
+                "item_id": "msg_parts",
+                "output_index": 0,
+                "content_index": 0,
+                "text": "Anchored",
+                "sequence_number": 7,
+                "logprobs": []
+            }),
+            // content 1 is a reasoning_text part: it binds the item but must
+            // never contribute to output_text().
+            json!({
+                "type": "response.content_part.added",
+                "item_id": "msg_parts",
+                "output_index": 0,
+                "content_index": 1,
+                "part": {"type": "reasoning_text", "text": "thinking"},
+                "sequence_number": 8
+            }),
+            json!({
+                "type": "response.content_part.done",
+                "item_id": "msg_parts",
+                "output_index": 0,
+                "content_index": 1,
+                "part": {"type": "reasoning_text", "text": "thinking"},
+                "sequence_number": 9
+            }),
+            // A second output item keeps its own content 0 aggregated after
+            // the first item's parts in output index order.
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 1,
+                "item": {
+                    "type": "message",
+                    "id": "msg_after",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": []
+                },
+                "sequence_number": 10
+            }),
+            json!({
+                "type": "response.content_part.added",
+                "item_id": "msg_after",
+                "output_index": 1,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": [], "logprobs": []},
+                "sequence_number": 11
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg_after",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": " tail",
+                "sequence_number": 12,
+                "logprobs": []
+            }),
+            json!({
+                "type": "response.output_text.done",
+                "item_id": "msg_after",
+                "output_index": 1,
+                "content_index": 0,
+                "text": " tail",
+                "sequence_number": 13,
+                "logprobs": []
+            }),
+        ];
+
+        for fixture in fixtures {
+            accumulator
+                .push(decode_stream_event(fixture))
+                .expect("accept part-level lifecycle event");
+        }
+        assert_eq!(accumulator.last_sequence_number(), Some(13));
+        assert_eq!(
+            accumulator.output_text(),
+            "Anchored tail",
+            "part snapshots replace deltas and reasoning_text parts stay out of output_text()"
+        );
+
+        accumulator
+            .push(decode_stream_event(json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_parts",
+                    "created_at": 2,
+                    "error": null,
+                    "incomplete_details": null,
+                    "instructions": null,
+                    "metadata": null,
+                    "model": "gpt-test",
+                    "object": "response",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_parts",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": "Anchored",
+                                    "annotations": [],
+                                    "logprobs": []
+                                },
+                                {"type": "reasoning_text", "text": "thinking"}
+                            ]
+                        },
+                        {
+                            "type": "message",
+                            "id": "msg_after",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": " tail",
+                                    "annotations": [],
+                                    "logprobs": []
+                                }
+                            ]
+                        }
+                    ],
+                    "parallel_tool_calls": false,
+                    "temperature": null,
+                    "tool_choice": "auto",
+                    "tools": [],
+                    "top_p": null
+                },
+                "sequence_number": 14
+            })))
+            .expect("accept terminal response");
+        assert_eq!(
+            accumulator.output_text(),
+            "Anchored tail",
+            "terminal snapshot keeps reasoning_text parts out of the final text"
+        );
+        let response = accumulator.finish().expect("finish terminal response");
+        assert_eq!(response.id(), "resp_parts");
+    }
+
+    #[test]
     fn accumulator_rejects_duplicate_sequence_and_item_identity_changes() {
         let first = json!({
             "type": "response.output_text.delta",
@@ -22497,6 +22780,11 @@ mod tests {
             input.name,
             Omittable::Value(Nullable::Value(String::from("lookup")))
         );
+        assert_eq!(
+            input.extra_fields().get("created_by"),
+            Some(&json!("user_9")),
+            "resource-only created_by must replay through extra"
+        );
 
         let shell: FunctionShellCall = serde_json::from_value(json!({
             "type": "shell_call",
@@ -22524,6 +22812,102 @@ mod tests {
             Omittable::Value(ResponseItemStatus::Completed)
         );
         assert_eq!(custom.created_by, Omittable::Value(String::from("user_9")));
+    }
+
+    #[test]
+    fn to_input_items_replays_resource_only_created_by_into_extra() {
+        let response: Response = serde_json::from_value(json!({
+            "id": "resp_replay",
+            "created_at": 2,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-5.6-sol",
+            "object": "response",
+            "output": [
+                {
+                    "type": "tool_search_call",
+                    "id": "tsc_1",
+                    "call_id": null,
+                    "execution": "server",
+                    "arguments": {"query": "shell"},
+                    "status": "completed",
+                    "created_by": "user_1"
+                },
+                {
+                    "type": "compaction",
+                    "id": "cmp_1",
+                    "encrypted_content": "enc_payload",
+                    "created_by": "user_2"
+                },
+                {
+                    "type": "shell_call",
+                    "id": "sh_1",
+                    "call_id": "call_sh",
+                    "action": {"commands": ["echo"], "timeout_ms": null, "max_output_length": null},
+                    "status": "completed",
+                    "environment": null,
+                    "created_by": "user_3"
+                },
+                {
+                    "type": "tool_search_call",
+                    "id": "tsc_2",
+                    "call_id": null,
+                    "execution": "server",
+                    "arguments": {},
+                    "status": "completed"
+                }
+            ],
+            "parallel_tool_calls": false,
+            "temperature": null,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": null
+        }))
+        .expect("decode replay response");
+
+        let inputs = response.to_input_items();
+
+        let ResponseInputItem::ToolSearchCall(tool_search) = &inputs[0] else {
+            panic!("expected replayed tool-search call input");
+        };
+        assert_eq!(
+            tool_search.extra_fields().get("created_by"),
+            Some(&json!("user_1"))
+        );
+        assert_eq!(
+            serde_json::to_value(tool_search).expect("encode replayed tool search")["created_by"],
+            "user_1"
+        );
+
+        let ResponseInputItem::Compaction(compaction) = &inputs[1] else {
+            panic!("expected replayed compaction input");
+        };
+        assert_eq!(
+            compaction.extra_fields().get("created_by"),
+            Some(&json!("user_2"))
+        );
+        assert_eq!(
+            serde_json::to_value(compaction).expect("encode replayed compaction")["created_by"],
+            "user_2"
+        );
+
+        let ResponseInputItem::FunctionShellCall(shell) = &inputs[2] else {
+            panic!("expected replayed shell-call input");
+        };
+        assert_eq!(
+            shell.extra_fields().get("created_by"),
+            Some(&json!("user_3"))
+        );
+
+        let ResponseInputItem::ToolSearchCall(plain) = &inputs[3] else {
+            panic!("expected tool-search call without created_by");
+        };
+        assert!(
+            plain.extra_fields().is_empty(),
+            "omitted created_by must not add replay noise"
+        );
     }
 
     #[test]

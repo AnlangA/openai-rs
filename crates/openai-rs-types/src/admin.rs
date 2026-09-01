@@ -4268,7 +4268,7 @@ mod tests {
     use std::collections::HashSet;
 
     use serde::{Serialize, de::DeserializeOwned};
-    use serde_json::{Value, json};
+    use serde_json::{Map, Value, json};
     use static_assertions::assert_impl_all;
 
     use super::*;
@@ -4498,164 +4498,118 @@ mod tests {
         );
     }
 
+    /// Pinned audit wire inventory derived from the frozen OpenAPI document.
+    ///
+    /// Mirrors the `openapi_tags` derivation in `realtime.rs`: the official
+    /// event-type strings come from `AuditLogEventType.enum` and the dotted
+    /// payload keys from `AuditLog.properties`, so the parity test below
+    /// asserts against the pin itself instead of a hand-copied list (7-20).
+    fn pinned_audit_wire_inventory() -> (Vec<String>, Vec<String>, Vec<String>) {
+        let openapi: Value = serde_json::from_str(include_str!(
+            "../../../spec/upstream/openapi-2026-08-29.json"
+        ))
+        .expect("pinned OpenAPI is valid JSON");
+        let schemas = openapi["components"]["schemas"]
+            .as_object()
+            .expect("OpenAPI schemas are an object");
+        let mut event_types: Vec<String> = schemas["AuditLogEventType"]["enum"]
+            .as_array()
+            .expect("AuditLogEventType carries an enum array")
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .expect("AuditLogEventType enum values are strings")
+                    .to_owned()
+            })
+            .collect();
+        event_types.sort();
+        let properties = schemas["AuditLog"]["properties"]
+            .as_object()
+            .expect("AuditLog properties are an object");
+        let mut payload_keys: Vec<String> = properties
+            .keys()
+            .filter(|key| key.contains('.'))
+            .cloned()
+            .collect();
+        payload_keys.sort();
+        let mut envelope_keys: Vec<String> = properties
+            .keys()
+            .filter(|key| !key.contains('.'))
+            .cloned()
+            .collect();
+        envelope_keys.sort();
+        (event_types, payload_keys, envelope_keys)
+    }
+
     #[test]
     fn admin_audit_event_payloads_match_openapi() {
-        const OFFICIAL_EVENT_TYPES: &[&str] = &[
-            "api_key.created",
-            "api_key.updated",
-            "api_key.deleted",
-            "certificate.created",
-            "certificate.updated",
-            "certificate.deleted",
-            "certificates.activated",
-            "certificates.deactivated",
-            "checkpoint.permission.created",
-            "checkpoint.permission.deleted",
-            "external_key.registered",
-            "external_key.removed",
-            "group.created",
-            "group.updated",
-            "group.deleted",
-            "invite.sent",
-            "invite.accepted",
-            "invite.deleted",
-            "ip_allowlist.created",
-            "ip_allowlist.updated",
-            "ip_allowlist.deleted",
-            "ip_allowlist.config.activated",
-            "ip_allowlist.config.deactivated",
-            "login.succeeded",
-            "login.failed",
-            "logout.succeeded",
-            "logout.failed",
-            "organization.updated",
-            "project.created",
-            "project.updated",
-            "project.archived",
-            "project.deleted",
-            "rate_limit.updated",
-            "rate_limit.deleted",
-            "resource.deleted",
-            "tunnel.created",
-            "tunnel.updated",
-            "tunnel.deleted",
-            "workload_identity_provider.created",
-            "workload_identity_provider.updated",
-            "workload_identity_provider.deleted",
-            "workload_identity_provider_mapping.created",
-            "workload_identity_provider_mapping.updated",
-            "workload_identity_provider_mapping.deleted",
-            "role.created",
-            "role.updated",
-            "role.deleted",
-            "role.assignment.created",
-            "role.assignment.deleted",
-            "role.bound_to_resource",
-            "role.unbound_from_resource",
-            "scim.enabled",
-            "scim.disabled",
-            "service_account.created",
-            "service_account.updated",
-            "service_account.deleted",
-            "user.added",
-            "user.updated",
-            "user.deleted",
-            "tenant.metadata.updated",
-            "tenant.microsoft_entra_mapping.upserted",
-            "tenant.microsoft_entra_mapping.deleted",
-            "tenant.workload_identity.provider.created",
-            "tenant.workload_identity.provider.updated",
-            "tenant.workload_identity.provider.archived",
-            "tenant.workload_identity.mapping.created",
-            "tenant.workload_identity.mapping.updated",
-            "tenant.workload_identity.mapping.archived",
-            "tenant.workload_identity.binding.created",
-            "tenant.workload_identity.principal.provisioned",
-            "tenant.workload_identity.access_token.issued",
-            "tenant.admin_api_key.created",
-            "tenant.admin_api_key.updated",
-            "tenant.admin_api_key.deleted",
-            "tenant.project_api_key.created",
-            "tenant.trusted_access.business_verification.started",
-            "tenant.trusted_access.application.submitted",
-            "tenant.chatgpt_access_token.revoked",
-            "tenant.migration.completed",
-            "tenant.sso.migrated",
-            "tenant.domains.migrated",
-            "tenant.sso_connection.created",
-            "tenant.sso_connection.updated",
-            "tenant.sso_connection.deleted",
-            "tenant.sso_connection.setup.started",
-            "tenant.policy.created",
-            "tenant.policy.updated",
-            "tenant.policy.deleted",
-            "tenant.policy.attached",
-            "tenant.policy.detached",
-            "tenant.principal_authentication_policy.resolved",
-            "tenant.scim.setup.started",
-            "tenant.scim.deletion.requested",
-            "tenant.scim.directory.created",
-            "tenant.product_access_policy.updated",
-            "tenant.resource_share_grant.created",
-            "tenant.resource_share_grant.updated",
-            "tenant.resource_share_grant.accepted",
-            "tenant.resource_share_grant.declined",
-            "tenant.resource_share_grant.revoked",
-            "tenant.resource_share_grant.deleted",
-            "tenant.service_account.updated",
-            "tenant.service_account.deleted",
-            "tenant.service_account.token.revoked",
-            "tenant.billing.overage_limit.updated",
-            "tenant.billing.alerts.updated",
-            "tenant.billing.info.updated",
-            "tenant.usage_limit.workspace.updated",
-            "tenant.usage_limit.group.updated",
-            "tenant.usage_limit.user.updated",
-            "tenant.usage_limit.increase_request.updated",
-            "tenant.usage_limit.increase_request.resolved",
-            "tenant.group.created",
-            "tenant.group.updated",
-            "tenant.group.deleted",
-            "tenant.group.member.added",
-            "tenant.group.member.removed",
-            "tenant.migration_rollout.status.updated",
-            "tenant.migration_rollout.tier.updated",
-            "tenant.role.metadata.updated",
-            "tenant.custom_role.created",
-            "tenant.custom_role.updated",
-            "tenant.custom_role.deleted",
-            "tenant.role_assignment.created",
-            "tenant.role_assignment.deleted",
-            "tenant.resource_role_assignment.created",
-            "tenant.resource_role_assignment.deleted",
-            "tenant.resource_access.updated",
-            "tenant.resource_access.deleted",
-            "tenant.ads_account.onboarding.redemption",
-            "tenant.session_policy.created",
-            "tenant.session_policy.updated",
-            "tenant.session_policy.deleted",
-            "tenant.session_revocation.started",
-            "tenant.third_party_app_policy.updated",
-            "tenant.user.added",
-            "tenant.user.updated",
-            "tenant.user.removed",
-            "tenant.user.looked_up",
-            "tenant.user.invited",
-            "tenant.membership.revoked",
-            "tenant.api_organization_invite.upserted",
-            "tenant.api_organization_invite.deleted",
-            "tenant.chatgpt_workspace_invite.upserted",
-            "tenant.membership.accepted",
-            "tenant.membership.declined",
-            "tenant.workspace_invite_email_settings.updated",
-        ];
-        assert_eq!(OFFICIAL_EVENT_TYPES.len(), 147);
-        for wire in OFFICIAL_EVENT_TYPES {
-            let parsed = AuditEventType::from_raw(*wire);
+        let (event_types, payload_keys, envelope_keys) = pinned_audit_wire_inventory();
+        // The pin carries 147 official event types and 55 dotted payload keys;
+        // the shared envelope owns every remaining `AuditLog` property. These
+        // counts guard a pin swap from silently rescoping the inventory.
+        assert_eq!(event_types.len(), 147);
+        assert_eq!(payload_keys.len(), 55);
+        assert_eq!(
+            envelope_keys,
+            ["actor", "effective_at", "id", "project", "type"]
+        );
+
+        // OpenAPI -> Rust: every pinned event type is known and round-trips
+        // through the exact wire spelling.
+        for wire in &event_types {
+            let parsed = AuditEventType::from_raw(wire.as_str());
             assert!(parsed.is_known(), "{wire} must be a known official type");
-            assert_eq!(parsed.as_str(), *wire);
+            assert_eq!(parsed.as_str(), wire.as_str());
         }
         assert!(!AuditEventType::from_raw("audit.future.event").is_known());
+
+        // Every dotted payload key is itself an official event type, and must
+        // be consumed by a typed `AuditLog` field rather than `extra`. Probing
+        // with an empty object is decisive in both directions: a typed field
+        // either decodes `{}` (absent from `extra`, round-trips) or fails on a
+        // required subfield, while a key that fell through to `extra` can only
+        // ever decode successfully and would surface there.
+        let event_set: HashSet<&str> = event_types.iter().map(String::as_str).collect();
+        for key in &payload_keys {
+            assert!(
+                event_set.contains(key.as_str()),
+                "{key} must be an official event type"
+            );
+            let mut object = Map::new();
+            object.insert("id".to_owned(), json!("audit_probe"));
+            object.insert("type".to_owned(), Value::from(key.clone()));
+            object.insert("effective_at".to_owned(), json!(0));
+            object.insert(key.clone(), json!({}));
+            match serde_json::from_value::<AuditLog>(Value::Object(object)) {
+                Ok(audit) => {
+                    assert_eq!(audit.kind.as_str(), key.as_str());
+                    assert!(
+                        !audit.extra().contains_key(key),
+                        "{key} must be typed on AuditLog, not extra"
+                    );
+                    let encoded = ok(serde_json::to_value(&audit));
+                    assert_eq!(encoded.get(key), Some(&json!({})));
+                }
+                Err(_) => {
+                    // A required subfield of the typed payload rejected `{}`;
+                    // the key was still matched against the typed field.
+                }
+            }
+        }
+
+        // Rust -> OpenAPI control: a dotted key the pin does not carry is not
+        // typed and stays in `extra` losslessly, so the typed set observed by
+        // decode is exactly the pinned 55 keys.
+        let future = json!({
+            "id": "audit_future",
+            "type": "api_key.created",
+            "effective_at": 0,
+            "audit.future.payload": {"future": true}
+        });
+        let decoded = ok(serde_json::from_value::<AuditLog>(future.clone()));
+        assert!(decoded.extra().contains_key("audit.future.payload"));
+        assert_eq!(ok(serde_json::to_value(decoded)), future);
 
         let fixture = json!({
             "id": "req_xxx_20240101",

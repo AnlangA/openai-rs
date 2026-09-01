@@ -208,6 +208,7 @@ impl Transport {
     /// Executes an empty-or-JSON operation with one operation-owned static
     /// header. Callers cannot use this to override authentication or codec
     /// headers.
+    #[cfg(feature = "beta-responses-multi-agent")]
     pub(crate) async fn execute_optional_json_with_static_header<O, Q>(
         &self,
         path: &[PathSegment<'_>],

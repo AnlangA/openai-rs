@@ -921,22 +921,58 @@ impl CreateContainerFileFromIdRequest {
 }
 
 /// Multipart request uploading a new binary file to a Container.
+///
+/// The pinned `CreateContainerFileBody` multipart schema carries the binary
+/// `file` part and one optional `file_id` text field (described upstream as
+/// the "Name of the file to create"); set it with
+/// [`CreateContainerFileUploadRequest::with_file_id`]. Attaching an existing
+/// Files API object by identifier instead of uploading bytes is the JSON
+/// twin, [`CreateContainerFileFromIdRequest`].
 #[derive(Clone, PartialEq)]
 pub struct CreateContainerFileUploadRequest {
     file: ReplayableMultipartSource,
+    file_id: Option<String>,
 }
 
 impl CreateContainerFileUploadRequest {
     /// Construct a binary upload request.
     #[must_use]
     pub const fn new(file: ReplayableMultipartSource) -> Self {
-        Self { file }
+        Self {
+            file,
+            file_id: None,
+        }
+    }
+
+    /// Names the uploaded file with the optional `file_id` form field.
+    ///
+    /// The pinned multipart schema describes this field as the "Name of the
+    /// file to create"; it is a free-form string, not a Files API object
+    /// identifier (use [`CreateContainerFileFromIdRequest`] to attach an
+    /// existing File).
+    #[must_use]
+    pub fn with_file_id(mut self, file_id: impl Into<String>) -> Self {
+        self.file_id = Some(file_id.into());
+        self
+    }
+
+    /// Removes the optional `file_id` form field.
+    #[must_use]
+    pub fn clear_file_id(mut self) -> Self {
+        self.file_id = None;
+        self
     }
 
     /// Replayable binary source.
     #[must_use]
     pub const fn file(&self) -> &ReplayableMultipartSource {
         &self.file
+    }
+
+    /// Optional name sent as the `file_id` form field.
+    #[must_use]
+    pub fn file_id(&self) -> Option<&str> {
+        self.file_id.as_deref()
     }
 }
 
@@ -945,6 +981,7 @@ impl fmt::Debug for CreateContainerFileUploadRequest {
         formatter
             .debug_struct("CreateContainerFileUploadRequest")
             .field("file", &self.file)
+            .field("file_id", &self.file_id)
             .finish()
     }
 }
@@ -1334,6 +1371,24 @@ mod tests {
             Some(b"secret-binary-file".as_slice())
         );
         assert!(!format!("{upload:?}").contains("secret-binary-file"));
+
+        // The optional multipart `file_id` ("Name of the file to create") is
+        // a free-form string beside the binary part, distinct from the
+        // Files API identifier of the JSON attach request above.
+        assert_eq!(upload.file_id(), None);
+        let named = upload
+            .clone()
+            .with_file_id("report.csv")
+            .with_file_id("final.csv");
+        assert_eq!(named.file_id(), Some("final.csv"));
+        let debug = format!("{named:?}");
+        assert!(debug.contains("final.csv"));
+        assert!(!debug.contains("secret-binary-file"));
+        assert_eq!(
+            named.clear_file_id().file_id(),
+            None,
+            "clearing restores the unnamed upload form"
+        );
 
         let fixture = json!({
             "id": "cfile_1",

@@ -643,8 +643,12 @@ fn normalize(
     }
 
     for (key, child) in object.iter_mut() {
-        match child {
-            Value::Object(children) if matches!(key.as_str(), "$defs" | "definitions") => {
+        // Every recursed keyword also pins its wire shape: an `items` array
+        // (draft-07 tuple form), a non-array `anyOf`, or a non-object
+        // `$defs`/`definitions` would otherwise be silently skipped instead
+        // of reported (7-21).
+        match (key.as_str(), &mut *child) {
+            ("$defs" | "definitions", Value::Object(children)) => {
                 for (name, schema) in children {
                     normalize(
                         schema,
@@ -655,7 +659,13 @@ fn normalize(
                     )?;
                 }
             }
-            Value::Array(children) if key == "anyOf" => {
+            ("$defs" | "definitions", _) => {
+                return Err(StructuredError::UnsupportedKeyword {
+                    path: format!("{path}/{}", escape_pointer(key)),
+                    keyword: key.clone(),
+                });
+            }
+            ("anyOf", Value::Array(children)) => {
                 for (index, schema) in children.iter_mut().enumerate() {
                     normalize(
                         schema,
@@ -666,8 +676,20 @@ fn normalize(
                     )?;
                 }
             }
-            Value::Object(_) | Value::Bool(_) if key == "items" => {
+            ("anyOf", _) => {
+                return Err(StructuredError::UnsupportedKeyword {
+                    path: format!("{path}/{key}"),
+                    keyword: key.clone(),
+                });
+            }
+            ("items", Value::Object(_) | Value::Bool(_)) => {
                 normalize(child, &format!("{path}/{key}"), base, chain, budget)?;
+            }
+            ("items", _) => {
+                return Err(StructuredError::UnsupportedKeyword {
+                    path: format!("{path}/{key}"),
+                    keyword: key.clone(),
+                });
             }
             _ => {}
         }
@@ -1331,6 +1353,70 @@ mod tests {
                 "{keyword} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn recursed_keyword_shapes_are_reported_with_path() {
+        // `items` in the draft-07 tuple (array) form. The property is required
+        // so `make_nullable` does not first wrap it in an `anyOf`.
+        let mut tuple_items = json!({
+            "type": "object",
+            "required": ["pair"],
+            "properties": {
+                "pair": { "type": "array", "items": [{ "type": "string" }, { "type": "number" }] }
+            }
+        });
+        let error =
+            normalize_strict_schema(&mut tuple_items).expect_err("array-form items must fail");
+        assert!(matches!(
+            &error,
+            StructuredError::UnsupportedKeyword { path, keyword }
+                if keyword == "items" && path == "#/properties/pair/items"
+        ));
+
+        // `anyOf` that is not an array (required, so the property itself is
+        // not wrapped in a nullable `anyOf` first).
+        let mut object_any_of = json!({
+            "type": "object",
+            "required": ["choice"],
+            "properties": {
+                "choice": { "type": "object", "anyOf": { "type": "string" } }
+            }
+        });
+        let error =
+            normalize_strict_schema(&mut object_any_of).expect_err("object-form anyOf must fail");
+        assert!(matches!(
+            &error,
+            StructuredError::UnsupportedKeyword { path, keyword }
+                if keyword == "anyOf" && path == "#/properties/choice/anyOf"
+        ));
+
+        // `$defs` that is not an object.
+        let mut array_defs = json!({
+            "type": "object",
+            "$defs": [{ "type": "string" }],
+            "properties": { "a": { "type": "string" } }
+        });
+        let error =
+            normalize_strict_schema(&mut array_defs).expect_err("array-form $defs must fail");
+        assert!(matches!(
+            &error,
+            StructuredError::UnsupportedKeyword { path, keyword }
+                if keyword == "$defs" && path == "#/$defs"
+        ));
+
+        let mut bool_defs = json!({
+            "type": "object",
+            "definitions": true,
+            "properties": { "a": { "type": "string" } }
+        });
+        let error =
+            normalize_strict_schema(&mut bool_defs).expect_err("bool definitions must fail");
+        assert!(matches!(
+            &error,
+            StructuredError::UnsupportedKeyword { path, keyword }
+                if keyword == "definitions" && path == "#/definitions"
+        ));
     }
 
     #[test]

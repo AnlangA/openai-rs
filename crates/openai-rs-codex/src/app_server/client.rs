@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use openai_rs_types::kernel::{Nullable, Omittable};
+use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -414,9 +415,13 @@ where
                 credential: PhantomData,
             };
 
-            let initialize_response = provisional
-                .request("initialize", Some(InitializeParams::new(client_info)))
-                .await;
+            let initialize_response = {
+                let params = InitializeParams::new(client_info);
+                // 7-21: every outbound params object is checked for extra-key
+                // collisions before encoding, initialize included.
+                params.validate_extra()?;
+                provisional.request("initialize", Some(params)).await
+            };
             let initialize_response = match initialize_response {
                 Ok(response) => response,
                 Err(error) => {
@@ -513,10 +518,12 @@ where
         &self,
         params: ThreadStartParams,
     ) -> Result<ThreadStartResponse, Error> {
+        params.validate_extra()?;
         self.request("thread/start", Some(params)).await
     }
 
     pub async fn turn_start(&self, params: TurnStartParams) -> Result<TurnStartResponse, Error> {
+        params.validate_extra()?;
         self.request("turn/start", Some(params)).await
     }
 
@@ -796,6 +803,46 @@ impl AppServerClient<ManagedAppServerCredential> {
                 })
                 .and_then(|auth_url| parse_login_url("authUrl", auth_url))?,
         })
+    }
+
+    /// Log the dedicated app-server profile in with an API key.
+    ///
+    /// Wire shape of the `apiKey` branch of the pinned `v2/LoginAccountParams`:
+    /// exactly `{"type": "apiKey", "apiKey": ...}` on `account/login/start`.
+    /// The response's `apiKey` branch carries no fields beyond its type tag,
+    /// so success is reported as `Ok(())` — watch the `account/updated`
+    /// notification for the resulting auth mode.
+    ///
+    /// The key is taken as a [`secrecy::SecretString`], exists only inside
+    /// this call's serialized request frame, and is neither retained on the
+    /// client nor echoed in any error or `Debug` output; a server answering
+    /// with a different login branch fails with [`Error::UnexpectedResponse`]
+    /// naming the branch it picked instead.
+    pub async fn account_login_api_key(&self, api_key: SecretString) -> Result<(), Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Params<'key> {
+            #[serde(rename = "type")]
+            kind: &'static str,
+            api_key: &'key str,
+        }
+
+        let response: LoginAccountResponse = self
+            .request(
+                "account/login/start",
+                Some(Params {
+                    kind: "apiKey",
+                    api_key: api_key.expose_secret(),
+                }),
+            )
+            .await?;
+        if response.kind != "apiKey" {
+            return Err(Error::UnexpectedResponse(format!(
+                "api key login returned type {:?}",
+                response.kind
+            )));
+        }
+        Ok(())
     }
 
     pub async fn account_login_device(&self) -> Result<DeviceCodeLogin, Error> {
@@ -1562,6 +1609,42 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn thread_start_rejects_extra_colliding_with_a_typed_key()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // 7-21: a flattened `extra` key shadowing a typed `thread/start` key
+        // is rejected before the frame is encoded, so the child never sees a
+        // request whose typed value was silently overwritten.
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 12
+            case "$init" in *'"method":"initialize"'*) ;; *) exit 13 ;; esac
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 14
+            IFS= read -r leaked
+            case "$leaked" in *thread/start*) exit 40 ;; *) exit 0 ;; esac
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "0.0.0")).await?;
+
+        let mut params = ThreadStartParams::default();
+        params.extra.insert("cwd".to_owned(), json!("/shadowed"));
+        match client.thread_start(params).await {
+            Err(Error::ExtraFieldConflict { method, key }) => {
+                assert_eq!((method, key.as_str()), ("thread/start", "cwd"));
+            }
+            other => return Err(format!("unexpected thread_start result: {other:?}").into()),
+        }
+
+        // The child exits 40 when a thread/start frame reaches it, which
+        // surfaces as a connection failure on close.
+        client.close().await?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn fake_child_handshake_correlation_and_unknown_notification()
     -> Result<(), Box<dyn std::error::Error>> {
         let profile = tempfile::tempdir()?;
@@ -1799,6 +1882,75 @@ mod tests {
                 );
             }
             other => return Err(format!("unexpected device login result: {other:?}").into()),
+        }
+
+        client.close().await?;
+        Ok(())
+    }
+
+    /// 7-06: the api-key login sends exactly the pinned `apiKey` branch of
+    /// `v2/LoginAccountParams` (`{"type": "apiKey", "apiKey": ...}`, no
+    /// chatgpt-branch keys), accepts the field-less `apiKey` response, never
+    /// echoes the key through the client's `Debug` or stderr, and fails with
+    /// an explicit error naming the branch when the server answers a
+    /// different one.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fake_child_api_key_login_sends_the_pinned_branch_and_never_echoes_the_key()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 151
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 152
+
+            IFS= read -r apikey || exit 153
+            case "$apikey" in
+                *'"method":"account/login/start"'*'"id":2'*'"params":{"type":"apiKey","apiKey":"sk-test-0144"}'*) ;; *) exit 154 ;;
+            esac
+            # The apiKey branch must not carry any chatgpt-branch property.
+            case "$apikey" in *appBrand*|*codexStreamlinedLogin*|*useHostedLoginSuccessPage*) exit 155 ;; esac
+            printf '%s\n' '{"id":2,"result":{"type":"apiKey"}}'
+
+            IFS= read -r mismatch || exit 156
+            case "$mismatch" in
+                *'"method":"account/login/start"'*'"params":{"type":"apiKey","apiKey":"sk-test-0144"}'*) ;; *) exit 157 ;;
+            esac
+            printf '%s\n' '{"id":3,"result":{"type":"chatgpt","loginId":"login-x","authUrl":"https://chatgpt.com/auth"}}'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        client
+            .account_login_api_key(secrecy::SecretString::from("sk-test-0144".to_owned()))
+            .await?;
+        assert!(
+            !format!("{client:?}").contains("sk-test-0144"),
+            "the api key must not survive in the client Debug output"
+        );
+        assert!(
+            !client.stderr_tail().contains("sk-test-0144"),
+            "the api key must not be echoed through the child stderr"
+        );
+
+        match client
+            .account_login_api_key(secrecy::SecretString::from("sk-test-0144".to_owned()))
+            .await
+        {
+            Err(Error::UnexpectedResponse(message)) => {
+                assert!(
+                    message.contains("chatgpt"),
+                    "unexpected mismatch message: {message}"
+                );
+                assert!(
+                    !message.contains("sk-test-0144"),
+                    "the api key leaked into the mismatch error: {message}"
+                );
+            }
+            other => return Err(format!("unexpected api key login result: {other:?}").into()),
         }
 
         client.close().await?;

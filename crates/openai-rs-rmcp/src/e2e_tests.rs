@@ -33,6 +33,7 @@ const INPUT_REQUIRED_TOOL: &str = "input_required_tool";
 #[derive(Clone, Default)]
 struct ProbeState {
     calls: Arc<AtomicUsize>,
+    list_requests: Arc<AtomicUsize>,
     slow_started: Arc<Notify>,
     slow_cancelled: Arc<Notify>,
     slow_cancellations: Arc<AtomicUsize>,
@@ -66,10 +67,25 @@ impl ServerHandler for ProbeServer {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(Self::tools()))
+        // 7-25: the fixture is served as two `nextCursor` pages so discovery
+        // e2e exercises the real pagination traversal instead of a single
+        // all-items response.
+        self.state.list_requests.fetch_add(1, Ordering::SeqCst);
+        let tools = Self::tools();
+        let second_page = request
+            .as_ref()
+            .and_then(|params| params.cursor.as_deref())
+            .is_some_and(|cursor| cursor == "probe-page-2");
+        if second_page {
+            Ok(ListToolsResult::with_all_items(tools[3..].to_vec()))
+        } else {
+            let mut result = ListToolsResult::with_all_items(tools[..3].to_vec());
+            result.next_cursor = Some("probe-page-2".to_owned());
+            Ok(result)
+        }
     }
 
     async fn call_tool(
@@ -220,6 +236,27 @@ impl Harness {
         let joined = tokio::time::timeout(Duration::from_secs(2), self.server_task).await;
         assert!(matches!(joined, Ok(Ok(true))), "server must observe close");
     }
+}
+
+/// 7-25: the probe server serves its five tools as two `nextCursor` pages.
+/// A frozen catalog holding all five — and exactly two observed
+/// `tools/list` requests — proves discovery followed the cursor instead of
+/// freezing the first page.
+#[tokio::test]
+async fn discovery_merges_every_paginated_tools_list_page() {
+    let harness = Harness::connect().await;
+    assert_eq!(
+        harness.state.list_requests.load(Ordering::SeqCst),
+        2,
+        "both pages must have been requested"
+    );
+    assert_eq!(harness.bridge.catalog().len(), ProbeServer::tools().len());
+    // Every tool from both pages is bound, including the ones only the
+    // second page carries.
+    for mcp_name in [RICH_TOOL, SLOW_TOOL, INPUT_REQUIRED_TOOL] {
+        let _ = harness.openai_name(mcp_name);
+    }
+    harness.close().await;
 }
 
 #[tokio::test]
@@ -435,15 +472,18 @@ async fn input_required_results_report_an_unsupported_result_kind() {
     harness.close().await;
 }
 
-/// A transport whose writes fail once the `broken` flag is set and whose
-/// reads are fed from a scripted response channel.
+/// A transport whose writes fail once the `broken` flag is set, hang forever
+/// once the `stuck` flag is set, and whose reads are fed from a scripted
+/// response channel.
 ///
 /// This lets a test hold a request pending forever (no response is scripted
-/// for it) while still failing the client's follow-up writes, which is the
-/// exact state "the peer disconnected while cancellation was in flight".
+/// for it) while still failing the client's follow-up writes (`broken`, the
+/// "peer disconnected" state) or wedging them in progress (`stuck`, the
+/// "write direction stalled" state of 7-25).
 #[derive(Clone)]
 struct ScriptedTransport {
     broken: Arc<AtomicBool>,
+    stuck: Arc<AtomicBool>,
     outgoing: mpsc::UnboundedSender<Value>,
     incoming: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Value>>>,
 }
@@ -460,9 +500,16 @@ impl Transport<RoleClient> for ScriptedTransport {
         item: rmcp::service::TxJsonRpcMessage<RoleClient>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
         let broken = self.broken.clone();
+        let stuck = self.stuck.clone();
         let outgoing = self.outgoing.clone();
         async move {
             if broken.load(Ordering::SeqCst) {
+                return Err(ScriptedWriteError);
+            }
+            if stuck.load(Ordering::SeqCst) {
+                // A wedged write direction: the frame is neither delivered
+                // nor failed, the write simply never completes.
+                std::future::pending::<()>().await;
                 return Err(ScriptedWriteError);
             }
             let message = serde_json::to_value(&item).map_err(|_| ScriptedWriteError)?;
@@ -490,6 +537,7 @@ async fn cancellation_wins_over_a_failed_cancel_notification_delivery() {
     let scripter_call_seen = call_seen.clone();
     let transport = ScriptedTransport {
         broken: broken.clone(),
+        stuck: Arc::new(AtomicBool::new(false)),
         outgoing: request_tx,
         incoming: Arc::new(tokio::sync::Mutex::new(response_rx)),
     };
@@ -587,6 +635,185 @@ async fn cancellation_wins_over_a_failed_cancel_notification_delivery() {
         cancelled,
         BridgeError::Cancelled { reason: Some(ref reason) } if reason == "caller stopped"
     ));
+
+    scripter.abort();
+    let closed = client.close().await;
+    assert!(closed.is_ok(), "client close must complete");
+}
+
+/// 7-25: a wedged write direction — the cancel notification neither fails
+/// nor completes — must not hold the dispatch past its deadline. The
+/// best-effort `notifications/cancelled` delivery is bounded (one second),
+/// so the caller still observes the cancellation promptly.
+#[tokio::test]
+async fn cancellation_returns_promptly_when_the_cancel_write_is_wedged() {
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel::<Value>();
+    let (response_tx, response_rx) = mpsc::unbounded_channel::<Value>();
+    let stuck = Arc::new(AtomicBool::new(false));
+    let call_seen = Arc::new(Notify::new());
+    let scripter_call_seen = call_seen.clone();
+    let transport = ScriptedTransport {
+        broken: Arc::new(AtomicBool::new(false)),
+        stuck: stuck.clone(),
+        outgoing: request_tx,
+        incoming: Arc::new(tokio::sync::Mutex::new(response_rx)),
+    };
+
+    // Scripted peer: handshake, one listed tool, and silence for both
+    // `tools/call` and any follow-up write.
+    let scripter = tokio::spawn(async move {
+        while let Some(message) = request_rx.recv().await {
+            let Some(method) = message.get("method").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(id) = message.get("id").cloned() else {
+                continue;
+            };
+            let response = match method {
+                "initialize" => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "scripted", "version": "0.0.0"}
+                    }
+                }),
+                "tools/list" => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "tools": [{
+                            "name": "slow/tool",
+                            "description": "scripted fixture",
+                            "inputSchema": {"type": "object"}
+                        }]
+                    }
+                }),
+                "tools/call" => {
+                    scripter_call_seen.notify_one();
+                    continue;
+                }
+                _ => continue,
+            };
+            let _ = response_tx.send(response);
+        }
+    });
+
+    let mut client = rmcp::serve_client((), transport)
+        .await
+        .expect("scripted handshake must complete");
+    let executor = RmcpExecutor::new(client.peer().clone());
+    let bridge = ResponsesToolBridge::discover(
+        executor,
+        CatalogPolicy::default(),
+        &ExecutionControl::default(),
+    )
+    .await
+    .expect("scripted tools/list must produce a catalog");
+    let slow_name = bridge
+        .catalog()
+        .entries()
+        .next()
+        .expect("one scripted tool must be listed")
+        .openai_name()
+        .to_owned();
+
+    let token = CancellationToken::new();
+    let control = ExecutionControl::default().with_cancellation(token.clone());
+    let bridge = Arc::new(bridge);
+    let dispatch = {
+        let bridge = bridge.clone();
+        let slow_name = slow_name.clone();
+        tokio::spawn(async move {
+            bridge
+                .dispatch_parts("call_wedged_cancel", &slow_name, "{}", &control)
+                .await
+        })
+    };
+
+    let seen = tokio::time::timeout(Duration::from_secs(2), call_seen.notified()).await;
+    assert!(seen.is_ok(), "scripted peer must observe the tools/call");
+    // From here on every outbound write is wedged in progress: the
+    // `notifications/cancelled` delivery can neither fail nor complete.
+    stuck.store(true, Ordering::SeqCst);
+    token.cancel_with_reason("caller stopped");
+
+    // Without the bounded delivery this join never happens: the dispatch
+    // would await the wedged cancel write forever.
+    let cancelled = tokio::time::timeout(Duration::from_secs(3), dispatch)
+        .await
+        .expect("dispatch must return despite the wedged cancel write");
+    let cancelled = cancelled.expect("dispatch task must join");
+    assert!(cancelled.is_err(), "cancellation must end the dispatch");
+    assert!(matches!(
+        cancelled,
+        Err(BridgeError::Cancelled { reason: Some(ref reason) }) if reason == "caller stopped"
+    ));
+
+    scripter.abort();
+    let closed = client.close().await;
+    assert!(closed.is_ok(), "client close must complete");
+}
+
+/// 7-25: the discovery control bounds the `tools/list` traversal — a peer
+/// that stalls the first page fails the whole discovery with the caller's
+/// timeout instead of hanging.
+#[tokio::test]
+async fn discovery_deadline_ends_a_stalled_tools_list_traversal() {
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel::<Value>();
+    let (response_tx, response_rx) = mpsc::unbounded_channel::<Value>();
+    let transport = ScriptedTransport {
+        broken: Arc::new(AtomicBool::new(false)),
+        stuck: Arc::new(AtomicBool::new(false)),
+        outgoing: request_tx,
+        incoming: Arc::new(tokio::sync::Mutex::new(response_rx)),
+    };
+
+    // Scripted peer: handshake only; `tools/list` stalls forever.
+    let scripter = tokio::spawn(async move {
+        while let Some(message) = request_rx.recv().await {
+            let Some(method) = message.get("method").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(id) = message.get("id").cloned() else {
+                continue;
+            };
+            if method != "initialize" {
+                continue;
+            }
+            let _ = response_tx.send(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "scripted", "version": "0.0.0"}
+                }
+            }));
+        }
+    });
+
+    let mut client = rmcp::serve_client((), transport)
+        .await
+        .expect("scripted handshake must complete");
+    let executor = RmcpExecutor::new(client.peer().clone());
+
+    let started = std::time::Instant::now();
+    let outcome = ResponsesToolBridge::discover(
+        executor,
+        CatalogPolicy::default(),
+        &ExecutionControl::default().with_timeout(Duration::from_millis(50)),
+    )
+    .await;
+    assert!(
+        matches!(outcome, Err(BridgeError::Timeout { timeout }) if timeout == Duration::from_millis(50)),
+        "a stalled tools/list must fail discovery with the caller deadline: {outcome:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "discovery must respect its deadline instead of hanging"
+    );
 
     scripter.abort();
     let closed = client.close().await;

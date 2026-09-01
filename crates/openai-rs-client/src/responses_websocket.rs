@@ -47,14 +47,29 @@ pub(crate) type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 ///
 /// An established connection is never automatically reconnected because
 /// replaying a `response.create` event could duplicate model work.
+///
+/// [`WebSocketReconnectPolicy::InitialConnect`] retries only handshake-time
+/// failures: transport errors (I/O, TLS), handshake timeouts, and non-101
+/// rejections whose HTTP status is retryable on the REST face too — 408, 429,
+/// and every 5xx (7-08). Any other rejection — a 401 (after the single
+/// credential refresh) or a 4xx such as 404 — surfaces from the attempt that
+/// produced it, and the REST-only `x-should-retry` override and 409 stay REST
+/// contract details: a WebSocket handshake replays no conflicting mutation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 #[cfg(feature = "realtime")]
 pub enum WebSocketReconnectPolicy {
     #[default]
     Never,
+    /// Retries a failed initial handshake before surfacing its error.
     InitialConnect {
+        /// Additional attempts *after* the first one, so the handshake is
+        /// tried at most `1 + max_retries` times in total (capped at 10 by
+        /// [`ResponsesWebSocketConfig`]'s validation).
         max_retries: u32,
+        /// Fixed pause between attempts with no backoff: every pause lasts
+        /// exactly `delay`, which callers are expected to keep small (the
+        /// validation caps it at 60s).
         delay: Duration,
     },
 }
@@ -299,6 +314,15 @@ impl ResponsesWebSocket {
     }
 
     /// Sends one typed client event with bounded buffering.
+    ///
+    /// A transport failure while *writing* the frame retires the socket
+    /// (`is_closed` becomes `true`), extending the recv-side posture (4-19,
+    /// D0212): a connection that cannot be written to is not usable again, so
+    /// later `send`/`recv` calls report the closed state instead of polling a
+    /// half-broken socket. Local validation failures — an event that fails to
+    /// encode, carries an invalid `stream_id`, or exceeds the configured
+    /// message limit — leave the connection open, because nothing reached the
+    /// wire and the socket remains healthy.
     pub async fn send_event(&mut self, event: ResponsesClientEvent) -> Result<(), Error> {
         if self.closed {
             return Err(Error::WebSocketProtocol(
@@ -312,10 +336,13 @@ impl ResponsesWebSocket {
                 "outgoing Responses event exceeds the configured message limit",
             ));
         }
-        self.socket
-            .send(Message::text(encoded))
-            .await
-            .map_err(map_websocket_error)
+        match self.socket.send(Message::text(encoded)).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.closed = true;
+                Err(map_websocket_error(error))
+            }
+        }
     }
 
     /// Receives the next typed server event. Ping/pong control frames are
@@ -439,29 +466,45 @@ impl fmt::Debug for ResponsesWebSocket {
     }
 }
 
-#[cfg(feature = "realtime")]
-fn websocket_url(base_url: &Url) -> Result<Url, Error> {
-    let mut url = base_url.clone();
-    let websocket_scheme = match url.scheme() {
+/// Derives a WebSocket URL from the configured API base for all three
+/// WebSocket faces (7-22): the scheme is mapped `https`→`wss` / `http`→`ws`,
+/// one `segment` is appended after the base path, and any fragment is
+/// dropped. Query parameters configured on the base survive untouched: the
+/// Responses faces append none of their own, and the Realtime face rejects
+/// (rather than clears) only the target keys it is about to set, so a gateway
+/// base such as `https://proxy.example/v1/?api-version=...` keeps its query on
+/// every WebSocket face.
+pub(crate) fn derive_websocket_url(
+    base: &Url,
+    segment: &'static str,
+    face: &'static str,
+) -> Result<Url, Error> {
+    let mut url = base.clone();
+    let scheme = match url.scheme() {
         "https" => "wss",
         "http" => "ws",
         _ => {
-            return Err(invalid_configuration(
-                "Responses WebSocket requires an HTTP(S) API base URL",
-            ));
+            return Err(invalid_configuration(format!(
+                "{face} WebSocket requires an HTTP(S) base URL"
+            )));
         }
     };
-    url.set_scheme(websocket_scheme)
-        .map_err(|()| invalid_configuration("failed to derive the Responses WebSocket scheme"))?;
+    url.set_scheme(scheme).map_err(|()| {
+        invalid_configuration(format!("failed to derive the {face} WebSocket scheme"))
+    })?;
     {
-        let mut segments = url.path_segments_mut().map_err(|()| {
-            invalid_configuration("API base URL cannot contain WebSocket path segments")
-        })?;
-        segments.pop_if_empty().push("responses");
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|()| invalid_configuration(format!("{face} base URL cannot encode a path")))?;
+        segments.pop_if_empty().push(segment);
     }
-    url.set_query(None);
     url.set_fragment(None);
     Ok(url)
+}
+
+#[cfg(feature = "realtime")]
+fn websocket_url(base_url: &Url) -> Result<Url, Error> {
+    derive_websocket_url(base_url, "responses", "Responses")
 }
 
 pub(crate) fn websocket_request(
@@ -571,11 +614,20 @@ pub(crate) fn websocket_connector(
     }
 }
 
+/// Handshake failures a `WebSocketReconnectPolicy::InitialConnect` policy may
+/// replay: transport errors (I/O, TLS) plus non-101 rejections whose HTTP
+/// status is retryable on the REST face (408, 429, 5xx — 7-08). Everything
+/// else — 4xx rejections such as 401/404, protocol violations, capacity
+/// errors — surfaces from the attempt that produced it.
 pub(crate) fn retryable_connect_error(error: &tungstenite::Error) -> bool {
-    matches!(
-        error,
-        tungstenite::Error::Io(_) | tungstenite::Error::Tls(_)
-    )
+    match error {
+        tungstenite::Error::Io(_) | tungstenite::Error::Tls(_) => true,
+        tungstenite::Error::Http(response) => {
+            let status = response.status().as_u16();
+            matches!(status, 408 | 429) || (500..=599).contains(&status)
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn is_unauthorized_websocket_error(error: &tungstenite::Error) -> bool {
@@ -783,6 +835,48 @@ mod tests {
         let base = Url::parse("https://api.openai.com/v1/").expect("official base URL");
         let url = websocket_url(&base).expect("derived URL");
         assert_eq!(url.as_str(), "wss://api.openai.com/v1/responses");
+        // 7-22: base query parameters survive the derivation (the Realtime
+        // semantics) and a base fragment is dropped — only the scheme, path,
+        // and query pairing differ per face.
+        let versioned = Url::parse("https://gateway.example/v1/?api-version=2026-01-01#anchor")
+            .expect("versioned base URL");
+        let url = websocket_url(&versioned).expect("derived versioned URL");
+        assert_eq!(
+            url.as_str(),
+            "wss://gateway.example/v1/responses?api-version=2026-01-01"
+        );
+    }
+
+    #[test]
+    fn retryable_connect_error_covers_the_rest_retry_statuses() {
+        // 7-08: a non-101 rejection carrying a REST-retryable status (408/429
+        // and every 5xx) joins I/O and TLS as replayable handshake failures;
+        // the remaining 4xx surface from the attempt that produced them.
+        let rejection = |status: u16| {
+            let response = http::Response::builder()
+                .status(StatusCode::from_u16(status).expect("raw rejection status"))
+                .body(None)
+                .expect("handshake rejection response");
+            tungstenite::Error::Http(Box::new(response))
+        };
+        for status in [408_u16, 429, 500, 502, 503, 599] {
+            assert!(
+                retryable_connect_error(&rejection(status)),
+                "{status} must be retryable"
+            );
+        }
+        for status in [400_u16, 401, 403, 404, 409, 422] {
+            assert!(
+                !retryable_connect_error(&rejection(status)),
+                "{status} must surface instead of retrying"
+            );
+        }
+        assert!(retryable_connect_error(&tungstenite::Error::Io(
+            std::io::Error::other("connection reset")
+        )));
+        assert!(!retryable_connect_error(&tungstenite::Error::Capacity(
+            tungstenite::error::CapacityError::TooManyHeaders
+        )));
     }
 
     #[test]
@@ -850,6 +944,187 @@ mod tests {
         let preview = error.handshake_body().expect("handshake body preview");
         assert_eq!(preview.as_str(), "");
         assert!(!preview.is_truncated());
+    }
+
+    /// Serves one raw HTTP rejection per listed status — one TCP connection
+    /// each — and then accepts a single WebSocket, recording how many TCP
+    /// connections reached the listener so retry counts stay assertable.
+    async fn rejecting_then_accepting_handshake_server(
+        rejections: &[u16],
+    ) -> (Client, Arc<Mutex<usize>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind retrying handshake server");
+        let address = listener
+            .local_addr()
+            .expect("retrying handshake server address");
+        let connections = Arc::new(Mutex::new(0_usize));
+        let server_connections = Arc::clone(&connections);
+        let rejections = rejections.to_vec();
+        tokio::spawn(async move {
+            for status in rejections {
+                let (mut stream, _) = listener.accept().await.expect("accept rejected handshake");
+                *server_connections
+                    .lock()
+                    .expect("retry connection counter lock") += 1;
+                let mut request = vec![0_u8; 4096];
+                let _ = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut request))
+                    .await
+                    .expect("timely rejected handshake read");
+                let status = StatusCode::from_u16(status).expect("raw rejection status code");
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: 0\r\n\r\n"
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write raw retry rejection");
+            }
+            let (stream, _) = listener.accept().await.expect("accept retrying WebSocket");
+            *server_connections
+                .lock()
+                .expect("retry connection counter lock") += 1;
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("retrying WebSocket handshake");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("retrying handshake client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("retrying handshake client");
+        (client, connections)
+    }
+
+    #[tokio::test]
+    async fn initial_connect_retries_a_503_handshake_rejection() {
+        // 7-08: a 503 handshake rejection carries a REST-retryable status, so
+        // an InitialConnect policy replays the handshake instead of surfacing
+        // the rejection from the first attempt.
+        let (client, connections) = rejecting_then_accepting_handshake_server(&[503]).await;
+        let mut socket = client
+            .responses()
+            .connect_with(ResponsesWebSocketConfig::new().reconnect_policy(
+                WebSocketReconnectPolicy::InitialConnect {
+                    max_retries: 2,
+                    delay: Duration::from_millis(10),
+                },
+            ))
+            .await
+            .expect("connect after the 503 rejection");
+        assert!(!socket.is_closed());
+        socket.close().await.expect("close the retried WebSocket");
+        assert_eq!(
+            *connections.lock().expect("retry connection counter lock"),
+            2,
+            "the 503 must be retried exactly once before the success"
+        );
+    }
+
+    #[tokio::test]
+    async fn initial_connect_retries_429_rejections_until_the_budget_is_spent() {
+        // 7-08: a 429 rejection is retryable too, and the budget is exactly
+        // `1 + max_retries` attempts — the second 429 surfaces with no third
+        // connection.
+        let (client, connections) = rejecting_then_accepting_handshake_server(&[429, 429]).await;
+        let error = client
+            .responses()
+            .connect_with(ResponsesWebSocketConfig::new().reconnect_policy(
+                WebSocketReconnectPolicy::InitialConnect {
+                    max_retries: 1,
+                    delay: Duration::from_millis(10),
+                },
+            ))
+            .await
+            .expect_err("the second 429 exhausts the retry budget");
+        assert_eq!(error.status(), Some(StatusCode::TOO_MANY_REQUESTS));
+        assert_eq!(
+            *connections.lock().expect("retry connection counter lock"),
+            2,
+            "total attempts must equal 1 + max_retries"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_write_failure_retires_the_responses_socket() {
+        // 7-22: a failed send write leaves the socket unusable in both
+        // directions, so it is retired like every recv-side failure (4-19,
+        // D0212) instead of staying half-open. The write fails
+        // deterministically against a `max_write_buffer_size` smaller than one
+        // text frame (a 12+-byte frame against an 8-byte cap).
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind send-failure server");
+        let address = listener.local_addr().expect("send-failure server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept send-failure socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("send-failure server handshake");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("send-failure client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("send-failure client");
+        let mut socket = client
+            .responses()
+            .connect_with(
+                ResponsesWebSocketConfig::new()
+                    .write_buffer_bytes(1)
+                    .max_queued_write_bytes(8),
+            )
+            .await
+            .expect("connect Responses WebSocket with a tiny write buffer");
+        match socket
+            .send_create(CreateResponseRequest::new("test-model", "hello"))
+            .await
+        {
+            Err(Error::WebSocketTransport(reason)) => {
+                assert!(
+                    reason.to_lowercase().contains("buffer"),
+                    "expected a write-buffer failure, got {reason}"
+                );
+            }
+            unexpected => panic!("expected a send write failure, got {unexpected:?}"),
+        }
+        assert!(
+            socket.is_closed(),
+            "a failed send must retire the Responses socket"
+        );
+        assert!(
+            socket
+                .recv()
+                .await
+                .expect("recv after the send failure")
+                .is_none(),
+            "a retired socket reports EOF on every later recv"
+        );
+        assert!(
+            matches!(
+                socket
+                    .send_create(CreateResponseRequest::new("test-model", "again"))
+                    .await,
+                Err(Error::WebSocketProtocol(_))
+            ),
+            "a later send must report the closed socket"
+        );
     }
 
     /// Serves one raw HTTP rejection — head and body in a single TCP write —

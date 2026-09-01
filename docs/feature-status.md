@@ -83,6 +83,23 @@ app-server transport authentication must remain separate from model
 credentials. Direct mode is off by default; prefer app-server whenever its
 runtime boundary fits the application.
 
+### Facade exposure and rustdoc coverage
+
+Either Codex entry feature (`codex-app-server` or `experimental-codex-direct`)
+re-exports the backend crate through the facade alias `openai_rs::codex`
+(7-24); enabling the direct feature alone therefore no longer leaves the
+facade silent. The experimental surface itself is not fully documented yet:
+public-API rustdoc coverage currently stands at roughly 38% for
+`openai-rs-codex` and 69% for `openai-rs-client`, and the undocumented share
+is concentrated in the experimental Codex/direct types and client error
+accessors. Applications that build against `experimental-codex-direct` should
+depend on `openai-rs-codex` directly (with
+`default-features = false, features = ["experimental-direct"]`) rather than
+through the facade alias: the direct types are the contract, the facade only
+mirrors the crate, and direct dependency keeps feature resolution and
+documentation under the application's control while the feature remains
+experimental.
+
 ## API coverage policy
 
 The generated pinned inventory contains 288 client operations. Its current

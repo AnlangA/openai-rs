@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -340,11 +341,49 @@ pub struct EncodedEmbedding {
     extra: ExtraFields,
 }
 
+/// Failures of [`EncodedEmbedding::decode_f32_vec`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum EncodedEmbeddingDecodeError {
+    /// The payload is not valid standard base64.
+    #[error("embedding is not valid base64: {0}")]
+    InvalidBase64(#[source] base64::DecodeError),
+    /// The decoded byte length is not a whole number of `f32` values.
+    #[error("decoded embedding is {actual} bytes, not a multiple of 4")]
+    LengthNotMultipleOfFour {
+        /// Decoded byte count.
+        actual: usize,
+    },
+}
+
 impl EncodedEmbedding {
     /// Response properties not known by this crate version.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
+    }
+
+    /// Decodes the base64 payload into the embedding vector.
+    ///
+    /// The service encodes each component as a 4-byte little-endian IEEE 754
+    /// `f32`, so the decoded byte length must be a multiple of four; a
+    /// truncated payload is reported instead of silently shortened.
+    pub fn decode_f32_vec(&self) -> Result<Vec<f32>, EncodedEmbeddingDecodeError> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(self.embedding.as_bytes())
+            .map_err(EncodedEmbeddingDecodeError::InvalidBase64)?;
+        if bytes.len() % 4 != 0 {
+            return Err(EncodedEmbeddingDecodeError::LengthNotMultipleOfFour {
+                actual: bytes.len(),
+            });
+        }
+        Ok(bytes
+            .chunks_exact(4)
+            .map(|chunk| {
+                let mut buffer = [0_u8; 4];
+                buffer.copy_from_slice(chunk);
+                f32::from_le_bytes(buffer)
+            })
+            .collect())
     }
 }
 
@@ -565,15 +604,68 @@ impl CreateModerationResponse {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
     use serde_json::{Value, json};
 
     use crate::{Nullable, Omittable};
 
     use super::{
         CreateEmbeddingConstraintError, CreateEmbeddingRequest, CreateModerationRequest,
-        CreateModerationResponse, EmbeddingEncodingFormat, EmbeddingInput,
-        MAX_EMBEDDING_BATCH_ITEMS, Model, ModelList, ModerationAppliedInputType,
+        CreateModerationResponse, EmbeddingEncodingFormat, EmbeddingInput, EncodedEmbedding,
+        EncodedEmbeddingDecodeError, MAX_EMBEDDING_BATCH_ITEMS, Model, ModelList,
+        ModerationAppliedInputType,
     };
+
+    #[test]
+    fn encoded_embedding_decodes_little_endian_f32_vector() {
+        // LE bytes of [1.0, -0.5, 0.25].
+        let payload = base64::engine::general_purpose::STANDARD
+            .encode([0_u8, 0, 0x80, 0x3f, 0, 0, 0, 0xbf, 0, 0, 0x80, 0x3e]);
+        let embedding = EncodedEmbedding {
+            index: 0,
+            embedding: payload,
+            object: super::EmbeddingObject::Embedding,
+            extra: crate::ExtraFields::new(),
+        };
+        assert_eq!(
+            embedding.decode_f32_vec().expect("valid payload"),
+            vec![1.0_f32, -0.5, 0.25]
+        );
+
+        let empty = EncodedEmbedding {
+            index: 1,
+            embedding: String::new(),
+            object: super::EmbeddingObject::Embedding,
+            extra: crate::ExtraFields::new(),
+        };
+        assert_eq!(
+            empty.decode_f32_vec().expect("empty vector"),
+            Vec::<f32>::new()
+        );
+
+        let invalid = EncodedEmbedding {
+            index: 2,
+            embedding: "not base64 !!".to_owned(),
+            object: super::EmbeddingObject::Embedding,
+            extra: crate::ExtraFields::new(),
+        };
+        assert!(matches!(
+            invalid.decode_f32_vec(),
+            Err(EncodedEmbeddingDecodeError::InvalidBase64(_))
+        ));
+
+        // Five bytes cannot be a whole number of f32 components.
+        let truncated = EncodedEmbedding {
+            index: 3,
+            embedding: base64::engine::general_purpose::STANDARD.encode([0_u8; 5]),
+            object: super::EmbeddingObject::Embedding,
+            extra: crate::ExtraFields::new(),
+        };
+        assert_eq!(
+            truncated.decode_f32_vec(),
+            Err(EncodedEmbeddingDecodeError::LengthNotMultipleOfFour { actual: 5 })
+        );
+    }
 
     #[test]
     fn embedding_request_omits_unset_fields() {

@@ -38,7 +38,7 @@ use crate::{
     },
     responses::DeleteResponseResult,
     responses_websocket::{
-        connect_socket, is_unauthorized_websocket_error, map_websocket_error,
+        connect_socket, derive_websocket_url, is_unauthorized_websocket_error, map_websocket_error,
         retryable_connect_error, websocket_connector, websocket_request,
     },
     sse::{SseDispatch, SseEndpointPolicy, SseFrame, SseLimits, SseStreamDecoder, SseStreamState},
@@ -565,13 +565,30 @@ impl fmt::Debug for BetaResponseEventStream {
 }
 
 /// Explicit retry policy for only the initial beta WebSocket handshake.
+///
+/// An established connection is never automatically reconnected because
+/// replaying a beta `response.create` event could duplicate model work.
+///
+/// [`BetaWebSocketReconnectPolicy::InitialConnect`] mirrors the GA
+/// `WebSocketReconnectPolicy`: only handshake-time failures are replayed —
+/// transport errors (I/O, TLS), handshake timeouts, and non-101 rejections
+/// whose HTTP status is retryable on the REST face too (408, 429, and every
+/// 5xx — 7-08). Any other rejection, such as a 401 after the single
+/// credential refresh or a 404, surfaces from the attempt that produced it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BetaWebSocketReconnectPolicy {
     #[default]
     Never,
+    /// Retries a failed initial handshake before surfacing its error.
     InitialConnect {
+        /// Additional attempts *after* the first one, so the handshake is
+        /// tried at most `1 + max_retries` times in total (capped at 10 by
+        /// [`BetaResponsesWebSocketConfig`]'s validation).
         max_retries: u32,
+        /// Fixed pause between attempts with no backoff: every pause lasts
+        /// exactly `delay`, which callers are expected to keep small (the
+        /// validation caps it at 60s).
         delay: Duration,
     },
 }
@@ -816,6 +833,15 @@ impl BetaResponsesWebSocket {
     }
 
     /// Sends any typed beta client event with bounded buffering.
+    ///
+    /// A transport failure while *writing* the frame retires the socket
+    /// (`is_closed` becomes `true`), extending the recv-side posture (4-19,
+    /// D0212): a connection that cannot be written to is not usable again, so
+    /// later `send`/`recv` calls report the closed state instead of polling a
+    /// half-broken socket. Local validation failures — an event that fails to
+    /// encode, carries an invalid `stream_id`, or exceeds the configured
+    /// message limit — leave the connection open, because nothing reached the
+    /// wire and the socket remains healthy.
     pub async fn send_event(&mut self, event: BetaResponsesClientEvent) -> Result<(), Error> {
         if self.closed {
             return Err(Error::WebSocketProtocol(
@@ -829,10 +855,13 @@ impl BetaResponsesWebSocket {
                 "outgoing beta Responses event exceeds the configured message limit",
             ));
         }
-        self.socket
-            .send(Message::text(encoded))
-            .await
-            .map_err(map_websocket_error)
+        match self.socket.send(Message::text(encoded)).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.closed = true;
+                Err(map_websocket_error(error))
+            }
+        }
     }
 
     /// Receives the next typed beta server event.
@@ -995,30 +1024,12 @@ fn decode_beta_event(
 }
 
 fn beta_websocket_url(base_url: &Url) -> Result<Url, Error> {
-    let mut url = base_url.clone();
-    let scheme = match url.scheme() {
-        "https" => "wss",
-        "http" => "ws",
-        _ => {
-            return Err(invalid_configuration(
-                "beta Responses WebSocket requires an HTTP(S) API base URL",
-            ));
-        }
-    };
-    url.set_scheme(scheme).map_err(|()| {
-        invalid_configuration("failed to derive the beta Responses WebSocket scheme")
-    })?;
-    {
-        let mut segments = url.path_segments_mut().map_err(|()| {
-            invalid_configuration("API base URL cannot contain WebSocket path segments")
-        })?;
-        segments.pop_if_empty().push("responses");
-    }
-    // The pinned beta Node oracle deliberately uses `/responses` without the
-    // REST-only `beta=true` query parameter.
-    url.set_query(None);
-    url.set_fragment(None);
-    Ok(url)
+    // 7-22: the shared derivation maps the scheme, appends `responses`, drops
+    // the fragment, and preserves query parameters configured on the base —
+    // the Realtime semantics. The derivation still never *adds* the REST-only
+    // `beta=true` query: the pinned beta Node oracle reaches `/responses`
+    // without it.
+    derive_websocket_url(base_url, "responses", "beta Responses")
 }
 
 fn validate_stream_id(encoded: &str) -> Result<(), Error> {
@@ -1210,7 +1221,11 @@ mod tests {
         BetaResponseIncludable, BetaResponseInputItem, BetaResponseItemOrder,
     };
     use serde_json::{Value, json};
-    use tokio::{net::TcpListener, sync::oneshot};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        sync::oneshot,
+    };
     use tokio_tungstenite::{
         accept_hdr_async,
         tungstenite::{
@@ -1900,6 +1915,159 @@ mod tests {
         let base = Url::parse("https://api.openai.com/v1/").expect("official base URL");
         let url = beta_websocket_url(&base).expect("derived beta WebSocket URL");
         assert_eq!(url.as_str(), "wss://api.openai.com/v1/responses");
+        // 7-22: the derivation invents no `beta=true` (the pinned Node oracle
+        // reaches `/responses` without the REST-only query), but query
+        // parameters configured on the base survive — the Realtime
+        // semantics — and a base fragment is dropped.
+        let versioned = Url::parse("https://gateway.example/v1/?api-version=2026-01-01#anchor")
+            .expect("versioned base URL");
+        let url = beta_websocket_url(&versioned).expect("derived versioned beta WebSocket URL");
+        assert_eq!(
+            url.as_str(),
+            "wss://gateway.example/v1/responses?api-version=2026-01-01"
+        );
+        assert!(
+            !url.query_pairs().any(|(key, _)| key == "beta"),
+            "the WebSocket face never adds the REST-only beta query"
+        );
+    }
+
+    /// Serves one raw 503 handshake rejection and then accepts a single
+    /// WebSocket, so the beta initial-connect policy can be exercised against
+    /// a REST-retryable status (the shared 7-08 `retryable_connect_error`).
+    async fn rejecting_then_accepting_handshake_server() -> Client {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta retrying handshake server");
+        let address = listener
+            .local_addr()
+            .expect("beta retrying handshake server address");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("accept beta rejected handshake");
+            let mut request = vec![0_u8; 4096];
+            let _ = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut request))
+                .await
+                .expect("timely beta rejected handshake read");
+            let response = "HTTP/1.1 503 Service Unavailable\r\ncontent-type: application/json\r\ncontent-length: 0\r\n\r\n";
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write beta raw rejection");
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept beta retrying WebSocket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("beta retrying WebSocket handshake");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("beta retrying client base");
+        client(base_url)
+    }
+
+    #[tokio::test]
+    async fn beta_initial_connect_retries_a_503_handshake_rejection() {
+        // 7-08: a 503 handshake rejection is REST-retryable, so the beta
+        // InitialConnect policy — which shares the GA `retryable_connect_error`
+        // — replays the handshake instead of surfacing the rejection.
+        let client = rejecting_then_accepting_handshake_server().await;
+        let mut socket = client
+            .beta_responses()
+            .connect_with(BetaResponsesWebSocketConfig::new().reconnect_policy(
+                BetaWebSocketReconnectPolicy::InitialConnect {
+                    max_retries: 1,
+                    delay: Duration::from_millis(10),
+                },
+            ))
+            .await
+            .expect("connect the beta WebSocket after the 503");
+        assert!(!socket.is_closed());
+        socket.close().await.expect("close the retried beta socket");
+    }
+
+    #[tokio::test]
+    async fn send_write_failure_retires_the_beta_socket() {
+        // 7-22: a failed send write leaves the socket unusable in both
+        // directions, so it is retired like every recv-side failure (4-19,
+        // D0212) instead of staying half-open. The write fails
+        // deterministically against a `max_write_buffer_size` smaller than one
+        // text frame (a 12+-byte frame against an 8-byte cap).
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta send-failure server");
+        let address = listener
+            .local_addr()
+            .expect("beta send-failure server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept beta send-failure socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("beta send-failure server handshake");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("beta send-failure client base");
+        let client = client(base_url);
+        let mut socket = client
+            .beta_responses()
+            .connect_with(
+                BetaResponsesWebSocketConfig::new()
+                    .write_buffer_bytes(1)
+                    .max_queued_write_bytes(8),
+            )
+            .await
+            .expect("connect beta WebSocket with a tiny write buffer");
+        match socket
+            .send_create(BetaCreateResponseRequest::new("gpt-test", "hello"))
+            .await
+        {
+            Err(Error::WebSocketTransport(reason)) => {
+                assert!(
+                    reason.to_lowercase().contains("buffer"),
+                    "expected a write-buffer failure, got {reason}"
+                );
+            }
+            unexpected => panic!("expected a beta send write failure, got {unexpected:?}"),
+        }
+        assert!(
+            socket.is_closed(),
+            "a failed send must retire the beta socket"
+        );
+        assert!(
+            socket
+                .recv()
+                .await
+                .expect("recv after the beta send failure")
+                .is_none(),
+            "a retired beta socket reports EOF on every later recv"
+        );
+        assert!(
+            matches!(
+                socket
+                    .send_create(BetaCreateResponseRequest::new("gpt-test", "again"))
+                    .await,
+                Err(Error::WebSocketProtocol(_))
+            ),
+            "a later beta send must report the closed socket"
+        );
     }
 
     /// Accepts one beta WebSocket and immediately closes it with a coded
