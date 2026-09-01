@@ -120,8 +120,9 @@ pub mod admin {
         AdminApiKey, AdminApiKeyError, AdminApiKeys, AdminAuditLogs, AdminAuthScope,
         AdminCertificates, AdminCheckpointPermissions, AdminClient, AdminClientBuilder,
         AdminClientOperationContract, AdminDataRetention, AdminGroups, AdminInvites,
-        AdminOperation, AdminProjects, AdminQuery, AdminRequest, AdminRequestEncoding,
-        AdminResponseMode, AdminRoles, AdminUsage, AdminUsers, operations,
+        AdminOperation, AdminProjectSpendAlerts, AdminProjectSpendLimits, AdminProjects,
+        AdminQuery, AdminRequest, AdminRequestEncoding, AdminResponseMode, AdminRoles,
+        AdminSpendAlerts, AdminSpendLimits, AdminUsage, AdminUsers, operations,
     };
     pub use openai_rs_types::admin::*;
 }

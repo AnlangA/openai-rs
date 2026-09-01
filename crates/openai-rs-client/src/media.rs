@@ -1594,6 +1594,42 @@ mod tests {
         assert!(!text.contains("null"));
     }
 
+    #[tokio::test]
+    async fn transcription_multipart_sends_empty_string_metadata_fields_verbatim() {
+        // D0163: openai-python's multipart serializer drops empty serialized
+        // primitives while openai-node sends them verbatim; this crate pins
+        // the node side, so an empty-string metadata field keeps its own
+        // (empty) part instead of being dropped like an explicit null.
+        let (client, captured) =
+            serve_once(JSON_MIME, Bytes::from_static(br#"{"text":"hello"}"#)).await;
+        let mut request = CreateTranscriptionRequest::new(
+            bytes_source(b"raw-audio", "meeting.wav", "audio/wav"),
+            "gpt-4o-transcribe",
+        );
+        request.metadata.language = Omittable::Value(String::new());
+        request.metadata.prompt = Omittable::Value(String::new());
+        let response = client
+            .audio()
+            .transcribe(request)
+            .await
+            .expect("transcription response");
+        assert!(matches!(response.body(), TranscriptionOutput::Json(_)));
+
+        let captured = captured.await.expect("captured transcription request");
+        let content_type = captured.content_type.expect("multipart content type");
+        assert!(content_type.starts_with("multipart/form-data; boundary="));
+        let text = String::from_utf8_lossy(&captured.body);
+        // Non-empty fields keep their encoding.
+        assert!(text.contains("name=\"model\"\r\n\r\ngpt-4o-transcribe"));
+        assert!(text.contains("name=\"file\"; filename=\"meeting.wav\""));
+        // Empty-string fields are still sent as named parts with empty
+        // bodies (header, blank line, empty value, closing CRLF).
+        assert!(text.contains("name=\"language\"\r\n\r\n\r\n"));
+        assert!(text.contains("name=\"prompt\"\r\n\r\n\r\n"));
+        assert!(text.contains("language"));
+        assert!(text.contains("prompt"));
+    }
+
     async fn speech_stream(client: &Client) -> MediaEventStream<SpeechStreamEvent> {
         client
             .audio()

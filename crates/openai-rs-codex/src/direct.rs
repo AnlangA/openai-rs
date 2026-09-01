@@ -35,7 +35,12 @@ pub enum DirectError {
     Random,
     #[error("direct Codex HTTP request failed: {0}")]
     Http(#[from] reqwest::Error),
-    #[error("direct Codex JSON codec failed: {0}")]
+    /// Neutral display (the D0206 app-server stance, synced to the direct
+    /// backend by 10-01): the wrapped `serde_json::Error` message can quote
+    /// payload fragments — a streamed SSE `data` frame, a keyring session, or
+    /// an auth response body — so only the category is shown; the source stays
+    /// reachable for handlers that want line/column diagnostics.
+    #[error("direct Codex JSON codec failed")]
     Json(#[from] serde_json::Error),
     #[error("OIDC token validation failed: {0}")]
     Jwt(String),
@@ -100,4 +105,37 @@ pub(crate) fn secure_equal(first: &[u8], second: &[u8]) -> bool {
     );
     let expected = ring::hmac::sign(&key, first);
     ring::hmac::verify(&key, second, expected.as_ref()).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+
+    use super::DirectError;
+
+    /// 10-01: the four `Json` construction points (streamed SSE `data` frames,
+    /// the Responses body decode, the auth body decode, and the keyring
+    /// session codec) all wrap the raw `serde_json::Error`, whose message
+    /// quotes payload fragments. The display must stay neutral — the D0206
+    /// app-server stance — while the source remains reachable for diagnostics.
+    #[test]
+    fn json_display_never_quotes_the_payload() {
+        let codec = serde_json::from_str::<u32>("\"direct-payload-literal\"")
+            .expect_err("serde_json must reject a string where a u32 is expected");
+        assert!(
+            codec.to_string().contains("direct-payload-literal"),
+            "the fixture must quote the payload so the leak assertion is meaningful"
+        );
+
+        let error = DirectError::Json(codec);
+        assert_eq!(error.to_string(), "direct Codex JSON codec failed");
+        assert!(
+            !error.to_string().contains("direct-payload-literal"),
+            "the payload literal must never reach the Display"
+        );
+        assert!(
+            error.source().is_some(),
+            "the serde_json source must stay reachable for diagnostics"
+        );
+    }
 }

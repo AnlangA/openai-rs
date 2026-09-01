@@ -541,8 +541,11 @@ pub(crate) fn websocket_request(
     Ok(request)
 }
 
-#[cfg(feature = "realtime")]
-fn validate_stream_id(encoded: &str) -> Result<(), Error> {
+/// Local pre-send guard shared by the GA and beta Responses WebSocket faces
+/// (10-03 deduplicated the two identical copies): every outbound event that
+/// carries a `stream_id` must be a 1-256 byte `[A-Za-z0-9_.-]` lane key, so a
+/// malformed lane is rejected before anything reaches the wire.
+pub(crate) fn validate_stream_id(encoded: &str) -> Result<(), Error> {
     let value = serde_json::from_str::<serde_json::Value>(encoded).map_err(Error::Encode)?;
     let Some(stream_id) = value.get("stream_id") else {
         return Ok(());
@@ -1460,6 +1463,101 @@ mod tests {
             .expect("a smaller event still sends after the local rejection");
         assert!(!socket.is_closed());
         socket.close().await.expect("close the healthy socket");
+    }
+
+    /// Accepts every TCP connection as a WebSocket and parks it open — the
+    /// fixture for send-side rejections, which never reach the peer.
+    async fn accepting_websocket_server() -> Client {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind accepting WebSocket server");
+        let address = listener
+            .local_addr()
+            .expect("accepting WebSocket server address");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut socket = accept_hdr_async(
+                        stream,
+                        |_request: &server::Request, response: server::Response| {
+                            Ok::<_, server::ErrorResponse>(response)
+                        },
+                    )
+                    .await
+                    .expect("accepting WebSocket server handshake");
+                    while socket.next().await.is_some() {}
+                });
+            }
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("accepting WebSocket client base");
+        Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("accepting WebSocket client")
+    }
+
+    /// Sends one `Unknown` client event carrying the given `stream_id` and
+    /// asserts it is rejected locally with `expected` while the healthy socket
+    /// stays open (nothing reached the wire).
+    async fn assert_stream_id_rejection(stream_id: Value, expected: &'static str) {
+        let client = accepting_websocket_server().await;
+        let mut socket = client
+            .responses()
+            .connect()
+            .await
+            .expect("connect the accepting WebSocket");
+        let event = ResponsesClientEvent::Unknown(
+            UnknownTaggedObject::from_value(json!({
+                "type": "future.client.event",
+                "stream_id": stream_id,
+            }))
+            .expect("unknown client event"),
+        );
+        match socket.send_event(event).await {
+            Err(Error::WebSocketProtocol(reason)) => assert_eq!(reason, expected),
+            unexpected => panic!("expected a stream_id rejection, got {unexpected:?}"),
+        }
+        assert!(
+            !socket.is_closed(),
+            "a local stream_id rejection must not retire the socket"
+        );
+        socket.close().await.expect("close the healthy socket");
+    }
+
+    /// 10-03: the empty-lane rejection branch of the shared pre-send guard,
+    /// exercised end-to-end through a verbatim `Unknown` event.
+    #[tokio::test]
+    async fn an_empty_stream_id_unknown_event_is_rejected_locally() {
+        assert_stream_id_rejection(json!(""), "stream_id must match ^[A-Za-z0-9_.-]{1,256}$").await;
+    }
+
+    /// 10-03: the over-long-lane rejection branch (a 257-byte key).
+    #[tokio::test]
+    async fn an_overlong_stream_id_unknown_event_is_rejected_locally() {
+        assert_stream_id_rejection(
+            json!("a".repeat(257)),
+            "stream_id must match ^[A-Za-z0-9_.-]{1,256}$",
+        )
+        .await;
+    }
+
+    /// 10-03: the illegal-character rejection branch (`/` is outside the
+    /// lane alphabet).
+    #[tokio::test]
+    async fn an_illegal_character_stream_id_unknown_event_is_rejected_locally() {
+        assert_stream_id_rejection(
+            json!("lane/1"),
+            "stream_id must match ^[A-Za-z0-9_.-]{1,256}$",
+        )
+        .await;
+    }
+
+    /// 10-03: the non-string rejection branch of the shared guard.
+    #[tokio::test]
+    async fn a_non_string_stream_id_unknown_event_is_rejected_locally() {
+        assert_stream_id_rejection(json!(7), "stream_id must be a string").await;
     }
 
     #[tokio::test]

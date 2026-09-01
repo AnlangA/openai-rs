@@ -4953,7 +4953,7 @@ mod tests {
 
     /// Every `Omittable<Nullable<T>>` body property, each of which must keep
     /// an explicit wire `null` distinct from omission.
-    const CHAT_CREATE_NULLABLE_FIELDS: [&str; 23] = [
+    const CHAT_CREATE_NULLABLE_FIELDS: [&str; 24] = [
         "audio",
         "frequency_penalty",
         "logit_bias",
@@ -4964,6 +4964,7 @@ mod tests {
         "modalities",
         "moderation",
         "n",
+        "prediction",
         "presence_penalty",
         "prompt_cache_key",
         "prompt_cache_retention",
@@ -5107,6 +5108,7 @@ mod tests {
         body.modalities = Omittable::Value(Nullable::Null);
         body.moderation = Omittable::Value(Nullable::Null);
         body.n = Omittable::Value(Nullable::Null);
+        body.prediction = Omittable::Value(Nullable::Null);
         body.presence_penalty = Omittable::Value(Nullable::Null);
         body.prompt_cache_key = Omittable::Value(Nullable::Null);
         body.prompt_cache_retention = Omittable::Value(Nullable::Null);
@@ -5139,6 +5141,41 @@ mod tests {
             value.clone(),
         ));
         assert_eq!(ok(serde_json::to_value(decoded)), value);
+    }
+
+    #[test]
+    fn chat_create_prediction_keeps_all_three_wire_states() {
+        // 10-06: `prediction` is `Omittable<Nullable<ChatPredictionContent>>`;
+        // omission, explicit null, and a populated value must stay
+        // distinguishable on the wire.
+        let omitted =
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"));
+        let omitted_value = ok(serde_json::to_value(&omitted));
+        assert!(
+            !omitted_value
+                .as_object()
+                .expect("object")
+                .contains_key("prediction"),
+            "omitted prediction must not serialize a key"
+        );
+
+        let mut nulled =
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"));
+        nulled.body.prediction = Omittable::Value(Nullable::Null);
+        let null_value = ok(serde_json::to_value(&nulled));
+        assert_eq!(null_value["prediction"], Value::Null);
+
+        let mut populated =
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"));
+        populated.body.prediction =
+            Omittable::Value(Nullable::Value(ChatPredictionContent::parts([
+                ChatTextContentPart::new("It is sunny"),
+            ])));
+        let populated_value = ok(serde_json::to_value(&populated));
+        assert_eq!(
+            populated_value["prediction"]["content"][0]["text"],
+            "It is sunny"
+        );
     }
 
     #[test]

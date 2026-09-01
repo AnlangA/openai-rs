@@ -28,6 +28,33 @@
 //! carrying the frozen `tool_count`. Field naming deliberately keeps this
 //! crate's flat snake_case style (`call_id`, not OTel-dotted names) instead
 //! of mirroring the client crate's span namespace.
+//!
+//! # HTTP transport proxy posture (10-10)
+//!
+//! The streamable-HTTP transport (`http-rustls` / `http-native-tls`) builds
+//! its own `reqwest` 0.13 client inside `rmcp`, and that client keeps
+//! `reqwest`'s default system-proxy behavior: the `HTTP_PROXY`,
+//! `HTTPS_PROXY`, and `ALL_PROXY` environment variables (plus `NO_PROXY`)
+//! are honored at client construction, so where MCP traffic is routed can be
+//! changed by the environment without any code change. This is deliberately
+//! different from `openai-rs-client`'s explicit proxy posture — the OpenAI
+//! client never reads environment proxies and stays direct unless a single
+//! proxy was declared on its builder. The two crates also ride separate
+//! `reqwest` stacks (0.13 here, 0.12 in the client), so one crate's builder
+//! settings cannot influence the other.
+//!
+//! With the `auth` feature enabled, MCP OAuth traffic — authorization server
+//! metadata discovery, client registration, token exchange, and the bearer
+//! token attached to every authenticated MCP request — crosses this same
+//! environment-influenced hop, so MCP credentials are routed wherever the
+//! environment's proxy variables point.
+//!
+//! Mitigations, in order of strength: prefer the `stdio` transport, which has
+//! no HTTP hop and is unaffected; construct the HTTP transport with
+//! `StreamableHttpClientTransport::with_client` and pass a `reqwest` client
+//! built with `no_proxy()` (or one explicit proxy) to restore the
+//! deterministic client-crate posture; or scrub the proxy variables from the
+//! environment before the transport is constructed.
 
 mod arguments;
 mod bridge;

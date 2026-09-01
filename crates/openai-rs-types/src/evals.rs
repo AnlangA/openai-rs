@@ -623,13 +623,15 @@ impl From<PythonGraderParam> for PythonGrader {
 /// Sampling controls attached to a Completions run data source.
 ///
 /// Mirrors the pinned `CreateEvalCompletionsRunDataSource.sampling_params`
-/// object. Every pinned property on this host is non-null, so explicit nulls
-/// are not expressible here; the grader counterpart
-/// [`EvalGraderSamplingParams`] is the anyOf-null host.
+/// object. `reasoning_effort` is pinned as an anyOf[enum, null] shape (both
+/// official SDKs type it nullable), so an explicit null stays expressible;
+/// every other pinned property on this host is non-null, and the grader
+/// counterpart [`EvalGraderSamplingParams`] additionally nulls the numeric
+/// controls.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EvalCompletionsSamplingParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    reasoning_effort: Omittable<responses::ReasoningEffort>,
+    reasoning_effort: Omittable<Nullable<responses::ReasoningEffort>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     temperature: Omittable<f64>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -654,7 +656,15 @@ impl EvalCompletionsSamplingParams {
     /// Sets reasoning effort.
     #[must_use]
     pub fn reasoning_effort(mut self, value: responses::ReasoningEffort) -> Self {
-        self.reasoning_effort = Omittable::Value(value);
+        self.reasoning_effort = Omittable::Value(Nullable::Value(value));
+        self
+    }
+
+    /// Sends official `reasoning_effort: null` on the Completions run
+    /// sampling-params object.
+    #[must_use]
+    pub fn reasoning_effort_null(mut self) -> Self {
+        self.reasoning_effort = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -711,12 +721,14 @@ impl EvalCompletionsSamplingParams {
 ///
 /// Mirrors the pinned `CreateEvalResponsesRunDataSource.sampling_params`
 /// object: the same domain as [`EvalCompletionsSamplingParams`] with the
-/// Responses-style `text` configuration replacing `response_format`. Every
-/// pinned property on this host is non-null.
+/// Responses-style `text` configuration replacing `response_format`.
+/// `reasoning_effort` is pinned as an anyOf[enum, null] shape (both official
+/// SDKs type it nullable); every other pinned property on this host is
+/// non-null.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EvalResponsesSamplingParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    reasoning_effort: Omittable<responses::ReasoningEffort>,
+    reasoning_effort: Omittable<Nullable<responses::ReasoningEffort>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     temperature: Omittable<f64>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -741,7 +753,15 @@ impl EvalResponsesSamplingParams {
     /// Sets reasoning effort.
     #[must_use]
     pub fn reasoning_effort(mut self, value: responses::ReasoningEffort) -> Self {
-        self.reasoning_effort = Omittable::Value(value);
+        self.reasoning_effort = Omittable::Value(Nullable::Value(value));
+        self
+    }
+
+    /// Sends official `reasoning_effort: null` on the Responses run
+    /// sampling-params object.
+    #[must_use]
+    pub fn reasoning_effort_null(mut self) -> Self {
+        self.reasoning_effort = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -795,9 +815,10 @@ impl EvalResponsesSamplingParams {
 /// Sampling controls attached to a model grader.
 ///
 /// Mirrors the pinned `GraderScoreModel.sampling_params` object: `seed`,
-/// `top_p`, `temperature`, and the `max_completions_tokens` field spelling are
-/// official anyOf-null shapes, so explicit nulls stay expressible on this
-/// host. The token cap uses the grader spelling, not the run
+/// `top_p`, `temperature`, the `max_completions_tokens` field spelling, and
+/// `reasoning_effort` (anyOf[enum, null] in the pin and both official SDKs)
+/// are official anyOf-null shapes, so explicit nulls stay expressible on
+/// this host. The token cap uses the grader spelling, not the run
 /// `max_completion_tokens` one.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EvalGraderSamplingParams {
@@ -810,7 +831,7 @@ pub struct EvalGraderSamplingParams {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     max_completions_tokens: Omittable<Nullable<u64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    reasoning_effort: Omittable<responses::ReasoningEffort>,
+    reasoning_effort: Omittable<Nullable<responses::ReasoningEffort>>,
 }
 
 impl EvalGraderSamplingParams {
@@ -882,7 +903,15 @@ impl EvalGraderSamplingParams {
     /// Sets reasoning effort.
     #[must_use]
     pub fn reasoning_effort(mut self, value: responses::ReasoningEffort) -> Self {
-        self.reasoning_effort = Omittable::Value(value);
+        self.reasoning_effort = Omittable::Value(Nullable::Value(value));
+        self
+    }
+
+    /// Sends official `reasoning_effort: null` on the grader
+    /// sampling-params object.
+    #[must_use]
+    pub fn reasoning_effort_null(mut self) -> Self {
+        self.reasoning_effort = Omittable::Value(Nullable::Null);
         self
     }
 
@@ -4400,5 +4429,97 @@ mod tests {
         }))
         .expect("official GET /evals/{eval_id}/runs list null");
         assert_eq!(list.data().len(), 1);
+    }
+
+    #[test]
+    fn sampling_params_reasoning_effort_null_round_trips_on_every_host() {
+        // 10-05: the pin types `reasoning_effort` as anyOf[enum, null] on all
+        // three sampling-params hosts (both official SDKs agree), so a
+        // server echo of null must decode instead of breaking the run.
+        let completions = EvalCompletionsSamplingParams::new().reasoning_effort_null();
+        let responses_host = EvalResponsesSamplingParams::new().reasoning_effort_null();
+        let grader = EvalGraderSamplingParams::new().reasoning_effort_null();
+        for (label, value) in [
+            (
+                "completions",
+                serde_json::to_value(&completions).expect("encode"),
+            ),
+            (
+                "responses",
+                serde_json::to_value(&responses_host).expect("encode"),
+            ),
+            ("grader", serde_json::to_value(&grader).expect("encode")),
+        ] {
+            assert_eq!(value, json!({"reasoning_effort": null}), "{label}");
+        }
+        assert_eq!(
+            serde_json::from_value::<EvalCompletionsSamplingParams>(
+                serde_json::to_value(&completions).expect("encode")
+            )
+            .expect("decode completions null"),
+            completions
+        );
+        assert_eq!(
+            serde_json::from_value::<EvalResponsesSamplingParams>(
+                serde_json::to_value(&responses_host).expect("encode")
+            )
+            .expect("decode responses null"),
+            responses_host
+        );
+        assert_eq!(
+            serde_json::from_value::<EvalGraderSamplingParams>(
+                serde_json::to_value(&grader).expect("encode")
+            )
+            .expect("decode grader null"),
+            grader
+        );
+        // The grader conversion keeps the explicit null alongside a value.
+        assert_eq!(
+            serde_json::to_value(EvalGraderSamplingParams::from(
+                EvalCompletionsSamplingParams::new()
+                    .reasoning_effort_null()
+                    .temperature(0.5)
+            ))
+            .expect("encode converted grader null"),
+            json!({"temperature": 0.5, "reasoning_effort": null})
+        );
+
+        // The run resource reuses the same DTO inside `data_source`, so the
+        // echoed null decodes through EvalRun itself.
+        let list = serde_json::from_value::<EvalRunList>(json!({
+            "object": "list",
+            "data": [{
+                "object": "eval.run",
+                "id": "evalrun_1",
+                "eval_id": "eval_1",
+                "status": "completed",
+                "model": "o3-mini",
+                "name": "run-1",
+                "created_at": 1_740_110_812_i64,
+                "report_url": "https://platform.openai.com/evaluations/eval_1",
+                "result_counts": {"total": 0, "errored": 0, "failed": 0, "passed": 0},
+                "per_model_usage": null,
+                "per_testing_criteria_results": null,
+                "data_source": {
+                    "type": "completions",
+                    "source": {"type": "file_id", "id": "file_abc"},
+                    "model": "o3-mini",
+                    "sampling_params": {"reasoning_effort": null, "temperature": 0.5}
+                },
+                "metadata": null,
+                "error": null
+            }],
+            "first_id": "evalrun_1",
+            "last_id": "evalrun_1",
+            "has_more": false
+        }))
+        .expect("run echo with reasoning_effort null decodes");
+        let EvalRunDataSource::Completions(source) = &list.data()[0].data_source else {
+            panic!("completions data source must decode");
+        };
+        assert_eq!(
+            serde_json::to_value(source).expect("re-encode source")["sampling_params"],
+            json!({"reasoning_effort": null, "temperature": 0.5})
+        );
     }
 }

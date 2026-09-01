@@ -963,6 +963,77 @@ mod tests {
     }
 
     #[test]
+    fn non_object_root_schemas_are_rejected() {
+        // 10-08: an array or scalar root passes the walk untouched (there
+        // are no keywords to rewrite) but still fails the strict-mode
+        // object-root requirement.
+        let mut array_root = json!({
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 4
+        });
+        assert!(matches!(
+            normalize_strict_schema(&mut array_root),
+            Err(StructuredError::RootMustBeObject)
+        ));
+        let mut scalar_root = json!({"type": "string"});
+        assert!(matches!(
+            normalize_strict_schema(&mut scalar_root),
+            Err(StructuredError::RootMustBeObject)
+        ));
+        let mut literal_root = json!(42);
+        assert!(matches!(
+            normalize_strict_schema(&mut literal_root),
+            Err(StructuredError::RootMustBeObject)
+        ));
+    }
+
+    #[test]
+    fn refs_resolving_to_non_object_targets_are_rejected_with_path() {
+        // 10-08: the pointer resolves inside the document but the target
+        // itself is not a JSON object (a literal array or boolean), so there
+        // is nothing to inline under the sibling keys; the failure keeps
+        // the offending node's path and reference.
+        let mut schema = json!({
+            "type": "object",
+            "required": ["tags"],
+            "properties": {
+                "tags": {
+                    "$ref": "#/$defs/TagList",
+                    "description": "inline an array-valued definition"
+                }
+            },
+            "$defs": {"TagList": ["tag-a", "tag-b"]}
+        });
+        let error = normalize_strict_schema(&mut schema).expect_err("non-object ref must fail");
+        assert!(matches!(
+            &error,
+            StructuredError::UnresolvableRef { path, reference }
+                if path == "#/properties/tags/$ref" && reference == "#/$defs/TagList"
+        ));
+
+        // A boolean-valued definition fails the same way at its own node.
+        let mut schema = json!({
+            "type": "object",
+            "required": ["constant"],
+            "properties": {
+                "constant": {
+                    "$ref": "#/$defs/Const",
+                    "description": "inline a boolean-valued definition"
+                }
+            },
+            "$defs": {"Const": true}
+        });
+        let error = normalize_strict_schema(&mut schema).expect_err("boolean ref must fail");
+        assert!(matches!(
+            &error,
+            StructuredError::UnresolvableRef { path, reference }
+                if path == "#/properties/constant/$ref" && reference == "#/$defs/Const"
+        ));
+    }
+
+    #[test]
     fn sibling_keys_win_over_the_inlined_reference() {
         let mut schema = json!({
             "type": "object",

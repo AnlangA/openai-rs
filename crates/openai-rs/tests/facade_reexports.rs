@@ -120,6 +120,40 @@ fn admin_checkpoint_permissions_is_nameable_through_the_facade() {
     assert!(format!("{permissions:?}").contains("AdminCheckpointPermissions"));
 }
 
+/// The four round-8 spend resource clients (org and project scopes for both
+/// alerts and limits) were missing from the facade's admin module (issue
+/// 10-02, same family as 2-34): facade-only users could not name the handles
+/// returned by `AdminClient::spend_alerts`/`spend_limits`. This test keeps
+/// all four types nameable and their accessor/method paths compile-checked.
+#[cfg(all(feature = "admin", any(feature = "rustls-tls", feature = "native-tls")))]
+#[test]
+fn admin_spend_resources_are_nameable_through_the_facade() {
+    use openai_rs::admin::{
+        AdminApiKey, AdminClient, AdminProjectSpendAlerts, AdminProjectSpendLimits,
+        AdminSpendAlerts, AdminSpendLimits,
+    };
+
+    // Async methods cannot coerce to `fn` pointers; referencing the paths is
+    // enough to keep the facade re-export type-checked.
+    let _list = AdminSpendAlerts::list;
+    let _create = AdminSpendAlerts::create;
+    let _get = AdminSpendLimits::get;
+    let _delete = AdminSpendLimits::delete;
+    let _project_list = AdminProjectSpendAlerts::list;
+    let _project_update = AdminProjectSpendLimits::update;
+
+    let api_key = AdminApiKey::new("admin-facade-reexport-check").expect("valid admin key");
+    let client = AdminClient::new(api_key).expect("admin client with secure defaults");
+    let alerts = client.spend_alerts();
+    assert!(format!("{alerts:?}").contains("AdminSpendAlerts"));
+    let project_alerts = alerts.project("proj_1");
+    assert!(format!("{project_alerts:?}").contains("AdminProjectSpendAlerts"));
+    let limits = client.spend_limits();
+    assert!(format!("{limits:?}").contains("AdminSpendLimits"));
+    let project_limits = limits.project("proj_1");
+    assert!(format!("{project_limits:?}").contains("AdminProjectSpendLimits"));
+}
+
 /// The admin operation machinery (`AdminOperation`/`AdminQuery` trait pair,
 /// their supporting enums, `AdminClientOperationContract`, and both manifest
 /// constants) used to be reachable only by depending on `openai-rs-client`

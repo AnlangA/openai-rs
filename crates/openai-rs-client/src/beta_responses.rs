@@ -39,7 +39,7 @@ use crate::{
     responses::DeleteResponseResult,
     responses_websocket::{
         connect_socket, derive_websocket_url, is_unauthorized_websocket_error, map_websocket_error,
-        retryable_connect_error, websocket_connector, websocket_request,
+        retryable_connect_error, validate_stream_id, websocket_connector, websocket_request,
     },
     sse::{SseDispatch, SseEndpointPolicy, SseFrame, SseLimits, SseStreamDecoder, SseStreamState},
     transport::{PathSegment, deserialize_json},
@@ -1032,27 +1032,6 @@ fn beta_websocket_url(base_url: &Url) -> Result<Url, Error> {
     derive_websocket_url(base_url, "responses", "beta Responses")
 }
 
-fn validate_stream_id(encoded: &str) -> Result<(), Error> {
-    let value = serde_json::from_str::<serde_json::Value>(encoded).map_err(Error::Encode)?;
-    let Some(stream_id) = value.get("stream_id") else {
-        return Ok(());
-    };
-    let Some(stream_id) = stream_id.as_str() else {
-        return Err(Error::WebSocketProtocol("stream_id must be a string"));
-    };
-    if stream_id.is_empty()
-        || stream_id.len() > 256
-        || !stream_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
-    {
-        return Err(Error::WebSocketProtocol(
-            "stream_id must match ^[A-Za-z0-9_.-]{1,256}$",
-        ));
-    }
-    Ok(())
-}
-
 fn response_path(response_id: &ResponseId) -> Result<[PathSegment<'_>; 2], Error> {
     Ok([
         PathSegment::literal("responses"),
@@ -1220,6 +1199,7 @@ mod tests {
         BetaMultiAgentCallOutputParam, BetaMultiAgentConfig, BetaMultiAgentOutputText,
         BetaResponseIncludable, BetaResponseInputItem, BetaResponseItemOrder,
     };
+    use openai_rs_types::kernel::UnknownTaggedObject;
     use serde_json::{Value, json};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -1974,6 +1954,74 @@ mod tests {
         assert_eq!(sent["input"][0]["type"], "multi_agent_call_output");
 
         socket.close().await.expect("close beta WebSocket");
+    }
+
+    /// 10-03: the beta face now delegates its pre-send lane guard to the GA
+    /// copy in `responses_websocket` (this module's duplicate validator was
+    /// removed), so every rejection branch must still fire before anything
+    /// reaches the wire — exercised through verbatim `Unknown` events so
+    /// arbitrary `stream_id` shapes reach the encoder.
+    #[tokio::test]
+    async fn beta_websocket_rejects_malformed_stream_id_unknown_events() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta accepting server");
+        let address = listener
+            .local_addr()
+            .expect("beta accepting server address");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut socket = accept_hdr_async(
+                        stream,
+                        |_request: &server::Request, response: server::Response| {
+                            Ok::<_, server::ErrorResponse>(response)
+                        },
+                    )
+                    .await
+                    .expect("beta accepting server handshake");
+                    while socket.next().await.is_some() {}
+                });
+            }
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("beta accepting client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("beta accepting client");
+        let mut socket = client
+            .beta_responses()
+            .connect()
+            .await
+            .expect("connect the accepting beta WebSocket");
+
+        let lane_pattern = "stream_id must match ^[A-Za-z0-9_.-]{1,256}$";
+        let cases: [(Value, &str); 4] = [
+            (json!(""), lane_pattern),
+            (json!("a".repeat(257)), lane_pattern),
+            (json!("lane/1"), lane_pattern),
+            (json!(7), "stream_id must be a string"),
+        ];
+        for (stream_id, expected) in cases {
+            let event = BetaResponsesClientEvent::Unknown(
+                UnknownTaggedObject::from_value(json!({
+                    "type": "future.client.event",
+                    "stream_id": stream_id,
+                }))
+                .expect("unknown beta client event"),
+            );
+            match socket.send_event(event).await {
+                Err(Error::WebSocketProtocol(reason)) => assert_eq!(reason, expected),
+                unexpected => panic!("expected a beta stream_id rejection, got {unexpected:?}"),
+            }
+            assert!(
+                !socket.is_closed(),
+                "a local beta stream_id rejection must not retire the socket"
+            );
+        }
+        socket.close().await.expect("close the healthy beta socket");
     }
 
     /// 8-19: the lane-routed `response.create` face mirrors the GA persistent

@@ -3086,6 +3086,48 @@ impl BetaResponse {
         &self.output
     }
 
+    /// Concatenates every message text part in wire order.
+    ///
+    /// GA-parity convenience accessor (10-04) mirroring
+    /// [`crate::responses::Response::output_text`]: stable
+    /// [`ResponseOutputItem::Message`] items contribute their `output_text`
+    /// parts, and the beta-only [`BetaAgentMessage`] items contribute their
+    /// plaintext content (`text` / `output_text` / `input_text`). Reasoning
+    /// summaries, reasoning text, refusals, and non-text content stay
+    /// excluded, matching the stable selection; multi-agent call items carry
+    /// no message text.
+    #[must_use]
+    pub fn output_text(&self) -> String {
+        let mut text = String::new();
+        for item in &self.output {
+            match item {
+                BetaResponseOutputItem::Stable(item) => {
+                    if let ResponseOutputItem::Message(message) = item.core() {
+                        text.extend(message.text_parts());
+                    }
+                }
+                BetaResponseOutputItem::AgentMessage(message) => {
+                    text.extend(message.content().iter().filter_map(|part| match part {
+                        BetaAgentMessageContent::Text(part) => Some(part.text()),
+                        BetaAgentMessageContent::OutputText(part) => Some(part.text()),
+                        BetaAgentMessageContent::PlainText(part) => Some(part.text()),
+                        BetaAgentMessageContent::Image(_)
+                        | BetaAgentMessageContent::Encrypted(_)
+                        | BetaAgentMessageContent::SummaryText(_)
+                        | BetaAgentMessageContent::ReasoningText(_)
+                        | BetaAgentMessageContent::Refusal(_)
+                        | BetaAgentMessageContent::ComputerScreenshot(_)
+                        | BetaAgentMessageContent::File(_)
+                        | BetaAgentMessageContent::Unknown(_) => None,
+                    }));
+                }
+                BetaResponseOutputItem::MultiAgentCall(_)
+                | BetaResponseOutputItem::MultiAgentCallOutput(_) => {}
+            }
+        }
+        text
+    }
+
     /// Returns the lifecycle status when present.
     #[must_use]
     pub fn status(&self) -> Option<&ResponseStatus> {
@@ -4874,6 +4916,63 @@ mod tests {
             serde_json::from_value(response_fixture(json!([]))).expect("decode healthy response");
         assert_eq!(healthy.error(), None);
         assert_eq!(healthy.incomplete_details(), None);
+    }
+
+    #[test]
+    fn beta_response_output_text_aggregates_stable_and_agent_message_text() {
+        // 10-04: GA-parity aggregation also reaches the beta-only
+        // AgentMessage text, in wire order; reasoning summaries,
+        // reasoning text, and multi-agent calls contribute nothing.
+        let fixture = response_fixture(json!([
+            {
+                "type": "agent_message",
+                "id": "item_agent_1",
+                "author": "root/research",
+                "recipient": "root",
+                "content": [
+                    {"type": "text", "text": "agent plain "},
+                    {"type": "summary_text", "text": "hidden summary "},
+                    {"type": "input_text", "text": "agent input "},
+                    {"type": "output_text", "text": "agent output"}
+                ]
+            },
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "stable one "},
+                    {"type": "reasoning_text", "text": "hidden reasoning "},
+                    {"type": "output_text", "text": "stable two"}
+                ]
+            },
+            {
+                "type": "multi_agent_call",
+                "action": "list_agents",
+                "arguments": "{}",
+                "call_id": "call_1",
+                "id": "item_call_1"
+            }
+        ]));
+        let response: BetaResponse =
+            serde_json::from_value(fixture.clone()).expect("decode beta response");
+        assert_eq!(
+            response.output_text(),
+            "agent plain agent input agent outputstable one stable two"
+        );
+        assert!(matches!(
+            response.output(),
+            [
+                BetaResponseOutputItem::AgentMessage(_),
+                BetaResponseOutputItem::Stable(_),
+                BetaResponseOutputItem::MultiAgentCall(_)
+            ]
+        ));
+
+        let empty: BetaResponse =
+            serde_json::from_value(response_fixture(json!([]))).expect("decode empty response");
+        assert_eq!(empty.output_text(), "");
     }
 
     #[test]
