@@ -72,7 +72,7 @@ impl Realtime {
     /// Opens a GA Realtime WebSocket for one model. The URL is derived from the
     /// configured Platform base and cannot be supplied by the caller. The
     /// handshake itself is single-shot and never retried; see
-    /// [`RealtimeWebSocket::connect`] for the rationale.
+    /// `RealtimeWebSocket::connect` for the rationale.
     pub async fn connect(&self, model: impl Into<ModelId>) -> Result<RealtimeWebSocket, Error> {
         self.connect_with(model, RealtimeWebSocketConfig::default())
             .await

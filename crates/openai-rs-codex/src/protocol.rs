@@ -508,7 +508,9 @@ openai_rs_types::open_string_enum! {
 /// `v2/AskForApproval` union. The keys stay snake_case exactly as pinned
 /// (`mcp_elicitations`, `rules`, `sandbox_approval` required;
 /// `request_permissions`, `skill_approval` optional, defaulting to `false`
-/// on the app-server side when omitted).
+/// on the app-server side when omitted). Future sub-keys a later app-server
+/// adds inside this known branch stay in [`GranularAskForApproval::extra`]
+/// and round-trip losslessly (17-O-1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GranularAskForApproval {
     pub mcp_elicitations: bool,
@@ -518,6 +520,9 @@ pub struct GranularAskForApproval {
     pub sandbox_approval: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_approval: Option<bool>,
+    /// Future branch properties, retained losslessly (17-O-1).
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 impl GranularAskForApproval {
@@ -531,6 +536,7 @@ impl GranularAskForApproval {
             rules,
             sandbox_approval,
             skill_approval: None,
+            extra: serde_json::Map::new(),
         }
     }
 
@@ -712,17 +718,28 @@ openai_rs_types::open_string_enum! {
 /// tag whose sub-settings no longer match the pinned shape stays verbatim in
 /// [`SandboxPolicy::Unknown`] instead of failing the surrounding response.
 /// The union therefore needs hand-written serde impls; the four branch bodies
-/// are buffered through the same [`serialize_tagged_branch`] /
-/// [`decode_tagged_branch`] helpers the thread-item union uses.
+/// are buffered through the same `serialize_tagged_branch` /
+/// `decode_tagged_branch` helpers the thread-item union uses, and each known
+/// branch carries a flatten `extra` map so a pin-legal additive sub-key on a
+/// known branch round-trips losslessly (17-O-1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SandboxPolicy {
-    /// Full access, no sandboxing; carries no sub-settings.
-    DangerFullAccess,
+    /// Full access, no sandboxing; carries no pinned sub-settings.
+    DangerFullAccess {
+        /// Future branch properties, retained losslessly (17-O-1).
+        extra: serde_json::Map<String, Value>,
+    },
     /// Read-only filesystem view of the host.
-    ReadOnly { network_access: Option<bool> },
+    ReadOnly {
+        network_access: Option<bool>,
+        /// Future branch properties, retained losslessly (17-O-1).
+        extra: serde_json::Map<String, Value>,
+    },
     /// Sandbox enforcement delegated to an external sandbox implementation.
     ExternalSandbox {
         network_access: Option<NetworkAccess>,
+        /// Future branch properties, retained losslessly (17-O-1).
+        extra: serde_json::Map<String, Value>,
     },
     /// Writable workspace plus explicit writable roots.
     WorkspaceWrite {
@@ -730,9 +747,20 @@ pub enum SandboxPolicy {
         network_access: Option<bool>,
         exclude_slash_tmp: Option<bool>,
         exclude_tmpdir_env_var: Option<bool>,
+        /// Future branch properties, retained losslessly (17-O-1).
+        extra: serde_json::Map<String, Value>,
     },
     /// A branch this crate has not modelled; the payload stays verbatim.
     Unknown(Value),
+}
+
+/// Branch body of the pinned `dangerFullAccess` sandbox policy: the pin names
+/// no sub-settings, so the body only carries unpinned future keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct DangerFullAccessSandboxPolicyBranch {
+    /// Future branch properties, retained losslessly (17-O-1).
+    #[serde(default, flatten)]
+    extra: serde_json::Map<String, Value>,
 }
 
 /// Branch body of the pinned `readOnly` sandbox policy.
@@ -741,6 +769,9 @@ pub enum SandboxPolicy {
 struct ReadOnlySandboxPolicyBranch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     network_access: Option<bool>,
+    /// Future branch properties, retained losslessly (17-O-1).
+    #[serde(default, flatten)]
+    extra: serde_json::Map<String, Value>,
 }
 
 /// Branch body of the pinned `externalSandbox` sandbox policy.
@@ -749,6 +780,9 @@ struct ReadOnlySandboxPolicyBranch {
 struct ExternalSandboxSandboxPolicyBranch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     network_access: Option<NetworkAccess>,
+    /// Future branch properties, retained losslessly (17-O-1).
+    #[serde(default, flatten)]
+    extra: serde_json::Map<String, Value>,
 }
 
 /// Branch body of the pinned `workspaceWrite` sandbox policy.
@@ -763,6 +797,9 @@ struct WorkspaceWriteSandboxPolicyBranch {
     exclude_slash_tmp: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exclude_tmpdir_env_var: Option<bool>,
+    /// Future branch properties, retained losslessly (17-O-1).
+    #[serde(default, flatten)]
+    extra: serde_json::Map<String, Value>,
 }
 
 impl Serialize for SandboxPolicy {
@@ -771,22 +808,34 @@ impl Serialize for SandboxPolicy {
         S: serde::Serializer,
     {
         match self {
-            // `dangerFullAccess` carries no sub-settings, so the branch body
-            // is an empty object that only collects the tag.
-            Self::DangerFullAccess => {
-                serialize_tagged_branch("dangerFullAccess", &serde_json::Map::new(), serializer)
-            }
-            Self::ReadOnly { network_access } => serialize_tagged_branch(
-                "readOnly",
-                &ReadOnlySandboxPolicyBranch {
-                    network_access: *network_access,
+            // `dangerFullAccess` pins no sub-settings, so an empty extra map
+            // makes the branch body an empty object that only collects the tag.
+            Self::DangerFullAccess { extra } => serialize_tagged_branch(
+                "dangerFullAccess",
+                &DangerFullAccessSandboxPolicyBranch {
+                    extra: extra.clone(),
                 },
                 serializer,
             ),
-            Self::ExternalSandbox { network_access } => serialize_tagged_branch(
+            Self::ReadOnly {
+                network_access,
+                extra,
+            } => serialize_tagged_branch(
+                "readOnly",
+                &ReadOnlySandboxPolicyBranch {
+                    network_access: *network_access,
+                    extra: extra.clone(),
+                },
+                serializer,
+            ),
+            Self::ExternalSandbox {
+                network_access,
+                extra,
+            } => serialize_tagged_branch(
                 "externalSandbox",
                 &ExternalSandboxSandboxPolicyBranch {
                     network_access: network_access.clone(),
+                    extra: extra.clone(),
                 },
                 serializer,
             ),
@@ -795,6 +844,7 @@ impl Serialize for SandboxPolicy {
                 network_access,
                 exclude_slash_tmp,
                 exclude_tmpdir_env_var,
+                extra,
             } => serialize_tagged_branch(
                 "workspaceWrite",
                 &WorkspaceWriteSandboxPolicyBranch {
@@ -802,6 +852,7 @@ impl Serialize for SandboxPolicy {
                     network_access: *network_access,
                     exclude_slash_tmp: *exclude_slash_tmp,
                     exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                    extra: extra.clone(),
                 },
                 serializer,
             ),
@@ -820,16 +871,24 @@ impl<'de> Deserialize<'de> for SandboxPolicy {
         // unrecognized tag it stays verbatim in the Unknown variant.
         let tag = value.get("type").and_then(Value::as_str).map(str::to_owned);
         let decoded = match tag.as_deref() {
-            Some("dangerFullAccess") => Ok(Self::DangerFullAccess),
+            Some("dangerFullAccess") => {
+                decode_tagged_branch::<DangerFullAccessSandboxPolicyBranch>(value.clone()).map(
+                    |branch| Self::DangerFullAccess {
+                        extra: branch.extra,
+                    },
+                )
+            }
             Some("readOnly") => decode_tagged_branch::<ReadOnlySandboxPolicyBranch>(value.clone())
                 .map(|branch| Self::ReadOnly {
                     network_access: branch.network_access,
+                    extra: branch.extra,
                 }),
             Some("externalSandbox") => decode_tagged_branch::<ExternalSandboxSandboxPolicyBranch>(
                 value.clone(),
             )
             .map(|branch| Self::ExternalSandbox {
                 network_access: branch.network_access,
+                extra: branch.extra,
             }),
             Some("workspaceWrite") => decode_tagged_branch::<WorkspaceWriteSandboxPolicyBranch>(
                 value.clone(),
@@ -839,6 +898,7 @@ impl<'de> Deserialize<'de> for SandboxPolicy {
                 network_access: branch.network_access,
                 exclude_slash_tmp: branch.exclude_slash_tmp,
                 exclude_tmpdir_env_var: branch.exclude_tmpdir_env_var,
+                extra: branch.extra,
             }),
             _ => return Ok(Self::Unknown(value)),
         };
@@ -1334,6 +1394,12 @@ pub struct Thread {
     /// classifications stay verbatim inside [`ThreadSourceKind::Unknown`].
     #[serde(default)]
     pub thread_source: Option<ThreadSourceKind>,
+    /// Version of the CLI that created the thread. `#/definitions/v2/Thread`
+    /// requires `cliVersion` as a plain string; kept Option-wrapped so a
+    /// payload that omits it still decodes (same decode-tolerance style as
+    /// the other pinned required keys, D0267).
+    #[serde(default)]
+    pub cli_version: Option<String>,
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -1351,7 +1417,8 @@ redacted_extra_debug!(Thread {
     turns,
     status,
     source,
-    thread_source
+    thread_source,
+    cli_version
 });
 
 /// Response payload of `thread/start`.
@@ -3278,7 +3345,9 @@ mod tests {
             summary: Some(ReasoningSummary::Auto),
             personality: Some(Personality::Friendly),
             output_schema: Some(json!({"type": "object"})),
-            sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+            sandbox_policy: Some(SandboxPolicy::DangerFullAccess {
+                extra: serde_json::Map::new(),
+            }),
             approval_policy: Some(AskForApproval::Mode(AskForApprovalMode::Never)),
             approvals_reviewer: Some(ApprovalsReviewer::User),
             service_tier: Some("flex".to_owned()),
@@ -4263,6 +4332,7 @@ mod tests {
                 "status": {"type": "active", "activeFlags": ["waitingOnApproval", "waitingOnUserInput"]},
                 "source": "cli",
                 "threadSource": "subAgentThreadSpawn",
+                "cliVersion": "0.42.0",
                 "futureThreadField": true
             }
         });
@@ -4297,6 +4367,7 @@ mod tests {
                     })),
                     source: Some(SessionSource::Mode(SessionSourceMode::Cli)),
                     thread_source: Some(ThreadSourceKind::SubAgentThreadSpawn),
+                    cli_version: Some("0.42.0".to_owned()),
                     extra: json!({"futureThreadField": true})
                         .as_object()
                         .cloned()
@@ -4329,7 +4400,8 @@ mod tests {
                 "turns": null,
                 "status": null,
                 "source": null,
-                "threadSource": null
+                "threadSource": null,
+                "cliVersion": null
             },
             "model": "gpt-5-codex",
             "modelProvider": "openai",
@@ -4369,6 +4441,7 @@ mod tests {
                 network_access: Some(false),
                 exclude_slash_tmp: None,
                 exclude_tmpdir_env_var: None,
+                extra: serde_json::Map::new(),
             })
         );
         assert_eq!(response.reasoning_effort.as_deref(), Some("medium"));
@@ -5411,6 +5484,7 @@ mod tests {
                 network_access: Some(true),
                 exclude_slash_tmp: Some(true),
                 exclude_tmpdir_env_var: Some(false),
+                extra: serde_json::Map::new(),
             }),
             approval_policy: Some(AskForApproval::Granular(GranularAskForApproval::new(
                 false, true, true,
@@ -5457,30 +5531,36 @@ mod tests {
         let cases = [
             (
                 json!({"type": "dangerFullAccess"}),
-                SandboxPolicy::DangerFullAccess,
+                SandboxPolicy::DangerFullAccess {
+                    extra: serde_json::Map::new(),
+                },
             ),
             (
                 json!({"type": "readOnly"}),
                 SandboxPolicy::ReadOnly {
                     network_access: None,
+                    extra: serde_json::Map::new(),
                 },
             ),
             (
                 json!({"type": "readOnly", "networkAccess": true}),
                 SandboxPolicy::ReadOnly {
                     network_access: Some(true),
+                    extra: serde_json::Map::new(),
                 },
             ),
             (
                 json!({"type": "externalSandbox"}),
                 SandboxPolicy::ExternalSandbox {
                     network_access: None,
+                    extra: serde_json::Map::new(),
                 },
             ),
             (
                 json!({"type": "externalSandbox", "networkAccess": "enabled"}),
                 SandboxPolicy::ExternalSandbox {
                     network_access: Some(NetworkAccess::Enabled),
+                    extra: serde_json::Map::new(),
                 },
             ),
             (
@@ -5496,6 +5576,7 @@ mod tests {
                     network_access: Some(false),
                     exclude_slash_tmp: Some(true),
                     exclude_tmpdir_env_var: Some(true),
+                    extra: serde_json::Map::new(),
                 },
             ),
         ];
@@ -5536,6 +5617,7 @@ mod tests {
         let params = TurnStartParams {
             sandbox_policy: Some(SandboxPolicy::ReadOnly {
                 network_access: Some(false),
+                extra: serde_json::Map::new(),
             }),
             ..TurnStartParams::text("thr_123", "hello")
         };
@@ -5545,6 +5627,92 @@ mod tests {
             json!({"type": "readOnly", "networkAccess": false})
         );
         assert_eq!(serde_json::from_value::<TurnStartParams>(encoded)?, params);
+        Ok(())
+    }
+
+    /// 17-O-1: a pin-legal additive sub-key on a known branch (and inside the
+    /// known `granular` approval-policy object) decodes into the branch's
+    /// flatten `extra` map and re-encodes byte-equal, instead of being
+    /// silently dropped.
+    #[test]
+    fn sandbox_policy_known_branches_retain_future_sub_keys() -> Result<(), serde_json::Error> {
+        let wire = json!({
+            "type": "workspaceWrite",
+            "writableRoots": ["/w"],
+            "networkAccess": false,
+            "futureFlag": true
+        });
+        let decoded = serde_json::from_value::<SandboxPolicy>(wire.clone())?;
+        let SandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            network_access,
+            extra,
+            ..
+        } = &decoded
+        else {
+            panic!("expected a workspaceWrite branch, got {decoded:?}");
+        };
+        assert_eq!(writable_roots, &Some(vec![PathBuf::from("/w")]));
+        assert_eq!(network_access, &Some(false));
+        assert_eq!(
+            serde_json::Value::Object(extra.clone()),
+            json!({"futureFlag": true}),
+            "the future sub-key must be retained"
+        );
+        // Re-encode is byte-equal: the retained key rides along, and an empty
+        // extra map on constructed branches emits nothing.
+        assert_eq!(serde_json::to_value(&decoded)?, wire);
+
+        // A constructed branch with an empty extra map stays byte-identical.
+        let constructed = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Some(vec![PathBuf::from("/w")]),
+            network_access: Some(false),
+            exclude_slash_tmp: None,
+            exclude_tmpdir_env_var: None,
+            extra: serde_json::Map::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(&constructed)?,
+            json!({"type": "workspaceWrite", "writableRoots": ["/w"], "networkAccess": false})
+        );
+
+        // The known `granular` approval-policy branch keeps additive sub-keys
+        // the same way, and `dangerFullAccess` (no pinned sub-settings)
+        // retains future keys too.
+        let granular_wire = json!({
+            "approvalPolicy": {
+                "granular": {
+                    "mcp_elicitations": false,
+                    "rules": true,
+                    "sandbox_approval": true,
+                    "futureGranularKey": 7
+                }
+            },
+            "sandboxPolicy": {"type": "dangerFullAccess", "futureDangerKey": "kept"}
+        });
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct Carrier {
+            #[serde(rename = "approvalPolicy")]
+            approval_policy: AskForApproval,
+            #[serde(rename = "sandboxPolicy")]
+            sandbox_policy: SandboxPolicy,
+        }
+        let carrier: Carrier = serde_json::from_value(granular_wire.clone())?;
+        let AskForApproval::Granular(granular) = &carrier.approval_policy else {
+            panic!("expected a granular approval policy");
+        };
+        assert_eq!(
+            serde_json::Value::Object(granular.extra.clone()),
+            json!({"futureGranularKey": 7})
+        );
+        let SandboxPolicy::DangerFullAccess { extra } = &carrier.sandbox_policy else {
+            panic!("expected a dangerFullAccess branch");
+        };
+        assert_eq!(
+            serde_json::Value::Object(extra.clone()),
+            json!({"futureDangerKey": "kept"})
+        );
+        assert_eq!(serde_json::to_value(&carrier)?, granular_wire);
         Ok(())
     }
 

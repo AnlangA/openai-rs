@@ -16195,7 +16195,7 @@ tagged_union! {
     /// The pinned `NamespaceToolParam.tools.items` union is
     /// `oneOf [FunctionToolParam, CustomToolParam]`, so hosted tool types such
     /// as `web_search` cannot be constructed for this position. A genuinely
-    /// future nested tool tag decodes losslessly as [`Unknown`].
+    /// future nested tool tag decodes losslessly as `Unknown`.
     pub enum NamespaceToolEntry {
         Function(FunctionTool) => "function",
         Custom(CustomTool) => "custom"

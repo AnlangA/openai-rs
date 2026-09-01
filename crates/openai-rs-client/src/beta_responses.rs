@@ -143,7 +143,7 @@ impl BetaResponses {
     /// Creates a beta response and decodes its SSE events incrementally.
     ///
     /// The SSE lane carries the static beta header alongside the `beta=true`
-    /// query (see [`execute_beta_json`]).
+    /// query (see `execute_beta_json`).
     ///
     /// Once the SSE handshake succeeds, transport errors (including
     /// mid-stream timeouts) are terminal: the stream yields the error and
@@ -190,7 +190,7 @@ impl BetaResponses {
     /// Retrieves or resumes a stored beta response SSE stream.
     ///
     /// The SSE lane carries the static beta header alongside the `beta=true`
-    /// query (see [`execute_beta_json`]).
+    /// query (see `execute_beta_json`).
     ///
     /// Once the SSE handshake succeeds, transport errors (including
     /// mid-stream timeouts) are terminal: the stream yields the error and
@@ -219,7 +219,7 @@ impl BetaResponses {
     /// Deletes a stored beta response.
     ///
     /// The empty-or-JSON lane also carries the static beta header (see
-    /// [`execute_beta_json`]).
+    /// `execute_beta_json`).
     pub async fn delete(
         &self,
         response_id: &ResponseId,

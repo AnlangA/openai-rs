@@ -3241,8 +3241,10 @@ pub struct ChatTopLogprob {
     pub token: String,
     /// Natural-log probability.
     pub logprob: f64,
-    /// UTF-8 bytes or explicit null.
-    pub bytes: Nullable<Vec<u8>>,
+    /// UTF-8 bytes or explicit null, as integers (the pin types the array
+    /// items `integer` with no bounds; python `Optional[List[int]]`,
+    /// node `Array<number> | null`).
+    pub bytes: Nullable<Vec<i64>>,
     /// Future response fields.
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -3263,8 +3265,10 @@ pub struct ChatTokenLogprob {
     pub token: String,
     /// Natural-log probability.
     pub logprob: f64,
-    /// UTF-8 bytes or explicit null.
-    pub bytes: Nullable<Vec<u8>>,
+    /// UTF-8 bytes or explicit null, as integers (the pin types the array
+    /// items `integer` with no bounds; python `Optional[List[int]]`,
+    /// node `Array<number> | null`).
+    pub bytes: Nullable<Vec<i64>>,
     /// Most likely alternatives at this position.
     pub top_logprobs: Vec<ChatTopLogprob>,
     /// Future response fields.
@@ -6010,5 +6014,48 @@ mod tests {
             other => panic!("expected an assistant message, got {other:?}"),
         }
         assert_eq!(ok(serde_json::to_value(decoded)), future);
+    }
+    #[test]
+    fn logprob_bytes_accept_any_integer_the_pin_permits() {
+        // 16-15-2: the pin types the bytes items as unbounded `integer`
+        // (python List[int], node Array<number>); values outside u8 must
+        // decode instead of failing the whole completion.
+        let payload = serde_json::json!({
+            "id": "chatcmpl_1",
+            "object": "chat.completion",
+            "created": 1_760_000_000_u64,
+            "model": "gpt-5.6-sol",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "logprobs": {
+                    "content": [{
+                        "token": "hi",
+                        "logprob": -0.1,
+                        "bytes": [104, 105, 300, -1],
+                        "top_logprobs": [
+                            {"token": "x", "logprob": -1.0, "bytes": [120, 999]}
+                        ]
+                    }],
+                    "refusal": null
+                }
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        });
+        let completion: ChatCompletion =
+            serde_json::from_value(payload).expect("out-of-u8 byte values decode");
+        let choice = &completion.choices[0];
+        let Nullable::Value(logprobs) = &choice.logprobs else {
+            panic!("logprobs present");
+        };
+        let Nullable::Value(content) = &logprobs.content else {
+            panic!("logprobs content present");
+        };
+        assert_eq!(content[0].bytes, Nullable::Value(vec![104, 105, 300, -1]));
+        assert_eq!(
+            content[0].top_logprobs[0].bytes,
+            Nullable::Value(vec![120, 999])
+        );
     }
 }

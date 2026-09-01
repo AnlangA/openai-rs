@@ -171,7 +171,7 @@ crate::open_string_enum! {
     /// Common administration list discriminator.
     ///
     /// Every pinned Administration list envelope pins `object` to the constant
-    /// `list`; the usage/costs `page` envelope has its own [`UsagePageTag`].
+    /// `list`; the usage/costs `page` envelope has its own `UsagePageTag`.
     pub enum AdminListObject {
         List = "list"
     }
@@ -1630,7 +1630,7 @@ crate::open_string_enum! {
     /// `group.user`/`group.role`/`user.role`/`group.user.deleted` are pinned
     /// schema constants; `group.role.deleted`/`user.role.deleted` appear in the
     /// pinned `DeletedRoleAssignmentResource.object` description ("such as …")
-    /// whose free-form string stays lossless through [`Unknown`].
+    /// whose free-form string stays lossless through `Unknown`.
     pub enum AssignmentObject {
         GroupUser = "group.user",
         GroupRole = "group.role",

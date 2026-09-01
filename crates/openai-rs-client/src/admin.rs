@@ -259,11 +259,11 @@ pub struct AdminClientOperationContract {
 /// Three of these operations are one-shot secret mints — the response carries
 /// a credential `value` exactly once and never again:
 ///
-/// - [`OpAdminApiKeysCreate`] (`admin-api-keys-create`) mints an organization
+/// - [`operations::OpAdminApiKeysCreate`] (`admin-api-keys-create`) mints an organization
 ///   Admin API key;
-/// - [`OpCreateanAPIkeyforaserviceaccount`] mints a project service-account
+/// - [`operations::OpCreateanAPIkeyforaserviceaccount`] mints a project service-account
 ///   API key;
-/// - [`OpCreateProjectServiceAccount`] mints a service account together with
+/// - [`operations::OpCreateProjectServiceAccount`] mints a service account together with
 ///   its first API key.
 ///
 /// Replay risk: under the default [`RetryPolicy::openai_compatible`] these

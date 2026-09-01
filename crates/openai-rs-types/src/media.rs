@@ -1428,9 +1428,10 @@ pub struct TranscriptionStreamLogprob {
     /// Token log probability.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub logprob: Omittable<f64>,
-    /// Token bytes.
+    /// Token bytes as integers (the pin types the array items `integer`
+    /// with no bounds; python `List[int]`, node `Array<number>`).
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    pub bytes: Omittable<Vec<u8>>,
+    pub bytes: Omittable<Vec<i64>>,
     /// Future response fields.
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -3999,5 +4000,21 @@ mod tests {
         assert!(!image.extra().contains_key("url"));
         assert!(!image.extra().contains_key("revised_prompt"));
         assert_eq!(encoded, fixture);
+    }
+    #[test]
+    fn stream_logprob_bytes_accept_any_integer_the_pin_permits() {
+        // 16-15-1 (D0269 deferral): the streaming events type the bytes
+        // items as unbounded `integer` (python List[int], node
+        // Array<number>); values outside u8 must decode instead of
+        // failing the stream event. The non-streaming face stays f64
+        // because its pin schema says `number`.
+        let payload = serde_json::json!({
+            "token": "hi",
+            "logprob": -0.2,
+            "bytes": [104, 300, -1]
+        });
+        let logprob: TranscriptionStreamLogprob =
+            serde_json::from_value(payload).expect("out-of-u8 byte values decode");
+        assert_eq!(logprob.bytes, Omittable::Value(vec![104, 300, -1]));
     }
 }

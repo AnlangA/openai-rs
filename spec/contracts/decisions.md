@@ -4962,3 +4962,25 @@ until a decision is recorded here and its fixtures pass.
 - Impact: ledger only.
 - Overrides: extends D0276 (empty-page stance), D0273 (realtime lane stance)
 - Tests: existing suites.
+
+## D0281 — Round-16 fixes: logprob bytes go integer, codex branch extras, Thread.cliVersion, rustdoc gate health, rmcp cfg import
+
+- Status: accepted
+- Reviewed: 2026-09-02
+- Scope: `TranscriptionStreamLogprob.bytes`, `ChatTopLogprob`/`ChatTokenLogprob`.bytes, SandboxPolicy/GranularAskForApproval branch extras, `Thread.cli_version`, 12 rustdoc link fixes, rmcp `Duration` cfg
+- Sources: round-16 findings 16-15-1/2 (resolving the D0269 deferral), 17-O-1/2, 16-16-1, 16-11-1 (问题16.md) — the streaming transcription and chat logprob `bytes` arrays were `Vec<u8>`/`Nullable<Vec<u8>>` while the pin types the items unbounded `integer` (python `List[int]`, node `Array<number>`), so one out-of-u8 element failed the whole event/completion decode; the codex SandboxPolicy/AskForApproval known branches had no flatten-extra (additive pin-legal sub-keys silently dropped) unlike every ThreadItem branch; pin-required `Thread.cliVersion` rode the redacted extra map (13-O-1 class); `RUSTDOCFLAGS="-D warnings" cargo doc` failed with 12 intra-doc link errors across three crates; rmcp's unconditional `use std::time::Duration` warned on every server-only/auth-only build (combos the gate suite never compiles).
+- Decision: the three `bytes` fields become `Vec<i64>`/`Nullable<Vec<i64>>` with pin/SDK citations (the non-streaming transcription face keeps `Vec<f64>` — its pin schema says `number`, closing the D0269 question both ways); codex known branches (incl. a new extra-only DangerFullAccess branch) and GranularAskForApproval gain lossless flatten-extra carriers with byte-identical encode for constructed branches; `Thread.cli_version: Option<String>` joins the D0267 field family; the 12 rustdoc links fixed (module-path prefixes where resolvable, plain backticks otherwise — macro-generated `Unknown` links cannot resolve at macro-definition scope); the rmcp import is client-gated. Two regression tests pin out-of-u8 byte decoding.
+- Impact: `openai-rs-types` media/chat decode (type change — out-of-range values now decode), `openai-rs-codex` receive forward-compat (SandboxPolicy::DangerFullAccess becomes a struct variant — breaking for pattern matches), docs, rmcp build hygiene.
+- Overrides: resolves the D0269 TranscriptionStreamLogprob deferral; extends D0267
+- Tests: `logprob_bytes_accept_any_integer_the_pin_permits`, `stream_logprob_bytes_accept_any_integer_the_pin_permits`, `sandbox_policy_known_branches_retain_future_sub_keys`, extended `thread_started_notification_decodes_and_round_trips` and `thread_start_response_decodes_the_negotiated_approval_and_sandbox_fields`.
+
+## D0282 — Round-16 recorded positions
+
+- Status: accepted
+- Reviewed: 2026-09-02
+- Scope: caller-supplied HTTP client injection; default headers/query; per-request REST headers; with_options generalization; credential rotation; integer signedness; rmcp cache e2e and mcp_tool wording; codex fake-child D0267 fields; the six zero-finding admin families' confirmations.
+- Sources: round-16 informational findings (问题16.md 信息组).
+- Decision: no `http_client`/`httpAgent`/`fetch` injection knob — the builder's own proxy/TLS/timeout surface plus `pub use reqwest` (D0231) is the posture; reopening on demand (the largest both-SDK knob deliberately unexposed); `default_headers`/`default_query`, per-request REST `extra_headers`, and generalized `with_options` stay unexposed (fixed header trio + `with_request_timeout` only; the WS lane's D0274 escape hatch is the one opt-in header surface); live-Client credential rotation stays absent (immutable credentials; rebuild the client — python's `client.api_key =` has no equivalent; admin-side lifetime stance is D0232); token-count/timestamp signedness stays split (u64 fail-closed on the platform half, i64 on realtime) with no wire expectation of negatives; the rmcp response-cache path's zero e2e coverage is queued for the test-gap lens; the catalog's `mcp_tool` promise is reworded in scope only (fields rmcp itself drops are unreachable, the pinned-shape claim stands); codex fake-child fixtures gain D0267/cliVersion fields in the test-gap lens; the six admin deep-dive families (api-keys/users, projects/invites, roles/groups, audit logs, usage, certs/spend/settings) are recorded as machine-verified zero-drift.
+- Impact: ledger only.
+- Overrides: none
+- Tests: existing suites.
