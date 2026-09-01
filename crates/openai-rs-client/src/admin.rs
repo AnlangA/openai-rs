@@ -3485,9 +3485,16 @@ pub struct AdminSpendAlerts(AdminClient);
 
 impl AdminSpendAlerts {
     /// List organization spend alerts.
-    pub async fn list(&self) -> Result<ApiResponse<OrganizationSpendAlertListResource>, Error> {
+    ///
+    /// Accepts the pinned pagination parameters (`limit`/`order`/`after`/
+    /// `before`); pass `&AdminListParams::default()` for the bare list.
+    pub async fn list(
+        &self,
+        params: &AdminListParams,
+    ) -> Result<ApiResponse<OrganizationSpendAlertListResource>, Error> {
         self.0
             .request::<operations::OpListOrganizationSpendAlerts>()
+            .query(params)?
             .send()
             .await
     }
@@ -3564,10 +3571,17 @@ pub struct AdminProjectSpendAlerts {
 
 impl AdminProjectSpendAlerts {
     /// List project spend alerts.
-    pub async fn list(&self) -> Result<ApiResponse<ProjectSpendAlertListResource>, Error> {
+    ///
+    /// Accepts the pinned pagination parameters (`limit`/`order`/`after`/
+    /// `before`); pass `&AdminListParams::default()` for the bare list.
+    pub async fn list(
+        &self,
+        params: &AdminListParams,
+    ) -> Result<ApiResponse<ProjectSpendAlertListResource>, Error> {
         self.client
             .request::<operations::OpListProjectSpendAlerts>()
             .path_parameter(&self.project_id)?
+            .query(params)?
             .send()
             .await
     }
@@ -4637,7 +4651,10 @@ mod tests {
         assert_eq!(created.id, "alert/1");
         assert!(matches!(created.object, SpendAlertObject::Organization));
 
-        let listed = alerts.list().await.expect("list organization alerts");
+        let listed = alerts
+            .list(&AdminListParams::default())
+            .await
+            .expect("list organization alerts");
         assert_eq!(listed.data.len(), 1);
         assert_eq!(listed.data[0].threshold_amount, 100);
         assert_eq!(listed.next_after(), None);
@@ -4669,7 +4686,10 @@ mod tests {
             .expect("create project spend alert");
         assert!(matches!(project_created.object, SpendAlertObject::Project));
 
-        let project_listed = project.list().await.expect("list project alerts");
+        let project_listed = project
+            .list(&AdminListParams::default())
+            .await
+            .expect("list project alerts");
         assert_eq!(project_listed.data.len(), 1);
 
         let project_deleted = project
@@ -5145,6 +5165,224 @@ mod tests {
             );
         }
         assert_eq!(pinned.len(), bound.len());
+    }
+
+    #[test]
+    fn admin_query_parameter_names_match_the_pinned_manifest() {
+        // 15-P-1: nothing compared the pinned manifest's admin query
+        // parameters with the Rust query DTOs (the D0249 projection drops
+        // `request.parameters`), so a renamed or missing DTO field — or a pin
+        // adding a new query param — passed silently. This test collects the
+        // serializable key sets of the admin query DTOs and checks them
+        // against every pinned query-parameter name on the admin paths.
+        use serde_json::json;
+
+        // Fully-populated wire shapes for every admin query DTO. Every
+        // optional field is set so no `skip_serializing_if` omits a key;
+        // enum-valued fields accept any string because the open string enums
+        // retain unknown values verbatim (they only need to round-trip a key
+        // set here, not a plausible value).
+        let all_sets: [(&str, Value); 7] = [
+            (
+                "AdminListParams",
+                serde_json::from_value(json!({
+                    "after": "cursor", "before": "cursor", "limit": 1,
+                    "order": "asc", "emails": ["a@example.com"],
+                    "include_archived": true, "owner_project_access": "active"
+                }))
+                .expect("AdminListParams all-set"),
+            ),
+            (
+                "AuditLogListParams",
+                serde_json::from_value(json!({
+                    "effective_at": {"gte": 1, "lte": 2},
+                    "project_ids": ["proj"], "event_types": ["x"],
+                    "actor_ids": ["user"], "actor_emails": ["a@example.com"],
+                    "resource_ids": ["res"], "tenant_only": true,
+                    "after": "cursor", "before": "cursor", "limit": 1,
+                    "order": "asc", "emails": ["a@example.com"],
+                    "include_archived": true, "owner_project_access": "active"
+                }))
+                .expect("AuditLogListParams all-set"),
+            ),
+            (
+                "UsageQueryParams",
+                serde_json::from_value(json!({
+                    "start_time": 1, "end_time": 2, "bucket_width": "1d",
+                    "project_ids": ["proj"], "user_ids": ["user"],
+                    "api_key_ids": ["key"], "models": ["gpt-x"],
+                    "batch": true, "sources": ["service"], "sizes": ["1024x1024"],
+                    "vector_store_ids": ["vs"], "context_levels": ["low"],
+                    "group_by": ["project_id"], "limit": 1, "page": "cursor"
+                }))
+                .expect("UsageQueryParams all-set"),
+            ),
+            (
+                "UsageCostsQueryParams",
+                serde_json::from_value(json!({
+                    "start_time": 1, "end_time": 2, "bucket_width": "1d",
+                    "project_ids": ["proj"], "api_key_ids": ["key"],
+                    "group_by": ["project_id"], "limit": 1, "page": "cursor"
+                }))
+                .expect("UsageCostsQueryParams all-set"),
+            ),
+            (
+                "CertificateGetParams",
+                serde_json::from_value(json!({"include": ["content"]}))
+                    .expect("CertificateGetParams all-set"),
+            ),
+            (
+                "ProjectGroupGetParams",
+                serde_json::from_value(json!({"group_type": "sso"}))
+                    .expect("ProjectGroupGetParams all-set"),
+            ),
+            (
+                "ListFineTuningCheckpointPermissionsParams",
+                serde_json::from_value(json!({
+                    "project_id": "proj", "after": "cursor",
+                    "limit": 1, "order": "asc"
+                }))
+                .expect("ListFineTuningCheckpointPermissionsParams all-set"),
+            ),
+        ];
+        let dto_keys: HashSet<String> = all_sets
+            .iter()
+            .flat_map(|(name, all_set)| {
+                let serialized = serde_json::to_value(all_set)
+                    .unwrap_or_else(|e| panic!("{name} must serialize its all-set instance: {e}"));
+                serialized
+                    .as_object()
+                    .unwrap_or_else(|| panic!("{name} must serialize to an object"))
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert!(
+            !dto_keys.is_empty(),
+            "the admin query DTO key union must not be empty"
+        );
+
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../../spec/contracts/operations.json"))
+                .expect("operation manifest JSON");
+        let admin_prefixes = ["/organization/", "/projects/"];
+        let mut pinned_pairs: Vec<(String, String)> = Vec::new();
+        let mut admin_query_ops = 0usize;
+        let mut query_ops_with_checkpoints = 0usize;
+        for operation in manifest["client_operations"]
+            .as_array()
+            .expect("client operation array")
+        {
+            let path = operation["path"].as_str().unwrap_or_default();
+            let prefixes: &[&str] = if path.starts_with("/fine_tuning/checkpoints/") {
+                // The checkpoint-permission list op is Administration-channel
+                // but not under the admin path prefixes.
+                &["/fine_tuning/checkpoints/"]
+            } else {
+                &admin_prefixes
+            };
+            if !prefixes.iter().any(|prefix| path.starts_with(prefix)) {
+                continue;
+            }
+            let operation_id = operation["operation_id"].as_str().unwrap_or_default();
+            let mut has_query = false;
+            let parameters = operation["request"]["parameters"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            for parameter in parameters {
+                if parameter["location"].as_str() == Some("query") {
+                    has_query = true;
+                    pinned_pairs.push((
+                        operation_id.to_owned(),
+                        parameter["name"]
+                            .as_str()
+                            .expect("pinned query parameter name")
+                            .to_owned(),
+                    ));
+                }
+            }
+            if has_query {
+                query_ops_with_checkpoints += 1;
+                if !path.starts_with("/fine_tuning/checkpoints/") {
+                    admin_query_ops += 1;
+                }
+            }
+        }
+        // Shrinkage guard: the pinned manifest currently defines query
+        // parameters on 35 admin ops plus the one checkpoint-permission list.
+        assert_eq!(
+            admin_query_ops, 35,
+            "pinned admin ops carrying query parameters must stay at 35"
+        );
+        assert_eq!(
+            query_ops_with_checkpoints, 36,
+            "pinned admin ops (incl. checkpoint permissions) with query parameters must stay at 36"
+        );
+
+        // Normalization (D0238/D0251 bracket rule): the manifest spells array
+        // parameters `name[]` while the DTOs serialize plain keys, so strip a
+        // trailing `[]` from the manifest name before comparing.
+        fn normalize(name: &str) -> &str {
+            name.strip_suffix("[]").unwrap_or(name)
+        }
+        for (operation_id, param) in &pinned_pairs {
+            let normalized = normalize(param);
+            assert!(
+                dto_keys.contains(normalized),
+                "pinned admin operation {operation_id} defines query parameter \
+                 {param} (normalized {normalized}) with no DTO field in the \
+                 admin query parameter DTOs"
+            );
+        }
+        let pinned_names: HashSet<&str> = pinned_pairs
+            .iter()
+            .map(|(_, name)| normalize(name))
+            .collect();
+        // Reverse direction: no DTO key may fall outside the pinned union.
+        // The D0059 shared-bag stance makes the DTOs a superset of any single
+        // route's parameters, not of the union of all pinned names — today
+        // the two sets are equal, so a stray DTO key is a real drift signal.
+        for key in &dto_keys {
+            assert!(
+                pinned_names.contains(key.as_str()),
+                "admin query DTO key {key} is absent from every pinned admin \
+                 operation's parameters (not a documented D0059 superset member)"
+            );
+        }
+
+        // The spend-alert lists route through AdminListParams since the
+        // round-15 fix; their four pinned params must all be covered by it.
+        let admin_list_serialized = serde_json::to_value(
+            serde_json::from_value::<AdminListParams>(json!({
+                "after": "c", "before": "c", "limit": 1, "order": "asc"
+            }))
+            .expect("AdminListParams all-set"),
+        )
+        .expect("AdminListParams must serialize");
+        let admin_list_keys: HashSet<&str> = admin_list_serialized
+            .as_object()
+            .expect("AdminListParams must serialize to an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        for spend_alert_op in [
+            "list-organization-spend-alerts",
+            "list-project-spend-alerts",
+        ] {
+            for param in pinned_pairs
+                .iter()
+                .filter(|(operation_id, _)| operation_id == spend_alert_op)
+                .map(|(_, name)| normalize(name))
+            {
+                assert!(
+                    admin_list_keys.contains(param),
+                    "spend-alert op {spend_alert_op} param {param} is not \
+                     covered by AdminListParams"
+                );
+            }
+        }
     }
 
     #[test]

@@ -4940,3 +4940,25 @@ until a decision is recorded here and its fixtures pass.
 - Impact: ledger only.
 - Overrides: none
 - Tests: existing suites.
+
+## D0279 — Round-15 pagination/HTTP fixes: spend-alert list params, facade accumulator re-export, query-param machine parity
+
+- Status: accepted
+- Reviewed: 2026-09-02
+- Scope: `AdminSpendAlerts::list`/`AdminProjectSpendAlerts::list`, facade `lib.rs`, `ListEvalRunOutputItemsParams::status` doc, rmcp cache doc, the admin query-parameter parity test
+- Sources: round-15 findings 15-O-1/15-E-1/15-F-1/15-L-1/15-P-1 (问题15.md) — the facade missed the D0270 `ChatCompletionAccumulator` re-export (mechanical miss); the two spend-alert lists were the only admin lists whose facade methods took no params although the pin defines limit/order/after/before (the generic `request::<O>()` face remained usable); the evals output-items status doc invented an "error" filter value the pin's fail/pass enum rejects; the rmcp response cache can merge a cached first page with live later pages (cross-generation catalog: DuplicateToolName or a dropped tool) beyond D0277's single-page disclosure; and nothing machine-checked hand-written query DTOs against the manifest's 301 query parameters (drift would compile and pass xtask check).
+- Decision: the facade re-export is added; both spend-alert lists take `&AdminListParams` (additive — bare list = `&AdminListParams::default()`); the evals doc drops "error"; the rmcp cache doc gains the cross-page hazard sentence (disable-cache escape hatch already nameable via D0268); a new admin-side test `admin_query_parameter_names_match_the_pinned_manifest` projects every pinned admin query parameter (location==query, `[]` suffix normalized per D0238/D0251) and asserts each name is serializable by one of the admin query DTOs, with the op count asserted so manifest shrinkage fails.
+- Impact: `openai-rs-client` admin facade (additive, two call sites updated in tests), facade surface, docs, test hardening.
+- Overrides: none
+- Tests: `admin_query_parameter_names_match_the_pinned_manifest` (the spend-alert coverage rides it), updated spend-alert loopback calls.
+
+## D0280 — Round-15 recorded positions
+
+- Status: accepted
+- Reviewed: 2026-09-02
+- Scope: empty-page+has_more paging; python-vs-ours page-stream shape; order open enums; DELETE 204 tolerance; upload-part carriage duality; VS next_page tokens; translation Accept superset; path-param encoding strictness; direct-lane budget doubling/content-type/session-id; webhook header joining and timestamp strictness; realtime beta lane; background poll pacing; count-tokens/retrieve_stream confirmations; per-resource query parity and drift-tool follow-ups; pagination example/doc gaps.
+- Sources: round-15 informational findings (问题15.md 信息组).
+- Decision: on a has_more page with empty `data`, we keep paging while a non-empty server `last_id` remains and fail closed otherwise — python's auto-pager silently stops on empty data; our stricter stance is deliberate (extends D0276; the anomaly is server-side); the page-at-a-time `list_pages` stream remains the API shape (python/node yield per item via auto-paging — callers flatten; stance now recorded, docs follow-up D0281); `order` enums stay open (D0089 family); `DeleteBetaResponse` keeps accepting 204 beyond the pin's 200 (documented D0223 exception); upload parts keep the pin's multipart carriage (python's resumable helper uses raw octet-stream — a future resumable helper should use that lane); VS search/content `next_page` tokens stay exposed-but-unusable (no baseline can advance them); translation `Accept` keeps the request-schema superset over the response map; path-parameter percent-encoding stays stricter than python's raw interpolation (safe direction); the direct codex lane's 401 retry can take ~2× budget (doc follow-up), its non-streaming lane keeps JSON-decode-as-gate, `session_id` regenerates per attempt (no pinned reuse semantics), and `arguments` stays sealed; webhook multi-value headers keep our space-join (the most tolerant of three divergent baselines), timestamps keep strict-digit acceptance (fail-closed vs node prefix-parse/python int() leniency), and no signing helper is exposed (matches both baselines); the deprecated python beta-realtime WS lane (`OpenAI-Beta: realtime=v1`) stays unexposed — node already dropped the WS face so no two-SDK consensus exists, and the realtime face keeps its typed-derivation stance (D0273) until demand appears; background Responses polling is already server-paced via D0275's default (rustdoc polish noted); count-tokens (`POST /responses/input_tokens`) and retrieve_stream query surfaces confirmed exact; the per-resource query-parity harness beyond admin, inline param schema lowering (P-2), drift.rs status/location diffing (P-3), a pagination example (O-2), and a pagination-ergonomics doc section (O-3) are recorded follow-ups.
+- Impact: ledger only.
+- Overrides: extends D0276 (empty-page stance), D0273 (realtime lane stance)
+- Tests: existing suites.

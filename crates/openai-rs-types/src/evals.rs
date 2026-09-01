@@ -2971,7 +2971,7 @@ impl ListEvalRunOutputItemsParams {
         Self::default()
     }
 
-    /// Filters by pass/fail/error status.
+    /// Filters by pass/fail status.
     #[must_use]
     pub fn status(mut self, status: EvalOutputItemFilterStatus) -> Self {
         self.status = Omittable::Value(status);

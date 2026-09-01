@@ -231,6 +231,12 @@ impl ResponsesToolExecutor for RmcpExecutor {
     ///   `stale_cached_response` instead of surfacing the error, because
     ///   `ClientCacheConfig::serve_stale_on_error` defaults to `true`
     ///   (rmcp 3.1.4 `src/service/client.rs`, `Peer::<RoleClient>::list_tools`).
+    /// - **A cache-hit first page can mix with live later pages.** Pages are
+    ///   cached independently per cursor, so one call can merge a cached first
+    ///   page with wire-fetched pages; if the server's tool set shifted in
+    ///   between, the merge may duplicate a tool (catalog build fails closed
+    ///   with `DuplicateToolName`) or drop one that moved off the cached page.
+    ///   Disabling the cache (below) removes this cross-page hazard too (15-L-1).
     ///   Entries only exist for servers that send a positive `ttlMs` on their
     ///   list results — the default TTL is zero and zero-TTL responses are
     ///   never stored (rmcp `src/service/client/cache.rs`) — so
