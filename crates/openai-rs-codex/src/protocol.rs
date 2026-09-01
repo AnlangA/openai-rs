@@ -2586,7 +2586,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AccountUpdatedNotification, ActiveTurnNotSteerableDetails, AgentMessageThreadItem,
+        AccountLoginCompletedNotification, AccountUpdatedNotification,
+        ActiveTurnNotSteerableDetails, AgentMessageDeltaNotification, AgentMessageThreadItem,
         ApprovalsReviewer, AskForApproval, AskForApprovalMode, AuthMode, ByteRange,
         CancelLoginResponse, CancelLoginStatus, ClientInfo, CodexErrorCode, CodexErrorInfo,
         CollabAgentState, CollabAgentStatus, CollabAgentTool, CollabAgentToolCallStatus,
@@ -2603,9 +2604,9 @@ mod tests {
         Personality, PlanThreadItem, PlanType, RateLimitReachedType, RateLimitSnapshot,
         ReasoningSummary, ReasoningThreadItem, SandboxMode, SandboxPolicy, SessionStartSource,
         SleepThreadItem, SubAgentActivityKind, SubAgentActivityThreadItem, TextElement, Thread,
-        ThreadItem, ThreadStartParams, Turn, TurnError, TurnStartParams, TurnStatus, UserInput,
-        UserMessageThreadItem, W3cTraceContext, WebSearchAction, WebSearchThreadItem,
-        decode_notification,
+        ThreadItem, ThreadStartParams, ThreadStartedNotification, Turn, TurnError, TurnStartParams,
+        TurnStatus, UserInput, UserMessageThreadItem, W3cTraceContext, WebSearchAction,
+        WebSearchThreadItem, decode_notification,
     };
 
     #[test]
@@ -3611,6 +3612,214 @@ mod tests {
                 .iter()
                 .any(|message| message.contains("a turn") || message.contains("\"not\""))
         );
+    }
+
+    /// 8-12: the `account/login/completed` branch decodes the success shape
+    /// through `decode_notification` and re-encodes the pinned envelope
+    /// losslessly (future keys included).
+    #[test]
+    fn account_login_completed_notification_decodes_and_round_trips()
+    -> Result<(), serde_json::Error> {
+        let params = json!({
+            "loginId": "login-browser",
+            "success": true,
+            "error": null,
+            "futureLoginField": {"kept": [1, 2]}
+        });
+        let notification = decode_notification(
+            "account/login/completed".to_owned(),
+            Some(params.clone()),
+            json!({"method": "account/login/completed"}),
+        );
+        let Notification::AccountLoginCompleted(completed) = notification else {
+            panic!("expected a login-completed notification, got {notification:?}");
+        };
+        assert_eq!(
+            *completed,
+            AccountLoginCompletedNotification {
+                login_id: Some("login-browser".to_owned()),
+                success: true,
+                error: None,
+                extra: json!({"futureLoginField": {"kept": [1, 2]}})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            }
+        );
+        assert_eq!(serde_json::to_value(&*completed)?, params);
+        Ok(())
+    }
+
+    /// 8-12: the `account/rateLimits/updated` branch decodes a typed
+    /// [`RateLimitSnapshot`] and re-encodes the pinned envelope losslessly.
+    #[test]
+    fn account_rate_limits_updated_notification_decodes_and_round_trips()
+    -> Result<(), serde_json::Error> {
+        let params = json!({
+            "rateLimits": {
+                "limitId": "codex",
+                "limitName": null,
+                "primary": {
+                    "usedPercent": 25,
+                    "windowDurationMins": 15,
+                    "resetsAt": 1730947200
+                },
+                "secondary": null,
+                "credits": null,
+                "planType": "future_plan",
+                "rateLimitReachedType": "future_state"
+            }
+        });
+        let notification = decode_notification(
+            "account/rateLimits/updated".to_owned(),
+            Some(params.clone()),
+            json!({"method": "account/rateLimits/updated"}),
+        );
+        let Notification::AccountRateLimitsUpdated(updated) = notification else {
+            panic!("expected a rate-limits notification, got {notification:?}");
+        };
+        assert_eq!(updated.rate_limits.limit_id.as_deref(), Some("codex"));
+        assert_eq!(
+            updated
+                .rate_limits
+                .primary
+                .as_ref()
+                .map(|window| window.used_percent),
+            Some(25)
+        );
+        assert_eq!(
+            updated.rate_limits.plan_type,
+            Some(PlanType::from_raw("future_plan"))
+        );
+        assert_eq!(serde_json::to_value(&*updated)?, params);
+        Ok(())
+    }
+
+    /// 8-12: the `thread/started` branch decodes the typed [`Thread`] and
+    /// re-encodes the pinned envelope losslessly.
+    #[test]
+    fn thread_started_notification_decodes_and_round_trips() -> Result<(), serde_json::Error> {
+        // The DTO keeps the pinned null-carrying optional keys on the wire, so
+        // the round-trip emits them explicitly.
+        let params = json!({
+            "thread": {
+                "id": "thr_123",
+                "sessionId": "thr_123",
+                "preview": null,
+                "ephemeral": null,
+                "modelProvider": null,
+                "createdAt": null,
+                "updatedAt": null,
+                "cwd": null,
+                "name": null,
+                "turns": null,
+                "futureThreadField": true
+            }
+        });
+        let notification = decode_notification(
+            "thread/started".to_owned(),
+            Some(params.clone()),
+            json!({"method": "thread/started"}),
+        );
+        let Notification::ThreadStarted(started) = notification else {
+            panic!("expected a thread-started notification, got {notification:?}");
+        };
+        assert_eq!(
+            *started,
+            ThreadStartedNotification {
+                thread: Thread {
+                    id: "thr_123".to_owned(),
+                    session_id: Some("thr_123".to_owned()),
+                    preview: None,
+                    ephemeral: None,
+                    model_provider: None,
+                    created_at: None,
+                    updated_at: None,
+                    cwd: None,
+                    name: None,
+                    turns: None,
+                    extra: json!({"futureThreadField": true})
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                },
+                extra: serde_json::Map::new(),
+            }
+        );
+        assert_eq!(serde_json::to_value(&*started)?, params);
+        Ok(())
+    }
+
+    /// 8-12: the `turn/started` branch decodes the typed [`Turn`] and
+    /// re-encodes the pinned envelope losslessly.
+    #[test]
+    fn turn_started_notification_decodes_and_round_trips() -> Result<(), serde_json::Error> {
+        // The DTO keeps the pinned null-carrying optional keys on the wire, so
+        // the round-trip emits them explicitly.
+        let params = json!({
+            "threadId": "thr_123",
+            "turn": {
+                "id": "turn_456",
+                "items": [],
+                "status": "inProgress",
+                "error": null,
+                "startedAt": null,
+                "completedAt": null,
+                "durationMs": null,
+                "futureTurnField": 7
+            }
+        });
+        let notification = decode_notification(
+            "turn/started".to_owned(),
+            Some(params.clone()),
+            json!({"method": "turn/started"}),
+        );
+        let Notification::TurnStarted(started) = notification else {
+            panic!("expected a turn-started notification, got {notification:?}");
+        };
+        assert_eq!(started.thread_id, "thr_123");
+        assert_eq!(started.turn.id, "turn_456");
+        assert_eq!(started.turn.status, TurnStatus::InProgress);
+        assert_eq!(started.turn.extra["futureTurnField"], json!(7));
+        assert_eq!(serde_json::to_value(&*started)?, params);
+        Ok(())
+    }
+
+    /// 8-12: `item/agentMessage/delta` is the only channel for incremental
+    /// agent text — decode through `decode_notification` and re-encode the
+    /// pinned envelope losslessly.
+    #[test]
+    fn agent_message_delta_notification_decodes_and_round_trips() -> Result<(), serde_json::Error> {
+        let params = json!({
+            "threadId": "thr_123",
+            "turnId": "turn_456",
+            "itemId": "item_1",
+            "delta": " incre",
+            "futureDeltaField": true
+        });
+        let notification = decode_notification(
+            "item/agentMessage/delta".to_owned(),
+            Some(params.clone()),
+            json!({"method": "item/agentMessage/delta"}),
+        );
+        let Notification::AgentMessageDelta(delta) = notification else {
+            panic!("expected an agent-message delta, got {notification:?}");
+        };
+        assert_eq!(
+            *delta,
+            AgentMessageDeltaNotification {
+                thread_id: "thr_123".to_owned(),
+                turn_id: "turn_456".to_owned(),
+                item_id: "item_1".to_owned(),
+                delta: " incre".to_owned(),
+                extra: json!({"futureDeltaField": true})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            }
+        );
+        assert_eq!(serde_json::to_value(&*delta)?, params);
+        Ok(())
     }
 
     #[derive(Clone, Default)]

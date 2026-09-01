@@ -1464,6 +1464,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn beta_background_poll_stops_at_terminal_status() {
+        // 8-18: mirror of the GA `response_poll_stops_at_terminal_state` —
+        // the background poll keeps hitting the beta retrieve route (query
+        // flag plus static beta header) until a terminal status arrives.
+        let (base_url, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, response_json("in_progress")),
+            (StatusCode::OK, response_json("completed")),
+        ])
+        .await;
+
+        let response = client(base_url)
+            .beta_responses()
+            .poll(
+                &ResponseId::new("resp_beta_1"),
+                PollOptions::new()
+                    .with_interval(std::time::Duration::from_millis(1))
+                    .with_timeout(std::time::Duration::from_secs(1)),
+            )
+            .await
+            .expect("poll beta background response");
+        assert_eq!(
+            response.status(),
+            Some(&openai_rs_types::responses::ResponseStatus::Completed)
+        );
+
+        for expected_path in [
+            "/v1/responses/resp_beta_1?beta=true",
+            "/v1/responses/resp_beta_1?beta=true",
+        ] {
+            let request = captured.recv().await.expect("poll request");
+            assert_eq!(request.method, Method::GET);
+            assert_eq!(request.path_and_query, expected_path);
+            assert_eq!(request.beta_header.as_deref(), Some(BETA_VALUE));
+        }
+        assert!(captured.recv().await.is_none());
+    }
+
+    #[tokio::test]
     async fn retrieve_delete_cancel_and_compact_use_pinned_routes() {
         let response_id = ResponseId::new("resp/a b");
 
@@ -1704,6 +1742,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn beta_create_stream_rejects_non_sse_content_type() {
+        // 8-05(b): the beta SSE handshake fails closed on a JSON body, the
+        // same guard the GA lane pins.
+        let (base_url, _captured) =
+            serve_once(StatusCode::OK, "application/json", "{}".to_owned()).await;
+        let error = client(base_url)
+            .beta_responses()
+            .create_stream(BetaCreateStreamingResponseRequest::new("gpt-test", "hello"))
+            .await
+            .expect_err("a JSON content type must fail the beta SSE handshake");
+        match &error {
+            Error::UnexpectedContentType {
+                expected,
+                actual,
+                status,
+                ..
+            } => {
+                assert_eq!(*expected, "text/event-stream");
+                assert_eq!(actual.as_deref(), Some("application/json"));
+                assert_eq!(*status, StatusCode::OK);
+            }
+            other => panic!("expected UnexpectedContentType, got {other:?}"),
+        }
+        assert_eq!(error.request_id(), Some("req_beta"));
+        assert_eq!(error.status(), Some(StatusCode::OK));
+    }
+
+    #[tokio::test]
     async fn beta_list_input_item_pages_fails_closed_on_repeated_cursor() {
         let page = json!({
             "object": "list",
@@ -1906,6 +1972,49 @@ mod tests {
         let sent = sent_event.await.expect("captured inject event");
         assert_eq!(sent["type"], "response.inject");
         assert_eq!(sent["input"][0]["type"], "multi_agent_call_output");
+
+        socket.close().await.expect("close beta WebSocket");
+    }
+
+    /// 8-19: the lane-routed `response.create` face mirrors the GA persistent
+    /// connection wire shape — a flattened create body tagged
+    /// `response.create` with the `stream_id` lane, no REST `beta=true` query,
+    /// and no `stream` key (the WebSocket transport is the stream).
+    #[tokio::test]
+    async fn send_create_on_stream_routes_the_lane_on_the_wire() {
+        let (client, handshake, sent_event) = websocket_server().await;
+        let mut socket = client
+            .beta_responses()
+            .connect()
+            .await
+            .expect("connect beta WebSocket");
+        socket
+            .send_create_on_stream(
+                "lane_1",
+                BetaCreateResponseRequest::new("gpt-test", "hello"),
+            )
+            .await
+            .expect("send lane-routed response.create");
+        let event = socket
+            .recv()
+            .await
+            .expect("receive lane event")
+            .expect("one server event");
+        assert_eq!(event.stream_id(), Some("lane_1"));
+
+        let handshake = handshake.await.expect("captured beta handshake");
+        assert_eq!(handshake.path_and_query, "/v1/responses");
+        assert_eq!(handshake.beta_header, None);
+        let sent = sent_event.await.expect("captured create event");
+        assert_eq!(sent["type"], "response.create");
+        assert_eq!(sent["stream_id"], "lane_1");
+        assert_eq!(sent["model"], "gpt-test");
+        // A plain-string input is the easy-input form and stays verbatim.
+        assert_eq!(sent["input"], "hello");
+        assert!(
+            sent.get("stream").is_none(),
+            "the create event must drop the REST-only stream key"
+        );
 
         socket.close().await.expect("close beta WebSocket");
     }
@@ -2271,5 +2380,200 @@ mod tests {
             .expect("the following beta event still decodes");
         assert!(matches!(event, BetaResponsesServerEvent::InjectCreated(_)));
         assert_eq!(event.stream_id(), Some("lane_2"));
+    }
+
+    /// Accepts every TCP connection, reads the handshake request, and then
+    /// parks holding the stream open so only a client-side connect timeout
+    /// can finish the attempt. Each connection parks in its own task so the
+    /// counter stays assertable.
+    async fn hanging_handshake_server() -> (Client, Arc<Mutex<usize>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta hanging handshake server");
+        let address = listener
+            .local_addr()
+            .expect("beta hanging handshake address");
+        let connections = Arc::new(Mutex::new(0_usize));
+        let server_connections = Arc::clone(&connections);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                *server_connections
+                    .lock()
+                    .expect("beta hanging connection lock") += 1;
+                tokio::spawn(async move {
+                    let mut request = vec![0_u8; 4096];
+                    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut request))
+                        .await;
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                });
+            }
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("beta hanging handshake base");
+        (client(base_url), connections)
+    }
+
+    #[tokio::test]
+    async fn a_hanging_beta_handshake_times_out_and_replays_within_the_budget() {
+        // 8-11: the beta handshake-timeout branch. A timeout counts as a
+        // retryable handshake failure for `BetaWebSocketReconnectPolicy::
+        // InitialConnect`, so the budget is exactly `1 + max_retries`
+        // attempts before the timeout error surfaces.
+        let (client, connections) = hanging_handshake_server().await;
+        let error = client
+            .beta_responses()
+            .connect_with(
+                BetaResponsesWebSocketConfig::new()
+                    .connect_timeout(Duration::from_millis(50))
+                    .reconnect_policy(BetaWebSocketReconnectPolicy::InitialConnect {
+                        max_retries: 1,
+                        delay: Duration::from_millis(10),
+                    }),
+            )
+            .await
+            .expect_err("the beta retry budget must eventually run out");
+        assert!(
+            matches!(&error, Error::WebSocketTransport(reason) if reason.contains("handshake timed out")),
+            "expected the beta handshake-timeout error, got {error:?}"
+        );
+        assert_eq!(
+            *connections.lock().expect("beta hanging connection lock"),
+            2,
+            "total attempts must equal 1 + max_retries"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_beta_send_is_local_and_keeps_the_socket_open() {
+        // 8-11: the send-side half of `max_message_bytes` on the beta face.
+        // The oversized event is rejected before anything reaches the wire,
+        // so the socket is not retired and a later, smaller event still sends.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta oversized-send server");
+        let address = listener.local_addr().expect("beta oversized-send address");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut socket = accept_hdr_async(
+                        stream,
+                        |_request: &server::Request, response: server::Response| {
+                            Ok::<_, server::ErrorResponse>(response)
+                        },
+                    )
+                    .await
+                    .expect("beta oversized-send handshake");
+                    while socket.next().await.is_some() {}
+                });
+            }
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("beta oversized-send base");
+        let client = client(base_url);
+        let mut socket = client
+            .beta_responses()
+            .connect_with(BetaResponsesWebSocketConfig::new().max_message_bytes(64))
+            .await
+            .expect("connect the beta WebSocket with a tiny message limit");
+
+        let oversized = BetaResponsesClientEvent::Unknown(
+            openai_rs_types::kernel::UnknownTaggedObject::from_value(json!({
+                "type": "future.beta.client.event",
+                "payload": "x".repeat(200),
+            }))
+            .expect("oversized unknown beta client event"),
+        );
+        match socket.send_event(oversized).await {
+            Err(Error::WebSocketProtocol(reason)) => assert_eq!(
+                reason,
+                "outgoing beta Responses event exceeds the configured message limit"
+            ),
+            unexpected => panic!("expected a local message-limit error, got {unexpected:?}"),
+        }
+        assert!(
+            !socket.is_closed(),
+            "a local send rejection must not retire the beta socket"
+        );
+
+        let small = BetaResponsesClientEvent::Unknown(
+            openai_rs_types::kernel::UnknownTaggedObject::from_value(
+                json!({"type": "future.beta.client.event"}),
+            )
+            .expect("small unknown beta client event"),
+        );
+        socket
+            .send_event(small)
+            .await
+            .expect("a smaller beta event still sends after the local rejection");
+        assert!(!socket.is_closed());
+        socket.close().await.expect("close the healthy beta socket");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_beta_inbound_event_retires_the_socket() {
+        // 8-11: the inbound half of `max_message_bytes` on the beta face. A
+        // peer text frame past the limit retires the socket — tungstenite's
+        // capacity guard fires first with the identical predicate, the local
+        // check is its defense-in-depth twin.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta oversized-inbound server");
+        let address = listener
+            .local_addr()
+            .expect("beta oversized-inbound address");
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept beta oversized-inbound socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("beta oversized-inbound handshake");
+            socket
+                .send(Message::text("x".repeat(200)))
+                .await
+                .expect("send oversized beta event");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("beta oversized-inbound base");
+        let client = client(base_url);
+        let mut socket = client
+            .beta_responses()
+            .connect_with(BetaResponsesWebSocketConfig::new().max_message_bytes(64))
+            .await
+            .expect("connect the beta WebSocket with a tiny inbound limit");
+
+        match socket.recv().await {
+            Err(Error::WebSocketTransport(reason)) => assert!(
+                reason.contains("capacity"),
+                "expected the capacity limit, got {reason}"
+            ),
+            Err(Error::WebSocketProtocol(reason)) => assert_eq!(
+                reason,
+                "incoming beta Responses event exceeds the configured message limit"
+            ),
+            unexpected => panic!("expected an inbound-limit error, got {unexpected:?}"),
+        }
+        assert!(
+            socket.is_closed(),
+            "an oversized inbound event must retire the beta socket"
+        );
+        assert!(
+            socket
+                .recv()
+                .await
+                .expect("recv after the beta retirement")
+                .is_none(),
+            "a retired beta socket reports EOF on every later recv"
+        );
     }
 }

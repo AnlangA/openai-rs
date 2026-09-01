@@ -902,4 +902,147 @@ mod tests {
         server.await??;
         Ok(())
     }
+
+    /// 8-22: the sealed-backend body guard rejects `max_output_tokens` and a
+    /// `background: true` request before any network I/O (the backend
+    /// supports neither), keeps an explicit `background: false` legal, and
+    /// polices the streaming typestate against the serialized `stream` key.
+    #[test]
+    fn validate_body_rejects_unsupported_fields_and_mismatched_stream_state() {
+        use serde_json::json;
+
+        assert!(matches!(
+            super::validate_body(&json!({"model":"gpt-test","max_output_tokens":128}), false),
+            Err(DirectError::UnsupportedRequestField("max_output_tokens"))
+        ));
+        assert!(matches!(
+            super::validate_body(&json!({"model":"gpt-test","background":true}), false),
+            Err(DirectError::UnsupportedRequestField("background"))
+        ));
+        assert!(
+            super::validate_body(&json!({"model":"gpt-test","background":false}), false).is_ok(),
+            "an explicit background: false stays legal"
+        );
+
+        assert!(matches!(
+            super::validate_body(&serde_json::Value::Null, false),
+            Err(DirectError::Configuration(_))
+        ));
+
+        assert!(matches!(
+            super::validate_body(&json!({"model":"gpt-test","stream":true}), false),
+            Err(DirectError::Configuration(_))
+        ));
+        assert!(matches!(
+            super::validate_body(&json!({"model":"gpt-test"}), true),
+            Err(DirectError::Configuration(_))
+        ));
+        assert!(
+            super::validate_body(&json!({"model":"gpt-test","stream":true}), true).is_ok(),
+            "the streaming body matches the streaming typestate"
+        );
+        for absent_or_false in [
+            json!({"model":"gpt-test"}),
+            json!({"model":"gpt-test","stream":false}),
+        ] {
+            assert!(super::validate_body(&absent_or_false, false).is_ok());
+        }
+    }
+
+    /// 8-22: the 401-recovery lane end to end — the first request fails with
+    /// 401 carrying the cached access token, the client refreshes against
+    /// the token endpoint, and the retry succeeds with the new token, all on
+    /// one scripted loopback origin.
+    #[tokio::test]
+    async fn create_retries_once_with_a_refreshed_token_after_a_401()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let mut backend_authorizations = Vec::new();
+            let mut refresh_body = String::new();
+            for round in 0..3 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut request = vec![0_u8; 16 * 1024];
+                let _ = stream.readable().await;
+                let read = stream.try_read(&mut request).unwrap_or(0);
+                let captured = String::from_utf8_lossy(&request[..read]).to_string();
+                let authorization = captured
+                    .to_ascii_lowercase()
+                    .lines()
+                    .find(|line| line.starts_with("authorization:"))
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_default();
+                let body_start = captured.find("\r\n\r\n").map(|index| index + 4);
+                if captured.starts_with("POST /oauth/token") {
+                    refresh_body = body_start
+                        .map(|start| captured[start..].to_owned())
+                        .unwrap_or_default();
+                    let body = br#"{"access_token":"access-refreshed","expires_in":3600}"#;
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream.write_all(headers.as_bytes()).await?;
+                    stream.write_all(body).await?;
+                } else if round == 0 {
+                    backend_authorizations.push(authorization);
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: 42\r\nConnection: close\r\n\r\n{\"error\":{\"code\":\"token_expired\",\"message\":\"x\"}}",
+                        )
+                        .await?;
+                } else {
+                    backend_authorizations.push(authorization);
+                    let body = br#"{"id":"resp_after_refresh","created_at":1,"error":null,"incomplete_details":null,"instructions":null,"metadata":null,"model":"gpt-test","object":"response","output":[],"parallel_tool_calls":true,"temperature":null,"tool_choice":"auto","tools":[],"top_p":null}"#;
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream.write_all(headers.as_bytes()).await?;
+                    stream.write_all(body).await?;
+                }
+            }
+            Ok::<_, std::io::Error>((backend_authorizations, refresh_body))
+        });
+
+        let store = Arc::new(EphemeralStore::default());
+        store
+            .save(&StoredCodexSession::fixture(
+                "access-secret",
+                "refresh-secret",
+                u64::MAX,
+                ChatGptAccountId::fixture("acct-123")?,
+            ))
+            .await?;
+        let auth = DirectAuthClient::with_test_token_endpoint(url::Url::parse(&format!(
+            "http://{address}/oauth/token"
+        ))?)?;
+        let manager = Arc::new(TokenManager::new(store, auth));
+        let endpoint = url::Url::parse(&format!("http://{address}/backend-api/codex/responses"))?;
+        let client = DirectCodexResponsesClient::with_test_endpoint(manager, endpoint)?;
+        let request = CreateResponseRequest::new("gpt-test", ResponseInput::Text("hello".into()));
+        assert_eq!(client.create(&request).await?.id(), "resp_after_refresh");
+
+        let (authorizations, refresh_body) = server.await??;
+        assert_eq!(authorizations.len(), 2, "exactly one retry after the 401");
+        assert!(
+            authorizations[0].contains("bearer access-secret"),
+            "the failed request carried the cached token: {}",
+            authorizations[0]
+        );
+        assert!(
+            authorizations[1].contains("bearer access-refreshed"),
+            "the retry carried the refreshed token: {}",
+            authorizations[1]
+        );
+        assert!(refresh_body.contains("grant_type=refresh_token"));
+        assert!(
+            refresh_body.contains("refresh_token=refresh-secret"),
+            "the refresh posted the stored refresh token"
+        );
+        Ok(())
+    }
 }

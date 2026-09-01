@@ -1,0 +1,10 @@
+error[E0599]: no method named `completions` found for struct `openai_rs_client::Client` in the current scope
+ --> tests/ui/default_client_has_no_legacy_completions.rs:4:20
+  |
+4 |     let _ = client.completions();
+  |                    ^^^^^^^^^^^
+  |
+help: there is a method `chat_completions` with a similar name
+  |
+4 |     let _ = client.chat_completions();
+  |                     +++++

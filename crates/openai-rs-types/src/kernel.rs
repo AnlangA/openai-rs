@@ -603,7 +603,7 @@ mod tests {
     use serde_json::{Map, Value, json};
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
-    use super::{ExtraFields, Nullable, Omittable};
+    use super::{ExtraFields, Nullable, Omittable, object_discriminator};
 
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
     struct ThreeState {
@@ -713,6 +713,41 @@ mod tests {
         assert_eq!(debug, "ExtraFields { len: 1 }");
         assert!(!debug.contains("token"));
         assert!(!debug.contains("secret-text"));
+    }
+
+    #[test]
+    fn object_discriminator_pins_the_three_adversarial_shapes() {
+        // 8-06: the Unknown-downgrade precondition. Every tagged union built
+        // on `object_discriminator` must reject these three shapes instead of
+        // retaining them as an unknown variant.
+        assert_eq!(
+            object_discriminator(&json!("response.completed")),
+            Err("tagged value must be a JSON object")
+        );
+        assert_eq!(
+            object_discriminator(&json!([1, 2])),
+            Err("tagged value must be a JSON object")
+        );
+        assert_eq!(
+            object_discriminator(&json!(7)),
+            Err("tagged value must be a JSON object")
+        );
+        assert_eq!(
+            object_discriminator(&json!({"sequence_number": 1})),
+            Err("tagged object is missing string field `type`")
+        );
+        assert_eq!(
+            object_discriminator(&json!({"type": 123})),
+            Err("tagged object field `type` must be a string")
+        );
+        assert_eq!(
+            object_discriminator(&json!({"type": null})),
+            Err("tagged object field `type` must be a string")
+        );
+        assert_eq!(
+            object_discriminator(&json!({"type": "response.completed"})),
+            Ok(String::from("response.completed"))
+        );
     }
 
     proptest! {

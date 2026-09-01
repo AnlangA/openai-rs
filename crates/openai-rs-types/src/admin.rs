@@ -4542,6 +4542,97 @@ mod tests {
         (event_types, payload_keys, envelope_keys)
     }
 
+    /// Pinned per-payload property schemas: `AuditLog.properties[<key>].properties`.
+    ///
+    /// Each dotted `AuditLog` property maps to the field schemas of its typed
+    /// Rust payload, so the parity test can derive both a complete sample
+    /// fixture and a type-mismatched probe per field straight from the pin
+    /// (8-08) instead of hand-copied field lists.
+    fn pinned_audit_payload_properties() -> Map<String, Value> {
+        let openapi: Value = serde_json::from_str(include_str!(
+            "../../../spec/upstream/openapi-2026-08-29.json"
+        ))
+        .expect("pinned OpenAPI is valid JSON");
+        openapi["components"]["schemas"]["AuditLog"]["properties"]
+            .as_object()
+            .expect("AuditLog properties are an object")
+            .iter()
+            .filter(|(key, _)| key.contains('.'))
+            .map(|(key, schema)| {
+                // `login.succeeded`/`logout.succeeded` pin an explicitly empty
+                // object ("no fields beyond the standard attributes"), which
+                // the Rust side types as free-form `AdminJsonObject`; their
+                // field set is empty rather than absent.
+                let fields = schema["properties"]
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
+                (key.clone(), Value::Object(fields))
+            })
+            .collect()
+    }
+
+    /// Sample value matching a pinned payload property schema, recursively for
+    /// nested objects and array items.
+    fn audit_sample_value(schema: &Value) -> Value {
+        if let Some(values) = schema["enum"].as_array() {
+            return values
+                .first()
+                .cloned()
+                .expect("pinned enum property carries a value");
+        }
+        match schema["type"].as_str().expect("payload property is typed") {
+            "string" => json!("sample"),
+            "integer" => json!(1),
+            "number" => json!(0.5),
+            "boolean" => json!(true),
+            "array" => json!([audit_sample_value(&schema["items"])]),
+            "object" => match schema["properties"].as_object() {
+                Some(properties) => Value::Object(
+                    properties
+                        .iter()
+                        .map(|(field, sub)| (field.clone(), audit_sample_value(sub)))
+                        .collect(),
+                ),
+                // A propertyless pinned object is free-form on the Rust side
+                // (`AdminJsonObject`); the empty object is its neutral value.
+                None => json!({}),
+            },
+            other => panic!("no audit sample for pinned type {other}"),
+        }
+    }
+
+    /// Value whose JSON type mismatches a pinned payload property schema.
+    ///
+    /// A typed Rust field must reject it at decode time; only the lossless
+    /// `extra` fallback accepts anything, and it never errors — so a decode
+    /// failure proves the pinned wire name is consumed by a typed field with
+    /// exactly that spelling.
+    fn audit_mismatched_value(schema: &Value) -> Value {
+        let typed = if schema["enum"].as_array().is_some() {
+            "string"
+        } else {
+            schema["type"].as_str().expect("payload property is typed")
+        };
+        match typed {
+            "string" => json!(false),
+            "integer" | "number" => json!("not-a-number"),
+            "boolean" => json!("not-a-boolean"),
+            "array" | "object" => json!(1),
+            other => panic!("no mismatched value for pinned type {other}"),
+        }
+    }
+
+    /// Minimal official audit envelope carrying one typed payload.
+    fn audit_envelope(key: &str, payload: Value) -> Value {
+        let mut object = Map::new();
+        object.insert("id".to_owned(), json!("audit_parity"));
+        object.insert("type".to_owned(), Value::from(key));
+        object.insert("effective_at".to_owned(), json!(0));
+        object.insert(key.to_owned(), payload);
+        Value::Object(object)
+    }
+
     #[test]
     fn admin_audit_event_payloads_match_openapi() {
         let (event_types, payload_keys, envelope_keys) = pinned_audit_wire_inventory();
@@ -4565,38 +4656,51 @@ mod tests {
         assert!(!AuditEventType::from_raw("audit.future.event").is_known());
 
         // Every dotted payload key is itself an official event type, and must
-        // be consumed by a typed `AuditLog` field rather than `extra`. Probing
-        // with an empty object is decisive in both directions: a typed field
-        // either decodes `{}` (absent from `extra`, round-trips) or fails on a
-        // required subfield, while a key that fell through to `extra` can only
-        // ever decode successfully and would surface there.
+        // be consumed by a typed `AuditLog` field rather than `extra`. The
+        // field-level probe below is decisive in both directions: decoding a
+        // complete pin-derived fixture proves each typed field accepts the
+        // pinned JSON type (a wrong Rust type rejects the sample), while a
+        // type-mismatched value under a pinned field name can only survive
+        // decode by falling into the lossless `extra` fallback — so a decode
+        // error proves the exact wire spelling is typed (8-08).
         let event_set: HashSet<&str> = event_types.iter().map(String::as_str).collect();
+        let payload_properties = pinned_audit_payload_properties();
+        let mut probed_fields = 0_usize;
         for key in &payload_keys {
             assert!(
                 event_set.contains(key.as_str()),
                 "{key} must be an official event type"
             );
-            let mut object = Map::new();
-            object.insert("id".to_owned(), json!("audit_probe"));
-            object.insert("type".to_owned(), Value::from(key.clone()));
-            object.insert("effective_at".to_owned(), json!(0));
-            object.insert(key.clone(), json!({}));
-            match serde_json::from_value::<AuditLog>(Value::Object(object)) {
-                Ok(audit) => {
-                    assert_eq!(audit.kind.as_str(), key.as_str());
-                    assert!(
-                        !audit.extra().contains_key(key),
-                        "{key} must be typed on AuditLog, not extra"
-                    );
-                    let encoded = ok(serde_json::to_value(&audit));
-                    assert_eq!(encoded.get(key), Some(&json!({})));
-                }
-                Err(_) => {
-                    // A required subfield of the typed payload rejected `{}`;
-                    // the key was still matched against the typed field.
-                }
+            let fields = payload_properties[key]
+                .as_object()
+                .unwrap_or_else(|| panic!("{key} carries pinned payload properties"));
+            let mut payload = Map::new();
+            for (field, schema) in fields {
+                payload.insert(field.clone(), audit_sample_value(schema));
+            }
+            let envelope = audit_envelope(key, Value::Object(payload));
+            let audit = ok(serde_json::from_value::<AuditLog>(envelope.clone()));
+            assert_eq!(audit.kind.as_str(), key.as_str());
+            assert!(
+                !audit.extra().contains_key(key),
+                "{key} must be typed on AuditLog, not extra"
+            );
+            assert_eq!(ok(serde_json::to_value(&audit)), envelope);
+
+            for (field, schema) in fields {
+                probed_fields += 1;
+                let mut probe = Map::new();
+                probe.insert(field.clone(), audit_mismatched_value(schema));
+                assert!(
+                    serde_json::from_value::<AuditLog>(audit_envelope(key, Value::Object(probe)))
+                        .is_err(),
+                    "{key}.{field} must be a typed field with this exact wire spelling"
+                );
             }
         }
+        // The pin carries 120 payload fields across the 55 typed payloads;
+        // this guards a pin swap from silently narrowing the probe.
+        assert_eq!(probed_fields, 120);
 
         // Rust -> OpenAPI control: a dotted key the pin does not carry is not
         // typed and stays in `extra` losslessly, so the typed set observed by
@@ -4905,6 +5009,147 @@ mod tests {
                 "num_model_requests": 1
             }))
             .is_err()
+        );
+    }
+
+    /// Pinned usage-result branch inventory derived from the frozen
+    /// discriminator manifest and OpenAPI document.
+    ///
+    /// Mirrors the realtime parity derivation (`realtime.rs`): the eleven
+    /// `UsageTimeBucket` branch references come from
+    /// `spec/contracts/discriminators.json`, and each wire tag plus required
+    /// field set from the pinned schema itself, so the parity test below
+    /// asserts against the pins instead of a hand-copied list (8-07).
+    fn pinned_usage_result_branches() -> Vec<(String, Vec<String>)> {
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../../spec/contracts/discriminators.json"))
+                .expect("pinned discriminator manifest is valid JSON");
+        let openapi: Value = serde_json::from_str(include_str!(
+            "../../../spec/upstream/openapi-2026-08-29.json"
+        ))
+        .expect("pinned OpenAPI is valid JSON");
+        let schemas = openapi["components"]["schemas"]
+            .as_object()
+            .expect("OpenAPI schemas are an object");
+        let entry = manifest["entries"]
+            .as_array()
+            .expect("manifest entries are an array")
+            .iter()
+            .find(|entry| entry["schema"].as_str() == Some("UsageTimeBucket"))
+            .expect("UsageTimeBucket discriminator entry is present");
+        entry["branch_refs"]
+            .as_array()
+            .expect("branch_refs is an array")
+            .iter()
+            .map(|reference| {
+                let branch = reference
+                    .as_str()
+                    .and_then(|reference| reference.rsplit('/').next())
+                    .expect("branch ref has a final component");
+                let schema = &schemas[branch];
+                let tag = schema["properties"]["object"]["enum"]
+                    .as_array()
+                    .and_then(|values| values.first())
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| panic!("{branch} has one object enum"))
+                    .to_owned();
+                let required = schema["required"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{branch} carries a required array"))
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .unwrap_or_else(|| panic!("{branch} required entries are strings"))
+                            .to_owned()
+                    })
+                    .collect();
+                (tag, required)
+            })
+            .collect()
+    }
+
+    /// Wire tag routed by a decoded usage result, including the future lane.
+    fn usage_result_variant_tag(result: &UsageResult) -> String {
+        match result {
+            UsageResult::Completions(_) => "organization.usage.completions.result",
+            UsageResult::Embeddings(_) => "organization.usage.embeddings.result",
+            UsageResult::Moderations(_) => "organization.usage.moderations.result",
+            UsageResult::Images(_) => "organization.usage.images.result",
+            UsageResult::AudioSpeeches(_) => "organization.usage.audio_speeches.result",
+            UsageResult::AudioTranscriptions(_) => "organization.usage.audio_transcriptions.result",
+            UsageResult::VectorStores(_) => "organization.usage.vector_stores.result",
+            UsageResult::CodeInterpreterSessions(_) => {
+                "organization.usage.code_interpreter_sessions.result"
+            }
+            UsageResult::FileSearchCalls(_) => "organization.usage.file_searches.result",
+            UsageResult::WebSearchCalls(_) => "organization.usage.web_searches.result",
+            UsageResult::Costs(_) => "organization.costs.result",
+            UsageResult::Unknown(value) => return value.discriminator().to_owned(),
+        }
+        .to_owned()
+    }
+
+    /// Sample value for a pinned required metric; every non-`object` required
+    /// field across the eleven branches is an integer count.
+    fn usage_required_value(field: &str) -> Value {
+        match field {
+            "characters" | "seconds" | "num_model_requests" | "num_sessions" | "input_tokens"
+            | "output_tokens" | "num_requests" | "images" | "usage_bytes" => json!(1),
+            other => panic!("no sample value for pinned usage field {other}"),
+        }
+    }
+
+    #[test]
+    fn usage_result_routes_every_pinned_branch_and_futures_to_unknown() {
+        let branches = pinned_usage_result_branches();
+        // Ten usage metrics plus the shared costs result.
+        assert_eq!(branches.len(), 11, "the pin carries eleven result branches");
+        let mut routed_tags = HashSet::new();
+
+        for (tag, required) in &branches {
+            let mut object = Map::new();
+            object.insert("object".to_owned(), Value::from(tag.clone()));
+            for field in required.iter().filter(|field| field.as_str() != "object") {
+                object.insert(field.clone(), usage_required_value(field));
+            }
+            let fixture = Value::Object(object);
+            let decoded = ok(serde_json::from_value::<UsageResult>(fixture.clone()));
+            assert_eq!(
+                usage_result_variant_tag(&decoded),
+                tag.as_str(),
+                "the pinned wire tag must route to its typed variant"
+            );
+            assert_eq!(ok(serde_json::to_value(&decoded)), fixture);
+            assert!(routed_tags.insert(tag.clone()), "branch tags are unique");
+
+            // The Rust required-field set may not be looser than the pin:
+            // dropping any pinned required metric must fail the decode
+            // instead of silently defaulting to zero.
+            for field in required.iter().filter(|field| field.as_str() != "object") {
+                let mut reduced = fixture.as_object().expect("usage fixture object").clone();
+                assert!(reduced.remove(field).is_some());
+                assert!(
+                    serde_json::from_value::<UsageResult>(Value::Object(reduced)).is_err(),
+                    "{tag} must require {field}"
+                );
+            }
+        }
+
+        // A future discriminator stays `Unknown`, keeps its exact tag, and
+        // round-trips verbatim.
+        let future = json!({"object": "organization.usage.future.result", "units": 7});
+        match ok(serde_json::from_value::<UsageResult>(future.clone())) {
+            UsageResult::Unknown(value) => {
+                assert_eq!(value.discriminator(), "organization.usage.future.result");
+            }
+            _ => panic!("future usage result must remain unknown"),
+        }
+        assert_eq!(
+            ok(serde_json::to_value(ok(serde_json::from_value::<
+                UsageResult,
+            >(future.clone())))),
+            future
         );
     }
 

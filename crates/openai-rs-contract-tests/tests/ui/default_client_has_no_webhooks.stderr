@@ -1,0 +1,16 @@
+error[E0432]: unresolved import `openai_rs_client::WebhookVerifier`
+ --> tests/ui/default_client_has_no_webhooks.rs:1:5
+  |
+1 | use openai_rs_client::WebhookVerifier;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `WebhookVerifier` in the root
+  |
+note: found an item that was configured out
+ --> $WORKSPACE/crates/openai-rs-client/src/lib.rs
+  |
+  | pub use webhooks::{WebhookVerificationError, WebhookVerifier};
+  |                                              ^^^^^^^^^^^^^^^
+note: the item is gated behind the `webhook-verification` feature
+ --> $WORKSPACE/crates/openai-rs-client/src/lib.rs
+  |
+  | #[cfg(feature = "webhook-verification")]
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

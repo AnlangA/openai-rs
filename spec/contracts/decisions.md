@@ -88,7 +88,9 @@ until a decision is recorded here and its fixtures pass.
 - Decision: keep `status` required for output decoding while recording the
   example discrepancy.
 - Impact: File resource requiredness and fixture quarantine.
-- Tests: capture or synthetic File response containing `status`.
+- Tests: `openai-rs-types::files::tests::retrieve_file_fixture_round_trips_the_pin_required_status`
+  (include_str wiring of the frozen synthetic fixture, round-8 item 8-01) and
+  `openai-rs-types::files::tests::file_status_is_required_even_though_deprecated`.
 
 ## D0007 — Empty File lists provisionally require cursor ids
 
@@ -100,7 +102,9 @@ until a decision is recorded here and its fixtures pass.
 - Decision: retain raw requiredness until an empty-list fixture proves absent or
   nullable behavior.
 - Impact: File pagination response DTO.
-- Tests: frozen empty `listFiles` response fixture.
+- Tests: `openai-rs-types::files::tests::empty_list_files_fixture_pins_required_cursor_ids`
+  (include_str wiring of the frozen empty `listFiles` fixture — decodes the
+  `"file_none"` sentinels and fails on a dropped id — round-8 item 8-01).
 
 ## D0008 — MCPApprovalResponse ghost request_id is directional
 
@@ -113,8 +117,11 @@ until a decision is recorded here and its fixtures pass.
   resources keep `request_id` required and preserve it in the anomaly manifest
   until fixtures resolve the conflict.
 - Impact: request/output DTO split and schema anomaly tracking.
-- Tests: input compile/serde test, output requiredness test, then input/output wire
-  fixtures.
+- Tests: input/output wire fixtures wired by round-8 item 8-01:
+  `openai-rs-types::responses::tests::mcp_approval_output_fixture_preserves_the_ghost_request_id`,
+  `openai-rs-types::responses::tests::mcp_approval_output_fixture_without_request_id_round_trips_both_shapes`,
+  plus the existing `remaining_item_fields_match_python_and_openapi_inventory`
+  and `local_shell_output_and_mcp_approval_decode_without_ghost_fields`.
 
 ## D0009 — Batch lifecycle fields accept explicit null
 
@@ -307,7 +314,12 @@ until a decision is recorded here and its fixtures pass.
   accessors; `CreateChatCompletionConstraintError`.
 - Overrides: none
 - Tests: `chat_completion_decodes_python_moderation_results_list`,
-  `chat_create_validate_enforces_pinned_limits`.
+  `chat_create_validate_enforces_pinned_limits` (partial, noted by round-8
+  item 8-26: only the frequency-penalty and `n` limit error paths are
+  asserted there — the temperature/top_p/presence_penalty/top_logprobs/
+  metadata/safety_identifier rejections and the empty-messages guard still
+  lack negative assertions; to be completed by the 8-14 fix, see the planned
+  D0245 addendum).
 
 ## D0017 — Embeddings, Speech, Images, Transcription, and Fine-tuning limits
 
@@ -3284,7 +3296,11 @@ until a decision is recorded here and its fixtures pass.
 - Reason: facade-only users could not call `retrieve_with`/`retrieve_stream` or match error details without taking a direct dependency on the client crate, and the example demonstrated a continuation the model could not tool-call against.
 - Impact: facade crate only; no wire behavior change.
 - Overrides: none
-- Tests: `crates/openai-rs/tests/facade_reexports.rs` (4 compile-level checks).
+- Tests: `crates/openai-rs/tests/facade_reexports.rs` (8 compile-level checks
+  as recounted by round-8 item 8-26: the four original re-export checks plus
+  four later feature-gated additions — realtime connect target, admin
+  checkpoint permissions, admin operation machinery, content-provenance
+  discriminators).
 
 ## D0136 — Required empty arrays survive the decode→encode round trip
 
@@ -3908,7 +3924,9 @@ until a decision is recorded here and its fixtures pass.
 - Reason: each position either hardens beyond lenient baselines without rejecting any evidenced wire form, or documents parity the repo already promises.
 - Impact: documentation and test coverage only (plus the README sample).
 - Overrides: none
-- Tests: `rejects_replay_future_tamper_and_unbounded_signature_lists` (rewritten), `multi_grader_accepts_pinned_single_and_official_example_array`, existing SSE handshake tests.
+- Tests: `rejects_replay_future_tamper_and_unusable_signature_lists` (name as
+  renamed by D0225), `multi_grader_accepts_pinned_single_and_official_example_array`,
+  existing SSE handshake tests.
 
 ## D0188 — Prompt-cached message drops the unsupported id/status null setters (corrects D0050)
 
@@ -4548,3 +4566,14 @@ until a decision is recorded here and its fixtures pass.
 - Impact: documentation and ledger only.
 - Overrides: none
 - Tests: existing suites.
+
+## D0245 — Test-gap round: fixtures wired, pin-derived parities extended, retry/WS/codex error lanes covered
+
+- Status: accepted
+- Reviewed: 2026-08-31
+- Scope: testdata fixtures; UsageResult/audit/ThreadItem-adjacent parities; chat/media stream-event positive coverage; retry truth tables and error lanes; WebSocket handshake-timeout/401/oversize lanes; codex error paths; rmcp schema policies; facades for spend alerts/limits; ledger name sync; fuzz gate
+- Sources: round-8 audit (问题8.md) — five of six testdata fixtures were dead files while D0007/OVR-0006's claimed empty-list guard did not exist in any form; seventeen chat request fields and the final usage chunk (both lanes) had zero wire coverage; ~32 GA stream-event tags, the beta wrapper's item branch, seven UsageResult branches, and five codex notification branches had no positive tests; the retry matrix's x-should-retry/408/409/transport-error/DeadlineExceeded quadrants, three WebSocket handshake-timeout/401-refresh/oversize lanes, and four codex public error paths were untested; fuzz had no execution path and trybuild pinned only two of twelve feature boundaries.
+- Decision: the four dead JSON fixtures are include_str!-wired (empty listFiles pins the required cursor ids — the OVR-0006 guard now exists — plus retrieveFile status and both mcp-approval shapes; the downloadFile fixture.toml stays as provenance metadata since its binary is already wired); pin-derived parities extend to the eleven UsageResult branches (from discriminators.json + the pinned OpenAPI) and to field-level audit payload probes (positive pin-derived fixtures plus 120 mismatched-value reverse probes; the unreachable `{}`-probe error branch is gone); chat gains a kitchen-sink round-trip with a key-set assertion, the nullable builder family, populated logprobs, and the empty-choices usage chunk on both lanes; the GA stream-event suite gains positive fixtures for the previously untested tags (hosted-tool lifecycles, delta families, queued/in_progress) plus the four annotation branches; kernel's three adversarial discriminator shapes are pinned; beta gains the moderation resource fixture, background-poll loopback, non-SSE content-type gates on both lanes, and a wire-level lane send; the retry lanes gain x-should-retry/408/connect-failure/deadline e2e's; the WebSocket clients gain hanging-handshake timeouts (with InitialConnect retry counting), a 401-refresh-retry lane, and oversize-send/keep-alive-local-validation halves; codex gains the queue-full, pending-capacity, orphan-response, and invalid-message paths plus the five notification branches, the OAuth success chain with a local JWKS, jwt multi-audience/namespace/nbf variants, and keyring/validate-body rejections; rmcp pins the Preserve policy and the invalid-name fallback; spend alerts/limits gain full facades (sixteen operations) with loopbacks; four pagination glues, chatkit item pages, and the SessionUpdate nested validate gain tests; the ledger's stale test names are synced; the fuzz crate joins the stable gate list via a manifest-path check and the trybuild suite grows four feature-boundary negatives.
+- Impact: tests, fixtures, and documentation only, plus two additive admin facades; no wire behavior change.
+- Overrides: none
+- Tests: the round-8 additions cited in the group reports (workspace total 1006 → 1101).

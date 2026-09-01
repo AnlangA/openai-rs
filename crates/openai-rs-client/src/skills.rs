@@ -1054,6 +1054,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn skill_version_page_stream_advances_cursor_and_preserves_query() {
+        // 8-20: the version-level pagination glue mirrors the Skill stream —
+        // the second request carries the advanced `after` cursor plus the
+        // preserved limit/order filters.
+        let (client, captures) = serve_script(vec![
+            StubResponse::json(
+                json!({
+                    "object":"list","data":[],"first_id":"skillver_1",
+                    "last_id":"skillver_2","has_more":true
+                })
+                .to_string(),
+            ),
+            StubResponse::json(
+                json!({
+                    "object":"list","data":[],"first_id":"skillver_3",
+                    "last_id":"skillver_3","has_more":false
+                })
+                .to_string(),
+            ),
+        ])
+        .await;
+        let params = SkillListParams {
+            limit: Omittable::Value(SkillListLimit::new(2).expect("limit")),
+            order: Omittable::Value(SkillListOrder::Descending),
+            after: Omittable::Omitted,
+        };
+        let pages = Skills::new(client)
+            .versions()
+            .list_pages(SkillId::new("skill/a b"), params)
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().all(Result::is_ok));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 2);
+        assert_eq!(
+            captures[0].path_and_query,
+            "/v1/skills/skill%2Fa%20b/versions?limit=2&order=desc"
+        );
+        let second = Url::parse(&format!("http://loopback{}", captures[1].path_and_query))
+            .expect("second version page URL");
+        let query = second.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("after".into(), "skillver_2".into())));
+        assert!(query.contains(&("limit".into(), "2".into())));
+        assert!(query.contains(&("order".into(), "desc".into())));
+    }
+
+    #[tokio::test]
     async fn skill_version_create_list_retrieve_delete_match_contract() {
         let (client, captures) = serve_script(vec![
             StubResponse::json(version_json("skill/a b", "3")),

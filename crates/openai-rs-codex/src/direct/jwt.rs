@@ -252,8 +252,10 @@ fn validate_audience(claims: &IdTokenClaims, expected: &str) -> Result<(), Direc
     }
 }
 
+/// Shared RSA signing fixture for the JWT unit tests and the OAuth e2e
+/// tests in `auth.rs` (8-22): one key pair, its published JWKS, and a signer.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use base64::Engine;
     use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
     use ring::rand::SystemRandom;
@@ -261,30 +263,43 @@ mod tests {
     use ring::signature::{RSA_PKCS1_SHA256, RsaKeyPair};
     use serde_json::json;
 
-    use super::{JsonWebKeySet, OidcVerifier};
+    use super::JsonWebKeySet;
 
     const PRIVATE_KEY: &str = "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDIp4UApaJQ247TbIW43Pg8S+GVMRT6qsdhbg6iSSL6a3qwH4VYLIFcw73rXtRnYrxTasyqi3JwWwDO8xay7FCPuWlyQbnjQjhBnMz3M57riwYhR69PWTL2E9m8CucL9tVtRDLoPhN2dYdTG/qd1WUxdBJEvnXovJImufpEtLihATWNfou3XQxySk8R7Od3diY/rv55YS6x1xZG536JgoZr4UAOr8NYDTE5tBqqc4AYc3LyLjW9VbKISWFlyIHtFU1YESRcUtVswJ1JFtTypQvPWuCiY39M+mv52q/BE9uoODtt19pt2Nsi2FEKjTEVmDMIkJoaAzJReqVeiW4VQkmzAgMBAAECggEAI6TukZDa5rY6BwDOOGq4hi2Moy4W5fiUdpBQdS+80PNq1gKjc2hkipATGs67uKnnfoIIXXtsFt1zpU+1ho9IOF/dhXh7hw1qZO1v07IN1xXZPuw3DkdwMBqSoT7mkE+G1mQ5DtyIJJD4OyFLQeJ4mXJfFGspEvD8nXiIJtBbw+3cMzbUJRYwTWfTxIHfkq7uuXUs1zn3hGm1Ku3WIQo/e3+y1eiecSTqJqrGGWLtZjB6689c59RI0leT6jM4tizOIQ3BkUXAetn/HRFbKZRcNFhh0e7+G6QIVTFX/wXHbLZsJWkPzHxNX2USoWqgpnmgiGZSGTbAt/CJ492NeX0K8QKBgQD4W6jcKVAjlu6SKrhVlhO8RdjYs4IC+Mi4/1eyhvCtgtPhrHxWb/5zHPrlYZrt3E5rdhvcshNkcOM9cS1MxwPCnJshs+eWnjXwkl+tWy3ceroc21xAhu9XHrPqNLuyX04YHV/B0Rg23aC+/C8aQmikq30yeLxFpTiz0jQdSDgnFwKBgQDO1BfuiMQBoDRDYfUx3NfwJXcw5AX81U625OU5aOZc5WBC3I/F4W5S5r3D3CbsiunD+JGxxEuR+xFjSinxQkT9hQ/Vjp5PX53wJ1WmGQmM/VyBlSN6htfCR/Y8ra9nuUiV1qphlTrckdy1wY2VreK/RG3QZcFRlrlv+mFWGXaTxQKBgQC/yYCHq3uQUDChPU4mAYPyAvomtdBzXQ0cF0rwuVXIl9vpTNqjoU6cNEfntM0AW/1O7OEtN3LUQHyq6Ogzfwf/VBJUH2p6nGhJA6/Q3jV3Kmrod9kwl0LiQvpqpRhA8WoMIzrcIA0T6WgFtBbnr1rBtxAyVpwFKEa2TmAiMK/0NwKBgDW7gCQmP9W0Sx+eWVcE6symzxpSgwO2XubA/JQ3nnFP3fxA1NExybmb3Hz/utUFGcohz6gBOSjJszC6Wb8l2kqKwRxYGuTAEIYNkgC+zG5mfBvmJPt2AKOmkmAdN06ZIjRbOpRzcoFPG6nUiPXz4M6T9nuHk/ugTri6sYLuxpGJAoGBALI0mlazlyncjdZYq8GNnN8HaQu6uMahky1cgJjnN5LSq8jC03gEhHwyPlFSmjKVXD0En2YyQC5dEZAtFde76EJMAqtU3ZbEDADY/0H1ajcguEPUXBtey/xQ2y5tWgsXtaF0PeIfamGlgC2pAnH72m5MbRKuM5IiUql/qXNlOreq";
 
-    fn fixture() -> Result<(RsaKeyPair, JsonWebKeySet), Box<dyn std::error::Error>> {
+    /// The RSA pair plus the JWKS publishing its public half (kid `fixture`).
+    ///
+    /// `jwks_json` is the exact object `jwks` decodes from, so loopback
+    /// servers can serve it without a Serialize impl on the DTO.
+    pub(crate) struct RsaFixture {
+        pub(crate) pair: RsaKeyPair,
+        pub(crate) jwks: JsonWebKeySet,
+        pub(crate) jwks_json: serde_json::Value,
+    }
+
+    pub(crate) fn rsa_fixture() -> Result<RsaFixture, Box<dyn std::error::Error + Send + Sync>> {
         let private = STANDARD.decode(PRIVATE_KEY)?;
         let pair = RsaKeyPair::from_pkcs8(&private)
             .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
         let components = PublicKeyComponents::<Vec<u8>>::from(pair.public());
-        let jwks = serde_json::from_value(json!({"keys":[{
+        let jwks_json = json!({"keys":[{
             "kty":"RSA", "kid":"fixture", "use":"sig", "alg":"RS256",
-            "n": URL_SAFE_NO_PAD.encode(components.n),
-            "e": URL_SAFE_NO_PAD.encode(components.e)
-        }]}))?;
-        Ok((pair, jwks))
+            "n": URL_SAFE_NO_PAD.encode(&components.n),
+            "e": URL_SAFE_NO_PAD.encode(&components.e)
+        }]});
+        let jwks = serde_json::from_value(jwks_json.clone())?;
+        Ok(RsaFixture {
+            pair,
+            jwks,
+            jwks_json,
+        })
     }
 
-    fn token(
+    fn sign(
         pair: &RsaKeyPair,
+        header: String,
         claims: serde_json::Value,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
-            "alg":"RS256", "kid":"fixture", "typ":"JWT"
-        }))?);
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims)?);
         let signing_input = format!("{header}.{payload}");
         let mut signature = vec![0_u8; pair.public().modulus_len()];
@@ -301,16 +316,48 @@ mod tests {
         ))
     }
 
+    /// Sign `claims` with the pinned RS256 `fixture` kid header.
+    pub(crate) fn token(
+        pair: &RsaKeyPair,
+        claims: serde_json::Value,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
+            "alg":"RS256", "kid":"fixture", "typ":"JWT"
+        }))?);
+        sign(pair, header, claims)
+    }
+
+    /// Sign `claims` under an attacker-chosen `alg` header value; only the
+    /// header differs, so the signature bytes stay a valid RSA signature.
+    pub(crate) fn token_with_alg(
+        pair: &RsaKeyPair,
+        alg: &str,
+        claims: serde_json::Value,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
+            "alg": alg, "kid": "fixture", "typ": "JWT"
+        }))?);
+        sign(pair, header, claims)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::OidcVerifier;
+    use super::test_support::{rsa_fixture, token, token_with_alg};
+
     #[test]
     fn verifies_signature_issuer_audience_expiry_and_nonce()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let (pair, jwks) = fixture()?;
-        let verifier = OidcVerifier::new("https://issuer.test", "client-test", jwks)?;
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let fixture = rsa_fixture()?;
+        let verifier = OidcVerifier::new("https://issuer.test", "client-test", fixture.jwks)?;
         let claims = json!({
             "iss":"https://issuer.test", "aud":"client-test", "exp":2000,
             "iat":900, "nonce":"nonce-test", "chatgpt_account_id":"acct-123"
         });
-        let token = token(&pair, claims)?;
+        let token = token(&fixture.pair, claims)?;
         assert_eq!(
             verifier.verify(&token, "nonce-test", 1000)?.as_str(),
             "acct-123"
@@ -325,6 +372,196 @@ mod tests {
         }
         let tampered = String::from_utf8(tampered)?;
         assert!(verifier.verify(&tampered, "nonce-test", 1000).is_err());
+        Ok(())
+    }
+
+    /// 8-22: a multi-audience `aud` array is accepted only when the matching
+    /// `azp` is present; a single-element array needs no `azp`, while a
+    /// missing or mismatched `azp` and an absent audience are rejected.
+    #[test]
+    fn multi_audience_tokens_require_a_matching_azp()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let fixture = rsa_fixture()?;
+        let verifier = OidcVerifier::new("https://issuer.test", "client-test", fixture.jwks)?;
+        let signed = |aud: serde_json::Value, azp: Option<&str>| {
+            let mut claims = json!({
+                "iss":"https://issuer.test", "aud": aud, "exp":2000,
+                "iat":900, "nonce":"nonce-test", "chatgpt_account_id":"acct-123"
+            });
+            if let Some(azp) = azp {
+                claims["azp"] = json!(azp);
+            }
+            token(&fixture.pair, claims)
+        };
+
+        let with_azp = signed(json!(["client-test", "other-client"]), Some("client-test"))?;
+        assert_eq!(
+            verifier.verify(&with_azp, "nonce-test", 1000)?.as_str(),
+            "acct-123"
+        );
+        let single_no_azp = signed(json!(["client-test"]), None)?;
+        assert!(verifier.verify(&single_no_azp, "nonce-test", 1000).is_ok());
+
+        let missing_azp = signed(json!(["client-test", "other-client"]), None)?;
+        assert!(matches!(
+            verifier.verify(&missing_azp, "nonce-test", 1000),
+            Err(super::DirectError::Jwt(ref message))
+                if message.contains("multi-audience token omitted matching azp")
+        ));
+        let wrong_azp = signed(json!(["client-test", "other-client"]), Some("other-client"))?;
+        assert!(verifier.verify(&wrong_azp, "nonce-test", 1000).is_err());
+
+        let absent_audience = signed(json!(["other-client"]), None)?;
+        assert!(
+            verifier
+                .verify(&absent_audience, "nonce-test", 1000)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    /// 8-22: the namespaced `https://api.openai.com/auth` claim path carries
+    /// the account identifier, equal duplicates are accepted, and a
+    /// conflicting or entirely absent pair is rejected.
+    #[test]
+    fn namespaced_and_conflicting_account_claims()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let fixture = rsa_fixture()?;
+        let verifier = OidcVerifier::new("https://issuer.test", "client-test", fixture.jwks)?;
+        let signed = |claims: serde_json::Value| token(&fixture.pair, claims);
+        let base = json!({
+            "iss":"https://issuer.test", "aud":"client-test", "exp":2000,
+            "iat":900, "nonce":"nonce-test"
+        });
+        let mut claims = base.clone();
+        claims["https://api.openai.com/auth"] = json!({"chatgpt_account_id": "acct-namespaced"});
+        assert_eq!(
+            verifier
+                .verify(&signed(claims)?, "nonce-test", 1000)?
+                .as_str(),
+            "acct-namespaced"
+        );
+
+        let mut agreeing = base.clone();
+        agreeing["chatgpt_account_id"] = json!("acct-agree");
+        agreeing["https://api.openai.com/auth"] = json!({"chatgpt_account_id": "acct-agree"});
+        assert_eq!(
+            verifier
+                .verify(&signed(agreeing)?, "nonce-test", 1000)?
+                .as_str(),
+            "acct-agree"
+        );
+
+        let mut conflicting = base.clone();
+        conflicting["chatgpt_account_id"] = json!("acct-top");
+        conflicting["https://api.openai.com/auth"] =
+            json!({"chatgpt_account_id": "acct-namespaced"});
+        assert!(matches!(
+            verifier.verify(&signed(conflicting)?, "nonce-test", 1000),
+            Err(super::DirectError::Jwt(ref message))
+                if message.contains("conflicting ChatGPT account identifier claims")
+        ));
+
+        assert!(matches!(
+            verifier.verify(&signed(base)?, "nonce-test", 1000),
+            Err(super::DirectError::Jwt(ref message))
+                if message.contains("omitted ChatGPT account identifier")
+        ));
+        Ok(())
+    }
+
+    /// 8-22: a future `nbf` (and an `iat` beyond the 60-second clock skew)
+    /// marks the token not yet valid even though its `exp` is in the future.
+    #[test]
+    fn future_nbf_and_far_future_iat_are_not_yet_valid()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let fixture = rsa_fixture()?;
+        let verifier = OidcVerifier::new("https://issuer.test", "client-test", fixture.jwks)?;
+        let signed = |nbf: Option<u64>, iat: Option<u64>| {
+            let mut claims = json!({
+                "iss":"https://issuer.test", "aud":"client-test", "exp":2000,
+                "iat":900, "nonce":"nonce-test", "chatgpt_account_id":"acct-123"
+            });
+            if let Some(nbf) = nbf {
+                claims["nbf"] = json!(nbf);
+            }
+            if let Some(iat) = iat {
+                claims["iat"] = json!(iat);
+            }
+            token(&fixture.pair, claims)
+        };
+
+        let future_nbf = signed(Some(1500), None)?;
+        assert!(matches!(
+            verifier.verify(&future_nbf, "nonce-test", 1000),
+            Err(super::DirectError::Jwt(ref message))
+                if message.contains("ID token is not yet valid")
+        ));
+        let current_nbf = signed(Some(1000), None)?;
+        verifier
+            .verify(&current_nbf, "nonce-test", 1000)
+            .expect("nbf at or before now is valid");
+
+        let future_iat = signed(None, Some(1200))?;
+        assert!(matches!(
+            verifier.verify(&future_iat, "nonce-test", 1000),
+            Err(super::DirectError::Jwt(ref message))
+                if message.contains("ID token is not yet valid")
+        ));
+        // Within the 60-second skew an `iat` slightly ahead is tolerated.
+        let skewed_iat = signed(None, Some(1030))?;
+        verifier
+            .verify(&skewed_iat, "nonce-test", 1000)
+            .expect("iat within the clock skew is valid");
+        Ok(())
+    }
+
+    /// 8-22: only a keyed RS256 header is accepted — the classic `alg: none`
+    /// and an HMAC confusion attempt are rejected before any key lookup or
+    /// claim parsing, even though the signature bytes verify under RSA.
+    #[test]
+    fn non_rs256_headers_are_rejected() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let fixture = rsa_fixture()?;
+        let verifier = OidcVerifier::new("https://issuer.test", "client-test", fixture.jwks)?;
+        let claims = json!({
+            "iss":"https://issuer.test", "aud":"client-test", "exp":2000,
+            "iat":900, "nonce":"nonce-test", "chatgpt_account_id":"acct-123"
+        });
+        for alg in ["none", "HS256", "RS512"] {
+            let forged = token_with_alg(&fixture.pair, alg, claims.clone())?;
+            assert!(
+                matches!(
+                    verifier.verify(&forged, "nonce-test", 1000),
+                    Err(super::DirectError::Jwt(ref message))
+                        if message.contains("only keyed RS256 ID tokens are accepted")
+                ),
+                "the {alg} header must be rejected before verification"
+            );
+        }
+        Ok(())
+    }
+
+    /// 8-22: a `kid` that selects more than one JWKS entry fails — the
+    /// verifier never guesses which key signed the token.
+    #[test]
+    fn kid_must_select_exactly_one_jwks_entry()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let fixture = rsa_fixture()?;
+        let entry = &fixture.jwks_json["keys"][0];
+        let jwks: super::JsonWebKeySet = serde_json::from_value(json!({
+            "keys": [entry.clone(), entry.clone()]
+        }))?;
+        let verifier = OidcVerifier::new("https://issuer.test", "client-test", jwks)?;
+        let claims = json!({
+            "iss":"https://issuer.test", "aud":"client-test", "exp":2000,
+            "iat":900, "nonce":"nonce-test", "chatgpt_account_id":"acct-123"
+        });
+        let signed = token(&fixture.pair, claims)?;
+        assert!(matches!(
+            verifier.verify(&signed, "nonce-test", 1000),
+            Err(super::DirectError::Jwt(ref message))
+                if message.contains("JWT kid did not select exactly one JWK")
+        ));
         Ok(())
     }
 }

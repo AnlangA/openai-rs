@@ -287,6 +287,7 @@ mod tests {
     };
 
     use bytes::Bytes;
+    use futures_util::StreamExt;
     use http_body_util::{BodyExt, Full};
     use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
     use hyper_util::rt::TokioIo;
@@ -439,6 +440,55 @@ mod tests {
                 .iter()
                 .all(|operation| operation.auth == AuthScope::Platform)
         );
+    }
+
+    #[tokio::test]
+    async fn consent_page_stream_advances_cursor_and_stops() {
+        // 8-20: the consent pagination glue reads its cursor from the Option
+        // source `last_id()` (an omitted-or-null envelope cursor), so a null
+        // `last_id` with `has_more` must fall back to the last item's id —
+        // the same D0147 resolution order as the other surfaces.
+        let first = json!({
+            "object": "list",
+            "data": [consent_json()],
+            "first_id": "cons_1",
+            "last_id": null,
+            "has_more": true
+        });
+        let second = json!({
+            "object": "list",
+            "data": [],
+            "first_id": null,
+            "last_id": null,
+            "has_more": false
+        });
+        let (client, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, first.to_string()),
+            (StatusCode::OK, second.to_string()),
+        ])
+        .await;
+        let consents = client.voices().consents();
+
+        let pages = consents
+            .list_pages(ListVoiceConsentsParams::new().limit(2))
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().all(Result::is_ok));
+        assert_eq!(pages[0].as_ref().expect("first page").data().len(), 1);
+
+        let first_request = captured.recv().await.expect("first consent page request");
+        let second_request = captured.recv().await.expect("second consent page request");
+        assert_eq!(
+            first_request.path_and_query,
+            "/v1/audio/voice_consents?limit=2"
+        );
+        // The null envelope cursor fell back to the last item id `cons_1`.
+        assert_eq!(
+            second_request.path_and_query,
+            "/v1/audio/voice_consents?after=cons_1&limit=2"
+        );
+        assert!(captured.recv().await.is_none());
     }
 
     #[tokio::test]

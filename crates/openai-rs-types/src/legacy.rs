@@ -1256,6 +1256,37 @@ mod tests {
     }
 
     #[test]
+    fn final_usage_chunk_decodes_with_empty_choices_and_populated_usage() {
+        // The final `include_usage` frame carries an empty `choices` array and
+        // the only populated usage object of the stream.
+        let fixture = json!({
+            "id": "cmpl_usage",
+            "object": "text_completion",
+            "created": 1,
+            "model": "gpt-3.5-turbo-instruct",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 9,
+                "completion_tokens": 2,
+                "total_tokens": 11,
+                "compute_units": null,
+                "future_usage": "kept"
+            },
+            "chunk_future": true
+        });
+        let chunk: Completion = serde_json::from_value(fixture.clone()).expect("decode chunk");
+        assert!(chunk.choices().is_empty());
+        let usage = chunk.usage().expect("final usage must decode");
+        assert_eq!(usage.total_tokens(), 11);
+        assert_eq!(usage.compute_units, Omittable::Value(Nullable::Null));
+        assert!(chunk.extra_fields().get("chunk_future").is_some());
+        assert_eq!(
+            serde_json::to_value(chunk).expect("round-trip usage chunk"),
+            fixture
+        );
+    }
+
+    #[test]
     fn completion_create_fields_match_python_and_openapi_inventory() {
         let request = CreateCompletionRequest::new("gpt-3.5-turbo-instruct", "Say hello")
             .echo(true)

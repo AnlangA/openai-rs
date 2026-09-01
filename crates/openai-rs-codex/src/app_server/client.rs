@@ -2424,4 +2424,365 @@ mod tests {
         client.close().await?;
         Ok(())
     }
+
+    /// 8-12: the bounded event queue is fail-stop — a consumer that stops
+    /// draining it does not block or silently drop events. Once the queue
+    /// fills, the connection tears down with `EventQueueFull` instead.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn event_queue_full_tears_down_a_stalled_consumer()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 160
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 161
+            i=0
+            while [ "$i" -lt 32 ]; do
+              printf '%s\n' "{\"method\":\"future/flood\",\"params\":{\"i\":$i}}"
+              i=$((i+1))
+            done
+            IFS= read -r until_eof
+        "#;
+        let limits = AppServerLimits {
+            event_queue_capacity: 2,
+            request_timeout: std::time::Duration::from_secs(2),
+            shutdown_timeout: std::time::Duration::from_secs(2),
+            ..AppServerLimits::default()
+        };
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client =
+            AppServerClient::spawn(config.with_limits(limits), ClientInfo::new("test", "1.0.0"))
+                .await?;
+
+        // The consumer never calls next_event, so the reader task floods the
+        // two-slot queue and must terminate the connection.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(failure) = client.connection_failure() {
+                assert_eq!(
+                    failure.kind,
+                    ConnectionFailureKind::EventQueueFull,
+                    "unexpected terminal failure: {}",
+                    failure.message
+                );
+                assert!(
+                    failure
+                        .message
+                        .contains("app-server event queue rejected an event"),
+                    "unexpected message: {}",
+                    failure.message
+                );
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the flooded event queue never tore the connection down"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(client.is_closed());
+        Ok(())
+    }
+
+    /// 8-12: with `max_pending_requests = 1`, a second concurrent request
+    /// fails fast with `PendingCapacityTimeout` instead of queueing behind
+    /// the in-flight one.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn second_concurrent_request_reports_pending_capacity_timeout()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        // The child accepts one request and never answers it, so the single
+        // pending slot stays held for the whole budget.
+        let script = r#"
+            IFS= read -r init || exit 162
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 163
+            IFS= read -r held || exit 164
+            exec sleep 60
+        "#;
+        let limits = AppServerLimits {
+            max_pending_requests: 1,
+            request_timeout: std::time::Duration::from_millis(300),
+            shutdown_timeout: std::time::Duration::from_secs(2),
+            ..AppServerLimits::default()
+        };
+        let expected_timeout = limits.request_timeout;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client =
+            AppServerClient::spawn(config.with_limits(limits), ClientInfo::new("test", "1.0.0"))
+                .await?;
+
+        // `join!` polls in declaration order, so the held request acquires the
+        // only slot; the blocked one then fails acquiring it.
+        let (held, blocked) = tokio::join!(
+            client.request_value("test/held", None),
+            client.request_value("test/blocked", None)
+        );
+        match blocked {
+            Err(Error::PendingCapacityTimeout(timeout)) => {
+                assert_eq!(timeout, expected_timeout);
+            }
+            other => {
+                return Err(format!("unexpected blocked-request result: {other:?}").into());
+            }
+        }
+        match held {
+            Err(Error::RequestTimeout { method, .. }) => assert_eq!(method, "test/held"),
+            other => return Err(format!("unexpected held-request result: {other:?}").into()),
+        }
+        client.close().await?;
+        Ok(())
+    }
+
+    /// 8-12: a response frame whose id matches no pending request degrades to
+    /// an `OrphanResponse` event instead of tearing the connection down — for
+    /// a string id and for an unknown numeric id alike.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn orphan_response_events_surface_string_and_unknown_numeric_ids()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 165
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 166
+            printf '%s\n' '{"id":"srv-orphan","result":{"kept":"string"},"futureEnvelopeField":1}'
+            printf '%s\n' '{"id":999,"result":{"kept":"numeric"},"futureEnvelopeField":2}'
+            printf '%s\n' '{"method":"future/orphansFlushed"}'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        let event = client.next_event().await.ok_or("missing string orphan")?;
+        match event {
+            AppServerEvent::OrphanResponse(response) => {
+                assert_eq!(response.id, RpcId::String("srv-orphan".to_owned()));
+                assert_eq!(response.raw["result"]["kept"], Value::from("string"));
+                assert_eq!(response.raw["futureEnvelopeField"], Value::from(1));
+            }
+            other => return Err(format!("unexpected event: {other:?}").into()),
+        }
+        let event = client.next_event().await.ok_or("missing numeric orphan")?;
+        match event {
+            AppServerEvent::OrphanResponse(response) => {
+                assert_eq!(response.id, RpcId::Number(999));
+                assert_eq!(response.raw["result"]["kept"], Value::from("numeric"));
+                assert_eq!(response.raw["futureEnvelopeField"], Value::from(2));
+            }
+            other => return Err(format!("unexpected event: {other:?}").into()),
+        }
+        assert!(
+            !client.is_closed(),
+            "orphan responses must not tear the connection down"
+        );
+        assert!(client.connection_failure().is_none());
+
+        // Drain one more notification emitted after the orphans so the fake
+        // child's script stays deterministic before close.
+        let event = client
+            .next_event()
+            .await
+            .ok_or("missing trailing notification")?;
+        assert!(matches!(event, AppServerEvent::Notification(_)));
+        client.close().await?;
+        Ok(())
+    }
+
+    /// 8-12: a JSONL frame that is valid JSON but not an object is a terminal
+    /// `InvalidMessage` failure for the connection and its pending requests.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn non_object_frame_fails_the_connection_with_invalid_message()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 168
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 169
+            IFS= read -r first || exit 170
+            printf '%s\n' '[1, 2, 3]'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        match client.request_value("test/first", None).await {
+            Err(Error::Connection(failure)) => {
+                assert_eq!(failure.kind, ConnectionFailureKind::InvalidMessage);
+                assert!(
+                    failure
+                        .message
+                        .contains("app-server JSONL frame was not an object"),
+                    "unexpected message: {}",
+                    failure.message
+                );
+            }
+            other => return Err(format!("unexpected request result: {other:?}").into()),
+        }
+        let terminal = client
+            .connection_failure()
+            .ok_or("missing terminal failure after a non-object frame")?;
+        assert_eq!(terminal.kind, ConnectionFailureKind::InvalidMessage);
+        assert!(client.is_closed());
+        Ok(())
+    }
+
+    /// 8-12: a response frame carrying both `result` and `error` violates the
+    /// exactly-one contract and fails the connection with `InvalidMessage`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn response_frame_with_both_result_and_error_fails_invalid_message()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 171
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 172
+            IFS= read -r first || exit 173
+            printf '%s\n' '{"id":2,"result":{"seen":true},"error":{"code":-32000,"message":"both"}}'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        match client.request_value("test/first", None).await {
+            Err(Error::Connection(failure)) => {
+                assert_eq!(failure.kind, ConnectionFailureKind::InvalidMessage);
+                assert!(
+                    failure
+                        .message
+                        .contains("JSON-RPC response must contain exactly one of result or error"),
+                    "unexpected message: {}",
+                    failure.message
+                );
+            }
+            other => return Err(format!("unexpected request result: {other:?}").into()),
+        }
+        let terminal = client
+            .connection_failure()
+            .ok_or("missing terminal failure after a double-field frame")?;
+        assert_eq!(terminal.kind, ConnectionFailureKind::InvalidMessage);
+        assert!(client.is_closed());
+        Ok(())
+    }
+
+    /// 8-12: the item lifecycle and agent-message delta notifications decode
+    /// into their typed branches through the live event stream —
+    /// `item/agentMessage/delta` is the only channel for incremental agent
+    /// text, so its delta payload must arrive verbatim.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fake_child_streams_item_lifecycle_and_agent_message_deltas()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 180
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 181
+            printf '%s\n' '{"method":"thread/started","params":{"thread":{"id":"thr_123"}}}'
+            printf '%s\n' '{"method":"turn/started","params":{"threadId":"thr_123","turn":{"id":"turn_456","status":"inProgress"}}}'
+            printf '%s\n' '{"method":"item/started","params":{"threadId":"thr_123","turnId":"turn_456","item":{"type":"agentMessage","id":"item_1","text":""},"startedAtMs":1730947200000}}'
+            printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thr_123","turnId":"turn_456","itemId":"item_1","delta":" incre"}}'
+            printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thr_123","turnId":"turn_456","itemId":"item_1","delta":"mental"}}'
+            printf '%s\n' '{"method":"item/completed","params":{"threadId":"thr_123","turnId":"turn_456","item":{"type":"agentMessage","id":"item_1","text":"incremental"},"completedAtMs":1730947200500}}'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        let event = client.next_event().await.ok_or("missing thread/started")?;
+        let AppServerEvent::Notification(notification) = event else {
+            return Err(format!("unexpected event: {event:?}").into());
+        };
+        assert!(matches!(*notification, Notification::ThreadStarted(_)));
+
+        let event = client.next_event().await.ok_or("missing turn/started")?;
+        let AppServerEvent::Notification(notification) = event else {
+            return Err(format!("unexpected event: {event:?}").into());
+        };
+        assert!(matches!(*notification, Notification::TurnStarted(_)));
+
+        let event = client.next_event().await.ok_or("missing item/started")?;
+        match event {
+            AppServerEvent::Notification(notification) => match *notification {
+                Notification::ItemStarted(started) => {
+                    assert_eq!(started.thread_id, "thr_123");
+                    assert_eq!(started.turn_id, "turn_456");
+                    assert_eq!(
+                        started.item,
+                        crate::ThreadItem::AgentMessage(Box::new(crate::AgentMessageThreadItem {
+                            id: "item_1".to_owned(),
+                            text: String::new(),
+                            phase: None,
+                            memory_citation: None,
+                            extra: serde_json::Map::new(),
+                        }))
+                    );
+                    assert_eq!(started.started_at_ms, Some(1730947200000));
+                }
+                other => return Err(format!("unexpected notification: {other:?}").into()),
+            },
+            other => return Err(format!("unexpected event: {other:?}").into()),
+        }
+
+        let mut deltas = Vec::new();
+        for _ in 0..2 {
+            let event = client
+                .next_event()
+                .await
+                .ok_or("missing item/agentMessage/delta")?;
+            match event {
+                AppServerEvent::Notification(notification) => match *notification {
+                    Notification::AgentMessageDelta(delta) => {
+                        assert_eq!(delta.thread_id, "thr_123");
+                        assert_eq!(delta.turn_id, "turn_456");
+                        assert_eq!(delta.item_id, "item_1");
+                        deltas.push(delta.delta);
+                    }
+                    other => {
+                        return Err(format!("unexpected notification: {other:?}").into());
+                    }
+                },
+                other => return Err(format!("unexpected event: {other:?}").into()),
+            }
+        }
+        assert_eq!(deltas, [" incre", "mental"]);
+
+        let event = client.next_event().await.ok_or("missing item/completed")?;
+        match event {
+            AppServerEvent::Notification(notification) => match *notification {
+                Notification::ItemCompleted(completed) => {
+                    assert_eq!(completed.completed_at_ms, Some(1730947200500));
+                    match completed.item {
+                        crate::ThreadItem::AgentMessage(item) => {
+                            assert_eq!(item.text, "incremental");
+                        }
+                        other => {
+                            return Err(format!("unexpected completed item: {other:?}").into());
+                        }
+                    }
+                }
+                other => return Err(format!("unexpected notification: {other:?}").into()),
+            },
+            other => return Err(format!("unexpected event: {other:?}").into()),
+        }
+
+        client.close().await?;
+        Ok(())
+    }
 }

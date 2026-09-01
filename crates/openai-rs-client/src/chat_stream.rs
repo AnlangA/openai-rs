@@ -202,6 +202,7 @@ fn sse_error(source: crate::sse::SseDecodeError, meta: &ResponseMeta) -> Error {
 mod tests {
     use futures_util::StreamExt;
     use http::{StatusCode, header};
+    use openai_rs_types::{Nullable, Omittable};
     use serde_json::{Value, json};
 
     use super::*;
@@ -307,6 +308,73 @@ mod tests {
                 ..
             } => {}
             other => panic!("expected unexpected EOF, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn usage_only_chunk_after_content_decodes_and_ends_cleanly() {
+        // The `stream_options.include_usage` happy path: one content delta,
+        // the final usage-only chunk (empty `choices` + populated `usage`),
+        // then the required `[DONE]` sentinel with no trailing error.
+        let usage_chunk = concat!(
+            "{\"id\":\"chatcmpl_1\",\"choices\":[],\"created\":1,",
+            "\"model\":\"test-model\",\"object\":\"chat.completion.chunk\",",
+            "\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":2,\"total_tokens\":11}}"
+        );
+        let body = format!("data: {CHUNK}\n\ndata: {usage_chunk}\n\ndata: [DONE]\n\n");
+        let mut stream = stream_over(&body);
+        let content = stream
+            .next()
+            .await
+            .expect("content chunk")
+            .expect("typed content chunk");
+        match &content.choices[0].delta.content {
+            Omittable::Value(Nullable::Value(text)) => assert_eq!(text, "hello"),
+            other => panic!("content delta must decode, got {other:?}"),
+        }
+
+        let usage = stream
+            .next()
+            .await
+            .expect("usage-only chunk")
+            .expect("typed usage chunk");
+        assert!(usage.choices.is_empty());
+        match &usage.usage {
+            Omittable::Value(Nullable::Value(usage)) => {
+                assert_eq!(
+                    (
+                        usage.prompt_tokens,
+                        usage.completion_tokens,
+                        usage.total_tokens
+                    ),
+                    (9, 2, 11)
+                );
+            }
+            other => panic!("final usage must be reachable, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn truncated_json_frame_yields_decode_error_and_ends_stream() {
+        let body = "data: {\n\ndata: [DONE]\n\n";
+        let mut stream = stream_over(body);
+        let error = stream
+            .next()
+            .await
+            .expect("decode error item")
+            .expect_err("truncated JSON frame");
+        match error {
+            Error::Decode {
+                meta_status,
+                request_id,
+                ..
+            } => {
+                assert_eq!(meta_status, StatusCode::OK);
+                assert_eq!(request_id.as_deref(), Some("req_chat_stream"));
+            }
+            other => panic!("expected a decode error, got {other:?}"),
         }
         assert!(stream.next().await.is_none());
     }

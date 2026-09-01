@@ -141,8 +141,9 @@ impl Files {
 /// - **Part size.** Each part carries at most 64 MB (64 × 1,048,576 bytes;
 ///   `DEFAULT_PART_SIZE` upstream; [`MAX_UPLOAD_PART_BYTES`]). Parts above
 ///   that size are rejected locally before any bytes are transmitted: the
-///   replay lane measures the length it freezes at preparation time, and the
-///   one-shot lane checks a length declared through
+///   replay lane measures the length with its own pre-transport stat (the
+///   in-memory length, or a fresh `symlink_metadata` read for a path), and
+///   the one-shot lane checks a length declared through
 ///   [`OneShotMultipartSource::with_length`]. Split larger inputs across
 ///   several parts.
 /// - **Total size.** One Upload accepts at most 8 GB in total across all of
@@ -192,8 +193,14 @@ impl Uploads {
     ///
     /// A part above [`MAX_UPLOAD_PART_BYTES`] is rejected locally with
     /// [`Error::RequestPayloadTooLarge`] before any bytes are transmitted,
-    /// using the length the replay lane freezes when it prepares the source
-    /// (the in-memory length, or the path-snapshot length). The Upload
+    /// using the length from an independent pre-transport stat: the
+    /// in-memory length for byte sources, or a fresh `symlink_metadata`
+    /// read for path sources. That stat is deliberately not the
+    /// transport's own preparation snapshot, so a path whose length changes
+    /// inside the window between the two observations is not caught here —
+    /// it is still caught afterwards, because the transport revalidates the
+    /// identity snapshot it takes when preparing the form, and the service
+    /// enforces the same ceiling server-side. The Upload
     /// accepts at most 8 GB in total and expires about an hour after
     /// creation, so complete it before [`Upload::expires_at`] passes. See the
     /// [struct documentation](Uploads) for the full constraint list.
@@ -287,13 +294,19 @@ fn upload_id_segment(upload_id: &UploadId) -> Result<PathSegment<'_>, Error> {
     PathSegment::parameter("upload_id", upload_id.as_str())
 }
 
-/// Measures the byte length the replay lane freezes when it prepares this
-/// source: the in-memory length for byte sources, or the snapshot length for
-/// path sources (the same `symlink_metadata` the preparation reads).
+/// Measures the byte length with an independent pre-transport stat: the
+/// in-memory length for byte sources, or a fresh `symlink_metadata` read
+/// for path sources.
 ///
-/// Returns `None` when the value cannot be observed without the transport's
-/// own fail-closed preparation — an unreadable path, or a future source
-/// variant — so those cases keep surfacing the transport's error unchanged.
+/// This is deliberately not the transport's preparation snapshot. For a
+/// path source the two observations happen at different times, so the
+/// length can differ inside that window; the local size check is
+/// best-effort, and the transport's fail-closed identity revalidation
+/// (plus the service's own ceiling) remains the backstop.
+///
+/// Returns `None` when the value cannot be observed — an unreadable path,
+/// or a future source variant — so those cases keep surfacing the
+/// transport's error unchanged.
 async fn replayable_source_length(source: &ReplayableMultipartSource) -> Option<u64> {
     match source {
         ReplayableMultipartSource::Bytes { data, .. } => u64::try_from(data.len()).ok(),
@@ -941,7 +954,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replayable_source_length_mirrors_the_prepare_time_freeze() {
+    async fn replayable_source_length_measures_a_pre_transport_stat() {
         let bytes = ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(&b"abc"[..]));
         assert_eq!(replayable_source_length(&bytes).await, Some(3));
 

@@ -679,10 +679,17 @@ fn invalid_configuration(message: impl Into<Box<str>>) -> Error {
 
 #[cfg(all(test, feature = "realtime"))]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        convert::Infallible,
+        sync::{Arc, Mutex},
+    };
 
     use bytes::Bytes;
     use http::StatusCode;
+    use http_body_util::Full;
+    use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use openai_rs_types::kernel::UnknownTaggedObject;
     use openai_rs_types::responses::ResponseStreamEvent;
     use serde_json::{Value, json};
     use tokio::{io::AsyncReadExt, io::AsyncWriteExt, net::TcpListener, sync::oneshot};
@@ -1284,6 +1291,425 @@ mod tests {
         assert!(
             socket.recv().await.expect("recv after rejection").is_none(),
             "a retired socket reports EOF on every later recv"
+        );
+    }
+
+    /// Accepts every TCP connection, reads the handshake request, and then
+    /// parks holding the stream open — no response, no EOF — so the only way
+    /// a client can finish is through its connect timeout. Connections are
+    /// parked in their own tasks so retries are accepted (and counted)
+    /// promptly.
+    async fn hanging_handshake_server() -> (Client, Arc<Mutex<usize>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind hanging handshake server");
+        let address = listener
+            .local_addr()
+            .expect("hanging handshake server address");
+        let connections = Arc::new(Mutex::new(0_usize));
+        let server_connections = Arc::clone(&connections);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                *server_connections
+                    .lock()
+                    .expect("hanging connection counter lock") += 1;
+                tokio::spawn(async move {
+                    let mut request = vec![0_u8; 4096];
+                    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut request))
+                        .await;
+                    // Park far beyond any test-side timeout without writing.
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                });
+            }
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("hanging handshake client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("hanging handshake client");
+        (client, connections)
+    }
+
+    #[tokio::test]
+    async fn a_hanging_handshake_times_out_with_a_transport_error() {
+        // 8-11: the handshake-timeout branch. A server that accepts TCP but
+        // never answers the upgrade surfaces the dedicated timeout error
+        // rather than hanging for the caller's lifetime.
+        let (client, connections) = hanging_handshake_server().await;
+        let error = client
+            .responses()
+            .connect_with(
+                ResponsesWebSocketConfig::new().connect_timeout(Duration::from_millis(50)),
+            )
+            .await
+            .expect_err("a silent handshake must time out");
+        match &error {
+            Error::WebSocketTransport(reason) => assert!(
+                reason.contains("handshake timed out"),
+                "expected the handshake-timeout error, got {reason}"
+            ),
+            unexpected => panic!("expected a transport error, got {unexpected:?}"),
+        }
+        assert_eq!(
+            *connections.lock().expect("hanging connection counter lock"),
+            1,
+            "the default policy must not replay a timed-out handshake"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hanging_handshake_replays_within_the_initial_connect_budget() {
+        // 8-11: an `InitialConnect` policy counts a handshake timeout as a
+        // retryable failure, so the budget is exactly `1 + max_retries`
+        // attempts before the timeout error surfaces.
+        let (client, connections) = hanging_handshake_server().await;
+        let error = client
+            .responses()
+            .connect_with(
+                ResponsesWebSocketConfig::new()
+                    .connect_timeout(Duration::from_millis(50))
+                    .reconnect_policy(WebSocketReconnectPolicy::InitialConnect {
+                        max_retries: 2,
+                        delay: Duration::from_millis(10),
+                    }),
+            )
+            .await
+            .expect_err("the retry budget must eventually run out");
+        assert!(
+            matches!(&error, Error::WebSocketTransport(reason) if reason.contains("handshake timed out")),
+            "expected the handshake-timeout error, got {error:?}"
+        );
+        assert_eq!(
+            *connections.lock().expect("hanging connection counter lock"),
+            3,
+            "total attempts must equal 1 + max_retries"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_send_is_a_local_error_and_keeps_the_socket_open() {
+        // 8-11: the send-side half of `max_message_bytes`. The oversized event
+        // is rejected before anything reaches the wire, so — unlike a write
+        // failure — the socket is not retired and a later, smaller event
+        // still sends.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind oversized-send server");
+        let address = listener
+            .local_addr()
+            .expect("oversized-send server address");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut socket = accept_hdr_async(
+                        stream,
+                        |_request: &server::Request, response: server::Response| {
+                            Ok::<_, server::ErrorResponse>(response)
+                        },
+                    )
+                    .await
+                    .expect("oversized-send server handshake");
+                    while socket.next().await.is_some() {}
+                });
+            }
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("oversized-send client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("oversized-send client");
+        let mut socket = client
+            .responses()
+            .connect_with(ResponsesWebSocketConfig::new().max_message_bytes(64))
+            .await
+            .expect("connect with a tiny message limit");
+
+        let oversized = ResponsesClientEvent::Unknown(
+            UnknownTaggedObject::from_value(json!({
+                "type": "future.client.event",
+                "payload": "x".repeat(200),
+            }))
+            .expect("oversized unknown client event"),
+        );
+        match socket.send_event(oversized).await {
+            Err(Error::WebSocketProtocol(reason)) => assert_eq!(
+                reason,
+                "outgoing Responses event exceeds the configured message limit"
+            ),
+            unexpected => panic!("expected a local message-limit error, got {unexpected:?}"),
+        }
+        assert!(
+            !socket.is_closed(),
+            "a local send rejection must not retire the socket"
+        );
+
+        let small = ResponsesClientEvent::Unknown(
+            UnknownTaggedObject::from_value(json!({"type": "future.client.event"}))
+                .expect("small unknown client event"),
+        );
+        socket
+            .send_event(small)
+            .await
+            .expect("a smaller event still sends after the local rejection");
+        assert!(!socket.is_closed());
+        socket.close().await.expect("close the healthy socket");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_inbound_event_retires_the_responses_socket() {
+        // 8-11: the inbound half of `max_message_bytes`. A peer text frame
+        // larger than the configured limit retires the socket — tungstenite's
+        // capacity guard fires first with the identical predicate, and the
+        // local check is the defense-in-depth twin — and a retired socket
+        // reports EOF on every later recv.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind oversized-inbound server");
+        let address = listener
+            .local_addr()
+            .expect("oversized-inbound server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept oversized-inbound socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("oversized-inbound server handshake");
+            socket
+                .send(Message::text("x".repeat(200)))
+                .await
+                .expect("send oversized inbound event");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("oversized-inbound client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("oversized-inbound client");
+        let mut socket = client
+            .responses()
+            .connect_with(ResponsesWebSocketConfig::new().max_message_bytes(64))
+            .await
+            .expect("connect with a tiny inbound limit");
+
+        match socket.recv().await {
+            Err(Error::WebSocketTransport(reason)) => assert!(
+                reason.contains("capacity"),
+                "expected the capacity limit, got {reason}"
+            ),
+            Err(Error::WebSocketProtocol(reason)) => assert_eq!(
+                reason,
+                "incoming Responses event exceeds the configured message limit"
+            ),
+            unexpected => panic!("expected an inbound-limit error, got {unexpected:?}"),
+        }
+        assert!(
+            socket.is_closed(),
+            "an oversized inbound event must retire the socket"
+        );
+        assert!(
+            socket
+                .recv()
+                .await
+                .expect("recv after retirement")
+                .is_none(),
+            "a retired socket reports EOF on every later recv"
+        );
+    }
+
+    /// Serves two workload token exchanges: `access_one` then `access_two`.
+    async fn two_token_exchange_server() -> (Url, Arc<Mutex<usize>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind workload exchange server");
+        let address = listener
+            .local_addr()
+            .expect("workload exchange server address");
+        let exchanges = Arc::new(Mutex::new(0_usize));
+        let server_exchanges = Arc::clone(&exchanges);
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let exchanges = Arc::clone(&server_exchanges);
+                tokio::spawn(async move {
+                    let service = service_fn(|_request: Request<Incoming>| {
+                        let exchanges = Arc::clone(&exchanges);
+                        async move {
+                            let attempt = {
+                                let mut exchanges =
+                                    exchanges.lock().expect("exchange counter lock");
+                                let attempt = *exchanges;
+                                *exchanges += 1;
+                                attempt
+                            };
+                            let token = if attempt == 0 {
+                                "access_one"
+                            } else {
+                                "access_two"
+                            };
+                            Ok::<_, Infallible>(
+                                hyper::Response::builder()
+                                    .status(StatusCode::OK)
+                                    .header(header::CONTENT_TYPE, "application/json")
+                                    .body(Full::new(Bytes::from(format!(
+                                        r#"{{"access_token":"{token}","expires_in":3600}}"#
+                                    ))))
+                                    .expect("workload exchange response"),
+                            )
+                        }
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        (
+            Url::parse(&format!("http://{address}/oauth/token")).expect("workload exchange URL"),
+            exchanges,
+        )
+    }
+
+    /// Rejects the first WebSocket handshake with a raw 401, then accepts the
+    /// replay and reports every authorization header it saw, in order.
+    async fn rejecting_then_accepting_websocket_server() -> (Url, oneshot::Receiver<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind 401-then-accept server");
+        let address = listener
+            .local_addr()
+            .expect("401-then-accept server address");
+        let (sender, receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let mut authorizations = Vec::new();
+
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("accept the rejected handshake");
+            let mut request = vec![0_u8; 4096];
+            let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut request))
+                .await
+                .expect("timely rejected handshake read")
+                .unwrap_or_default();
+            let head = String::from_utf8_lossy(&request[..read]).to_ascii_lowercase();
+            if let Some(value) = head
+                .lines()
+                .find_map(|line| line.strip_prefix("authorization:"))
+            {
+                authorizations.push(value.trim().to_owned());
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: 0\r\n\r\n",
+                )
+                .await
+                .expect("write the raw 401 rejection");
+
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept the replayed handshake");
+            let authorizations = Arc::new(Mutex::new(Some(authorizations)));
+            let sender = Arc::new(Mutex::new(Some(sender)));
+            let callback = move |request: &server::Request, response: server::Response| {
+                let authorization = request
+                    .headers()
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToOwned::to_owned);
+                if let Some(authorization) = authorization
+                    && let Some(mut authorizations) =
+                        authorizations.lock().expect("authorization lock").take()
+                {
+                    authorizations.push(authorization);
+                    if let Some(sender) = sender.lock().expect("sender lock").take() {
+                        let _ = sender.send(authorizations);
+                    }
+                }
+                Ok::<_, server::ErrorResponse>(response)
+            };
+            let mut socket = accept_hdr_async(stream, callback)
+                .await
+                .expect("replayed WebSocket handshake");
+            while socket.next().await.is_some() {}
+        });
+        (
+            Url::parse(&format!("http://{address}/v1/")).expect("401-then-accept client base"),
+            receiver,
+        )
+    }
+
+    #[cfg(feature = "workload-identity")]
+    #[tokio::test]
+    async fn a_401_handshake_refreshes_the_workload_credential_and_replays_once() {
+        // 8-11: the WebSocket-side twin of the REST 401 refresh lane. A
+        // workload-identity client whose first handshake is rejected with 401
+        // invalidates the cached token generation, exchanges a fresh token,
+        // and replays the handshake exactly once — the REST face of the same
+        // refresh is pinned in `workload_identity.rs`
+        // (`api_401_invalidates_generation_and_replays_once`).
+        use crate::workload_identity::{
+            SubjectToken, SubjectTokenProviderError, SubjectTokenProviderFn, SubjectTokenType,
+            WorkloadIdentityConfig,
+        };
+
+        let (exchange_url, exchanges) = two_token_exchange_server().await;
+        let (api_url, authorizations) = rejecting_then_accepting_websocket_server().await;
+        let provider = SubjectTokenProviderFn::new(SubjectTokenType::Jwt, || async {
+            SubjectToken::new("subject.jwt.token").map_err(|_| SubjectTokenProviderError::new())
+        });
+        let config = WorkloadIdentityConfig::new("idp_test", "svc_test", provider)
+            .expect("workload config")
+            .with_token_exchange_url(exchange_url);
+        let client = Client::workload_identity_builder(config)
+            .base_url(api_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("workload WebSocket client");
+
+        let mut socket = client
+            .responses()
+            .connect()
+            .await
+            .expect("the refreshed credential must complete the replayed handshake");
+        assert!(!socket.is_closed());
+        socket.close().await.expect("close the refreshed socket");
+
+        assert_eq!(
+            *exchanges.lock().expect("exchange counter lock"),
+            2,
+            "the 401 must invalidate the cached generation and force one new exchange"
+        );
+        let authorizations = authorizations.await.expect("captured authorizations");
+        // The first header was scraped from the lowercased raw rejection head,
+        // the second from the accepted handshake, so compare case-blind.
+        assert_eq!(authorizations.len(), 2);
+        assert!(
+            authorizations[0].eq_ignore_ascii_case("bearer access_one"),
+            "the rejected handshake must carry the first token, got {}",
+            authorizations[0]
+        );
+        assert_eq!(
+            authorizations[1], "Bearer access_two",
+            "the replayed handshake must carry the refreshed bearer token"
         );
     }
 }

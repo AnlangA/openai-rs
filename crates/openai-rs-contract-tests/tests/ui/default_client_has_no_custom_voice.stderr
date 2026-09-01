@@ -1,0 +1,5 @@
+error[E0599]: no method named `voices` found for struct `openai_rs_client::Client` in the current scope
+ --> tests/ui/default_client_has_no_custom_voice.rs:4:20
+  |
+4 |     let _ = client.voices();
+  |                    ^^^^^^ method not found in `Client`

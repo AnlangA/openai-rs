@@ -25,6 +25,7 @@ cargo test --workspace --all-features --locked
 cargo check -p openai-rs-sdk --all-targets --no-default-features --locked
 cargo check --workspace --all-targets --all-features --locked
 cargo check -p openai-rs-sdk --examples --all-features --locked
+cargo check --manifest-path fuzz/Cargo.toml --locked
 cargo +1.88.0 check --workspace --all-targets --all-features --locked
 cargo run --locked -p xtask -- check
 cargo deny --all-features check
@@ -53,6 +54,35 @@ addition to the vendored OpenAPI and Codex schema provenance.
 
 Refresh commands, when added, must be separate and explicit. Normal builds,
 tests, and `xtask check` must not fetch a moving specification.
+
+## Fuzzing
+
+The `fuzz/` directory is a standalone cargo-fuzz crate (excluded from the
+workspace in the root `Cargo.toml`, so `--workspace` commands never see it)
+with three targets: `kernel_omittable_extra` (the lossless
+`Omittable`/`Nullable`/extra-fields kernel round-trip), `sse_decoder` (the
+chunked SSE state machine across the three endpoint policies), and
+`responses_stream_event` (typed stream-event decode/re-encode parity).
+
+Two layers of gating apply:
+
+- **Compile gate (required, always):** `cargo check --manifest-path
+  fuzz/Cargo.toml --locked` runs on the pinned stable toolchain — no nightly
+  is needed for `check` because libFuzzer only links at build time. This keeps
+  the targets from silently rotting out of any compile path when the crates
+  they pin change shape. The fuzz crate pins its own `fuzz/Cargo.lock`, so the
+  command also fails when a target edit needs a lock refresh.
+- **Execution (manual, on demand):** actually running the targets requires
+  nightly plus the sanitizer runtime, via `cargo +nightly fuzz run <target>`
+  (install `cargo-fuzz` with `cargo +nightly install cargo-fuzz` first).
+  Execution is intentionally not a pre-release gate: sanitizer builds are
+  slow and platform-dependent. Run it before a release, after touching the
+  SSE decoder, the types kernel, or stream-event decoding, and whenever a
+  fuzz target's coverage claim is load-bearing for a fix.
+
+When adding a target, register it as a `[[bin]]` in `fuzz/Cargo.toml`, keep
+the harness free of I/O and clocks, and prefer re-encoding round-trips
+(decode → encode → decode) so any non-idempotent mapping surfaces as a crash.
 
 ## Generated files
 

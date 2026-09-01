@@ -2700,4 +2700,278 @@ mod tests {
         assert!(captured.content_type.is_none());
         assert!(captured.body.is_empty());
     }
+
+    /// Accepts every TCP connection, reads the handshake request, and then
+    /// parks holding the stream open so only a client-side connect timeout
+    /// can finish the attempt. Each connection parks in its own task so the
+    /// counter stays assertable.
+    async fn hanging_handshake_server() -> (Client, Arc<Mutex<usize>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind Realtime hanging handshake server");
+        let address = listener
+            .local_addr()
+            .expect("Realtime hanging handshake address");
+        let connections = Arc::new(Mutex::new(0_usize));
+        let server_connections = Arc::clone(&connections);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                *server_connections
+                    .lock()
+                    .expect("Realtime hanging connection lock") += 1;
+                tokio::spawn(async move {
+                    let mut request = vec![0_u8; 4096];
+                    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut request))
+                        .await;
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                });
+            }
+        });
+        let base_url = Url::parse(&format!("http://{address}/v1/"))
+            .expect("Realtime hanging handshake client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("Realtime hanging handshake client");
+        (client, connections)
+    }
+
+    #[tokio::test]
+    async fn a_hanging_realtime_handshake_times_out_without_a_retry() {
+        // 8-11: the Realtime handshake-timeout branch. Realtime offers no
+        // reconnect knob at all, so a silent handshake surfaces the dedicated
+        // timeout error after exactly one attempt.
+        let (client, connections) = hanging_handshake_server().await;
+        let error = client
+            .realtime()
+            .connect_with(
+                "gpt-realtime/test",
+                RealtimeWebSocketConfig::new().connect_timeout(Duration::from_millis(50)),
+            )
+            .await
+            .expect_err("a silent Realtime handshake must time out");
+        match &error {
+            Error::WebSocketTransport(reason) => assert!(
+                reason.contains("Realtime handshake timed out"),
+                "expected the Realtime handshake-timeout error, got {reason}"
+            ),
+            unexpected => panic!("expected a transport error, got {unexpected:?}"),
+        }
+        assert_eq!(
+            *connections
+                .lock()
+                .expect("Realtime hanging connection lock"),
+            1,
+            "a timed-out Realtime handshake is never replayed"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_realtime_send_is_local_and_keeps_the_socket_open() {
+        // 8-11: the send-side half of `max_message_bytes`. The oversized audio
+        // append is rejected before anything reaches the wire, so the socket
+        // is not retired and a later, smaller event still sends.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind Realtime oversized-send server");
+        let address = listener
+            .local_addr()
+            .expect("Realtime oversized-send address");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut socket = accept_hdr_async(
+                        stream,
+                        |_request: &server::Request, response: server::Response| {
+                            Ok::<_, server::ErrorResponse>(response)
+                        },
+                    )
+                    .await
+                    .expect("Realtime oversized-send handshake");
+                    while socket.next().await.is_some() {}
+                });
+            }
+        });
+        let base_url = Url::parse(&format!("http://{address}/v1/"))
+            .expect("Realtime oversized-send client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("Realtime oversized-send client");
+        let mut socket = client
+            .realtime()
+            .connect_with(
+                "gpt-realtime/test",
+                RealtimeWebSocketConfig::new().max_message_bytes(64),
+            )
+            .await
+            .expect("connect Realtime with a tiny message limit");
+
+        // 96 raw bytes base64-encode to 128 characters, well past the limit.
+        match socket.append_audio(vec![0_u8; 96]).await {
+            Err(Error::WebSocketProtocol(reason)) => assert_eq!(
+                reason,
+                "outgoing Realtime event exceeds the configured message limit"
+            ),
+            unexpected => panic!("expected a local message-limit error, got {unexpected:?}"),
+        }
+        assert!(
+            !socket.is_closed(),
+            "a local send rejection must not retire the Realtime socket"
+        );
+
+        socket
+            .cancel_response(None)
+            .await
+            .expect("a smaller event still sends after the local rejection");
+        assert!(!socket.is_closed());
+        socket.close().await.expect("close the healthy socket");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_realtime_inbound_event_retires_the_socket() {
+        // 8-11: the inbound half of `max_message_bytes` on the Realtime face.
+        // A peer text frame past the limit retires the socket — tungstenite's
+        // capacity guard fires first with the identical predicate, the local
+        // check is its defense-in-depth twin — and a retired socket reports
+        // EOF on every later recv.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind Realtime oversized-inbound server");
+        let address = listener
+            .local_addr()
+            .expect("Realtime oversized-inbound address");
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept Realtime oversized-inbound socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("Realtime oversized-inbound handshake");
+            socket
+                .send(Message::text("x".repeat(200)))
+                .await
+                .expect("send oversized Realtime event");
+            while socket.next().await.is_some() {}
+        });
+        let base_url = Url::parse(&format!("http://{address}/v1/"))
+            .expect("Realtime oversized-inbound client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("Realtime oversized-inbound client");
+        let mut socket = client
+            .realtime()
+            .connect_with(
+                "gpt-realtime/test",
+                RealtimeWebSocketConfig::new().max_message_bytes(64),
+            )
+            .await
+            .expect("connect Realtime with a tiny inbound limit");
+
+        match socket.recv().await {
+            Err(Error::WebSocketTransport(reason)) => assert!(
+                reason.contains("capacity"),
+                "expected the capacity limit, got {reason}"
+            ),
+            Err(Error::WebSocketProtocol(reason)) => assert_eq!(
+                reason,
+                "incoming Realtime event exceeds the configured message limit"
+            ),
+            unexpected => panic!("expected an inbound-limit error, got {unexpected:?}"),
+        }
+        assert!(
+            socket.is_closed(),
+            "an oversized inbound event must retire the Realtime socket"
+        );
+        assert!(
+            socket
+                .recv()
+                .await
+                .expect("recv after Realtime retirement")
+                .is_none(),
+            "a retired socket reports EOF on every later recv"
+        );
+    }
+
+    /// 8-19: `session.update` validates its nested session body — a
+    /// `server_vad.idle_timeout_ms` of 4999 is rejected through the
+    /// client-event face exactly as it is on the REST session face, both for
+    /// an event assembled around a decoded session and for one decoded from
+    /// the wire, while the 5000 boundary stays accepted.
+    #[test]
+    fn session_update_event_delegates_to_the_nested_session_validate()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use openai_rs_types::realtime::{
+            CreateRealtimeSessionConstraintError, RealtimeClientEventSessionUpdate,
+            RealtimeSessionConfig, RealtimeSessionCreateRequest,
+        };
+
+        let session = serde_json::from_value::<RealtimeSessionCreateRequest>(json!({
+            "type": "realtime",
+            "audio": {
+                "input": {
+                    "turn_detection": {"type": "server_vad", "idle_timeout_ms": 4999}
+                }
+            }
+        }))?;
+        let event =
+            RealtimeClientEvent::SessionUpdate(Box::new(RealtimeClientEventSessionUpdate::new(
+                RealtimeSessionConfig::Realtime(Box::new(session)),
+            )));
+        match event.validate() {
+            Err(CreateRealtimeSessionConstraintError::IdleTimeout {
+                actual,
+                minimum,
+                maximum,
+            }) => {
+                assert_eq!((actual, minimum, maximum), (4999, 5_000, 30_000));
+            }
+            other => panic!("expected IdleTimeout from the constructed event, got {other:?}"),
+        }
+
+        let decoded: RealtimeClientEvent = serde_json::from_value(json!({
+            "type": "session.update",
+            "session": {
+                "type": "realtime",
+                "audio": {
+                    "input": {
+                        "turn_detection": {"type": "server_vad", "idle_timeout_ms": 4999}
+                    }
+                }
+            }
+        }))?;
+        match decoded.validate() {
+            Err(CreateRealtimeSessionConstraintError::IdleTimeout { actual: 4999, .. }) => {}
+            other => panic!("expected IdleTimeout from the decoded event, got {other:?}"),
+        }
+
+        let boundary = serde_json::from_value::<RealtimeClientEvent>(json!({
+            "type": "session.update",
+            "session": {
+                "type": "realtime",
+                "audio": {
+                    "input": {
+                        "turn_detection": {"type": "server_vad", "idle_timeout_ms": 5000}
+                    }
+                }
+            }
+        }))?;
+        boundary
+            .validate()
+            .expect("the 5000ms boundary stays accepted through the event face");
+        Ok(())
+    }
 }

@@ -959,7 +959,8 @@ mod tests {
             CreateImageEditJsonRequest, CreateImageEditMultipartRequest, CreateImageRequest,
             CreateSpeechRequest, CreateTranscriptionRequest, CreateTranslationRequest,
             ImageEditStreamEvent, ImageGenerationStreamEvent, ImageReference, PartialImageCount,
-            SpeechStreamEvent, TranscriptionStreamEvent, TranslationResponseFormat,
+            SpeechStreamEvent, TranscriptionChunkingStrategy, TranscriptionStreamEvent,
+            TranscriptionVadConfig, TranslationResponseFormat,
         },
     };
     use serde_json::{Value, json};
@@ -1899,5 +1900,352 @@ mod tests {
             other => panic!("expected a decode error, got {other:?}"),
         }
         assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn truncated_json_frame_yields_decode_error_and_stops_the_stream() {
+        let body = Bytes::from_static(b"data: {\n\n");
+        let (client, _captured) = serve_once(SSE_MIME, body).await;
+        let mut stream = speech_stream(&client).await;
+        let error = stream
+            .next()
+            .await
+            .expect("decode error item")
+            .expect_err("truncated JSON frame");
+        match error {
+            Error::Decode {
+                meta_status,
+                request_id,
+                ..
+            } => {
+                assert_eq!(meta_status, StatusCode::OK);
+                assert_eq!(request_id.as_deref(), Some("req_media"));
+            }
+            other => panic!("expected a decode error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn transcription_format_matrix_maps_accept_header_and_output_variant() {
+        // Table-driven "response_format × Accept × decoded variant" matrix for
+        // all six transcription formats.
+        let cases: [(
+            TranscriptionResponseFormat,
+            &'static str,
+            &'static str,
+            &'static [u8],
+        ); 6] = [
+            (
+                TranscriptionResponseFormat::Json,
+                JSON_MIME,
+                JSON_MIME,
+                br#"{"text":"hello"}"#,
+            ),
+            (
+                TranscriptionResponseFormat::VerboseJson,
+                JSON_MIME,
+                JSON_MIME,
+                br#"{"language":"en","duration":1.25,"text":"hello"}"#,
+            ),
+            (
+                TranscriptionResponseFormat::DiarizedJson,
+                JSON_MIME,
+                JSON_MIME,
+                br#"{"task":"transcribe","duration":1.0,"text":"hi","segments":[]}"#,
+            ),
+            (
+                TranscriptionResponseFormat::Text,
+                "text/plain",
+                "text/plain",
+                b"hello",
+            ),
+            (
+                TranscriptionResponseFormat::Srt,
+                "application/x-subrip",
+                "application/x-subrip",
+                b"1\n00:00:00,000 --> 00:00:01,000\nhello\n",
+            ),
+            (
+                TranscriptionResponseFormat::Vtt,
+                "text/vtt",
+                "text/vtt",
+                b"WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhello\n",
+            ),
+        ];
+        for (format, expected_accept, response_content_type, response_body) in cases {
+            let kind = format.as_str().to_owned();
+            let (client, captured) =
+                serve_once(response_content_type, Bytes::from_static(response_body)).await;
+            let response = client
+                .audio()
+                .transcribe(
+                    CreateTranscriptionRequest::new(
+                        bytes_source(b"call-audio", "clip.mp3", "audio/mpeg"),
+                        "gpt-4o-transcribe",
+                    )
+                    .with_response_format(format),
+                )
+                .await
+                .expect("transcription response");
+
+            let captured = captured.await.expect("captured transcription request");
+            assert_eq!(captured.path, "/v1/audio/transcriptions", "{kind}");
+            assert_eq!(captured.accept.as_deref(), Some(expected_accept), "{kind}");
+            let wire = String::from_utf8_lossy(&captured.body);
+            assert!(
+                wire.contains(&format!("name=\"response_format\"\r\n\r\n{kind}")),
+                "{kind} must be encoded as a multipart field"
+            );
+
+            match kind.as_str() {
+                "json" => match response.body() {
+                    TranscriptionOutput::Json(value) => assert_eq!(value.text, "hello"),
+                    other => panic!("expected Json output, got {other:?}"),
+                },
+                "verbose_json" => match response.body() {
+                    TranscriptionOutput::VerboseJson(value) => {
+                        assert_eq!(value.text, "hello");
+                        assert_eq!(value.language, "en");
+                    }
+                    other => panic!("expected VerboseJson output, got {other:?}"),
+                },
+                "diarized_json" => match response.body() {
+                    TranscriptionOutput::DiarizedJson(value) => {
+                        assert_eq!(value.text, "hi");
+                        assert_eq!(value.task.as_str(), "transcribe");
+                    }
+                    other => panic!("expected DiarizedJson output, got {other:?}"),
+                },
+                "text" => match response.body() {
+                    TranscriptionOutput::Text(value) => {
+                        assert_eq!(value.as_bytes(), b"hello");
+                    }
+                    other => panic!("expected Text output, got {other:?}"),
+                },
+                "srt" => match response.body() {
+                    TranscriptionOutput::Srt(value) => {
+                        assert!(value.as_str().expect("UTF-8 SRT").contains("hello"));
+                    }
+                    other => panic!("expected Srt output, got {other:?}"),
+                },
+                "vtt" => match response.body() {
+                    TranscriptionOutput::Vtt(value) => {
+                        assert!(value.as_str().expect("UTF-8 VTT").contains("hello"));
+                    }
+                    other => panic!("expected Vtt output, got {other:?}"),
+                },
+                other => panic!("unknown table kind {other}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn translation_format_matrix_maps_accept_header_and_output_variant() {
+        // Table-driven "response_format × Accept × decoded variant" matrix for
+        // all five translation formats.
+        let cases: [(
+            TranslationResponseFormat,
+            &'static str,
+            &'static str,
+            &'static [u8],
+        ); 5] = [
+            (
+                TranslationResponseFormat::Json,
+                JSON_MIME,
+                JSON_MIME,
+                br#"{"text":"hello"}"#,
+            ),
+            (
+                TranslationResponseFormat::VerboseJson,
+                JSON_MIME,
+                JSON_MIME,
+                br#"{"language":"english","duration":1.0,"text":"hello"}"#,
+            ),
+            (
+                TranslationResponseFormat::Text,
+                "text/plain",
+                "text/plain",
+                b"hello",
+            ),
+            (
+                TranslationResponseFormat::Srt,
+                "application/x-subrip",
+                "application/x-subrip",
+                b"1\n00:00:00,000 --> 00:00:01,000\nhello\n",
+            ),
+            (
+                TranslationResponseFormat::Vtt,
+                "text/vtt",
+                "text/vtt",
+                b"WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhello\n",
+            ),
+        ];
+        for (format, expected_accept, response_content_type, response_body) in cases {
+            let kind = format.as_str().to_owned();
+            let (client, captured) =
+                serve_once(response_content_type, Bytes::from_static(response_body)).await;
+            let response = client
+                .audio()
+                .translate(
+                    CreateTranslationRequest::new(
+                        bytes_source(b"call-audio", "clip.mp3", "audio/mpeg"),
+                        "whisper-1",
+                    )
+                    .with_response_format(format),
+                )
+                .await
+                .expect("translation response");
+
+            let captured = captured.await.expect("captured translation request");
+            assert_eq!(captured.path, "/v1/audio/translations", "{kind}");
+            assert_eq!(captured.accept.as_deref(), Some(expected_accept), "{kind}");
+            let wire = String::from_utf8_lossy(&captured.body);
+            assert!(
+                wire.contains(&format!("name=\"response_format\"\r\n\r\n{kind}")),
+                "{kind} must be encoded as a multipart field"
+            );
+
+            match kind.as_str() {
+                "json" => match response.body() {
+                    TranslationOutput::Json(value) => assert_eq!(value.text, "hello"),
+                    other => panic!("expected Json output, got {other:?}"),
+                },
+                "verbose_json" => match response.body() {
+                    TranslationOutput::VerboseJson(value) => {
+                        assert_eq!(value.text, "hello");
+                        assert_eq!(value.language, "english");
+                    }
+                    other => panic!("expected VerboseJson output, got {other:?}"),
+                },
+                "text" => match response.body() {
+                    TranslationOutput::Text(value) => {
+                        assert_eq!(value.as_bytes(), b"hello");
+                    }
+                    other => panic!("expected Text output, got {other:?}"),
+                },
+                "srt" => match response.body() {
+                    TranslationOutput::Srt(value) => {
+                        assert!(value.as_str().expect("UTF-8 SRT").contains("hello"));
+                    }
+                    other => panic!("expected Srt output, got {other:?}"),
+                },
+                "vtt" => match response.body() {
+                    TranslationOutput::Vtt(value) => {
+                        assert!(value.as_str().expect("UTF-8 VTT").contains("hello"));
+                    }
+                    other => panic!("expected Vtt output, got {other:?}"),
+                },
+                other => panic!("unknown table kind {other}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_response_format_fails_configuration_before_any_request() {
+        // A future response-format string must fail locally: the format is
+        // resolved before the multipart form is prepared or sent.
+        let (client, _captured) =
+            serve_once(JSON_MIME, Bytes::from_static(br#"{"text":"x"}"#)).await;
+        let error = client
+            .audio()
+            .transcribe(
+                CreateTranscriptionRequest::new(
+                    bytes_source(b"call-audio", "clip.mp3", "audio/mpeg"),
+                    "gpt-4o-transcribe",
+                )
+                .with_response_format(TranscriptionResponseFormat::from_raw("future_format")),
+            )
+            .await
+            .expect_err("unknown transcription format");
+        match error {
+            Error::InvalidConfiguration(message) => {
+                assert!(message.contains("transcription"), "{message}");
+            }
+            other => panic!("expected invalid configuration, got {other:?}"),
+        }
+
+        let (client, _captured) =
+            serve_once(JSON_MIME, Bytes::from_static(br#"{"text":"x"}"#)).await;
+        let error = client
+            .audio()
+            .translate(
+                CreateTranslationRequest::new(
+                    bytes_source(b"call-audio", "clip.mp3", "audio/mpeg"),
+                    "whisper-1",
+                )
+                .with_response_format(TranslationResponseFormat::from_raw("future_format")),
+            )
+            .await
+            .expect_err("unknown translation format");
+        match error {
+            Error::InvalidConfiguration(message) => {
+                assert!(message.contains("translation"), "{message}");
+            }
+            other => panic!("expected invalid configuration, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn transcription_multipart_encodes_nested_objects_and_speaker_arrays() {
+        // Wire-level assertion for the bracket encoding of the nested
+        // `chunking_strategy` object, the paired known-speaker arrays, and
+        // scalar/array metadata fields on one transcription request.
+        let (client, captured) = serve_once(
+            JSON_MIME,
+            Bytes::from_static(
+                br#"{"task":"transcribe","duration":1.0,"text":"hello","segments":[]}"#,
+            ),
+        )
+        .await;
+        let mut vad = TranscriptionVadConfig::new();
+        vad.prefix_padding_ms = Omittable::Value(300);
+        vad.silence_duration_ms = Omittable::Value(500);
+        vad.threshold = Omittable::Value(0.5);
+        let mut request = CreateTranscriptionRequest::new(
+            bytes_source(b"call-audio", "call.wav", "audio/wav"),
+            "gpt-4o-transcribe-diarize",
+        )
+        .with_response_format(TranscriptionResponseFormat::DiarizedJson)
+        .with_chunking_strategy(TranscriptionChunkingStrategy::ServerVad(vad))
+        .with_known_speaker("agent", "audio/wav", b"agent-sample")
+        .with_known_speaker("customer", "audio/wav", b"customer-sample");
+        request.metadata.keywords = Omittable::Value(vec!["Acme".to_owned(), "gpt-5.6".to_owned()]);
+        let response = client
+            .audio()
+            .transcribe(request)
+            .await
+            .expect("transcription response");
+        assert!(matches!(
+            response.body(),
+            TranscriptionOutput::DiarizedJson(_)
+        ));
+
+        let captured = captured.await.expect("captured transcription request");
+        assert_eq!(captured.accept.as_deref(), Some(JSON_MIME));
+        let text = String::from_utf8_lossy(&captured.body);
+        assert!(text.contains("name=\"response_format\"\r\n\r\ndiarized_json"));
+        // Nested objects use one bracket part per leaf field.
+        assert!(text.contains("name=\"chunking_strategy[type]\"\r\n\r\nserver_vad"));
+        assert!(text.contains("name=\"chunking_strategy[prefix_padding_ms]\"\r\n\r\n300"));
+        assert!(text.contains("name=\"chunking_strategy[silence_duration_ms]\"\r\n\r\n500"));
+        assert!(text.contains("name=\"chunking_strategy[threshold]\"\r\n\r\n0.5"));
+        // Paired known-speaker arrays keep their ordering and data URLs.
+        assert_eq!(text.matches("name=\"known_speaker_names[]\"").count(), 2);
+        assert_eq!(
+            text.matches("name=\"known_speaker_references[]\"").count(),
+            2
+        );
+        assert!(text.contains("name=\"known_speaker_names[]\"\r\n\r\nagent"));
+        assert!(text.contains("name=\"known_speaker_names[]\"\r\n\r\ncustomer"));
+        assert_eq!(
+            text.matches("data:audio/wav;base64,").count(),
+            2,
+            "speaker samples must be base64 data URLs"
+        );
+        assert_eq!(text.matches("name=\"keywords[]\"").count(), 2);
+        assert!(text.contains("name=\"keywords[]\"\r\n\r\nAcme"));
+        assert!(text.contains("name=\"keywords[]\"\r\n\r\ngpt-5.6"));
+        assert!(text.contains("name=\"file\"; filename=\"call.wav\""));
     }
 }

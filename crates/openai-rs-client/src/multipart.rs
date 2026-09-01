@@ -26,7 +26,7 @@ use url::Url;
 
 use tracing::Instrument;
 
-use crate::transport::{PathSegment, deserialize_json};
+use crate::transport::{PathSegment, deserialize_json, should_retry_response};
 use crate::{
     ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy,
     auth::AuthProvider,
@@ -1311,20 +1311,9 @@ fn remaining_time(started: Instant, overall_timeout: Duration) -> Result<Duratio
         })
 }
 
-fn should_retry_response(response: &reqwest::Response) -> bool {
-    match response
-        .headers()
-        .get("x-should-retry")
-        .and_then(|value| value.to_str().ok())
-    {
-        Some("true") => true,
-        Some("false") => false,
-        Some(_) | None => {
-            matches!(response.status().as_u16(), 408 | 409 | 429)
-                || response.status().is_server_error()
-        }
-    }
-}
+// `should_retry_response` is shared from `transport.rs` (8-10): the multipart
+// lanes classify responses through the same `x-should-retry` / status truth
+// table as the JSON transport and the Administration channel.
 
 fn retry_delay(headers: &http::HeaderMap, retries: u32, maximum: Duration) -> Option<Duration> {
     if let Some(value) = headers

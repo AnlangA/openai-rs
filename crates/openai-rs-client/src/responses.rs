@@ -1337,4 +1337,163 @@ mod tests {
         assert!(stream.next().await.is_none());
         assert!(captured.recv().await.is_some());
     }
+
+    #[tokio::test]
+    async fn retrieve_stream_resumes_an_interrupted_accumulator_end_to_end() {
+        // 8-05(a): the documented resume consumption path. The upper half is
+        // cut off mid-stream (EOF without a terminal marker), its events are
+        // folded into a caller-owned accumulator, and `collect_with` finishes
+        // reduction from `retrieve_stream`'s lower half.
+        let upper = concat!(
+            "event: response.output_item.added\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_resume\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]},\"sequence_number\":1}\n\n",
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_resume\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello \",\"sequence_number\":2,\"logprobs\":[]}\n\n",
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_resume\",\"output_index\":0,\"content_index\":0,\"delta\":\"resumed\",\"sequence_number\":3,\"logprobs\":[]}\n\n",
+        );
+        let (base_url, _captured) =
+            serve_once_with_content_type(StatusCode::OK, "text/event-stream", upper).await;
+        let mut accumulator = openai_rs_types::responses::ResponseAccumulator::new();
+        let mut upper_stream = client(base_url)
+            .responses()
+            .create_stream(CreateResponseRequest::empty().into_streaming())
+            .await
+            .expect("upper-half handshake");
+        let mut interrupted = false;
+        while let Some(item) = upper_stream.next().await {
+            match item {
+                Ok(event) => accumulator.push(event).expect("accept upper-half event"),
+                Err(error) => {
+                    // The dropped connection surfaces as the resume trigger.
+                    assert!(
+                        matches!(error, Error::Sse { .. }),
+                        "interruption must be an SSE error, got {error:?}"
+                    );
+                    interrupted = true;
+                }
+            }
+        }
+        assert!(interrupted, "the upper half must end interrupted");
+        assert_eq!(accumulator.last_sequence_number(), Some(3));
+        assert_eq!(accumulator.output_text(), "Hello resumed");
+
+        let lower = concat!(
+            "event: response.output_text.done\n",
+            "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_resume\",\"output_index\":0,\"content_index\":0,\"text\":\"Hello resumed\",\"sequence_number\":4,\"logprobs\":[]}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"sequence_number\":5,\"response\":{\"id\":\"resp_resume\",\"created_at\":1,\"error\":null,\"incomplete_details\":null,\"instructions\":null,\"metadata\":null,\"model\":\"test-model\",\"object\":\"response\",\"output\":[{\"type\":\"message\",\"id\":\"msg_resume\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello resumed\",\"annotations\":[],\"logprobs\":[]}]}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[],\"top_p\":1.0,\"status\":\"completed\"}}\n\n",
+        );
+        let (base_url, captured) =
+            serve_once_with_content_type(StatusCode::OK, "text/event-stream", lower).await;
+        let response = client(base_url)
+            .responses()
+            .retrieve_stream(
+                &ResponseId::new("resp_resume"),
+                RetrieveResponseStreamParams::new().starting_after(3),
+            )
+            .await
+            .expect("resume handshake")
+            .collect_with(accumulator)
+            .await
+            .expect("resumed terminal response");
+        assert_eq!(response.id(), "resp_resume");
+        assert_eq!(response.output_text(), "Hello resumed");
+
+        let captured = captured.await.expect("captured resume request");
+        assert_eq!(captured.method, Method::GET);
+        let url = Url::parse(&format!("http://loopback{}", captured.path_and_query))
+            .expect("captured resume URL");
+        assert_eq!(url.path(), "/v1/responses/resp_resume");
+        let query = url.query_pairs().collect::<Vec<_>>();
+        assert!(query.contains(&("stream".into(), "true".into())));
+        assert!(query.contains(&("starting_after".into(), "3".into())));
+    }
+
+    #[tokio::test]
+    async fn create_stream_rejects_non_sse_content_type() {
+        // 8-05(b): the SSE handshake fails closed when the service answers
+        // with a JSON body instead of an event stream.
+        let (base_url, _captured) =
+            serve_once_with_content_type(StatusCode::OK, "application/json", "{}").await;
+        let error = client(base_url)
+            .responses()
+            .create_stream(CreateResponseRequest::empty().into_streaming())
+            .await
+            .expect_err("a JSON content type must fail the SSE handshake");
+        match &error {
+            Error::UnexpectedContentType {
+                expected,
+                actual,
+                status,
+                ..
+            } => {
+                assert_eq!(*expected, "text/event-stream");
+                assert_eq!(actual.as_deref(), Some("application/json"));
+                assert_eq!(*status, StatusCode::OK);
+            }
+            other => panic!("expected UnexpectedContentType, got {other:?}"),
+        }
+        assert_eq!(error.request_id(), Some("req_loopback"));
+        assert_eq!(error.status(), Some(StatusCode::OK));
+    }
+
+    #[tokio::test]
+    async fn stream_frame_without_event_field_fails_closed() {
+        // 8-05(c): a data-only frame has no SSE event field to cross-check.
+        let body = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"hi\",\"sequence_number\":1,\"logprobs\":[]}\n\n",
+        );
+        let (base_url, _captured) =
+            serve_once_with_content_type(StatusCode::OK, "text/event-stream", body).await;
+        let mut stream = client(base_url)
+            .responses()
+            .create_stream(CreateResponseRequest::empty().into_streaming())
+            .await
+            .expect("stream handshake");
+        let error = stream
+            .next()
+            .await
+            .expect("malformed frame surfaces")
+            .expect_err("missing event field must fail");
+        match &error {
+            Error::StreamProtocol { message, .. } => {
+                assert_eq!(*message, "a Responses event is missing its SSE event field");
+            }
+            other => panic!("expected StreamProtocol, got {other:?}"),
+        }
+        assert_eq!(error.request_id(), Some("req_loopback"));
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn stream_event_field_and_type_discriminator_must_agree() {
+        // 8-05(c): the SSE event name and the JSON `type` disagree.
+        let body = concat!(
+            "event: response.output_text.done\n",
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"hi\",\"sequence_number\":1,\"logprobs\":[]}\n\n",
+        );
+        let (base_url, _captured) =
+            serve_once_with_content_type(StatusCode::OK, "text/event-stream", body).await;
+        let mut stream = client(base_url)
+            .responses()
+            .create_stream(CreateResponseRequest::empty().into_streaming())
+            .await
+            .expect("stream handshake");
+        let error = stream
+            .next()
+            .await
+            .expect("mismatched frame surfaces")
+            .expect_err("event/type disagreement must fail");
+        match &error {
+            Error::StreamProtocol { message, .. } => {
+                assert_eq!(
+                    *message,
+                    "the SSE event field and JSON type discriminator differ"
+                );
+            }
+            other => panic!("expected StreamProtocol, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
 }

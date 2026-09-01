@@ -1114,6 +1114,103 @@ mod tests {
     }
 
     #[test]
+    fn a_hanging_cr_and_a_split_bom_do_not_consume_a_tiny_line_limit() {
+        // 8-23: the two framing defenses inside the incomplete-line check. A
+        // final CR may still turn out to be a terminator, so it is excluded
+        // from the content length while the LF decision is pending; and the
+        // first bytes of a stream BOM are framing, not content, so they must
+        // not eat into a custom line budget while the rest of the BOM is in
+        // flight.
+        let limits = ok(SseLimits::new(8, 64, 4));
+
+        // Eight content bytes plus a pending CR stay exactly at the limit.
+        let mut decoder = SseDecoder::new(limits);
+        assert!(ok(decoder.push(b"data: ab\r")).is_empty());
+        // The exclusion covers the CR alone, not the byte before it: a ninth
+        // content byte fails even while the CR is still pending.
+        let mut over = SseDecoder::new(limits);
+        assert_eq!(
+            over.push(b"data: abc\r"),
+            Err(SseDecodeError::LineTooLarge { limit: 8 })
+        );
+        assert_eq!(over.state(), SseDecoderState::Failed);
+
+        // The pending CR really was half of a CRLF terminator.
+        let mut decoder = SseDecoder::new(limits);
+        assert!(ok(decoder.push(b"data: ab\r")).is_empty());
+        let frames = ok(decoder.push(b"\ndata: cd\r\n\r\n"));
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].data.as_ref(), "ab\ncd");
+
+        // A byte-split BOM stays inside the budget at every prefix and is
+        // never decoded as content.
+        let mut decoder = SseDecoder::new(limits);
+        assert!(ok(decoder.push(&UTF8_BOM[..1])).is_empty());
+        assert!(ok(decoder.push(&UTF8_BOM[1..])).is_empty());
+        let frames = ok(decoder.push(b"data: ab\n\n"));
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].data.as_ref(), "ab");
+
+        // The same holds when the BOM arrives beside a line that is exactly
+        // at the limit: three framing bytes never counted as content.
+        let mut decoder = SseDecoder::new(limits);
+        let mut chunk = UTF8_BOM.to_vec();
+        chunk.extend_from_slice(b"data: ab");
+        assert!(ok(decoder.push(&chunk)).is_empty());
+        let frames = ok(decoder.push(b"\n\n"));
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].data.as_ref(), "ab");
+    }
+
+    #[test]
+    fn stream_close_discards_buffered_input_and_ends_the_stream() {
+        // 8-23: `SseStreamDecoder::close()` is the early-stop contract for a
+        // caller that abandons a stream before EOF or a terminal marker:
+        // retained input is released immediately, the stream reports
+        // Completed rather than Failed, and every later use is rejected
+        // instead of silently decoding the released remainder.
+        let mut decoder = SseStreamDecoder::with_default_limits(SseEndpointPolicy::responses());
+        let dispatches =
+            ok(decoder.push(b"event: response.created\ndata: {}\n\ndata: {\"partial\""));
+        assert_eq!(dispatches.len(), 1);
+        assert!(matches!(dispatches[0], SseDispatch::Event(_)));
+        assert!(
+            decoder.decoder().buffered_bytes() > 0,
+            "an unterminated partial line must still be retained before close"
+        );
+
+        decoder.close();
+        assert_eq!(decoder.state(), SseStreamState::Completed);
+        assert_eq!(decoder.decoder().state(), SseDecoderState::Finished);
+        assert_eq!(decoder.decoder().buffered_bytes(), 0);
+        assert_eq!(
+            decoder.push(b"data: later\n\n"),
+            Err(SseDecodeError::StreamInactive {
+                state: SseStreamState::Completed,
+            })
+        );
+        assert_eq!(
+            decoder.finish(),
+            Err(SseDecodeError::StreamInactive {
+                state: SseStreamState::Completed,
+            })
+        );
+
+        // Close is idempotent and never resurrects or downgrades a stopped
+        // stream: a Completed decoder stays Completed...
+        decoder.close();
+        assert_eq!(decoder.state(), SseStreamState::Completed);
+
+        // ...and a Failed decoder stays Failed instead of being rebranded as
+        // a clean early stop.
+        let mut failed = SseStreamDecoder::with_default_limits(SseEndpointPolicy::responses());
+        assert!(failed.push(b"data: \xff\n\n").is_err());
+        assert_eq!(failed.state(), SseStreamState::Failed);
+        failed.close();
+        assert_eq!(failed.state(), SseStreamState::Failed);
+    }
+
+    #[test]
     fn invalid_limits_are_rejected() {
         assert_eq!(
             SseLimits::new(0, 1, 1),

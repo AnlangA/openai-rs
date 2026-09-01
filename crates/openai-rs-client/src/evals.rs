@@ -1180,6 +1180,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_page_stream_advances_cursor_and_encodes_query() {
+        // 8-20: the run-level pagination glue shares the parent-Eval cursor
+        // rules; the second request must carry the advanced `after` cursor
+        // together with the preserved filters.
+        let first = json!({
+            "object": "list",
+            "data": [],
+            "first_id": "evalrun_1",
+            "last_id": "evalrun_2",
+            "has_more": true
+        });
+        let second = json!({
+            "object": "list",
+            "data": [],
+            "first_id": "evalrun_3",
+            "last_id": "evalrun_3",
+            "has_more": false
+        });
+        let (client, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, first.to_string()),
+            (StatusCode::OK, second.to_string()),
+        ])
+        .await;
+        let mut pages = client.evals().runs().list_pages(
+            EvalId::new("eval_1"),
+            ListEvalRunsParams::new()
+                .limit(2)
+                .order(EvalSortOrder::Ascending),
+        );
+        assert!(pages.next().await.expect("first run page").is_ok());
+        assert!(pages.next().await.expect("second run page").is_ok());
+        assert!(pages.next().await.is_none());
+
+        let first_request = captured.recv().await.expect("first run list request");
+        let second_request = captured.recv().await.expect("second run list request");
+        assert_eq!(
+            first_request.path_and_query,
+            "/v1/evals/eval_1/runs?limit=2&order=asc"
+        );
+        let second_url = Url::parse(&format!("http://loopback{}", second_request.path_and_query))
+            .expect("second run query URL");
+        let second_query = second_url.query_pairs().collect::<Vec<_>>();
+        assert!(second_query.contains(&("after".into(), "evalrun_2".into())));
+        assert!(second_query.contains(&("limit".into(), "2".into())));
+        assert!(second_query.contains(&("order".into(), "asc".into())));
+        assert!(captured.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn output_item_page_stream_advances_cursor_and_encodes_query() {
+        // 8-20: output-item pagination is the deepest glue (three path
+        // parameters) and reuses the same cursor advance/termination rules.
+        let first = json!({
+            "object": "list",
+            "data": [],
+            "first_id": "outputitem_1",
+            "last_id": "outputitem_2",
+            "has_more": true
+        });
+        let second = json!({
+            "object": "list",
+            "data": [],
+            "first_id": "outputitem_3",
+            "last_id": "outputitem_3",
+            "has_more": false
+        });
+        let (client, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, first.to_string()),
+            (StatusCode::OK, second.to_string()),
+        ])
+        .await;
+        let mut pages = client.evals().runs().output_items().list_pages(
+            EvalId::new("eval_1"),
+            EvalRunId::new("evalrun_1"),
+            ListEvalRunOutputItemsParams::new()
+                .limit(3)
+                .order(EvalSortOrder::Descending),
+        );
+        assert!(pages.next().await.expect("first item page").is_ok());
+        assert!(pages.next().await.expect("second item page").is_ok());
+        assert!(pages.next().await.is_none());
+
+        let first_request = captured.recv().await.expect("first item list request");
+        let second_request = captured.recv().await.expect("second item list request");
+        assert_eq!(
+            first_request.path_and_query,
+            "/v1/evals/eval_1/runs/evalrun_1/output_items?limit=3&order=desc"
+        );
+        let second_url = Url::parse(&format!("http://loopback{}", second_request.path_and_query))
+            .expect("second item query URL");
+        let second_query = second_url.query_pairs().collect::<Vec<_>>();
+        assert!(second_query.contains(&("after".into(), "outputitem_2".into())));
+        assert!(second_query.contains(&("limit".into(), "3".into())));
+        assert!(second_query.contains(&("order".into(), "desc".into())));
+        assert!(captured.recv().await.is_none());
+    }
+
+    #[tokio::test]
     async fn run_poll_stops_at_terminal_status() {
         let (client, mut captured) = serve_sequence(vec![
             (StatusCode::OK, run_json("queued").to_string()),

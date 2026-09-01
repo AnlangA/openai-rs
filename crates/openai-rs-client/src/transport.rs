@@ -746,7 +746,16 @@ fn retryable_operation(class: RetryClass, policy: RetryPolicy) -> bool {
     }
 }
 
-fn should_retry_response(response: &reqwest::Response) -> bool {
+/// Retry classification for one non-success HTTP response, shared by every
+/// transport lane (JSON transport, multipart forms/downloads, Administration).
+///
+/// `x-should-retry` is authoritative when present as exactly `true`/`false`;
+/// anything else — a garbage value or an absent header — falls back to the
+/// status-only rule: 408, 409, 429, and every 5xx are retryable, every other
+/// 4xx is not. The three lanes previously carried verbatim copies of this
+/// predicate; they now share this one so a single truth table pins them all
+/// (8-10).
+pub(crate) fn should_retry_response(response: &reqwest::Response) -> bool {
     match response
         .headers()
         .get("x-should-retry")
@@ -1192,6 +1201,7 @@ mod tests {
     struct ScriptedResponse {
         status: http::StatusCode,
         retry_after: Option<HeaderValue>,
+        x_should_retry: Option<HeaderValue>,
         body: &'static str,
     }
 
@@ -1218,6 +1228,7 @@ mod tests {
                             .expect("scripted response");
                         let status = scripted.status;
                         let retry_after = scripted.retry_after.clone();
+                        let x_should_retry = scripted.x_should_retry.clone();
                         let body = scripted.body;
                         async move {
                             let mut builder = hyper::Response::builder()
@@ -1225,6 +1236,9 @@ mod tests {
                                 .header(header::CONTENT_TYPE, "application/json");
                             if let Some(retry_after) = retry_after {
                                 builder = builder.header(header::RETRY_AFTER, retry_after);
+                            }
+                            if let Some(x_should_retry) = x_should_retry {
+                                builder = builder.header("x-should-retry", x_should_retry);
                             }
                             Ok::<_, Infallible>(
                                 builder
@@ -1257,11 +1271,13 @@ mod tests {
             ScriptedResponse {
                 status: http::StatusCode::TOO_MANY_REQUESTS,
                 retry_after: Some(HeaderValue::from_static("0")),
+                x_should_retry: None,
                 body: r#"{"error":{"message":"rate limited","type":"rate_limit_error"}}"#,
             },
             ScriptedResponse {
                 status: http::StatusCode::OK,
                 retry_after: None,
+                x_should_retry: None,
                 body: r#"{"object":"list","data":[]}"#,
             },
         ])
@@ -1295,11 +1311,13 @@ mod tests {
             ScriptedResponse {
                 status: http::StatusCode::TOO_MANY_REQUESTS,
                 retry_after: Some(HeaderValue::from_static("1")),
+                x_should_retry: None,
                 body: r#"{"error":{"message":"rate limited","type":"rate_limit_error"}}"#,
             },
             ScriptedResponse {
                 status: http::StatusCode::OK,
                 retry_after: None,
+                x_should_retry: None,
                 body: r#"{"object":"list","data":[]}"#,
             },
         ])
@@ -1331,6 +1349,7 @@ mod tests {
         let (client, attempts) = serve_scripted_responses(vec![ScriptedResponse {
             status: http::StatusCode::INTERNAL_SERVER_ERROR,
             retry_after: Some(HeaderValue::from_static("130")),
+            x_should_retry: None,
             body: r#"{"error":{"message":"retry","type":"server_error","code":"temporary"}}"#,
         }])
         .await;
@@ -1376,5 +1395,295 @@ mod tests {
             RetryClass::Replayable,
             RetryPolicy::openai_compatible()
         ));
+    }
+
+    fn classified_response(status: u16, x_should_retry: Option<&'static str>) -> reqwest::Response {
+        let mut builder = http::Response::builder()
+            .status(http::StatusCode::from_u16(status).expect("raw status code"));
+        if let Some(value) = x_should_retry {
+            builder = builder.header("x-should-retry", value);
+        }
+        builder
+            .body(Vec::new())
+            .expect("classification response")
+            .into()
+    }
+
+    #[test]
+    fn should_retry_response_truth_table() {
+        // 8-10: the truth table shared by the JSON transport, the multipart
+        // lanes, and the Administration channel. Without the header only
+        // 408/409/429/5xx retry; every other 4xx is terminal.
+        for status in [400_u16, 401, 403, 404, 410, 422] {
+            assert!(
+                !should_retry_response(&classified_response(status, None)),
+                "{status} without the header must not retry"
+            );
+        }
+        for status in [408_u16, 409, 429, 500, 502, 503, 599] {
+            assert!(
+                should_retry_response(&classified_response(status, None)),
+                "{status} without the header must retry"
+            );
+        }
+
+        // The explicit override beats the status in both directions.
+        for status in [400_u16, 404, 408, 500] {
+            assert!(
+                should_retry_response(&classified_response(status, Some("true"))),
+                "`x-should-retry: true` must force a retry of {status}"
+            );
+        }
+        for status in [408_u16, 409, 429, 503] {
+            assert!(
+                !should_retry_response(&classified_response(status, Some("false"))),
+                "`x-should-retry: false` must suppress the {status} retry"
+            );
+        }
+
+        // A non-boolean value is not an override: it falls back to the status
+        // rule exactly like an absent header (openai-python parses the header
+        // strictly).
+        for value in ["1", "yes", "TRUE", ""] {
+            assert!(
+                !should_retry_response(&classified_response(400, Some(value))),
+                "`x-should-retry: {value}` must fall back to the 400 status rule"
+            );
+            assert!(
+                should_retry_response(&classified_response(503, Some(value))),
+                "`x-should-retry: {value}` must fall back to the 503 status rule"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn x_should_retry_true_forces_a_retry_of_a_400_rejection() {
+        // 8-10: a plain 4xx never retries, but the platform header explicitly
+        // marks this rejection replayable.
+        let (client, attempts) = serve_scripted_responses(vec![
+            ScriptedResponse {
+                status: http::StatusCode::BAD_REQUEST,
+                retry_after: None,
+                x_should_retry: Some(HeaderValue::from_static("true")),
+                body: r#"{"error":{"message":"retry this one","type":"invalid_request_error"}}"#,
+            },
+            ScriptedResponse {
+                status: http::StatusCode::OK,
+                retry_after: None,
+                x_should_retry: None,
+                body: r#"{"object":"list","data":[]}"#,
+            },
+        ])
+        .await;
+
+        let response = client
+            .models()
+            .list()
+            .await
+            .expect("the 400 must be retried after `x-should-retry: true`");
+        assert!(response.data.is_empty());
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn x_should_retry_false_suppresses_the_500_retry() {
+        // 8-10: the header overrides the status rule in the other direction
+        // too — a 5xx the platform marked terminal surfaces immediately.
+        let (client, attempts) = serve_scripted_responses(vec![ScriptedResponse {
+            status: http::StatusCode::INTERNAL_SERVER_ERROR,
+            retry_after: None,
+            x_should_retry: Some(HeaderValue::from_static("false")),
+            body: r#"{"error":{"message":"do not retry","type":"server_error"}}"#,
+        }])
+        .await;
+
+        let error = client
+            .models()
+            .list()
+            .await
+            .expect_err("the suppressed 500 must surface on the first attempt");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "`x-should-retry: false` must suppress every retry"
+        );
+        let Error::Api(api) = &error else {
+            panic!("expected an API error, got {error:?}");
+        };
+        assert_eq!(api.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn request_timeout_and_conflict_statuses_retry_without_any_header() {
+        // 8-10: 408 and 409 were the two status cells with no direct coverage.
+        for status in [
+            http::StatusCode::REQUEST_TIMEOUT,
+            http::StatusCode::CONFLICT,
+        ] {
+            let (client, attempts) = serve_scripted_responses(vec![
+                ScriptedResponse {
+                    status,
+                    retry_after: None,
+                    x_should_retry: None,
+                    body: r#"{"error":{"message":"transient","type":"server_error"}}"#,
+                },
+                ScriptedResponse {
+                    status: http::StatusCode::OK,
+                    retry_after: None,
+                    x_should_retry: None,
+                    body: r#"{"object":"list","data":[]}"#,
+                },
+            ])
+            .await;
+
+            let response = client
+                .models()
+                .list()
+                .await
+                .unwrap_or_else(|error| panic!("{status} must be retried, got {error:?}"));
+            assert!(response.data.is_empty());
+            assert_eq!(
+                attempts.load(Ordering::SeqCst),
+                2,
+                "{status} must be retried exactly once before the success"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_connect_failure_against_a_closed_port_is_retried() {
+        // 8-10: the transport-error retry lane (`is_connect`). The port is
+        // reserved and closed so the first attempt fails with ECONNREFUSED,
+        // and a server rebound on the same port during the local backoff
+        // makes the retry succeed.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the doomed listener");
+        let address = listener.local_addr().expect("doomed listener address");
+        drop(listener);
+
+        tokio::spawn(async move {
+            // The client's first attempt fails while the port is still closed.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let listener = TcpListener::bind(address)
+                .await
+                .expect("rebind the released port");
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept the retried connection");
+            let service = service_fn(|_request: Request<Incoming>| async move {
+                Ok::<_, Infallible>(
+                    hyper::Response::builder()
+                        .status(http::StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Full::new(Bytes::from_static(
+                            br#"{"object":"list","data":[]}"#,
+                        )))
+                        .expect("rebound response"),
+                )
+            });
+            let _ = http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+        });
+
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("closed-port base URL");
+        let key = ApiKey::new("test-placeholder-key").expect("valid test key");
+        let client = Client::builder(key)
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("closed-port loopback client");
+        let response = client
+            .models()
+            .list()
+            .await
+            .expect("the connect failure must be retried, not surfaced");
+        assert!(response.data.is_empty());
+    }
+
+    #[tokio::test]
+    async fn spent_and_nanoscale_overall_budgets_fail_closed_before_any_attempt() {
+        // 8-10: the transport's own deadline branch. A spent budget trips at
+        // the top of the retry loop — before authentication, the request
+        // build, or any wire I/O — so the loopback server never sees a
+        // connection.
+        let (client, attempts) = serve_scripted_responses(vec![ScriptedResponse {
+            status: http::StatusCode::OK,
+            retry_after: None,
+            x_should_retry: None,
+            body: r#"{"object":"list","data":[]}"#,
+        }])
+        .await;
+        assert!(
+            matches!(
+                client
+                    .with_request_timeout(Duration::ZERO)
+                    .models()
+                    .list()
+                    .await,
+                Err(Error::DeadlineExceeded)
+            ),
+            "a spent budget has no time for any attempt"
+        );
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            0,
+            "a spent budget must never reach the wire"
+        );
+
+        // The smallest budget the builder accepts (one nanosecond) also fails
+        // closed without a retry: depending on the host clock granularity the
+        // deadline either trips at loop entry (`DeadlineExceeded`) or the
+        // single nanosecond-wide attempt times out and its backoff can no
+        // longer fit the budget (`Timeout`/`Transport`). Both are terminal,
+        // and neither consults the server.
+        let base_url = Url::parse("http://127.0.0.1:9/v1/").expect("unreached base URL");
+        let key = ApiKey::new("test-placeholder-key").expect("valid test key");
+        let nanoscale = Client::builder(key)
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .request_timeout(Duration::from_nanos(1))
+            .build()
+            .expect("nanoscale budget client");
+        assert!(
+            matches!(
+                nanoscale.models().list().await,
+                Err(Error::DeadlineExceeded | Error::Timeout(_) | Error::Transport(_))
+            ),
+            "a nanoscale budget must fail closed without a retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_backoff_that_cannot_fit_the_budget_surfaces_the_api_error() {
+        // 8-10: a retryable 503 whose local backoff (375ms floor) cannot fit
+        // the remaining overall budget must not sleep past the deadline and
+        // must not surface a transport error — the rejection itself becomes
+        // the delivered `ApiError`.
+        let (client, attempts) = serve_scripted_responses(vec![ScriptedResponse {
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            retry_after: None,
+            x_should_retry: None,
+            body: r#"{"error":{"message":"temporarily down","type":"server_error"}}"#,
+        }])
+        .await;
+        let client = client.with_request_timeout(Duration::from_millis(250));
+
+        let error = client
+            .models()
+            .list()
+            .await
+            .expect_err("the unfittable backoff must end the request");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "the 375ms backoff floor must not fit a 250ms budget"
+        );
+        let Error::Api(api) = &error else {
+            panic!("expected the surfaced API error, got {error:?}");
+        };
+        assert_eq!(api.status(), http::StatusCode::SERVICE_UNAVAILABLE);
     }
 }

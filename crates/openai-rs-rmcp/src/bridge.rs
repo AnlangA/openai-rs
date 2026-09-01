@@ -473,8 +473,8 @@ mod tests {
     #[test]
     fn oversized_rich_result_encodes_but_fails_next_turn_validation() {
         // Pins the documented magnitude split (round-5 items 5-P2/5-28): the
-        // encoder inlines base64 media verbatim and never truncates, while
-        // the only bound is the types-side function_call_output cap, which
+        // encoder inlines base64 media verbatim and never truncates, while the
+        // only bound is the types-side function_call_output cap, which
         // rejects the oversized string when the follow-up request carrying
         // the output is validated — not at dispatch or encode time.
         let base64 = "A".repeat(MAX_FUNCTION_CALL_OUTPUT_CHARS);
@@ -490,5 +490,74 @@ mod tests {
             follow_up.validate(),
             Err(CreateResponseConstraintError::FunctionCallOutputChars { .. })
         ));
+    }
+
+    /// 8-24: `with_result_encoding` wires the chosen policy into dispatch —
+    /// the same successful structured result reaches the OpenAI output string
+    /// flattened under `CompactWhenPossible` and as the lossless envelope
+    /// under the default.
+    #[tokio::test]
+    async fn with_result_encoding_selects_the_dispatch_output_shape() {
+        fn structured_executor() -> FakeExecutor {
+            FakeExecutor {
+                tools: vec![fake_tool()],
+                calls: Arc::new(Mutex::new(Vec::new())),
+                result: CallToolResult::structured(json!({"answer": 42})),
+            }
+        }
+        let catalog =
+            ToolCatalog::build([fake_tool()], CatalogPolicy::default()).expect("fake catalog");
+
+        let compact = ResponsesToolBridge::new(structured_executor(), catalog.clone())
+            .with_result_encoding(ResultEncoding::CompactWhenPossible);
+        let function = compact
+            .function_tools()
+            .into_iter()
+            .next()
+            .expect("one function");
+        let outcome = compact
+            .dispatch_parts(
+                "call_compact",
+                function.name(),
+                "{}",
+                &ExecutionControl::default(),
+            )
+            .await
+            .expect("compact dispatch");
+        assert!(!outcome.is_tool_error());
+        let compact_value: Value = outcome
+            .output()
+            .deserialize_output()
+            .expect("the compact output is the flattened structuredContent");
+        assert_eq!(compact_value, json!({"answer": 42}));
+        assert!(
+            compact_value.get("content").is_none(),
+            "the compact lane must not wrap the result in the envelope"
+        );
+
+        let lossless = ResponsesToolBridge::new(structured_executor(), catalog);
+        let function = lossless
+            .function_tools()
+            .into_iter()
+            .next()
+            .expect("one function");
+        let outcome = lossless
+            .dispatch_parts(
+                "call_lossless",
+                function.name(),
+                "{}",
+                &ExecutionControl::default(),
+            )
+            .await
+            .expect("lossless dispatch");
+        let lossless_value: Value = outcome
+            .output()
+            .deserialize_output()
+            .expect("the default output is the envelope");
+        assert_eq!(lossless_value["structuredContent"], json!({"answer": 42}));
+        assert!(
+            lossless_value.get("content").is_some(),
+            "the default lane keeps the lossless envelope"
+        );
     }
 }

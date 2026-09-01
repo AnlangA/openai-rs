@@ -210,9 +210,20 @@ impl DirectAuthClient {
     }
 
     #[cfg(test)]
-    fn with_test_token_endpoint(token: Url) -> Result<Self, DirectError> {
+    pub(crate) fn with_test_token_endpoint(token: Url) -> Result<Self, DirectError> {
         let mut client = Self::new()?;
         client.endpoints.token = token;
+        Ok(client)
+    }
+
+    /// Test-only override of both token-exchange endpoints used by the
+    /// browser-login e2e chain (8-22): the OAuth token endpoint and the JWKS
+    /// endpoint, both pointed at a scripted loopback server.
+    #[cfg(test)]
+    pub(crate) fn with_test_auth_urls(token: Url, jwks: Url) -> Result<Self, DirectError> {
+        let mut client = Self::new()?;
+        client.endpoints.token = token;
+        client.endpoints.jwks = jwks;
         Ok(client)
     }
 
@@ -967,7 +978,7 @@ mod tests {
     use std::time::Duration;
 
     use static_assertions::assert_not_impl_any;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
     use url::Url;
 
@@ -1201,6 +1212,297 @@ mod tests {
         let result = tokio::time::timeout(Duration::from_secs(2), task).await??;
         assert!(matches!(result, Err(super::DirectError::Cancelled)));
         server.await??;
+        Ok(())
+    }
+
+    /// Read one HTTP request (headers plus a Content-Length body) from a
+    /// loopback stream.
+    async fn read_http_request(
+        stream: &mut TcpStream,
+    ) -> Result<(String, Vec<u8>), Box<dyn std::error::Error + Send + Sync>> {
+        let mut buffer = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        loop {
+            let read = stream.read(&mut chunk).await?;
+            if read == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+            let Some(header_end) = buffer.windows(4).position(|window| window == b"\r\n\r\n")
+            else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&buffer[..header_end]).to_string();
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.trim()
+                        .eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())?
+                })
+                .unwrap_or(0);
+            if buffer.len() >= header_end + 4 + content_length {
+                let body = buffer[header_end + 4..].to_vec();
+                return Ok((headers, body));
+            }
+        }
+        Err("loopback HTTP request ended early".into())
+    }
+
+    async fn write_http_response(
+        stream: &mut TcpStream,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).await?;
+        stream.write_all(&body).await?;
+        stream.shutdown().await?;
+        Ok(())
+    }
+
+    /// Drive one scripted loopback "browser" callback against `login` and
+    /// return the HTTP response bytes the client served.
+    async fn scripted_callback(
+        port: u16,
+        query: &str,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        let request = format!(
+            "GET /auth/callback?{query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        );
+        let mut stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).await?;
+        stream.write_all(request.as_bytes()).await?;
+        let mut response = Vec::new();
+        let _ = stream.read_to_end(&mut response).await;
+        Ok(response)
+    }
+
+    /// 8-22: the full browser-login success chain against a scripted loopback
+    /// IdP — callback with the matching state, the authorization-code
+    /// exchange (PKCE verifier honored), JWKS discovery, id_token signature
+    /// and nonce verification, and the final `store.save`.
+    #[tokio::test]
+    async fn browser_login_completes_the_exchange_jwks_and_verification_chain()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use sha2::Digest;
+
+        let fixture = crate::direct::jwt::test_support::rsa_fixture()?;
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let base = Url::parse(&format!("http://{address}/"))?;
+        let auth = DirectAuthClient::with_test_auth_urls(
+            base.join("oauth/token")?,
+            base.join(".well-known/jwks.json")?,
+        )?;
+
+        let login = auth.begin_browser_login().await?;
+        let params: std::collections::HashMap<_, _> =
+            login.authorize_url.query_pairs().into_owned().collect();
+        let state = params.get("state").ok_or("authorize URL state")?.clone();
+        let nonce = params.get("nonce").ok_or("authorize URL nonce")?.clone();
+        let challenge = params
+            .get("code_challenge")
+            .ok_or("authorize URL code_challenge")?
+            .clone();
+        let port = login.redirect_uri.port().ok_or("redirect port")?;
+
+        let now = now_epoch()?;
+        let id_token = crate::direct::jwt::test_support::token(
+            &fixture.pair,
+            serde_json::json!({
+                "iss": super::ISSUER,
+                "aud": super::CLIENT_ID,
+                "exp": now + 3_600,
+                "iat": now,
+                "nonce": nonce,
+                "chatgpt_account_id": "acct-e2e"
+            }),
+        )?;
+        let token_body = serde_json::json!({
+            "id_token": id_token,
+            "access_token": "access-e2e",
+            "refresh_token": "refresh-e2e",
+            "expires_in": 3_600
+        })
+        .to_string()
+        .into_bytes();
+        let jwks_body = serde_json::to_vec(&fixture.jwks_json)?;
+
+        let server = tokio::spawn(async move {
+            // 1: the authorization-code exchange, 2: JWKS discovery.
+            let (mut stream, _) = listener.accept().await?;
+            let (headers, body) = read_http_request(&mut stream).await?;
+            let exchange = format!("{headers}\n{}", String::from_utf8_lossy(&body));
+            let exchange_body = body;
+            write_http_response(&mut stream, "application/json", token_body).await?;
+            let (mut stream, _) = listener.accept().await?;
+            let (jwks_headers, _) = read_http_request(&mut stream).await?;
+            assert!(jwks_headers.starts_with("GET /.well-known/jwks.json"));
+            write_http_response(&mut stream, "application/json", jwks_body).await?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((exchange, exchange_body))
+        });
+
+        let store = Arc::new(EphemeralStore::default());
+        let verify_store = Arc::clone(&store);
+        let complete = tokio::spawn(async move {
+            login
+                .complete(store.as_ref(), &super::CancellationToken::default())
+                .await
+        });
+        let callback = scripted_callback(port, &format!("code=code-e2e&state={state}")).await?;
+        let callback_html = String::from_utf8_lossy(&callback);
+        assert!(
+            callback_html.contains("200 OK"),
+            "the success page must reach the browser: {callback_html}"
+        );
+        assert!(callback_html.contains("Authorization complete"));
+
+        let session = complete.await??;
+        assert_eq!(session.access_token(), "access-e2e");
+        assert_eq!(session.account_id().as_str(), "acct-e2e");
+        assert!(session.expires_at() >= now + 3_000);
+        let stored = CredentialStore::load(verify_store.as_ref()).await?;
+        assert_eq!(
+            stored.map(|stored| stored.access_token().to_owned()),
+            Some("access-e2e".to_owned()),
+            "complete() must persist the session"
+        );
+
+        let (exchange, exchange_body) = server.await??;
+        let lower = exchange.to_ascii_lowercase();
+        assert!(lower.contains("post /oauth/token"));
+        assert!(lower.contains("grant_type=authorization_code"));
+        assert!(exchange.contains("code=code-e2e"));
+        assert!(lower.contains("code_verifier="));
+        // The PKCE pair must be internally consistent: the verifier presented
+        // at exchange time hashes to the challenge the authorize URL carried.
+        let exchange_form = String::from_utf8_lossy(&exchange_body).into_owned();
+        let verifier = exchange_form
+            .split('&')
+            .find_map(|field| field.strip_prefix("code_verifier="))
+            .ok_or("code_verifier form field")?;
+        use base64::Engine;
+        let derived = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sha2::Sha256::digest(verifier.as_bytes()));
+        assert_eq!(
+            derived, challenge,
+            "the PKCE challenge must match the verifier"
+        );
+        Ok(())
+    }
+
+    /// 8-22: a callback whose state does not match the one sent in the
+    /// authorize URL is rejected, and an OAuth `error` parameter (with the
+    /// correct state) is reported as a denied authorization — neither
+    /// reaches the token endpoint.
+    #[tokio::test]
+    async fn browser_login_rejects_state_mismatch_and_error_callbacks()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut auth = DirectAuthClient::new()?;
+        auth.callback_timeout = Duration::from_secs(5);
+
+        let login = auth.begin_browser_login().await?;
+        let port = login.redirect_uri.port().ok_or("redirect port")?;
+        let store = EphemeralStore::default();
+        let complete = tokio::spawn(async move {
+            login
+                .complete(&store, &super::CancellationToken::default())
+                .await
+        });
+        let response = scripted_callback(port, "code=code-x&state=tampered-state").await?;
+        assert!(
+            response.starts_with(b"HTTP/1.1 400"),
+            "a state mismatch must serve the failure page"
+        );
+        match complete.await? {
+            Err(super::DirectError::OAuth(message)) => {
+                assert_eq!(message, "callback state mismatch");
+            }
+            other => return Err(format!("unexpected mismatch result: {other:?}").into()),
+        }
+
+        let login = auth.begin_browser_login().await?;
+        let params: std::collections::HashMap<_, _> =
+            login.authorize_url.query_pairs().into_owned().collect();
+        let state = params.get("state").ok_or("authorize URL state")?.clone();
+        let port = login.redirect_uri.port().ok_or("redirect port")?;
+        let store = EphemeralStore::default();
+        let complete = tokio::spawn(async move {
+            login
+                .complete(&store, &super::CancellationToken::default())
+                .await
+        });
+        scripted_callback(port, &format!("error=access_denied&state={state}")).await?;
+        match complete.await? {
+            Err(super::DirectError::OAuth(message)) => {
+                assert_eq!(message, "authorization was not granted");
+            }
+            other => return Err(format!("unexpected error-callback result: {other:?}").into()),
+        }
+        Ok(())
+    }
+
+    /// 8-22: the 401-recovery lane — `refresh_after_unauthorized` performs
+    /// exactly one refresh for the failed generation and persists it, while
+    /// a caller whose generation is already stale (another caller refreshed
+    /// in the meantime) gets the newer session back without any further
+    /// network round trip.
+    #[tokio::test]
+    async fn refresh_after_unauthorized_refreshes_once_and_skips_stale_generations()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let mut served = 0_u64;
+            // Serve at most one refresh; a second request would prove the
+            // skip branch wrong, so park instead of answering it.
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let _ = read_http_request(&mut stream).await?;
+                served += 1;
+                let body = br#"{"access_token":"access-refreshed","expires_in":3600}"#;
+                write_http_response(&mut stream, "application/json", body.to_vec()).await?;
+            }
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(served)
+        });
+
+        let store = Arc::new(EphemeralStore::default());
+        let expired = StoredCodexSession::fixture(
+            "access-old",
+            "refresh-secret",
+            now_epoch()?.saturating_sub(1),
+            super::ChatGptAccountId::fixture("acct-123")?,
+        );
+        store.save(&expired).await?;
+        let token_endpoint = Url::parse(&format!("http://{address}/oauth/token"))?;
+        let auth = DirectAuthClient::with_test_token_endpoint(token_endpoint)?;
+        let manager = TokenManager::new(Arc::clone(&store), auth);
+
+        // The failed generation triggers the single refresh and persists it.
+        let refreshed = manager.refresh_after_unauthorized(0).await?;
+        assert_eq!(refreshed.access_token(), "access-refreshed");
+        assert_eq!(refreshed.generation(), 1);
+        let stored = CredentialStore::load(store.as_ref()).await?;
+        assert_eq!(
+            stored.map(|stored| stored.generation()),
+            Some(1),
+            "the refreshed session must be persisted"
+        );
+
+        // The same failed generation is now stale (the cache already holds
+        // generation 1), so the newer session comes back with no refresh.
+        let skipped = manager.refresh_after_unauthorized(0).await?;
+        assert_eq!(skipped.access_token(), "access-refreshed");
+        assert_eq!(skipped.generation(), 1);
+
+        assert_eq!(
+            server.await??,
+            1,
+            "exactly one refresh request may leave the client"
+        );
         Ok(())
     }
 }

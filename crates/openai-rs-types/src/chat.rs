@@ -4910,4 +4910,662 @@ mod tests {
         keys.sort();
         assert_eq!(keys, ["data", "first_id", "has_more", "last_id", "object"]);
     }
+
+    /// The 33 optional properties pinned by `CreateChatCompletionRequest`,
+    /// plus the required `messages` and `model`.
+    const CHAT_CREATE_ALL_FIELDS: [&str; 35] = [
+        "audio",
+        "frequency_penalty",
+        "function_call",
+        "functions",
+        "logit_bias",
+        "logprobs",
+        "max_completion_tokens",
+        "max_tokens",
+        "messages",
+        "metadata",
+        "modalities",
+        "model",
+        "moderation",
+        "n",
+        "parallel_tool_calls",
+        "prediction",
+        "presence_penalty",
+        "prompt_cache_key",
+        "prompt_cache_options",
+        "prompt_cache_retention",
+        "reasoning_effort",
+        "response_format",
+        "safety_identifier",
+        "seed",
+        "service_tier",
+        "stop",
+        "store",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_logprobs",
+        "top_p",
+        "user",
+        "verbosity",
+        "web_search_options",
+    ];
+
+    /// Every `Omittable<Nullable<T>>` body property, each of which must keep
+    /// an explicit wire `null` distinct from omission.
+    const CHAT_CREATE_NULLABLE_FIELDS: [&str; 23] = [
+        "audio",
+        "frequency_penalty",
+        "logit_bias",
+        "logprobs",
+        "max_completion_tokens",
+        "max_tokens",
+        "metadata",
+        "modalities",
+        "moderation",
+        "n",
+        "presence_penalty",
+        "prompt_cache_key",
+        "prompt_cache_retention",
+        "reasoning_effort",
+        "safety_identifier",
+        "seed",
+        "service_tier",
+        "stop",
+        "store",
+        "temperature",
+        "top_logprobs",
+        "top_p",
+        "verbosity",
+    ];
+
+    #[test]
+    fn chat_create_kitchen_sink_round_trips_every_field() {
+        use crate::responses::{ModerationDirection, ModerationMode, ModerationPolicy};
+
+        let grammar = ChatCustomToolDefinition::new("transcribe")
+            .with_description("Free-form transcription")
+            .with_format(ChatCustomToolFormat::Grammar(ChatCustomGrammarFormat::new(
+                "start: WORD",
+                ChatGrammarSyntax::Lark,
+            )));
+        let schema = ok(ChatJsonSchemaDefinition::new("weather")
+            .with_description("Current weather")
+            .with_schema(&weather_schema()))
+        .with_strict(true);
+        let mut request = CreateChatCompletionRequest::new(
+            "gpt-5.6-sol",
+            ChatUserMessage::text("Weather in Shanghai?"),
+        )
+        .with_tool(ChatCustomTool::new(grammar))
+        .with_tool_choice(ChatToolChoice::Allowed(ChatAllowedToolsChoice::new(
+            ChatAllowedTools::new(
+                ChatAllowedToolsMode::Required,
+                [ChatNamedCustomChoice::new("transcribe")],
+            ),
+        )))
+        .with_response_format(ChatResponseFormat::JsonSchema(
+            ChatResponseFormatJsonSchema::new(schema),
+        ))
+        .with_max_completion_tokens(1024)
+        .with_temperature(1.5)
+        .with_logprobs(Some(5));
+
+        let body = &mut request.body;
+        body.audio = Omittable::Value(Nullable::Value(ChatOutputAudio::new(
+            ChatVoice::Named("coral".to_owned()),
+            ChatOutputAudioFormat::Wav,
+        )));
+        body.frequency_penalty = Omittable::Value(Nullable::Value(0.5));
+        body.function_call = Omittable::Value(ChatLegacyFunctionChoice::Named(
+            ChatLegacyNamedFunctionChoice {
+                name: "weather".to_owned(),
+            },
+        ));
+        body.functions = Omittable::Value(vec![ChatCompletionFunction::new("weather")]);
+        body.logit_bias =
+            Omittable::Value(Nullable::Value(BTreeMap::from([("50256".to_owned(), 10)])));
+        body.max_tokens = Omittable::Value(Nullable::Value(512));
+        body.metadata = Omittable::Value(Nullable::Value(BTreeMap::from([(
+            "team".to_owned(),
+            "sdk".to_owned(),
+        )])));
+        body.modalities = Omittable::Value(Nullable::Value(vec![
+            ChatModality::Text,
+            ChatModality::Audio,
+        ]));
+        body.moderation = Omittable::Value(Nullable::Value(
+            ChatModerationConfig::new("omni-moderation-latest").policy(
+                ModerationPolicy::default()
+                    .input(ModerationDirection::new(ModerationMode::Score))
+                    .output(ModerationDirection::new(ModerationMode::Block)),
+            ),
+        ));
+        body.n = Omittable::Value(Nullable::Value(1));
+        body.parallel_tool_calls = Omittable::Value(false);
+        body.prediction = Omittable::Value(Nullable::Value(ChatPredictionContent::parts([
+            ChatTextContentPart::new("It is sunny"),
+        ])));
+        body.presence_penalty = Omittable::Value(Nullable::Value(0.25));
+        body.prompt_cache_key = Omittable::Value(Nullable::Value("cache-key".to_owned()));
+        body.prompt_cache_options = Omittable::Value(ChatPromptCacheOptions {
+            ttl: Omittable::Value(ChatPromptCacheTtl::ThirtyMinutes),
+            mode: Omittable::Value(ChatPromptCacheMode::Implicit),
+        });
+        body.prompt_cache_retention =
+            Omittable::Value(Nullable::Value(ChatPromptCacheRetention::TwentyFourHours));
+        body.reasoning_effort = Omittable::Value(Nullable::Value(ChatReasoningEffort::Medium));
+        body.safety_identifier = Omittable::Value(Nullable::Value("user-1".to_owned()));
+        body.seed = Omittable::Value(Nullable::Value(42));
+        body.service_tier = Omittable::Value(Nullable::Value(ChatServiceTier::Flex));
+        body.stop = Omittable::Value(Nullable::Value(ChatStop::Many(vec!["END".to_owned()])));
+        body.store = Omittable::Value(Nullable::Value(true));
+        body.top_p = Omittable::Value(Nullable::Value(0.9));
+        body.user = Omittable::Value("user-1".to_owned());
+        body.verbosity = Omittable::Value(Nullable::Value(ChatVerbosity::High));
+        body.web_search_options = Omittable::Value(ChatWebSearchOptions {
+            user_location: Omittable::Value(Nullable::Value(ChatWebSearchUserLocation::new(
+                ChatWebSearchLocation {
+                    country: Omittable::Value("US".to_owned()),
+                    region: Omittable::Omitted,
+                    city: Omittable::Value("Phoenix".to_owned()),
+                    timezone: Omittable::Value("America/Phoenix".to_owned()),
+                },
+            ))),
+            search_context_size: Omittable::Value(ChatWebSearchContextSize::Medium),
+        });
+
+        request
+            .validate()
+            .expect("kitchen-sink values stay in range");
+        let value = ok(serde_json::to_value(&request));
+        let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, CHAT_CREATE_ALL_FIELDS);
+
+        let decoded = ok(serde_json::from_value::<CreateChatCompletionRequest>(
+            value.clone(),
+        ));
+        assert_eq!(ok(serde_json::to_value(decoded)), value);
+    }
+
+    #[test]
+    fn chat_create_explicit_nulls_round_trip_every_nullable_field() {
+        // Chat request builders expose no per-field `*_null` constructors
+        // (only `with_stream_options_null`), so explicit nulls are set
+        // directly on the public body fields the way callers do.
+        let mut request =
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hello"));
+        let body = &mut request.body;
+        body.audio = Omittable::Value(Nullable::Null);
+        body.frequency_penalty = Omittable::Value(Nullable::Null);
+        body.logit_bias = Omittable::Value(Nullable::Null);
+        body.logprobs = Omittable::Value(Nullable::Null);
+        body.max_completion_tokens = Omittable::Value(Nullable::Null);
+        body.max_tokens = Omittable::Value(Nullable::Null);
+        body.metadata = Omittable::Value(Nullable::Null);
+        body.modalities = Omittable::Value(Nullable::Null);
+        body.moderation = Omittable::Value(Nullable::Null);
+        body.n = Omittable::Value(Nullable::Null);
+        body.presence_penalty = Omittable::Value(Nullable::Null);
+        body.prompt_cache_key = Omittable::Value(Nullable::Null);
+        body.prompt_cache_retention = Omittable::Value(Nullable::Null);
+        body.reasoning_effort = Omittable::Value(Nullable::Null);
+        body.safety_identifier = Omittable::Value(Nullable::Null);
+        body.seed = Omittable::Value(Nullable::Null);
+        body.service_tier = Omittable::Value(Nullable::Null);
+        body.stop = Omittable::Value(Nullable::Null);
+        body.store = Omittable::Value(Nullable::Null);
+        body.temperature = Omittable::Value(Nullable::Null);
+        body.top_logprobs = Omittable::Value(Nullable::Null);
+        body.top_p = Omittable::Value(Nullable::Null);
+        body.verbosity = Omittable::Value(Nullable::Null);
+
+        request
+            .validate()
+            .expect("official explicit nulls skip every range check");
+        let value = ok(serde_json::to_value(&request));
+        for key in CHAT_CREATE_NULLABLE_FIELDS {
+            assert_eq!(value[key], Value::Null, "{key}");
+        }
+        let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        let mut expected: Vec<_> = CHAT_CREATE_NULLABLE_FIELDS.to_vec();
+        expected.extend(["messages", "model"]);
+        expected.sort();
+        assert_eq!(keys, expected);
+
+        let decoded = ok(serde_json::from_value::<CreateChatCompletionRequest>(
+            value.clone(),
+        ));
+        assert_eq!(ok(serde_json::to_value(decoded)), value);
+    }
+
+    #[test]
+    fn final_usage_chunk_decodes_with_empty_choices_and_populated_usage() {
+        let fixture = json!({
+            "id": "chatcmpl_usage",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-5.6-sol",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 9,
+                "completion_tokens": 2,
+                "total_tokens": 11,
+                "compute_units": null,
+                "usage_future": "kept"
+            },
+            "chunk_future": true
+        });
+        let chunk = ok(serde_json::from_value::<ChatCompletionChunk>(
+            fixture.clone(),
+        ));
+        assert!(chunk.choices.is_empty());
+        match &chunk.usage {
+            Omittable::Value(Nullable::Value(usage)) => {
+                assert_eq!(
+                    (
+                        usage.prompt_tokens,
+                        usage.completion_tokens,
+                        usage.total_tokens
+                    ),
+                    (9, 2, 11)
+                );
+                assert_eq!(usage.compute_units, Omittable::Value(Nullable::Null));
+                assert!(usage.extra().contains_key("usage_future"));
+            }
+            other => panic!("usage must decode as a non-null value, got {other:?}"),
+        }
+        assert!(chunk.extra().contains_key("chunk_future"));
+        assert_eq!(ok(serde_json::to_value(chunk)), fixture);
+    }
+
+    #[test]
+    fn populated_choice_logprobs_decode_and_round_trip() {
+        let fixture = json!({
+            "id": "chatcmpl_logprobs",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-5.6-sol",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "logprobs": {
+                    "content": [
+                        {
+                            "token": "hel",
+                            "logprob": -0.1,
+                            "bytes": [104, 101, 108],
+                            "top_logprobs": [
+                                {"token": "hel", "logprob": -0.1, "bytes": null},
+                                {"token": "lo", "logprob": -2.5, "bytes": [108, 111]}
+                            ],
+                            "token_future": 1
+                        },
+                        {"token": "!", "logprob": -0.05, "bytes": null, "top_logprobs": []}
+                    ],
+                    "refusal": [
+                        {"token": "no", "logprob": -0.3, "bytes": null, "top_logprobs": []}
+                    ],
+                    "logprobs_future": "kept"
+                },
+                "finish_reason": "stop"
+            }]
+        });
+        let completion = ok(serde_json::from_value::<ChatCompletion>(fixture.clone()));
+        let logprobs = match &completion.choices[0].logprobs {
+            Nullable::Value(logprobs) => logprobs,
+            Nullable::Null => panic!("fixture must contain logprobs"),
+        };
+        match &logprobs.content {
+            Nullable::Value(content) => {
+                assert_eq!(content[0].bytes, Nullable::Value(vec![104, 101, 108]));
+                match &content[0].top_logprobs[0].bytes {
+                    Nullable::Null => {}
+                    bytes => panic!("top_logprob bytes must stay null, got {bytes:?}"),
+                }
+                assert!(content[0].extra().contains_key("token_future"));
+                assert_eq!(content[1].bytes, Nullable::Null);
+            }
+            Nullable::Null => panic!("content logprobs must decode"),
+        }
+        match &logprobs.refusal {
+            Nullable::Value(refusal) => {
+                assert_eq!(refusal[0].token, "no");
+                assert_eq!(refusal[0].bytes, Nullable::Null);
+            }
+            Nullable::Null => panic!("refusal logprobs must decode"),
+        }
+        assert!(logprobs.extra().contains_key("logprobs_future"));
+        assert_eq!(ok(serde_json::to_value(completion)), fixture);
+    }
+
+    #[test]
+    fn chat_create_validate_enforces_the_remaining_pinned_limits() {
+        let base = || CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hi"));
+
+        let mut boundary = base();
+        boundary.body.presence_penalty = Omittable::Value(Nullable::Value(-2.0));
+        boundary.body.top_p = Omittable::Value(Nullable::Value(0.0));
+        boundary.body.safety_identifier =
+            Omittable::Value(Nullable::Value("i".repeat(MAX_SAFETY_IDENTIFIER_CHARS)));
+        boundary.body.metadata = Omittable::Value(Nullable::Value(BTreeMap::from([(
+            "k".repeat(MAX_RESPONSE_METADATA_KEY_CHARS),
+            "v".repeat(MAX_RESPONSE_METADATA_VALUE_CHARS),
+        )])));
+        boundary
+            .validate()
+            .expect("boundary presence_penalty/top_p/metadata/safety stay accepted");
+
+        let mut temperature = base();
+        temperature.body.temperature = Omittable::Value(Nullable::Value(2.1));
+        assert!(matches!(
+            temperature.validate(),
+            Err(CreateChatCompletionConstraintError::Temperature { value }) if value == "2.1"
+        ));
+
+        let mut top_p = base();
+        top_p.body.top_p = Omittable::Value(Nullable::Value(1.1));
+        assert!(matches!(
+            top_p.validate(),
+            Err(CreateChatCompletionConstraintError::TopP { value }) if value == "1.1"
+        ));
+
+        let mut presence = base();
+        presence.body.presence_penalty = Omittable::Value(Nullable::Value(-2.1));
+        assert!(matches!(
+            presence.validate(),
+            Err(CreateChatCompletionConstraintError::PresencePenalty { value }) if value == "-2.1"
+        ));
+
+        let mut top_logprobs = base();
+        top_logprobs.body.top_logprobs = Omittable::Value(Nullable::Value(21));
+        assert!(matches!(
+            top_logprobs.validate(),
+            Err(CreateChatCompletionConstraintError::TopLogprobs {
+                actual: 21,
+                maximum: MAX_TOP_LOGPROBS
+            })
+        ));
+
+        let mut pairs = base();
+        pairs.body.metadata = Omittable::Value(Nullable::Value(
+            (0..=MAX_RESPONSE_METADATA_PAIRS)
+                .map(|index| (format!("key{index}"), "value".to_owned()))
+                .collect(),
+        ));
+        assert!(matches!(
+            pairs.validate(),
+            Err(CreateChatCompletionConstraintError::MetadataPairCount {
+                actual: 17,
+                maximum: MAX_RESPONSE_METADATA_PAIRS
+            })
+        ));
+
+        let mut key = base();
+        key.body.metadata = Omittable::Value(Nullable::Value(BTreeMap::from([(
+            "k".repeat(MAX_RESPONSE_METADATA_KEY_CHARS + 1),
+            "v".to_owned(),
+        )])));
+        assert!(matches!(
+            key.validate(),
+            Err(CreateChatCompletionConstraintError::MetadataKey {
+                actual: 65,
+                maximum: MAX_RESPONSE_METADATA_KEY_CHARS
+            })
+        ));
+
+        let mut value = base();
+        value.body.metadata = Omittable::Value(Nullable::Value(BTreeMap::from([(
+            "k".to_owned(),
+            "v".repeat(MAX_RESPONSE_METADATA_VALUE_CHARS + 1),
+        )])));
+        assert!(matches!(
+            value.validate(),
+            Err(CreateChatCompletionConstraintError::MetadataValue {
+                actual: 513,
+                maximum: MAX_RESPONSE_METADATA_VALUE_CHARS
+            })
+        ));
+
+        let mut safety = base();
+        safety.body.safety_identifier =
+            Omittable::Value(Nullable::Value("i".repeat(MAX_SAFETY_IDENTIFIER_CHARS + 1)));
+        assert!(matches!(
+            safety.validate(),
+            Err(CreateChatCompletionConstraintError::SafetyIdentifier {
+                actual: 65,
+                maximum: MAX_SAFETY_IDENTIFIER_CHARS
+            })
+        ));
+
+        let mut empty = base();
+        empty.body.messages.clear();
+        assert_eq!(
+            empty.validate(),
+            Err(CreateChatCompletionConstraintError::EmptyMessages)
+        );
+    }
+
+    #[test]
+    fn tool_choice_modes_named_custom_and_allowed_variants_round_trip() {
+        for mode in ["auto", "none", "required"] {
+            let wire = json!(mode);
+            let decoded = ok(serde_json::from_value::<ChatToolChoice>(wire.clone()));
+            assert!(
+                matches!(&decoded, ChatToolChoice::Mode(value) if value.as_str() == mode),
+                "{mode} must decode as a string mode"
+            );
+            assert_eq!(ok(serde_json::to_value(decoded)), wire);
+        }
+
+        let custom = ChatToolChoice::Custom(ChatNamedCustomChoice::new("synthesizer"));
+        let custom_wire = json!({"type": "custom", "custom": {"name": "synthesizer"}});
+        assert_eq!(ok(serde_json::to_value(&custom)), custom_wire);
+        assert_eq!(
+            ok(serde_json::from_value::<ChatToolChoice>(
+                custom_wire.clone()
+            )),
+            custom
+        );
+
+        let allowed = ChatToolChoice::Allowed(ChatAllowedToolsChoice::new(ChatAllowedTools::new(
+            ChatAllowedToolsMode::Required,
+            [
+                ChatAllowedTool::Reference(ChatNamedCustomChoice::new("synthesizer").into()),
+                ChatAllowedTool::Arbitrary(
+                    BTreeMap::from([
+                        ("connector".to_owned(), json!("future-connector")),
+                        ("version".to_owned(), json!(2)),
+                    ])
+                    .into_iter()
+                    .collect::<serde_json::Map<_, _>>(),
+                ),
+            ],
+        )));
+        let allowed_wire = json!({
+            "type": "allowed_tools",
+            "allowed_tools": {
+                "mode": "required",
+                "tools": [
+                    {"type": "custom", "custom": {"name": "synthesizer"}},
+                    {"connector": "future-connector", "version": 2}
+                ]
+            }
+        });
+        assert_eq!(ok(serde_json::to_value(&allowed)), allowed_wire);
+        assert_eq!(
+            ok(serde_json::from_value::<ChatToolChoice>(
+                allowed_wire.clone()
+            )),
+            allowed
+        );
+
+        let future = json!({"type": "future_policy", "strict": true});
+        let decoded = ok(serde_json::from_value::<ChatToolChoice>(future.clone()));
+        assert!(matches!(decoded, ChatToolChoice::Unknown(_)));
+        assert_eq!(ok(serde_json::to_value(decoded)), future);
+    }
+
+    #[test]
+    fn custom_tool_round_trips_text_grammar_and_future_formats() {
+        let text = ChatTool::Custom(ChatCustomTool::new(
+            ChatCustomToolDefinition::new("validator")
+                .with_description("Validates free text")
+                .with_format(ChatCustomToolFormat::Text(ChatCustomTextFormat::new())),
+        ));
+        let text_wire = json!({
+            "type": "custom",
+            "custom": {
+                "name": "validator",
+                "description": "Validates free text",
+                "format": {"type": "text"}
+            }
+        });
+        assert_eq!(ok(serde_json::to_value(&text)), text_wire);
+        assert_eq!(
+            ok(serde_json::from_value::<ChatTool>(text_wire.clone())),
+            text
+        );
+
+        let grammar = ChatTool::Custom(ChatCustomTool::new(
+            ChatCustomToolDefinition::new("parser").with_format(ChatCustomToolFormat::Grammar(
+                ChatCustomGrammarFormat::new("start: WORD", ChatGrammarSyntax::Regex),
+            )),
+        ));
+        let grammar_wire = json!({
+            "type": "custom",
+            "custom": {
+                "name": "parser",
+                "format": {
+                    "type": "grammar",
+                    "grammar": {"definition": "start: WORD", "syntax": "regex"}
+                }
+            }
+        });
+        assert_eq!(ok(serde_json::to_value(&grammar)), grammar_wire);
+        assert_eq!(
+            ok(serde_json::from_value::<ChatTool>(grammar_wire.clone())),
+            grammar
+        );
+
+        let future = json!({
+            "type": "custom",
+            "custom": {
+                "name": "parser",
+                "format": {"type": "future_format", "knobs": 3}
+            }
+        });
+        let decoded = ok(serde_json::from_value::<ChatTool>(future.clone()));
+        match &decoded {
+            ChatTool::Custom(tool) => match &tool.custom.format {
+                Omittable::Value(format) => {
+                    assert!(matches!(format, ChatCustomToolFormat::Unknown(_)));
+                }
+                Omittable::Omitted => panic!("future format must be retained"),
+            },
+            other => panic!("expected a custom tool, got {other:?}"),
+        }
+        assert_eq!(ok(serde_json::to_value(decoded)), future);
+    }
+
+    #[test]
+    fn response_format_three_variants_round_trip() {
+        let text = ChatResponseFormat::Text(ChatResponseFormatText::new());
+        let text_wire = json!({"type": "text"});
+        assert_eq!(ok(serde_json::to_value(&text)), text_wire);
+        assert_eq!(
+            ok(serde_json::from_value::<ChatResponseFormat>(
+                text_wire.clone()
+            )),
+            text
+        );
+
+        let object = ChatResponseFormat::JsonObject(ChatResponseFormatJsonObject::new());
+        let object_wire = json!({"type": "json_object"});
+        assert_eq!(ok(serde_json::to_value(&object)), object_wire);
+        assert_eq!(
+            ok(serde_json::from_value::<ChatResponseFormat>(
+                object_wire.clone()
+            )),
+            object
+        );
+
+        let schema = ok(ChatJsonSchemaDefinition::new("weather")
+            .with_description("Current weather")
+            .with_schema(&weather_schema()))
+        .with_strict(true);
+        let json_schema = ChatResponseFormat::JsonSchema(ChatResponseFormatJsonSchema::new(schema));
+        let encoded = ok(serde_json::to_value(&json_schema));
+        assert_eq!(encoded["type"], "json_schema");
+        assert_eq!(encoded["json_schema"]["name"], "weather");
+        assert_eq!(encoded["json_schema"]["description"], "Current weather");
+        assert_eq!(encoded["json_schema"]["strict"], true);
+        assert_eq!(encoded["json_schema"]["schema"]["type"], "object");
+        assert_eq!(
+            ok(serde_json::from_value::<ChatResponseFormat>(
+                encoded.clone()
+            )),
+            json_schema
+        );
+
+        let future = json!({"type": "future_format"});
+        let decoded = ok(serde_json::from_value::<ChatResponseFormat>(future.clone()));
+        assert!(matches!(decoded, ChatResponseFormat::Unknown(_)));
+        assert_eq!(ok(serde_json::to_value(decoded)), future);
+    }
+
+    #[test]
+    fn assistant_refusal_content_part_and_future_tags_round_trip() {
+        let mut assistant = ChatAssistantMessage::text("placeholder");
+        assistant.content = Omittable::Value(Nullable::Value(ChatAssistantContent::Parts(vec![
+            ChatTextContentPart::new("It is sunny").into(),
+            ChatRefusalContentPart::new("cannot help with that").into(),
+        ])));
+        let message = ok(serde_json::to_value(&assistant));
+        assert_eq!(
+            message["content"],
+            json!([
+                {"type": "text", "text": "It is sunny"},
+                {"type": "refusal", "refusal": "cannot help with that"}
+            ])
+        );
+        let decoded = ok(serde_json::from_value::<ChatMessage>(message.clone()));
+        match &decoded {
+            ChatMessage::Assistant(message) => match &message.content {
+                Omittable::Value(Nullable::Value(ChatAssistantContent::Parts(parts))) => {
+                    assert!(matches!(
+                        &parts[1],
+                        ChatAssistantContentPart::Refusal(part) if part.refusal == "cannot help with that"
+                    ));
+                }
+                other => panic!("assistant parts must decode, got {other:?}"),
+            },
+            other => panic!("expected an assistant message, got {other:?}"),
+        }
+        assert_eq!(ok(serde_json::to_value(decoded)), message);
+
+        let future = json!({
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "partial"},
+                {"type": "future_part", "weight": 0.7}
+            ]
+        });
+        let decoded = ok(serde_json::from_value::<ChatMessage>(future.clone()));
+        match &decoded {
+            ChatMessage::Assistant(message) => match &message.content {
+                Omittable::Value(Nullable::Value(ChatAssistantContent::Parts(parts))) => {
+                    assert!(matches!(
+                        &parts[1],
+                        ChatAssistantContentPart::Unknown(part) if part.discriminator() == "future_part"
+                    ));
+                }
+                other => panic!("future part must stay retained, got {other:?}"),
+            },
+            other => panic!("expected an assistant message, got {other:?}"),
+        }
+        assert_eq!(ok(serde_json::to_value(decoded)), future);
+    }
 }

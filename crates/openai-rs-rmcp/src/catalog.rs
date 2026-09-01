@@ -519,4 +519,79 @@ mod tests {
         let empty_schema = Tool::new("empty", "empty", Arc::new(Map::new()));
         assert!(ToolCatalog::build([empty_schema], CatalogPolicy::default()).is_ok());
     }
+
+    /// 8-24: `SchemaPolicy::Preserve` keeps the MCP schema object verbatim —
+    /// no `type: object` is invented for an untyped root, and an explicitly
+    /// non-object root type survives instead of being rejected, because the
+    /// compatible-gateway caller took responsibility for it.
+    #[test]
+    fn preserve_policy_keeps_the_schema_verbatim() {
+        let untyped = json!({"properties": {"city": {"type": "string"}}});
+        let non_object = json!({"type": "array", "items": {"type": "string"}});
+        let catalog = ToolCatalog::build(
+            [
+                tool("untyped", untyped.clone()),
+                tool("non_object", non_object.clone()),
+            ],
+            CatalogPolicy::new(ToolNamePolicy::default(), SchemaPolicy::Preserve),
+        )
+        .expect("Preserve accepts every schema object");
+        assert_eq!(
+            catalog.resolve("untyped").map(CatalogEntry::parameters),
+            Some(untyped.as_object().expect("untyped schema object"))
+        );
+        assert_eq!(
+            catalog.resolve("non_object").map(CatalogEntry::parameters),
+            Some(non_object.as_object().expect("non-object schema object"))
+        );
+        // The exposed function tool carries the preserved schema untouched.
+        let functions = catalog.function_tools();
+        let non_object_function = functions
+            .iter()
+            .find(|function| function.name() == "non_object")
+            .expect("non_object function");
+        assert_eq!(
+            non_object_function.parameters_ref(),
+            Some(&non_object),
+            "the preserved schema must reach the function tool verbatim"
+        );
+    }
+
+    /// 8-24: a name with no valid characters at all ("///") cannot yield a
+    /// non-empty prefix, so the degenerate mapping falls back to the
+    /// `mcp_tool__<hash>` shape instead of an empty or separator-only name.
+    #[test]
+    fn all_invalid_characters_fall_back_to_the_mcp_tool_prefix() {
+        let catalog = ToolCatalog::build(
+            [tool("///", json!({"type": "object"}))],
+            CatalogPolicy::default(),
+        )
+        .expect("a fully invalid name is mapped, not rejected");
+        let mapped = catalog
+            .entries()
+            .next()
+            .expect("catalog holds the mapped entry");
+        assert_eq!(mapped.mcp_name(), "///");
+        assert!(
+            mapped.openai_name().starts_with("mcp_tool__"),
+            "expected the mcp_tool__<hash> fallback, got {}",
+            mapped.openai_name()
+        );
+        assert!(
+            mapped.openai_name().len() > "mcp_tool__".len(),
+            "the fallback must carry the 16-hex-char hash suffix"
+        );
+        assert!(is_valid_function_name(mapped.openai_name()));
+        assert!(
+            mapped.openai_name().len() <= MAX_FUNCTION_NAME_BYTES,
+            "the fallback must fit the pinned name budget"
+        );
+        // The reverse mapping still resolves the degenerate name.
+        assert_eq!(
+            catalog
+                .resolve(mapped.openai_name())
+                .map(CatalogEntry::mcp_name),
+            Some("///")
+        );
+    }
 }

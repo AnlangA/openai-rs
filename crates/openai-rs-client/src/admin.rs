@@ -27,6 +27,7 @@ use url::{Host, Url};
 use zeroize::Zeroizing;
 
 use crate::operation::RetryClass;
+use crate::transport::should_retry_response;
 use crate::{
     ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy, TlsBackend, trace,
 };
@@ -1977,6 +1978,18 @@ impl AdminClient {
         AdminUsage(self.clone())
     }
 
+    /// Organization spend alerts, with project-scoped sub-resources.
+    #[must_use]
+    pub fn spend_alerts(&self) -> AdminSpendAlerts {
+        AdminSpendAlerts(self.clone())
+    }
+
+    /// Organization spend limit, with project-scoped sub-resources.
+    #[must_use]
+    pub fn spend_limits(&self) -> AdminSpendLimits {
+        AdminSpendLimits(self.clone())
+    }
+
     /// Administration-only fine-tuning checkpoint permissions.
     #[must_use]
     pub fn checkpoint_permissions(&self) -> AdminCheckpointPermissions {
@@ -2702,11 +2715,14 @@ fn admin_retry_class(method: &Method) -> RetryClass {
 }
 
 // The retry helpers below are minimal copies of the private helpers in
-// `transport.rs` (`retryable_operation`, `should_retry_response`,
-// `server_retry_delay`, `bounded_delay`, `local_retry_delay`, `can_wait`).
-// They are private there, so this channel duplicates them verbatim; the two
-// copies must stay behaviorally identical — the delay semantics are pinned by
-// decision D0131 and the response gating by the platform transport.
+// `transport.rs` (`retryable_operation`, `server_retry_delay`,
+// `bounded_delay`, `local_retry_delay`, `can_wait`). They are private there, so
+// this channel duplicates them verbatim; the two copies must stay behaviorally
+// identical — the delay semantics are pinned by decision D0131 and the
+// response gating by the platform transport. `should_retry_response` is the
+// one exception: it is shared `pub(crate)` from `transport.rs` (8-10), so the
+// Administration channel classifies responses through the identical
+// `x-should-retry` / status truth table.
 
 fn retryable_operation(class: RetryClass, policy: RetryPolicy) -> bool {
     match class {
@@ -2714,21 +2730,6 @@ fn retryable_operation(class: RetryClass, policy: RetryPolicy) -> bool {
         RetryClass::Replayable => policy.retry_replayable_mutations,
         #[cfg(any(feature = "realtime", feature = "legacy-realtime"))]
         RetryClass::Never => false,
-    }
-}
-
-fn should_retry_response(response: &reqwest::Response) -> bool {
-    match response
-        .headers()
-        .get("x-should-retry")
-        .and_then(|value| value.to_str().ok())
-    {
-        Some("true") => true,
-        Some("false") => false,
-        Some(_) | None => {
-            matches!(response.status().as_u16(), 408 | 409 | 429)
-                || response.status().is_server_error()
-        }
     }
 }
 
@@ -3474,6 +3475,239 @@ impl AdminUsage {
     }
 }
 
+/// Organization-level spend alerts, with project-scoped sub-resources.
+#[derive(Clone, Debug)]
+pub struct AdminSpendAlerts(AdminClient);
+
+impl AdminSpendAlerts {
+    /// List organization spend alerts.
+    pub async fn list(&self) -> Result<ApiResponse<OrganizationSpendAlertListResource>, Error> {
+        self.0
+            .request::<operations::OpListOrganizationSpendAlerts>()
+            .send()
+            .await
+    }
+
+    /// Create an organization spend alert.
+    pub async fn create(
+        &self,
+        request: CreateSpendAlertBody,
+    ) -> Result<ApiResponse<OrganizationSpendAlert>, Error> {
+        self.0
+            .request::<operations::OpCreateOrganizationSpendAlert>()
+            .body(request)
+            .send()
+            .await
+    }
+
+    /// Retrieve one organization spend alert.
+    pub async fn retrieve(
+        &self,
+        alert_id: &str,
+    ) -> Result<ApiResponse<OrganizationSpendAlert>, Error> {
+        self.0
+            .request::<operations::OpRetrieveOrganizationSpendAlert>()
+            .path_parameter(alert_id)?
+            .send()
+            .await
+    }
+
+    /// Update one organization spend alert.
+    ///
+    /// The pinned route reuses the create body schema
+    /// (`CreateSpendAlertBody`), matching openai-python and openai-node.
+    pub async fn update(
+        &self,
+        alert_id: &str,
+        request: CreateSpendAlertBody,
+    ) -> Result<ApiResponse<OrganizationSpendAlert>, Error> {
+        self.0
+            .request::<operations::OpUpdateOrganizationSpendAlert>()
+            .path_parameter(alert_id)?
+            .body(request)
+            .send()
+            .await
+    }
+
+    /// Delete one organization spend alert.
+    pub async fn delete(
+        &self,
+        alert_id: &str,
+    ) -> Result<ApiResponse<OrganizationSpendAlertDeletedResource>, Error> {
+        self.0
+            .request::<operations::OpDeleteOrganizationSpendAlert>()
+            .path_parameter(alert_id)?
+            .send()
+            .await
+    }
+
+    /// Project-scoped spend-alert sub-resource.
+    #[must_use]
+    pub fn project(&self, project_id: impl Into<String>) -> AdminProjectSpendAlerts {
+        AdminProjectSpendAlerts {
+            client: self.0.clone(),
+            project_id: project_id.into(),
+        }
+    }
+}
+
+/// Project-scoped spend alerts.
+#[derive(Clone, Debug)]
+pub struct AdminProjectSpendAlerts {
+    client: AdminClient,
+    project_id: String,
+}
+
+impl AdminProjectSpendAlerts {
+    /// List project spend alerts.
+    pub async fn list(&self) -> Result<ApiResponse<ProjectSpendAlertListResource>, Error> {
+        self.client
+            .request::<operations::OpListProjectSpendAlerts>()
+            .path_parameter(&self.project_id)?
+            .send()
+            .await
+    }
+
+    /// Create a project spend alert.
+    pub async fn create(
+        &self,
+        request: CreateSpendAlertBody,
+    ) -> Result<ApiResponse<ProjectSpendAlert>, Error> {
+        self.client
+            .request::<operations::OpCreateProjectSpendAlert>()
+            .path_parameter(&self.project_id)?
+            .body(request)
+            .send()
+            .await
+    }
+
+    /// Retrieve one project spend alert.
+    pub async fn retrieve(&self, alert_id: &str) -> Result<ApiResponse<ProjectSpendAlert>, Error> {
+        self.client
+            .request::<operations::OpRetrieveProjectSpendAlert>()
+            .path_parameter(&self.project_id)?
+            .path_parameter(alert_id)?
+            .send()
+            .await
+    }
+
+    /// Update one project spend alert.
+    pub async fn update(
+        &self,
+        alert_id: &str,
+        request: CreateSpendAlertBody,
+    ) -> Result<ApiResponse<ProjectSpendAlert>, Error> {
+        self.client
+            .request::<operations::OpUpdateProjectSpendAlert>()
+            .path_parameter(&self.project_id)?
+            .path_parameter(alert_id)?
+            .body(request)
+            .send()
+            .await
+    }
+
+    /// Delete one project spend alert.
+    pub async fn delete(
+        &self,
+        alert_id: &str,
+    ) -> Result<ApiResponse<ProjectSpendAlertDeletedResource>, Error> {
+        self.client
+            .request::<operations::OpDeleteProjectSpendAlert>()
+            .path_parameter(&self.project_id)?
+            .path_parameter(alert_id)?
+            .send()
+            .await
+    }
+}
+
+/// Organization-level spend limit, with project-scoped sub-resources.
+#[derive(Clone, Debug)]
+pub struct AdminSpendLimits(AdminClient);
+
+impl AdminSpendLimits {
+    /// Retrieve the organization spend limit.
+    pub async fn get(&self) -> Result<ApiResponse<OrganizationSpendLimitResource>, Error> {
+        self.0
+            .request::<operations::OpGetorganizationspendlimit>()
+            .send()
+            .await
+    }
+
+    /// Update the organization spend limit.
+    ///
+    /// `UpdateSpendLimitBody::validate` checks the pinned
+    /// `threshold_amount` minimum without sending the request.
+    pub async fn update(
+        &self,
+        request: UpdateOrganizationSpendLimitBody,
+    ) -> Result<ApiResponse<OrganizationSpendLimitResource>, Error> {
+        self.0
+            .request::<operations::OpUpdateorganizationspendlimit>()
+            .body(request)
+            .send()
+            .await
+    }
+
+    /// Delete the organization spend limit.
+    pub async fn delete(
+        &self,
+    ) -> Result<ApiResponse<OrganizationSpendLimitDeletedResource>, Error> {
+        self.0
+            .request::<operations::OpDeleteorganizationspendlimit>()
+            .send()
+            .await
+    }
+
+    /// Project-scoped spend-limit sub-resource.
+    #[must_use]
+    pub fn project(&self, project_id: impl Into<String>) -> AdminProjectSpendLimits {
+        AdminProjectSpendLimits {
+            client: self.0.clone(),
+            project_id: project_id.into(),
+        }
+    }
+}
+
+/// Project-scoped spend limit.
+#[derive(Clone, Debug)]
+pub struct AdminProjectSpendLimits {
+    client: AdminClient,
+    project_id: String,
+}
+
+impl AdminProjectSpendLimits {
+    /// Retrieve the project spend limit.
+    pub async fn get(&self) -> Result<ApiResponse<ProjectSpendLimitResource>, Error> {
+        self.client
+            .request::<operations::OpGetprojectspendlimit>()
+            .path_parameter(&self.project_id)?
+            .send()
+            .await
+    }
+
+    /// Update the project spend limit.
+    pub async fn update(
+        &self,
+        request: UpdateProjectSpendLimitBody,
+    ) -> Result<ApiResponse<ProjectSpendLimitResource>, Error> {
+        self.client
+            .request::<operations::OpUpdateprojectspendlimit>()
+            .path_parameter(&self.project_id)?
+            .body(request)
+            .send()
+            .await
+    }
+
+    /// Delete the project spend limit.
+    pub async fn delete(&self) -> Result<ApiResponse<ProjectSpendLimitDeletedResource>, Error> {
+        self.client
+            .request::<operations::OpDeleteprojectspendlimit>()
+            .path_parameter(&self.project_id)?
+            .send()
+            .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -3580,6 +3814,70 @@ mod tests {
                                     StatusCode::OK,
                                     r#"{"object":"project.data_retention","type":"none"}"#,
                                 )
+                            } else if path_and_query.starts_with("/v1/organization/usage/") {
+                                (
+                                    StatusCode::OK,
+                                    r#"{"object":"page","data":[{"object":"bucket","start_time":1700000000,"end_time":1700003600,"results":[{"object":"organization.usage.completions.result","input_tokens":10,"output_tokens":2,"num_model_requests":1,"project_id":"proj_1"}]}],"has_more":false,"next_page":null}"#,
+                                )
+                            } else if path_and_query.starts_with("/v1/organization/costs") {
+                                (
+                                    StatusCode::OK,
+                                    r#"{"object":"page","data":[{"object":"bucket","start_time":1700000000,"end_time":1700086400,"results":[{"object":"organization.costs.result","amount":{"value":0.01,"currency":"usd"},"line_item":null,"project_id":"proj_1"}]}],"has_more":false,"next_page":null}"#,
+                                )
+                            } else if path_and_query
+                                .starts_with("/v1/organization/projects/proj_1/spend_alerts")
+                            {
+                                let body = match (method, path_and_query.ends_with("alert%2F1")) {
+                                    (Method::DELETE, _) => {
+                                        r#"{"id":"alert/1","object":"project.spend_alert.deleted","deleted":true}"#
+                                    }
+                                    (Method::GET, false) => {
+                                        r#"{"object":"list","data":[{"id":"alert/1","object":"project.spend_alert","threshold_amount":100,"currency":"USD","interval":"month","notification_channel":{"type":"email","recipients":["ops@example.com"]}}],"first_id":"alert/1","last_id":"alert/1","has_more":false}"#
+                                    }
+                                    _ => {
+                                        r#"{"id":"alert/1","object":"project.spend_alert","threshold_amount":100,"currency":"USD","interval":"month","notification_channel":{"type":"email","recipients":["ops@example.com"]}}"#
+                                    }
+                                };
+                                (StatusCode::OK, body)
+                            } else if path_and_query.starts_with("/v1/organization/spend_alerts") {
+                                let body = match (method, path_and_query.ends_with("alert%2F1")) {
+                                    (Method::DELETE, _) => {
+                                        r#"{"id":"alert/1","object":"organization.spend_alert.deleted","deleted":true}"#
+                                    }
+                                    (Method::GET, false) => {
+                                        r#"{"object":"list","data":[{"id":"alert/1","object":"organization.spend_alert","threshold_amount":100,"currency":"USD","interval":"month","notification_channel":{"type":"email","recipients":["ops@example.com"]}}],"first_id":"alert/1","last_id":"alert/1","has_more":false}"#
+                                    }
+                                    _ => {
+                                        r#"{"id":"alert/1","object":"organization.spend_alert","threshold_amount":100,"currency":"USD","interval":"month","notification_channel":{"type":"email","recipients":["ops@example.com"]}}"#
+                                    }
+                                };
+                                (StatusCode::OK, body)
+                            } else if path_and_query
+                                .starts_with("/v1/organization/projects/proj_1/spend_limit")
+                            {
+                                if method == Method::DELETE {
+                                    (
+                                        StatusCode::OK,
+                                        r#"{"object":"project.spend_limit.deleted","deleted":true}"#,
+                                    )
+                                } else {
+                                    (
+                                        StatusCode::OK,
+                                        r#"{"object":"project.spend_limit","threshold_amount":100,"currency":"USD","interval":"month","enforcement":{"status":"inactive"}}"#,
+                                    )
+                                }
+                            } else if path_and_query.starts_with("/v1/organization/spend_limit") {
+                                if method == Method::DELETE {
+                                    (
+                                        StatusCode::OK,
+                                        r#"{"object":"organization.spend_limit.deleted","deleted":true}"#,
+                                    )
+                                } else {
+                                    (
+                                        StatusCode::OK,
+                                        r#"{"object":"organization.spend_limit","threshold_amount":100,"currency":"USD","interval":"month","enforcement":{"status":"inactive"}}"#,
+                                    )
+                                }
                             } else if path_and_query.starts_with("/v1/organization/audit_logs") {
                                 // has_more with a null last_id: the D0147
                                 // last-item fallback must recover the cursor.
@@ -4198,6 +4496,304 @@ mod tests {
         assert_eq!(
             captured[0].authorization.as_deref(),
             Some("Bearer admin-test-placeholder-key")
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn usage_loopback_pins_start_time_bracket_arrays_and_result_decoding() {
+        let (base_url, captured, task) = spawn_server().await;
+        let client = AdminClient::builder(key())
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("build admin client");
+
+        let params = UsageQueryParams {
+            project_ids: openai_rs_types::Omittable::Value(vec![
+                "proj_1".to_owned(),
+                "proj_2".to_owned(),
+            ]),
+            group_by: openai_rs_types::Omittable::Value(vec![
+                UsageGroupBy::ProjectId,
+                UsageGroupBy::Model,
+            ]),
+            ..UsageQueryParams::new(1_700_000_000)
+        };
+        let page = client
+            .usage()
+            .completions(&params)
+            .await
+            .expect("query completions usage");
+        assert_eq!(page.data.len(), 1);
+        assert_eq!(page.data[0].start_time, 1_700_000_000);
+        assert!(matches!(
+            page.data[0].results.first(),
+            Some(UsageResult::Completions(_))
+        ));
+        // `has_more=false` closes the cursor even though `next_page` is null.
+        assert_eq!(page.next_page(), None);
+
+        let captured = captured.lock().expect("capture lock");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].method, Method::GET);
+        // `start_time` is required on every usage route and leads the query;
+        // the array filters keep the pinned `[]` spelling like the audit
+        // filters (`project_ids%5B%5D=...` once URL-encoded).
+        assert_eq!(
+            captured[0].path_and_query,
+            "/v1/organization/usage/completions?start_time=1700000000&project_ids%5B%5D=proj_1&project_ids%5B%5D=proj_2&group_by%5B%5D=project_id&group_by%5B%5D=model"
+        );
+        assert_eq!(
+            captured[0].authorization.as_deref(),
+            Some("Bearer admin-test-placeholder-key")
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn costs_loopback_pins_one_day_bucket_and_costs_group_by() {
+        let (base_url, captured, task) = spawn_server().await;
+        let client = AdminClient::builder(key())
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("build admin client");
+
+        let params = UsageCostsQueryParams {
+            bucket_width: openai_rs_types::Omittable::Value(UsageCostsBucketWidth::Day),
+            group_by: openai_rs_types::Omittable::Value(vec![
+                UsageCostsGroupBy::ProjectId,
+                UsageCostsGroupBy::LineItem,
+            ]),
+            ..UsageCostsQueryParams::new(1_700_000_000)
+        };
+        let page = client
+            .usage()
+            .costs(&params)
+            .await
+            .expect("query organization costs");
+        assert_eq!(page.data.len(), 1);
+        assert_eq!(page.data[0].end_time, 1_700_086_400);
+        match page.data[0].results.first() {
+            Some(UsageResult::Costs(result)) => {
+                assert!(matches!(
+                    result.amount,
+                    openai_rs_types::Omittable::Value(_)
+                ));
+            }
+            _ => panic!("the costs result must route to the Costs variant"),
+        }
+        assert_eq!(page.next_page(), None);
+
+        let captured = captured.lock().expect("capture lock");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].method, Method::GET);
+        // The costs route pins `bucket_width` to `1d` and `group_by` to its
+        // own three-value union (`line_item` is costs-only).
+        assert_eq!(
+            captured[0].path_and_query,
+            "/v1/organization/costs?start_time=1700000000&bucket_width=1d&group_by%5B%5D=project_id&group_by%5B%5D=line_item"
+        );
+        assert_eq!(
+            captured[0].authorization.as_deref(),
+            Some("Bearer admin-test-placeholder-key")
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn spend_alerts_loopback_covers_org_and_project_routes() {
+        let (base_url, captured, task) = spawn_server().await;
+        let client = AdminClient::builder(key())
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("build admin client");
+        let alerts = client.spend_alerts();
+        // The channel struct keeps a private future-field, so the fixture is
+        // built through its public Serde surface.
+        let notification_channel =
+            serde_json::from_value::<SpendAlertNotificationChannel>(serde_json::json!({
+                "type": "email",
+                "recipients": ["ops@example.com"]
+            }))
+            .expect("spend alert notification channel");
+        let body = CreateSpendAlertBody {
+            threshold_amount: 100,
+            currency: SpendCurrency::Usd,
+            interval: SpendInterval::Month,
+            notification_channel,
+        };
+
+        let created = alerts
+            .create(body.clone())
+            .await
+            .expect("create organization spend alert");
+        assert_eq!(created.id, "alert/1");
+        assert!(matches!(created.object, SpendAlertObject::Organization));
+
+        let listed = alerts.list().await.expect("list organization alerts");
+        assert_eq!(listed.data.len(), 1);
+        assert_eq!(listed.data[0].threshold_amount, 100);
+        assert_eq!(listed.next_after(), None);
+
+        let retrieved = alerts.retrieve("alert/1").await.expect("retrieve alert");
+        assert_eq!(retrieved.id, "alert/1");
+
+        let updated = alerts
+            .update("alert/1", body.clone())
+            .await
+            .expect("update organization spend alert");
+        assert_eq!(updated.threshold_amount, 100);
+
+        let deleted = alerts
+            .delete("alert/1")
+            .await
+            .expect("delete organization spend alert");
+        assert_eq!(deleted.id, "alert/1");
+        assert!(deleted.deleted);
+        assert!(matches!(
+            deleted.object,
+            SpendAlertDeletedObject::Organization
+        ));
+
+        let project = alerts.project("proj_1");
+        let project_created = project
+            .create(body)
+            .await
+            .expect("create project spend alert");
+        assert!(matches!(project_created.object, SpendAlertObject::Project));
+
+        let project_listed = project.list().await.expect("list project alerts");
+        assert_eq!(project_listed.data.len(), 1);
+
+        let project_deleted = project
+            .delete("alert/1")
+            .await
+            .expect("delete project spend alert");
+        assert!(matches!(
+            project_deleted.object,
+            SpendAlertDeletedObject::Project
+        ));
+
+        let captured = captured.lock().expect("capture lock");
+        assert_eq!(captured.len(), 8);
+        let expected = [
+            ("POST", "/v1/organization/spend_alerts"),
+            ("GET", "/v1/organization/spend_alerts"),
+            ("GET", "/v1/organization/spend_alerts/alert%2F1"),
+            ("POST", "/v1/organization/spend_alerts/alert%2F1"),
+            ("DELETE", "/v1/organization/spend_alerts/alert%2F1"),
+            ("POST", "/v1/organization/projects/proj_1/spend_alerts"),
+            ("GET", "/v1/organization/projects/proj_1/spend_alerts"),
+            (
+                "DELETE",
+                "/v1/organization/projects/proj_1/spend_alerts/alert%2F1",
+            ),
+        ];
+        for (index, (method, path)) in expected.iter().enumerate() {
+            assert_eq!(captured[index].method.as_str(), *method);
+            assert_eq!(captured[index].path_and_query, *path);
+            assert_eq!(
+                captured[index].authorization.as_deref(),
+                Some("Bearer admin-test-placeholder-key")
+            );
+        }
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captured[0].body).expect("create alert JSON"),
+            serde_json::json!({
+                "threshold_amount": 100,
+                "currency": "USD",
+                "interval": "month",
+                "notification_channel": {
+                    "type": "email",
+                    "recipients": ["ops@example.com"]
+                }
+            })
+        );
+        assert!(captured[1].body.is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn spend_limits_loopback_covers_org_and_project_routes() {
+        let (base_url, captured, task) = spawn_server().await;
+        let client = AdminClient::builder(key())
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("build admin client");
+        let limits = client.spend_limits();
+        let body = UpdateOrganizationSpendLimitBody {
+            threshold_amount: 100,
+            currency: SpendLimitCurrency::Usd,
+            interval: SpendLimitInterval::Month,
+        };
+        assert!(body.validate().is_ok());
+
+        let current = limits.get().await.expect("get organization limit");
+        assert_eq!(current.threshold_amount, 100);
+        assert!(matches!(current.object, SpendLimitObject::Organization));
+        assert!(matches!(
+            current.enforcement.status,
+            SpendLimitEnforcementStatus::Inactive
+        ));
+
+        let updated = limits
+            .update(body.clone())
+            .await
+            .expect("update organization limit");
+        assert!(matches!(updated.object, SpendLimitObject::Organization));
+
+        let deleted = limits.delete().await.expect("delete organization limit");
+        assert!(deleted.deleted);
+        assert!(matches!(
+            deleted.object,
+            SpendLimitDeletedObject::Organization
+        ));
+
+        let project = limits.project("proj_1");
+        let project_body = UpdateProjectSpendLimitBody {
+            threshold_amount: 100,
+            currency: SpendLimitCurrency::Usd,
+            interval: SpendLimitInterval::Month,
+        };
+        let project_current = project.get().await.expect("get project limit");
+        assert!(matches!(project_current.object, SpendLimitObject::Project));
+
+        project
+            .update(project_body)
+            .await
+            .expect("update project limit");
+
+        let project_deleted = project.delete().await.expect("delete project limit");
+        assert!(matches!(
+            project_deleted.object,
+            SpendLimitDeletedObject::Project
+        ));
+
+        let captured = captured.lock().expect("capture lock");
+        assert_eq!(captured.len(), 6);
+        let expected = [
+            ("GET", "/v1/organization/spend_limit"),
+            ("POST", "/v1/organization/spend_limit"),
+            ("DELETE", "/v1/organization/spend_limit"),
+            ("GET", "/v1/organization/projects/proj_1/spend_limit"),
+            ("POST", "/v1/organization/projects/proj_1/spend_limit"),
+            ("DELETE", "/v1/organization/projects/proj_1/spend_limit"),
+        ];
+        for (index, (method, path)) in expected.iter().enumerate() {
+            assert_eq!(captured[index].method.as_str(), *method);
+            assert_eq!(captured[index].path_and_query, *path);
+            assert_eq!(
+                captured[index].authorization.as_deref(),
+                Some("Bearer admin-test-placeholder-key")
+            );
+        }
+        assert_eq!(
+            serde_json::from_slice::<Value>(&captured[1].body).expect("update limit JSON"),
+            serde_json::json!({"threshold_amount": 100, "currency": "USD", "interval": "month"})
         );
         task.abort();
     }

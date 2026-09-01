@@ -614,4 +614,84 @@ mod tests {
         }
         assert!(stream.next().await.is_none());
     }
+
+    #[tokio::test]
+    async fn create_stream_final_usage_chunk_decodes_and_ends_cleanly() {
+        // The `stream_options.include_usage` happy path: one content chunk,
+        // the final usage-only chunk (empty `choices` + populated `usage`),
+        // then the required `[DONE]` sentinel with no trailing error.
+        let usage_chunk = json!({
+            "id": "cmpl_1",
+            "object": "text_completion",
+            "created": 1,
+            "model": "gpt-3.5-turbo-instruct",
+            "choices": [],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11}
+        });
+        let body = format!(
+            "data: {}\n\ndata: {usage_chunk}\n\ndata: [DONE]\n\n",
+            completion_json("This", Value::Null),
+        );
+        let (client, captured) = serve_once("text/event-stream; charset=utf-8", body).await;
+        let mut stream = client
+            .completions()
+            .create_stream(
+                CreateStreamingCompletionRequest::new("gpt-3.5-turbo-instruct", "Say hello")
+                    .stream_options(
+                        openai_rs_types::CompletionStreamOptions::new().include_usage(true),
+                    ),
+            )
+            .await
+            .expect("stream handshake");
+        let content = stream
+            .next()
+            .await
+            .expect("content chunk")
+            .expect("typed content chunk");
+        assert_eq!(content.choices()[0].text(), "This");
+
+        let usage = stream
+            .next()
+            .await
+            .expect("usage-only chunk")
+            .expect("typed usage chunk");
+        assert!(usage.choices().is_empty());
+        assert_eq!(usage.usage().map(|usage| usage.total_tokens()), Some(11));
+        assert!(stream.next().await.is_none());
+
+        let request = captured.await.expect("captured stream request");
+        let body: Value = serde_json::from_slice(&request.body).expect("stream body");
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[tokio::test]
+    async fn create_stream_truncated_json_frame_yields_decode_error_and_ends_stream() {
+        let body = "data: {\n\ndata: [DONE]\n\n".to_owned();
+        let (client, _captured) = serve_once("text/event-stream; charset=utf-8", body).await;
+        let mut stream = client
+            .completions()
+            .create_stream(CreateStreamingCompletionRequest::new(
+                "gpt-3.5-turbo-instruct",
+                "Say hello",
+            ))
+            .await
+            .expect("stream handshake");
+        let error = stream
+            .next()
+            .await
+            .expect("decode error item")
+            .expect_err("truncated JSON frame");
+        match error {
+            Error::Decode {
+                meta_status,
+                request_id,
+                ..
+            } => {
+                assert_eq!(meta_status, StatusCode::OK);
+                assert_eq!(request_id.as_deref(), Some("req_legacy"));
+            }
+            other => panic!("expected a decode error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
 }

@@ -1365,6 +1365,14 @@ mod tests {
     };
     use crate::{Nullable, Omittable};
 
+    // Frozen synthetic fixtures (D0007/OVR-0006 and D0006/OVR-0005). Wiring
+    // them through include_str keeps the ledger's fixture evidence live
+    // instead of leaving dead files under testdata/.
+    const EMPTY_LIST_FIXTURE: &str =
+        include_str!("../../../testdata/fixtures/files/listFiles/empty.json");
+    const RETRIEVE_FILE_FIXTURE: &str =
+        include_str!("../../../testdata/fixtures/files/retrieveFile/response.json");
+
     assert_impl_all!(FileObject: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(FileListParams: Serialize, DeserializeOwned, Send, Sync);
     assert_impl_all!(FileListPage: Serialize, DeserializeOwned, Send, Sync);
@@ -1546,6 +1554,64 @@ mod tests {
         assert_eq!(
             serde_json::to_value(deleted).expect("encode deletion"),
             delete_wire
+        );
+    }
+
+    #[test]
+    fn empty_list_files_fixture_pins_required_cursor_ids() {
+        // OVR-0006 / D0007: the pinned schema keeps `first_id`/`last_id`
+        // required even on an empty page, and the frozen synthetic fixture
+        // uses the `"file_none"` sentinel rather than null or an absent key.
+        // Dropping either id must still fail decode, so the provisional
+        // requiredness pin cannot silently regress before a live empty-list
+        // capture proves nullable or absent behavior.
+        let page = serde_json::from_str::<FileListPage>(EMPTY_LIST_FIXTURE)
+            .expect("empty listFiles fixture decodes");
+
+        assert!(page.data().is_empty());
+        assert_eq!(page.first_id().as_str(), "file_none");
+        assert_eq!(page.last_id().as_str(), "file_none");
+        assert!(!page.has_more());
+        assert_eq!(
+            serde_json::to_value(&page).expect("encode empty page"),
+            serde_json::from_str::<Value>(EMPTY_LIST_FIXTURE).expect("fixture is JSON")
+        );
+
+        for key in ["first_id", "last_id"] {
+            let mut wire =
+                serde_json::from_str::<Value>(EMPTY_LIST_FIXTURE).expect("fixture is JSON");
+            wire.as_object_mut()
+                .expect("fixture is an object")
+                .remove(key);
+            let error = serde_json::from_value::<FileListPage>(wire)
+                .expect_err("an empty page still requires the cursor ids");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("missing field `{key}`")),
+                "expected a missing-field error for {key}, got {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn retrieve_file_fixture_round_trips_the_pin_required_status() {
+        // OVR-0005 / D0006: the frozen synthetic retrieve fixture carries the
+        // deprecated but pin-required `status` field that the official
+        // example omits, and it must round-trip losslessly.
+        let file = serde_json::from_str::<FileObject>(RETRIEVE_FILE_FIXTURE)
+            .expect("retrieveFile fixture decodes");
+
+        assert_eq!(file.id().as_str(), "file_synthetic_1");
+        assert_eq!(file.status(), &FileStatus::Processed);
+        assert_eq!(file.purpose(), &FileObjectPurpose::UserData);
+        assert_eq!(file.bytes(), 12);
+        assert_eq!(file.filename(), "synthetic.txt");
+        assert_eq!(file.expires_at(), None);
+        assert_eq!(file.status_details(), None);
+        assert_eq!(
+            serde_json::to_value(&file).expect("encode retrieved file"),
+            serde_json::from_str::<Value>(RETRIEVE_FILE_FIXTURE).expect("fixture is JSON")
         );
     }
 

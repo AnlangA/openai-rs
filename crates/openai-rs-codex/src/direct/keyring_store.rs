@@ -177,4 +177,51 @@ mod tests {
         let encoded = r#"{"format_version":99,"access_token":"a","refresh_token":"r","expires_at":1,"account_id":"acct-1","generation":0}"#;
         assert!(decode_session(encoded).is_err());
     }
+
+    /// 8-22: the entry-name guard rejects empty/whitespace and 129-character
+    /// names while accepting the documented 128-character boundary.
+    #[test]
+    fn entry_name_validation_covers_empty_and_length_boundaries()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for empty in ["", "   ", "\t"] {
+            assert!(
+                matches!(
+                    KeyringStore::new(empty),
+                    Err(crate::direct::DirectError::Configuration(ref message))
+                        if message.contains("1..=128")
+                ),
+                "an empty entry name must be rejected: {empty:?}"
+            );
+        }
+        assert!(KeyringStore::new("x".repeat(129)).is_err());
+        let boundary = KeyringStore::new("x".repeat(128))?;
+        assert!(
+            !format!("{boundary:?}").contains("x".repeat(128).as_str()),
+            "the entry name must stay redacted from Debug"
+        );
+        Ok(())
+    }
+
+    /// 8-22: a persisted session with an account identifier the JWT parser
+    /// would refuse (illegal characters or over-length) fails decode instead
+    /// of materializing an unvalidated account id.
+    #[test]
+    fn decode_session_rejects_an_illegal_account_id() {
+        let illegal = ["acct/1", "acct@openai", "", "a b c"];
+        let mut account_ids: Vec<String> = illegal.iter().map(ToString::to_string).collect();
+        account_ids.push("a".repeat(257));
+        for account_id in account_ids {
+            let encoded = format!(
+                r#"{{"format_version":1,"access_token":"a","refresh_token":"r","expires_at":1,"account_id":"{account_id}","generation":0}}"#
+            );
+            assert!(
+                decode_session(&encoded).is_err(),
+                "account_id {account_id:?} must fail decode"
+            );
+        }
+        // The legal shape still decodes.
+        let encoded = r#"{"format_version":1,"access_token":"a","refresh_token":"r","expires_at":1,"account_id":"acct-123_456","generation":2}"#;
+        let session = decode_session(encoded).expect("legal account id decodes");
+        assert_eq!(session.account_id().as_str(), "acct-123_456");
+    }
 }

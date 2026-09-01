@@ -354,7 +354,7 @@ mod tests {
     use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
     use hyper_util::rt::TokioIo;
     use openai_rs_types::chatkit::{
-        ChatKitListLimit, ChatKitListOrder, ChatKitSessionId, ChatKitThreadId,
+        ChatKitListLimit, ChatKitListOrder, ChatKitSessionId, ChatKitThreadId, ChatKitThreadItemId,
         ChatKitThreadItemListParams, ChatKitThreadListParams, ChatKitWorkflowRequest,
         CreateChatKitSessionRequest,
     };
@@ -643,6 +643,94 @@ mod tests {
         assert!(captures[0].path_and_query.contains("limit=3"));
         assert!(captures[0].path_and_query.contains("after=item+cursor"));
         assert_eq!(captures[0].beta.as_deref(), Some(BETA_VALUE));
+    }
+
+    /// 8-19: the forward item-page stream walks two pages by cursor, and a
+    /// server that repeats an already-seen cursor fails closed with an
+    /// `InvalidConfiguration` error instead of looping forever. Thread items
+    /// are a tagged union without a shared id accessor, so there is no
+    /// last-item fallback: a repeated cursor can never be rescued.
+    #[tokio::test]
+    async fn list_item_pages_walks_two_pages_and_fails_closed_on_a_repeated_cursor() {
+        let page = |first: &str, last: &str, more: bool| {
+            json!({
+                "object":"list",
+                "data":[{
+                    "id":"item_1","object":"chatkit.thread_item","created_at":1,
+                    "thread_id":"cthr_1","type":"chatkit.widget","widget":"{}"
+                }],
+                "first_id":first,"last_id":last,"has_more":more
+            })
+            .to_string()
+        };
+        let (client, captures) = serve_script(vec![
+            page("item_first", "item_next", true),
+            page("item_first", "item_last", false),
+        ])
+        .await;
+        let pages = client
+            .chatkit()
+            .threads()
+            .list_item_pages(
+                ChatKitThreadId::new("cthr_1"),
+                ChatKitThreadItemListParams {
+                    limit: openai_rs_types::Omittable::Omitted,
+                    order: openai_rs_types::Omittable::Omitted,
+                    after: openai_rs_types::Omittable::Omitted,
+                    before: openai_rs_types::Omittable::Omitted,
+                },
+            )
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().all(Result::is_ok));
+        {
+            let captures = captures.lock().expect("capture lock");
+            assert_eq!(captures.len(), 2);
+            let second = Url::parse(&format!("http://loopback{}", captures[1].path_and_query))
+                .expect("second page URL");
+            let query = second.query_pairs().collect::<Vec<_>>();
+            assert!(query.contains(&("after".into(), "item_next".into())));
+        }
+
+        // A second page that repeats the first cursor must fail closed.
+        let (client, captures) = serve_script(vec![
+            page("item_first", "item_repeat", true),
+            page("item_first", "item_repeat", true),
+        ])
+        .await;
+        let mut pages = client.chatkit().threads().list_item_pages(
+            ChatKitThreadId::new("cthr_1"),
+            ChatKitThreadItemListParams {
+                limit: openai_rs_types::Omittable::Omitted,
+                order: openai_rs_types::Omittable::Omitted,
+                after: openai_rs_types::Omittable::Omitted,
+                before: openai_rs_types::Omittable::Omitted,
+            },
+        );
+        assert!(
+            pages
+                .next()
+                .await
+                .expect("first repeated-cursor page")
+                .is_ok()
+        );
+        match pages.next().await.expect("second repeated-cursor page") {
+            Err(Error::InvalidConfiguration(message)) => {
+                assert!(
+                    message.to_string().contains("repeated cursor"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected a repeated-cursor failure, got {other:?}"),
+        }
+        drop(pages);
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(
+            captures.len(),
+            2,
+            "the fail-closed stream must stop after the repeated cursor"
+        );
     }
 
     #[test]

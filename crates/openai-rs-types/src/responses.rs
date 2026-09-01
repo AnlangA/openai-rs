@@ -16795,6 +16795,15 @@ mod tests {
 
     use super::*;
 
+    // Frozen synthetic MCP-approval outputs (D0008/OVR-0007). Wiring them
+    // through include_str keeps the ghost-`request_id` evidence live instead
+    // of leaving dead files under testdata/.
+    const MCP_APPROVAL_OUTPUT_FIXTURE: &str =
+        include_str!("../../../testdata/fixtures/responses/mcp-approval/output.json");
+    const MCP_APPROVAL_OUTPUT_WITHOUT_REQUEST_ID_FIXTURE: &str = include_str!(
+        "../../../testdata/fixtures/responses/mcp-approval/output-without-request-id.json"
+    );
+
     fn assert_json_dto<T>()
     where
         T: Serialize + DeserializeOwned + Send + Sync,
@@ -23729,6 +23738,57 @@ mod tests {
     }
 
     #[test]
+    fn mcp_approval_output_fixture_preserves_the_ghost_request_id() {
+        // OVR-0007 / D0008 / D0111: the pinned schema lists `request_id` in
+        // `required` without ever defining it. The frozen synthetic output
+        // carries the ghost field; the typed DTO must decode without
+        // fabricating it while the flattened extra fields keep it verbatim
+        // through a re-encode.
+        let decoded: McpApprovalResponse = serde_json::from_str(MCP_APPROVAL_OUTPUT_FIXTURE)
+            .expect("mcp-approval output fixture decodes");
+        assert_eq!(decoded.approval_request_id(), "mcpr_synthetic_1");
+        assert!(decoded.is_approved());
+        assert_eq!(decoded.id(), None);
+        assert_eq!(decoded.reason(), None);
+
+        let re_encoded = serde_json::to_value(&decoded).expect("re-encode approval");
+        assert_eq!(re_encoded["request_id"], json!("req_synthetic_1"));
+        assert_eq!(
+            re_encoded,
+            serde_json::from_str::<Value>(MCP_APPROVAL_OUTPUT_FIXTURE).expect("fixture is JSON")
+        );
+    }
+
+    #[test]
+    fn mcp_approval_output_fixture_without_request_id_round_trips_both_shapes() {
+        // The sibling fixture drops the ghost field entirely: both the input
+        // DTO and the output resource must stay decodable without it, and
+        // neither may re-encode a fabricated `request_id` (D0111).
+        let dto: McpApprovalResponse =
+            serde_json::from_str(MCP_APPROVAL_OUTPUT_WITHOUT_REQUEST_ID_FIXTURE)
+                .expect("input DTO decodes without request_id");
+        assert_eq!(dto.id(), Some("mcp_resp_synthetic_1"));
+        assert_eq!(dto.approval_request_id(), "mcpr_synthetic_1");
+        assert!(dto.is_approved());
+        assert_eq!(
+            serde_json::to_value(&dto).expect("re-encode input DTO"),
+            serde_json::from_str::<Value>(MCP_APPROVAL_OUTPUT_WITHOUT_REQUEST_ID_FIXTURE)
+                .expect("fixture is JSON")
+        );
+
+        let resource: McpApprovalResponseResource =
+            serde_json::from_str(MCP_APPROVAL_OUTPUT_WITHOUT_REQUEST_ID_FIXTURE)
+                .expect("output resource decodes without request_id");
+        assert_eq!(resource.reason(), None);
+        assert!(resource.extra_fields().get("request_id").is_none());
+        assert_eq!(
+            serde_json::to_value(&resource).expect("re-encode resource"),
+            serde_json::from_str::<Value>(MCP_APPROVAL_OUTPUT_WITHOUT_REQUEST_ID_FIXTURE)
+                .expect("fixture is JSON")
+        );
+    }
+
+    #[test]
     fn event_logprobs_omit_bytes_and_optional_top_logprobs() {
         let fixture = json!({
             "type": "response.output_text.delta",
@@ -23752,5 +23812,776 @@ mod tests {
             serde_json::from_value(fixture.clone()).expect("decode empty incomplete details");
         assert_eq!(decoded.reason(), None);
         assert_eq!(serde_json::to_value(&decoded).expect("round trip"), fixture);
+    }
+
+    fn exhaustive_event_response_value() -> Value {
+        json!({
+            "id": "resp_exhaustive",
+            "created_at": 1,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-test",
+            "object": "response",
+            "output": [],
+            "parallel_tool_calls": true,
+            "temperature": null,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": null
+        })
+    }
+
+    fn lifecycle_stream_event(tag: &str) -> Value {
+        json!({
+            "type": tag,
+            "sequence_number": 1,
+            "response": exhaustive_event_response_value()
+        })
+    }
+
+    fn item_snapshot_stream_event(tag: &str) -> Value {
+        json!({
+            "type": tag,
+            "output_index": 0,
+            "item": {
+                "type": "message",
+                "id": "msg_exhaustive",
+                "status": "completed",
+                "role": "assistant",
+                "content": []
+            },
+            "sequence_number": 1
+        })
+    }
+
+    fn content_part_stream_event(tag: &str) -> Value {
+        json!({
+            "type": tag,
+            "item_id": "msg_exhaustive",
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "output_text", "text": "hi", "annotations": [], "logprobs": []},
+            "sequence_number": 1
+        })
+    }
+
+    fn tool_status_stream_event(tag: &str) -> Value {
+        json!({
+            "type": tag,
+            "item_id": "tool_exhaustive",
+            "output_index": 0,
+            "sequence_number": 1
+        })
+    }
+
+    /// Branch predicate for one pinned stream-event discriminator.
+    type StreamEventBranch = fn(&ResponseStreamEvent) -> bool;
+
+    #[test]
+    fn every_stable_stream_event_tag_decodes_routes_and_reencodes() {
+        // Exhaustive positive decode coverage for all 58 pinned SSE tags
+        // (8-04): each entry carries the minimal legal payload for its tag,
+        // asserts the tagged union routes it to the typed branch (a payload
+        // silently downgraded to `Unknown` would keep its `type` on
+        // re-encode, so branch identity needs its own predicate), and
+        // re-encodes equal.
+        let table: &[(&str, Value, StreamEventBranch)] = &[
+            // Audio family: official events carry no output binding fields.
+            (
+                "response.audio.delta",
+                json!({"type": "response.audio.delta", "delta": "==audio==", "sequence_number": 1}),
+                |event| matches!(event, ResponseStreamEvent::AudioDelta(_)),
+            ),
+            (
+                "response.audio.done",
+                json!({"type": "response.audio.done", "sequence_number": 1}),
+                |event| matches!(event, ResponseStreamEvent::AudioDone(_)),
+            ),
+            (
+                "response.audio.transcript.delta",
+                json!({
+                    "type": "response.audio.transcript.delta",
+                    "delta": "spoken",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::AudioTranscriptDelta(_)),
+            ),
+            (
+                "response.audio.transcript.done",
+                json!({"type": "response.audio.transcript.done", "sequence_number": 1}),
+                |event| matches!(event, ResponseStreamEvent::AudioTranscriptDone(_)),
+            ),
+            // Code-interpreter hosted tool: code delta/done plus lifecycle trio.
+            (
+                "response.code_interpreter_call_code.delta",
+                json!({
+                    "type": "response.code_interpreter_call_code.delta",
+                    "output_index": 0,
+                    "item_id": "ci_exhaustive",
+                    "delta": "print(1)",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::CodeInterpreterCodeDelta(_)),
+            ),
+            (
+                "response.code_interpreter_call_code.done",
+                json!({
+                    "type": "response.code_interpreter_call_code.done",
+                    "output_index": 0,
+                    "item_id": "ci_exhaustive",
+                    "code": "print(1)",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::CodeInterpreterCodeDone(_)),
+            ),
+            (
+                "response.code_interpreter_call.completed",
+                tool_status_stream_event("response.code_interpreter_call.completed"),
+                |event| matches!(event, ResponseStreamEvent::CodeInterpreterCompleted(_)),
+            ),
+            (
+                "response.code_interpreter_call.in_progress",
+                tool_status_stream_event("response.code_interpreter_call.in_progress"),
+                |event| matches!(event, ResponseStreamEvent::CodeInterpreterInProgress(_)),
+            ),
+            (
+                "response.code_interpreter_call.interpreting",
+                tool_status_stream_event("response.code_interpreter_call.interpreting"),
+                |event| matches!(event, ResponseStreamEvent::CodeInterpreterInterpreting(_)),
+            ),
+            // Response lifecycle, including the queued/in_progress snapshots.
+            (
+                "response.queued",
+                lifecycle_stream_event("response.queued"),
+                |event| matches!(event, ResponseStreamEvent::Queued(_)),
+            ),
+            (
+                "response.created",
+                lifecycle_stream_event("response.created"),
+                |event| matches!(event, ResponseStreamEvent::Created(_)),
+            ),
+            (
+                "response.in_progress",
+                lifecycle_stream_event("response.in_progress"),
+                |event| matches!(event, ResponseStreamEvent::InProgress(_)),
+            ),
+            (
+                "response.completed",
+                lifecycle_stream_event("response.completed"),
+                |event| matches!(event, ResponseStreamEvent::Completed(_)),
+            ),
+            (
+                "response.failed",
+                lifecycle_stream_event("response.failed"),
+                |event| matches!(event, ResponseStreamEvent::Failed(_)),
+            ),
+            (
+                "response.incomplete",
+                lifecycle_stream_event("response.incomplete"),
+                |event| matches!(event, ResponseStreamEvent::Incomplete(_)),
+            ),
+            // Item and content-part snapshots.
+            (
+                "response.output_item.added",
+                item_snapshot_stream_event("response.output_item.added"),
+                |event| matches!(event, ResponseStreamEvent::OutputItemAdded(_)),
+            ),
+            (
+                "response.output_item.done",
+                item_snapshot_stream_event("response.output_item.done"),
+                |event| matches!(event, ResponseStreamEvent::OutputItemDone(_)),
+            ),
+            (
+                "response.content_part.added",
+                content_part_stream_event("response.content_part.added"),
+                |event| matches!(event, ResponseStreamEvent::ContentPartAdded(_)),
+            ),
+            (
+                "response.content_part.done",
+                content_part_stream_event("response.content_part.done"),
+                |event| matches!(event, ResponseStreamEvent::ContentPartDone(_)),
+            ),
+            (
+                "response.output_text.delta",
+                json!({
+                    "type": "response.output_text.delta",
+                    "item_id": "msg_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "hi",
+                    "logprobs": [],
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::OutputTextDelta(_)),
+            ),
+            (
+                "response.output_text.done",
+                json!({
+                    "type": "response.output_text.done",
+                    "item_id": "msg_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "text": "hi",
+                    "logprobs": [],
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::OutputTextDone(_)),
+            ),
+            // Refusal delta family.
+            (
+                "response.refusal.delta",
+                json!({
+                    "type": "response.refusal.delta",
+                    "item_id": "msg_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "cannot",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::RefusalDelta(_)),
+            ),
+            (
+                "response.refusal.done",
+                json!({
+                    "type": "response.refusal.done",
+                    "item_id": "msg_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "refusal": "cannot help",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::RefusalDone(_)),
+            ),
+            // Function-call argument deltas.
+            (
+                "response.function_call_arguments.delta",
+                json!({
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_exhaustive",
+                    "output_index": 0,
+                    "delta": "{\"city\":",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::FunctionCallArgumentsDelta(_)),
+            ),
+            (
+                "response.function_call_arguments.done",
+                json!({
+                    "type": "response.function_call_arguments.done",
+                    "item_id": "fc_exhaustive",
+                    "output_index": 0,
+                    "name": "weather",
+                    "arguments": "{}",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::FunctionCallArgumentsDone(_)),
+            ),
+            // File-search hosted-tool lifecycle trio.
+            (
+                "response.file_search_call.completed",
+                tool_status_stream_event("response.file_search_call.completed"),
+                |event| matches!(event, ResponseStreamEvent::FileSearchCompleted(_)),
+            ),
+            (
+                "response.file_search_call.in_progress",
+                tool_status_stream_event("response.file_search_call.in_progress"),
+                |event| matches!(event, ResponseStreamEvent::FileSearchInProgress(_)),
+            ),
+            (
+                "response.file_search_call.searching",
+                tool_status_stream_event("response.file_search_call.searching"),
+                |event| matches!(event, ResponseStreamEvent::FileSearchSearching(_)),
+            ),
+            // Shell command and shell output content families.
+            (
+                "response.shell_call_command.added",
+                json!({
+                    "type": "response.shell_call_command.added",
+                    "output_index": 0,
+                    "command_index": 0,
+                    "command": "ls",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::ShellCommandAdded(_)),
+            ),
+            (
+                "response.shell_call_command.delta",
+                json!({
+                    "type": "response.shell_call_command.delta",
+                    "output_index": 0,
+                    "command_index": 0,
+                    "delta": "-la",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::ShellCommandDelta(_)),
+            ),
+            (
+                "response.shell_call_command.done",
+                json!({
+                    "type": "response.shell_call_command.done",
+                    "output_index": 0,
+                    "command_index": 0,
+                    "command": "ls -la",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::ShellCommandDone(_)),
+            ),
+            (
+                "response.shell_call_output_content.delta",
+                json!({
+                    "type": "response.shell_call_output_content.delta",
+                    "item_id": "shell_exhaustive",
+                    "output_index": 0,
+                    "command_index": 0,
+                    "delta": {},
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::ShellOutputContentDelta(_)),
+            ),
+            (
+                "response.shell_call_output_content.done",
+                json!({
+                    "type": "response.shell_call_output_content.done",
+                    "item_id": "shell_exhaustive",
+                    "output_index": 0,
+                    "command_index": 0,
+                    "output": [],
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::ShellOutputContentDone(_)),
+            ),
+            // Reasoning summary part/text and reasoning text delta families.
+            (
+                "response.reasoning_summary_part.added",
+                json!({
+                    "type": "response.reasoning_summary_part.added",
+                    "item_id": "rs_exhaustive",
+                    "output_index": 0,
+                    "summary_index": 0,
+                    "part": {"type": "summary_text", "text": "thought"},
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::ReasoningSummaryPartAdded(_)),
+            ),
+            (
+                "response.reasoning_summary_part.done",
+                json!({
+                    "type": "response.reasoning_summary_part.done",
+                    "item_id": "rs_exhaustive",
+                    "output_index": 0,
+                    "summary_index": 0,
+                    "part": {"type": "summary_text", "text": "thought"},
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::ReasoningSummaryPartDone(_)),
+            ),
+            (
+                "response.reasoning_summary_text.delta",
+                json!({
+                    "type": "response.reasoning_summary_text.delta",
+                    "item_id": "rs_exhaustive",
+                    "output_index": 0,
+                    "summary_index": 0,
+                    "delta": "thought",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::ReasoningSummaryTextDelta(_)),
+            ),
+            (
+                "response.reasoning_summary_text.done",
+                json!({
+                    "type": "response.reasoning_summary_text.done",
+                    "item_id": "rs_exhaustive",
+                    "output_index": 0,
+                    "summary_index": 0,
+                    "text": "thought",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::ReasoningSummaryTextDone(_)),
+            ),
+            (
+                "response.reasoning_text.delta",
+                json!({
+                    "type": "response.reasoning_text.delta",
+                    "item_id": "rs_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "thinking",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::ReasoningTextDelta(_)),
+            ),
+            (
+                "response.reasoning_text.done",
+                json!({
+                    "type": "response.reasoning_text.done",
+                    "item_id": "rs_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "text": "thinking",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::ReasoningTextDone(_)),
+            ),
+            // Web-search hosted-tool lifecycle trio.
+            (
+                "response.web_search_call.completed",
+                tool_status_stream_event("response.web_search_call.completed"),
+                |event| matches!(event, ResponseStreamEvent::WebSearchCompleted(_)),
+            ),
+            (
+                "response.web_search_call.in_progress",
+                tool_status_stream_event("response.web_search_call.in_progress"),
+                |event| matches!(event, ResponseStreamEvent::WebSearchInProgress(_)),
+            ),
+            (
+                "response.web_search_call.searching",
+                tool_status_stream_event("response.web_search_call.searching"),
+                |event| matches!(event, ResponseStreamEvent::WebSearchSearching(_)),
+            ),
+            // Image-generation hosted tool: lifecycle trio plus partial image.
+            (
+                "response.image_generation_call.completed",
+                tool_status_stream_event("response.image_generation_call.completed"),
+                |event| matches!(event, ResponseStreamEvent::ImageGenerationCompleted(_)),
+            ),
+            (
+                "response.image_generation_call.generating",
+                tool_status_stream_event("response.image_generation_call.generating"),
+                |event| matches!(event, ResponseStreamEvent::ImageGenerationGenerating(_)),
+            ),
+            (
+                "response.image_generation_call.in_progress",
+                tool_status_stream_event("response.image_generation_call.in_progress"),
+                |event| matches!(event, ResponseStreamEvent::ImageGenerationInProgress(_)),
+            ),
+            (
+                "response.image_generation_call.partial_image",
+                json!({
+                    "type": "response.image_generation_call.partial_image",
+                    "output_index": 0,
+                    "item_id": "img_exhaustive",
+                    "partial_image_index": 0,
+                    "partial_image_b64": "cGFydGlhbA==",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::ImageGenerationPartialImage(_)),
+            ),
+            // Native remote MCP call and list-tools families.
+            (
+                "response.mcp_call_arguments.delta",
+                json!({
+                    "type": "response.mcp_call_arguments.delta",
+                    "item_id": "mcp_exhaustive",
+                    "output_index": 0,
+                    "delta": "{\"query\":",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::McpCallArgumentsDelta(_)),
+            ),
+            (
+                "response.mcp_call_arguments.done",
+                json!({
+                    "type": "response.mcp_call_arguments.done",
+                    "item_id": "mcp_exhaustive",
+                    "output_index": 0,
+                    "arguments": "{}",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::McpCallArgumentsDone(_)),
+            ),
+            (
+                "response.mcp_call.in_progress",
+                tool_status_stream_event("response.mcp_call.in_progress"),
+                |event| matches!(event, ResponseStreamEvent::McpCallInProgress(_)),
+            ),
+            (
+                "response.mcp_call.completed",
+                tool_status_stream_event("response.mcp_call.completed"),
+                |event| matches!(event, ResponseStreamEvent::McpCallCompleted(_)),
+            ),
+            (
+                "response.mcp_call.failed",
+                tool_status_stream_event("response.mcp_call.failed"),
+                |event| matches!(event, ResponseStreamEvent::McpCallFailed(_)),
+            ),
+            (
+                "response.mcp_list_tools.in_progress",
+                tool_status_stream_event("response.mcp_list_tools.in_progress"),
+                |event| matches!(event, ResponseStreamEvent::McpListToolsInProgress(_)),
+            ),
+            (
+                "response.mcp_list_tools.completed",
+                tool_status_stream_event("response.mcp_list_tools.completed"),
+                |event| matches!(event, ResponseStreamEvent::McpListToolsCompleted(_)),
+            ),
+            (
+                "response.mcp_list_tools.failed",
+                tool_status_stream_event("response.mcp_list_tools.failed"),
+                |event| matches!(event, ResponseStreamEvent::McpListToolsFailed(_)),
+            ),
+            // Annotation and custom-tool input deltas.
+            (
+                "response.output_text.annotation.added",
+                json!({
+                    "type": "response.output_text.annotation.added",
+                    "item_id": "msg_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "annotation_index": 0,
+                    "annotation": {
+                        "type": "file_path",
+                        "file_id": "file_exhaustive",
+                        "index": 0
+                    },
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::OutputTextAnnotationAdded(_)),
+            ),
+            (
+                "response.custom_tool_call_input.delta",
+                json!({
+                    "type": "response.custom_tool_call_input.delta",
+                    "output_index": 0,
+                    "item_id": "ct_exhaustive",
+                    "delta": "{\"rows\":",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::CustomToolCallInputDelta(_)),
+            ),
+            (
+                "response.custom_tool_call_input.done",
+                json!({
+                    "type": "response.custom_tool_call_input.done",
+                    "output_index": 0,
+                    "item_id": "ct_exhaustive",
+                    "input": "{\"rows\": []}",
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::CustomToolCallInputDone(_)),
+            ),
+            // Standalone SSE error event.
+            (
+                "error",
+                json!({
+                    "type": "error",
+                    "code": null,
+                    "message": "exhaustive",
+                    "param": null,
+                    "sequence_number": 1
+                }),
+                |event| matches!(event, ResponseStreamEvent::Error(_)),
+            ),
+        ];
+
+        let mut table_tags: Vec<&str> = table.iter().map(|(tag, _, _)| *tag).collect();
+        table_tags.sort_unstable();
+        let mut pinned: Vec<&str> = STABLE_RESPONSE_STREAM_EVENT_DISCRIMINATORS.to_vec();
+        pinned.sort_unstable();
+        assert_eq!(
+            table_tags, pinned,
+            "the exhaustive fixture table must track the pinned discriminator manifest"
+        );
+
+        for (tag, payload, is_branch) in table {
+            let decoded: ResponseStreamEvent = serde_json::from_value(payload.clone())
+                .unwrap_or_else(|error| panic!("decode {tag}: {error}"));
+            assert!(
+                is_branch(&decoded),
+                "tag {tag} must route to its typed branch instead of {decoded:?}"
+            );
+            assert_eq!(decoded.sequence_number(), Some(1), "tag {tag}");
+            assert_eq!(
+                serde_json::to_value(&decoded)
+                    .unwrap_or_else(|error| panic!("encode {tag}: {error}")),
+                *payload,
+                "tag {tag} must re-encode to its minimal payload"
+            );
+        }
+    }
+
+    /// Branch predicate for one annotation discriminator.
+    type AnnotationBranch = fn(&Annotation) -> bool;
+
+    #[test]
+    fn annotation_branches_round_trip_all_four_citation_shapes() {
+        let fixtures: [(Value, AnnotationBranch); 4] = [
+            (
+                json!({
+                    "type": "file_citation",
+                    "file_id": "file_cited",
+                    "index": 3,
+                    "filename": "source.txt"
+                }),
+                |annotation: &Annotation| matches!(annotation, Annotation::FileCitation(_)),
+            ),
+            (
+                json!({
+                    "type": "url_citation",
+                    "url": "https://example.test/doc",
+                    "start_index": 0,
+                    "end_index": 4,
+                    "title": "Example"
+                }),
+                |annotation: &Annotation| matches!(annotation, Annotation::UrlCitation(_)),
+            ),
+            (
+                json!({
+                    "type": "container_file_citation",
+                    "container_id": "cntr_cited",
+                    "file_id": "file_cited",
+                    "start_index": 0,
+                    "end_index": 4,
+                    "filename": "container.txt"
+                }),
+                |annotation: &Annotation| {
+                    matches!(annotation, Annotation::ContainerFileCitation(_))
+                },
+            ),
+            (
+                json!({
+                    "type": "file_path",
+                    "file_id": "file_cited",
+                    "index": 5
+                }),
+                |annotation: &Annotation| matches!(annotation, Annotation::FilePath(_)),
+            ),
+        ];
+
+        let mut embedded = Vec::new();
+        for (payload, is_branch) in fixtures {
+            let decoded: Annotation = serde_json::from_value(payload.clone())
+                .unwrap_or_else(|error| panic!("decode annotation {}: {error}", payload["type"]));
+            assert!(
+                is_branch(&decoded),
+                "annotation {} must decode to its typed branch",
+                payload["type"]
+            );
+            assert_eq!(
+                serde_json::to_value(&decoded).expect("re-encode annotation"),
+                payload
+            );
+            embedded.push(payload);
+        }
+
+        // The same four shapes stay lossless inside an annotated output part.
+        let part = json!({
+            "type": "output_text",
+            "text": "cited four ways",
+            "annotations": embedded,
+            "logprobs": []
+        });
+        let decoded: OutputContent =
+            serde_json::from_value(part.clone()).expect("decode annotated output part");
+        let OutputContent::Text(text) = &decoded else {
+            panic!("output_text part must decode to the text branch");
+        };
+        assert_eq!(text.annotations().len(), 4);
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode annotated output part"),
+            part
+        );
+    }
+
+    #[test]
+    fn custom_tool_text_format_decodes_and_round_trips() {
+        // 8-R1: the `text` format branch (unconstrained input) was previously
+        // exercised only through the grammar variant.
+        let text = json!({"type": "text"});
+        let decoded: CustomToolFormat =
+            serde_json::from_value(text.clone()).expect("decode text format");
+        assert!(matches!(decoded, CustomToolFormat::Text(_)));
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode text format"),
+            text
+        );
+
+        let future = json!({"type": "future_format", "detail": {"nested": true}});
+        let decoded: CustomToolFormat =
+            serde_json::from_value(future.clone()).expect("decode future format");
+        assert!(matches!(decoded, CustomToolFormat::Unknown(_)));
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode future format"),
+            future
+        );
+
+        let tool = json!({
+            "type": "custom",
+            "name": "render",
+            "format": {"type": "text"}
+        });
+        let decoded: CustomTool =
+            serde_json::from_value(tool.clone()).expect("decode custom tool with text format");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("round-trip custom tool"),
+            tool
+        );
+    }
+
+    #[test]
+    fn stream_input_and_tool_unions_reject_malformed_discriminators() {
+        // 8-06: the three shapes that must never be downgraded to `Unknown` —
+        // a non-object, an object without `type`, and a non-string `type` —
+        // pinned at the DTO layer for the two kernel-tagged unions.
+        let malformed = [
+            json!("response.completed"),
+            json!([1, 2]),
+            json!({"sequence_number": 1}),
+            json!({"type": 7}),
+            json!({"type": null}),
+        ];
+        for payload in &malformed {
+            assert!(
+                serde_json::from_value::<ResponseStreamEvent>(payload.clone()).is_err(),
+                "stream event must reject {payload}"
+            );
+            assert!(
+                serde_json::from_value::<ResponseTool>(payload.clone()).is_err(),
+                "response tool must reject {payload}"
+            );
+        }
+
+        let non_object = serde_json::from_value::<ResponseStreamEvent>(json!("response.completed"))
+            .expect_err("a string is not a tagged object");
+        assert!(non_object.to_string().contains("must be a JSON object"));
+        let missing_type = serde_json::from_value::<ResponseTool>(json!({"strict": true}))
+            .expect_err("missing type");
+        assert!(
+            missing_type
+                .to_string()
+                .contains("missing string field `type`")
+        );
+        let non_string = serde_json::from_value::<ResponseStreamEvent>(json!({"type": 7}))
+            .expect_err("numeric type");
+        assert!(non_string.to_string().contains("`type` must be a string"));
+
+        // The input-item union hand-rolls its discriminator and additionally
+        // accepts untagged `role`/`id` forms, so its rejection shapes are
+        // pinned separately: only an object with none of `type`/`role`/`id`
+        // counts as missing the discriminator.
+        for payload in [
+            json!("function_call"),
+            json!(7),
+            json!({"output_index": 0}),
+            json!({"type": 7}),
+            json!({"type": null}),
+        ] {
+            assert!(
+                serde_json::from_value::<ResponseInputItem>(payload.clone()).is_err(),
+                "input item must reject {payload}"
+            );
+        }
+        let missing_tag = serde_json::from_value::<ResponseInputItem>(json!({"output_index": 0}))
+            .expect_err("an object without type, role, or id is not an input item");
+        assert!(missing_tag.to_string().contains("missing `type`"));
+        let non_string_tag = serde_json::from_value::<ResponseInputItem>(json!({"type": 7}))
+            .expect_err("input item type must be a string");
+        assert!(
+            non_string_tag
+                .to_string()
+                .contains("`type` must be a string")
+        );
     }
 }

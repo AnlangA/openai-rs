@@ -34,7 +34,7 @@ sources = [{ category = "official_sdk", fixture_status = "captured", url = "http
 reviewed_at = "2026-08-30"
 reason = "Upload.object is a constant wire discriminator and is required by the official SDK contract."
 impact = ["request/response schema requiredness split", "Upload DTO"]
-tests = ["Upload output fixture requires object=upload"]
+tests = ["openai-rs-types::files::tests::upload_object_is_required_by_the_sdk_contract_override"]
 
 [[overrides]]
 id = "OVR-0004"
@@ -56,7 +56,7 @@ sources = [{ category = "raw_openapi", fixture_status = "captured", url = "https
 reviewed_at = "2026-08-30"
 reason = "Keep File.status required according to raw and SDK contracts despite the incomplete official example."
 impact = ["OpenAIFile output requiredness", "fixture quarantine"]
-tests = ["synthetic File response fixture contains status", "example omission remains recorded"]
+tests = ["openai-rs-types::files::tests::retrieve_file_fixture_round_trips_the_pin_required_status", "openai-rs-types::files::tests::file_status_is_required_even_though_deprecated"]
 
 [[overrides]]
 id = "OVR-0006"
@@ -67,7 +67,7 @@ sources = [{ category = "raw_openapi", fixture_status = "captured", url = "https
 reviewed_at = "2026-08-30"
 reason = "Use raw-spec requiredness provisionally until a live empty-list capture proves nullable or absent behavior."
 impact = ["ListFilesResponse output requiredness", "pagination fixture"]
-tests = ["synthetic empty listFiles fixture keeps required ids"]
+tests = ["openai-rs-types::files::tests::empty_list_files_fixture_pins_required_cursor_ids"]
 
 [[overrides]]
 id = "OVR-0007"
@@ -78,7 +78,7 @@ sources = [{ category = "raw_openapi", fixture_status = "captured", url = "https
 reviewed_at = "2026-08-31"
 reason = "The pinned schema contains a ghost required field. Official SDK and schema properties agree on approval_request_id; typed output must not require request_id."
 impact = ["MCPApprovalResponse request/output split", "schema anomaly manifest", "D0111"]
-tests = ["input DTO does not require request_id", "output ExtraFields preserve request_id", "output decodes without request_id", "synthetic mcp-approval output fixture"]
+tests = ["openai-rs-types::responses::tests::mcp_approval_output_fixture_preserves_the_ghost_request_id", "openai-rs-types::responses::tests::mcp_approval_output_fixture_without_request_id_round_trips_both_shapes", "openai-rs-types::responses::tests::local_shell_output_and_mcp_approval_decode_without_ghost_fields", "openai-rs-types::responses::tests::remaining_item_fields_match_python_and_openapi_inventory"]
 
 [[overrides]]
 id = "OVR-0008"

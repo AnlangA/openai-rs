@@ -4877,6 +4877,57 @@ mod tests {
     }
 
     #[test]
+    fn beta_response_decodes_moderation_resource_field() {
+        // 8-17: the response-side `moderation` resource (moderation_result
+        // plus error outcome shapes) was never decoded on the beta face.
+        let mut fixture = response_fixture(json!([]));
+        fixture["moderation"] = json!({
+            "input": {
+                "type": "moderation_result",
+                "categories": {"harassment": false},
+                "category_applied_input_types": {"harassment": ["text"]},
+                "category_scores": {"harassment": 0.0001},
+                "flagged": false,
+                "model": "omni-moderation-latest"
+            },
+            "output": {
+                "type": "error",
+                "code": "moderation_failed",
+                "message": "classifier unavailable"
+            }
+        });
+        let response: BetaResponse =
+            serde_json::from_value(fixture.clone()).expect("decode beta moderation resource");
+        let moderation = response.moderation().expect("moderation must be readable");
+        let BetaModerationOutcome::Result { flagged, model, .. } = moderation.input() else {
+            panic!("input moderation must decode as a moderation_result");
+        };
+        assert!(!*flagged);
+        assert_eq!(*model, "omni-moderation-latest");
+        let BetaModerationOutcome::Error { code, message } = moderation.output() else {
+            panic!("output moderation must decode as an error outcome");
+        };
+        assert_eq!(code, "moderation_failed");
+        assert_eq!(message, "classifier unavailable");
+        assert_eq!(
+            serde_json::to_value(&response).expect("round-trip beta moderation"),
+            fixture
+        );
+
+        // An explicit `moderation: null` decodes to `None` and stays null on
+        // the wire instead of disappearing.
+        let mut null_fixture = response_fixture(json!([]));
+        null_fixture["moderation"] = Value::Null;
+        let response: BetaResponse =
+            serde_json::from_value(null_fixture.clone()).expect("decode null moderation");
+        assert!(response.moderation().is_none());
+        assert_eq!(
+            serde_json::to_value(&response).expect("round-trip null moderation"),
+            null_fixture
+        );
+    }
+
+    #[test]
     fn lifecycle_event_reuses_stable_discriminator_with_typed_agent_snapshot() {
         let fixture = json!({
             "type": "response.created",

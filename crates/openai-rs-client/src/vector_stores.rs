@@ -1240,6 +1240,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_and_file_batch_polls_honor_is_file_terminal() {
+        // 8-18: the store poll test above covers the top-level entry point;
+        // the two nested consumers route their own sub-resources and stop on
+        // the same three-terminal `is_file_terminal` domain (completed,
+        // failed, cancelled).
+        let (client, captures) = serve_script(vec![
+            file_json("file/1", "vs/a b", "in_progress"),
+            file_json("file/1", "vs/a b", "completed"),
+            batch_json("batch/1", "vs/a b", "in_progress"),
+            batch_json("batch/1", "vs/a b", "failed"),
+        ])
+        .await;
+        let store_id = VectorStoreId::new("vs/a b");
+        let options = || {
+            PollOptions::new()
+                .with_interval(Duration::from_millis(1))
+                .with_timeout(Duration::from_secs(1))
+        };
+
+        let file = client
+            .vector_stores()
+            .files()
+            .poll(&store_id, &FileId::new("file/1"), options())
+            .await
+            .expect("poll attached file");
+        assert!(matches!(file.status(), VectorStoreFileStatus::Completed));
+
+        let batch = client
+            .vector_stores()
+            .file_batches()
+            .poll(
+                &store_id,
+                &VectorStoreFileBatchId::new("batch/1"),
+                options(),
+            )
+            .await
+            .expect("poll file batch");
+        assert!(matches!(batch.status(), VectorStoreFileStatus::Failed));
+
+        let captures = captures.lock().expect("capture lock");
+        assert_eq!(captures.len(), 4);
+        assert!(captures.iter().all(|request| request.method == Method::GET));
+        assert!(
+            captures[..2]
+                .iter()
+                .all(|request| request.path_and_query
+                    == "/v1/vector_stores/vs%2Fa%20b/files/file%2F1")
+        );
+        assert!(captures[2..].iter().all(|request| {
+            request.path_and_query == "/v1/vector_stores/vs%2Fa%20b/file_batches/batch%2F1"
+        }));
+        assert!(
+            captures
+                .iter()
+                .all(|request| request.beta.as_deref() == Some("assistants=v2"))
+        );
+    }
+
+    #[tokio::test]
     async fn list_pages_advances_opaque_cursor_and_stops() {
         let responses = vec![
             json!({
