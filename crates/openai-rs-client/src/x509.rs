@@ -937,14 +937,22 @@ impl From<Error> for X509Error {
 
 impl X509Error {
     fn is_retryable(&self) -> bool {
-        matches!(
+        if matches!(
             self,
             Self::ExchangeTimeout
                 | Self::ExchangeTransport
                 | Self::ExchangeStatus(StatusCode::REQUEST_TIMEOUT)
                 | Self::ExchangeStatus(StatusCode::CONFLICT)
                 | Self::ExchangeStatus(StatusCode::TOO_MANY_REQUESTS)
-        ) || matches!(self, Self::ExchangeStatus(status) if status.is_server_error())
+        ) {
+            return true;
+        }
+        // The >= 500 bound is numeric, not `is_server_error()` (exactly
+        // 500..=599): a representable non-standard 6xx exchange status still
+        // permits the cached-token fallback, matching the raw-code compare
+        // both official SDKs use (D0264: openai-python `_base_client.py:851-853`,
+        // openai-node `client.ts:1606-1607`).
+        matches!(self, Self::ExchangeStatus(status) if status.as_u16() >= 500)
     }
 }
 
@@ -1332,6 +1340,32 @@ mod tests {
             None
         );
         assert_eq!(safe_oauth_code(b"not-json"), None);
+    }
+
+    /// D0264: the exchange-status retry fallback is a raw `>= 500` compare,
+    /// not `is_server_error()` (exactly 500..=599), so a representable
+    /// non-standard 6xx still permits the cached-token fallback while 499 —
+    /// one below the bound — does not.
+    #[test]
+    fn exchange_status_retryability_covers_non_standard_6xx() {
+        let status = |code: u16| {
+            X509Error::ExchangeStatus(StatusCode::from_u16(code).expect("raw exchange status"))
+        };
+        for code in [500_u16, 502, 503, 599, 600, 699] {
+            assert!(status(code).is_retryable(), "{code} must be retryable");
+        }
+        for code in [400_u16, 401, 403, 404, 422, 499] {
+            assert!(
+                !status(code).is_retryable(),
+                "{code} must surface instead of retrying"
+            );
+        }
+        // The status-independent lanes keep their classification.
+        assert!(X509Error::ExchangeTimeout.is_retryable());
+        assert!(X509Error::ExchangeTransport.is_retryable());
+        assert!(status(408).is_retryable());
+        assert!(status(409).is_retryable());
+        assert!(status(429).is_retryable());
     }
 
     #[test]

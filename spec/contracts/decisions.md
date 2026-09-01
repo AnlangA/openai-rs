@@ -4841,3 +4841,102 @@ until a decision is recorded here and its fixtures pass.
 - Impact: ledger only.
 - Overrides: none
 - Tests: existing suites.
+
+## D0270 — Chat completions gain a stream accumulator and remote-error lane coverage
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `ChatCompletionAccumulator` (new `chat_accumulator.rs`), `ChatCompletionEventStream` docs, chat/completions `event: error` tests
+- Sources: round-14 items 14-C-1/14-C-2 (问题14.md) — python ships `ChatCompletionStreamManager`/`ChatCompletionStream` (`lib/streaming/chat/_completions.py:46` `until_done`/`get_final_completion`/snapshot; fold engine `lib/_deltas.py:6` `accumulate_delta` merges tool_calls by chunk index) and node `lib/ChatCompletionStream.ts`; the crate had `ResponseAccumulator` on the Responses channel but nothing on chat (internal asymmetry); the chat and legacy-completions `event: error` remote-error lanes had zero test coverage.
+- Decision: a `ChatCompletionAccumulator` folds chunks into a `ChatCompletion` snapshot — content/refusal concatenation, tool_calls keyed by the required chunk `index` (first id/name wins, arguments concatenated, custom payloads retained via extra fields per the D0269 pin-lag stance), legacy `function_call` fold, python-precedence first/last-seen rules, empty-choices usage capture — with `push`/`snapshot`/`is_done`/`finish` and a `collect_with`-style convenience on the event stream mirroring the Responses API. Loopback tests pin the `event: error` lane (nested + flat bodies) on both channels.
+- Impact: `openai-rs-client` chat streaming (additive fold layer + test hardening).
+- Overrides: none
+- Tests: the accumulator suite in `chat_accumulator.rs` (multi-index tool calls, usage chunk, error mid-stream, end-to-end), the extended `event: error` loopback tests.
+
+## D0271 — Sentinel precedence, EOF-flushed dispatch delivery, and the EOF-flush stance
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `SseEndpointPolicy::classify`, `SseStreamDecoder::finish_with_flushed`, media/Responses finish loops
+- Sources: round-14 items 14-C-3/14-G-1/14-B-1 — `classify` checked remote-error event names before the `[DONE]` sentinel while python (`_streaming.py:64`) and node (`streaming.ts:106`) check the sentinel first; `finish()` dropped already-classified EOF-flushed dispatches when RequireTerminal failed, masking a data-only terminal/error frame flushed at EOF; and the deliberate EOF-flush divergence (we deliver WHATWG-discarded unterminated events; both SDKs drop them) was unrecorded.
+- Decision: the sentinel wins over remote-error event names (combined frame ends cleanly; sentinel stays exact-match, now pinned by a junk-sentinel test locking D0269). `finish_with_flushed()` returns the flushed dispatches beside the UnexpectedEof so media/Responses finish loops yield them before the error (chat/completions/beta lanes keep plain `finish()` — their policies differ; flagged as an opt-in follow-up). The EOF-flush divergence (delivering fully-received events over spec-mandated discard) is recorded as intentional.
+- Impact: `openai-rs-client` SSE dispatch (edge-case ordering + EOF payload delivery).
+- Overrides: amends D0269's context with an explicit junk-sentinel pin
+- Tests: `a_consumed_data_sentinel_wins_over_a_remote_error_event_name`, `a_done_sentinel_with_trailing_junk_is_not_consumed`, `finish_with_flushed_keeps_eof_flushed_dispatches_under_unexpected_eof`, `eof_flushed_data_only_terminal_is_delivered_before_unexpected_eof`.
+
+## D0272 — The ≥500 retry boundary propagates to every same-class predicate
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `ApiError::is_server_error`, `retryable_connect_error` (WS InitialConnect, all three WS faces), `X509Error::is_retryable`, `Error::StreamProtocol` Display
+- Sources: round-14 items 14-D-1/14-D-2 — D0264 made the transport retry numeric but `is_server_error()` (python classes any ≥500 as InternalServerError, `_client.py:855-856`), the WS handshake retry (`408|429 || 500..=599`), and the x509 exchange retry all kept the `http` crate's 500..=599; and `StreamProtocol`'s Display hard-coded "Responses" though media lanes construct it (the D0195 channel-attribution family).
+- Decision: all three predicates use `status.as_u16() >= 500` citing D0264; `StreamProtocol` Display is channel-neutral ("invalid stream protocol: {message}").
+- Impact: `openai-rs-client` retry classification and error text; behavior change only for representable non-standard 6xx (now retried/classified as server errors everywhere).
+- Overrides: extends D0264
+- Tests: `api_error_is_server_error_is_numeric_above_500`, extended `retryable_connect_error_covers_the_rest_retry_statuses`, `exchange_status_retryability_covers_non_standard_6xx`, `stream_protocol_display_is_channel_neutral`.
+
+## D0273 — WebSocket close sends 1000 and the realtime divergence docs are re-anchored
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `ResponsesWebSocket::close`, `RealtimeWebSocket::close` + its struct docs
+- Sources: round-14 items 14-E-1/2/3/4 — client-initiated close sent an empty close frame (peer-equivalent 1005) where python `close(code=1000)` and both node transports default 1000/'OK'; the rustdoc claimed both baselines never retry WS connections, stale against the pinned python's opt-in reconnect lane (`resources/realtime/realtime.py:99-136`, recoverable codes {1001,1005,1006,1011,1012,1013,1015} per `types/websocket_reconnection.py:48-64`, off unless `on_reconnecting`); no typed-derivation stance or owning-task pattern was documented for the `&mut self` send/recv surface.
+- Decision: both close() paths send `CloseFrame { code: CloseCode::Normal, reason: Utf8Bytes::default() }`; the reconnect rustdoc states the accurate three-way posture (node never; python opt-in; we never auto-reconnect); struct docs add the typed-derivation stance (URL/headers from Client config only; python's `extra_headers` deferred) and the owning-task pattern (one task owns the socket, callers select! on bridged channels). A server-observer fixture pins the client-sent 1000 on the wire.
+- Impact: `openai-rs-client` WebSocket close behavior (peer-visible code now 1000) and documentation.
+- Overrides: amends D0199's stale python attribution
+- Tests: `client_initiated_close_sends_the_normal_1000_code`.
+
+## D0274 — Beta WS stream_options, a handshake header escape hatch, and parity accessors; ResponseStreamOptions retains extras
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `BetaResponsesCreateEvent` serializer + WS face, `BetaResponsesWebSocketConfig`, `BetaWebSocketErrorEvent.agent()`, `is_error`, beta accessors/docs, `ResponseStreamOptions`
+- Sources: round-14 items 14-A-1/14-F-1..6 — the WS create serializer stripped `stream_options` and the WS face had no field, though the pin's WS create schema includes it (python `responses.py:5154-5210`/node `responses.ts:11052-11053` forward it); the official multi-agent WS examples attach `OpenAI-Beta: responses_multi_agent=v1` manually and our fixed handshake could not reproduce it (D0210 decided only against automatic sending); `agent` was decoded without an accessor, `is_error` missed `inject.failed`, beta lacked the GA `event()`/`collect_with` conveniences and the D0244 no-retry note; `ResponseStreamOptions` was the only nested create-body options struct without ExtraFields.
+- Decision: the WS serializer keeps stream_options (stream still dropped) and the beta WS face gains a way to set it; `BetaResponsesWebSocketConfig` gains `with_beta_header()` plus validated `extra_static_header()` (refusing the protected set: Authorization/Organization/Project/X-Client-Request-Id), default off preserving D0210; `agent()` accessor added; `is_error` treatment pinned per the pin's per-inject-rejection semantics; GA-mirroring `event()`/`collect_with` conveniences and the D0244 note added; `ResponseStreamOptions` gains flatten ExtraFields + accessor.
+- Impact: `openai-rs-types` beta/responses request surfaces and `openai-rs-client` beta WS config (addive except the serializer no longer dropping stream_options).
+- Overrides: extends D0210 with an explicit opt-in escape hatch
+- Tests: beta WS stream_options serialization, handshake header tests, agent accessor, is_error pin, convenience helpers, stream_options extras round-trip.
+
+## D0275 — The poller honors the server pacing hint; vector stores gain a preset
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `ResponseMeta::poll_after_ms`, `PollOptions` pacing, the three VS poll consumers
+- Sources: round-14 item 14-I-1 — python reads `openai-poll-after-ms` from retrieve responses (`_vector_stores.py:16-22`, 1000ms fallback) and its VS file/batch pollers use it when the caller didn't pin an interval (no deadline); node's `pollWithResponse` does the same (`polling.ts:117-145`, 5000ms fallback, no deadline); our poller slept a fixed interval, never read the header, and the VS consumers had no preset (generic 1s/10min).
+- Decision: `ResponseMeta` retains `openai-poll-after-ms` verbatim with a `poll_after_ms()` accessor (parse-fail → None); `PollOptions` gains a server-paced mode — the hinted interval is preferred when the caller hasn't pinned one (uncapped like both baselines, documented); `PollOptions::for_vector_stores()` wires the three VS consumers (server-paced; our default deadline is kept and the both-baselines-impose-none divergence documented in the preset doc).
+- Impact: `openai-rs-client` polling cadence (server-hinted where offered; identical behavior on servers that don't send the header).
+- Overrides: none
+- Tests: hint-used-when-unpinned/ignored-when-pinned/parse-fail fallback, `poll_after_ms_parses_whole_milliseconds_and_drops_everything_else`, `for_vector_stores_preset_is_server_paced_with_the_python_fallback`.
+
+## D0276 — Pagination faults get a dedicated error; multipart source failures keep their detail; stream-timeout attribution corrected
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `Error::Pagination` + `PaginationFault`, all `next_cursor` call sites, multipart source preflight, request-timeout rustdoc
+- Sources: round-14 items 14-H-1/14-H-2/14-M-1 — pagination fail-closed faults (missing cursor with has_more / repeated cursor) reported `InvalidConfiguration` ("invalid client configuration", no request-id) though they are server-side anomalies (the D0204 category-hygiene family); multipart source preflight folded every io::Error into one message with no detail; the 600s total-budget rustdoc attributed the stance to node, which holds only for non-streaming bodies (python=per-read, node=no body timeout, ours=total).
+- Decision: `Error::Pagination { resource, reason }` with a `PaginationFault` enum covers both fail-closed branches across every caller (request-id plumbing deferred); the multipart source messages case-split (not-found/not-a-regular-file/unreadable) with the io error's Display inlined (a source-carrying variant needs error.rs surgery — follow-up noted); the request-timeout docs state the three-way streaming truth and point at `with_request_timeout`.
+- Impact: `openai-rs-client` error taxonomy (additive variant; callers updated mechanically) and docs.
+- Overrides: extends D0204's category hygiene
+- Tests: updated pagination fault assertions; multipart source case tests.
+
+## D0277 — Codex null results resolve; rmcp cache and progress postures disclosed
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: codex `handle_inbound` null-result normalization; rmcp `list_tools`/executor rustdoc
+- Sources: round-14 items 14-O-1/14-P-1/14-P-2 — the pin's `JSONRPCResponse.result` is typed `true` (any JSON; JSON-RPC 2.0 permits null) so `"result": null` is wire-legal, but typed `from_value::<R>(Null)` failed for every R (flatten forces a map), turning an accepted `turn/interrupt` into ResponseDecode; rmcp's client cache can mask a first-page list_tools failure with a stale entry (`serve_stale_on_error` default-true, SEP-2549 ttlMs servers only) undisclosed; every tools/call advertises a progress token the executor never consumes while the fixed deadline never extends.
+- Decision: null results normalize to `json!({})` at the PendingResult boundary (orphan raw frames untouched); the rmcp docs disclose the cache semantics with the `set_response_cache_config(ClientCacheConfig::disabled())` escape hatch (nameable via D0268) and the progress posture (not consumed, deadline not extended, drive your own ClientHandler via `peer()`).
+- Impact: `openai-rs-codex` receive correctness for pin-legal nulls; rmcp documentation.
+- Overrides: none
+- Tests: `null_result_response_resolves_ok_for_typed_and_raw_faces`.
+
+## D0278 — Round-14 recorded positions
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: EOF-flush delivery; terminal-mechanism strictness; typestate deltas; Responses-lane error-key predicate; SSE control-block/limits/UTF-8/id edges; realtime send-full/binary rejection; poll unknown-status and file-count bases; retry-budget consumption; tts-1 SSE prose; UA; span census; webhook timestamp class naming; codex double-clone; SSE `retry:`/node-prefix notes; rmcp isError null normalization and send await scope.
+- Sources: round-14 informational findings (问题14.md 信息组).
+- Decision: the SSE EOF-flush delivery of fully-received unterminated events stands (recorded in D0271); stopping at the first lifecycle terminal (vs SDKs reading to [DONE]) stands — no official fixture shows post-terminal frames and retrieve_stream recovery exists; the typestate hardening (no stream_options on non-streaming create) stands; the truthy `error`-key predicate stays chat/completions/media-only (D0193 scope — a hypothetical sibling error key on a Responses event rides ExtraFields; both SDKs would raise, but no official wire shape exhibits it; reopening on evidence); SSE limits/id/UTF-8 stances re-verified; realtime send-full retirement and binary rejection stay (D0239/D0212); poll unknown-status keeps polling (documented for FT, to be noted in poll.rs docs), VS file-batch stays status-based (matches node; python's file_counts basis is the outlier); transport-retry delays consuming poll budget stays; tts-1/tts-1-hd SSE prose stays unenforced (neither SDK enforces); the `openai-rs/{version}` UA and the two field-less auth spans join their family stances; >20-digit webhook timestamps keep classifying as InvalidTimestamp (both baselines reject; class-naming divergence only); the codex notification double-clone is a cost note; rmcp `isError: null` → success and the send-await residual stay.
+- Impact: ledger only.
+- Overrides: none
+- Tests: existing suites.

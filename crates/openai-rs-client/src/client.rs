@@ -312,10 +312,13 @@ impl Client {
     /// request budget.
     ///
     /// The default budget is 600s (see [`ClientBuilder::request_timeout`] for
-    /// the D0199 total-budget semantics). This is the escape hatch for
-    /// long-running work — a large upload or a deliberately slow stream can
-    /// derive a wider budget (or a tight caller a narrower one) without
-    /// loosening the budget every other call runs under. The derived client
+    /// the three-way attribution against the official SDKs). This is the
+    /// escape hatch for long-running work — a large upload or a deliberately
+    /// slow stream can derive a wider budget (or a tight caller a narrower
+    /// one) without loosening the budget every other call runs under; without
+    /// it, a stream still healthy at the 600s mark is truncated as
+    /// [`crate::Error::ResponseBody`], which neither openai-python (per-read
+    /// timeout) nor openai-node (no body timeout) would do. The derived client
     /// shares this client's credential, connection pool, TLS backend, retry
     /// policy, and body limits; the original client is unaffected.
     ///
@@ -484,13 +487,24 @@ impl ClientBuilder {
     ///
     /// This budget covers connection, request write, server processing, body
     /// streaming, and any in-budget retries from start to finish — it is a
-    /// *total* budget, matching openai-node. openai-python's 600s
-    /// `DEFAULT_TIMEOUT` is instead applied by httpx per I/O operation, so the
-    /// same number buys less there (D0199 corrects the attribution; the 600s
-    /// default itself matches both SDKs). Long-running operations (large
-    /// uploads, slow streams) should derive a wider budget with
-    /// [`Client::with_request_timeout`] instead of raising this value for every
-    /// call. Must be non-zero; zero values are rejected by
+    /// *total* budget. The three implementations differ on what that 600s
+    /// default buys (14-M-1 corrects the attribution):
+    ///
+    /// - here: one 600s budget for the whole logical request, so a stream or
+    ///   body that is still healthy at the 600s mark is truncated and surfaces
+    ///   as [`crate::Error::ResponseBody`];
+    /// - openai-python: its 600s `DEFAULT_TIMEOUT` is applied by httpx per I/O
+    ///   operation, so a stream that keeps producing data never hits a total
+    ///   ceiling;
+    /// - openai-node: no body timeout at all — only connect and (for
+    ///   non-streaming requests) header deadlines apply.
+    ///
+    /// On streams this crate is therefore the strictest of the three: a
+    /// deliberately slow SSE stream cannot outlive the budget the way it can
+    /// in either official SDK. Long-running operations (large uploads, slow
+    /// streams) should derive a wider budget with
+    /// [`Client::with_request_timeout`] instead of raising this value for
+    /// every call. Must be non-zero; zero values are rejected by
     /// [`ClientBuilder::build`].
     #[must_use]
     pub const fn request_timeout(mut self, timeout: Duration) -> Self {

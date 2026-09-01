@@ -1186,7 +1186,19 @@ fn handle_inbound(inner: &Arc<Inner>, line: &[u8]) -> Result<(), ConnectionFailu
             let has_error = object.contains_key("error");
             let result = match (has_result, has_error) {
                 (true, false) => {
-                    PendingResult::Result(object.get("result").cloned().unwrap_or(Value::Null))
+                    // 14-O-1: the pin types `JSONRPCResponse.result` as `true`
+                    // — any JSON, and JSON-RPC 2.0 permits a null result — so
+                    // an accepted `turn/interrupt` may answer exactly
+                    // `{"id":N,"result":null}`. Every typed response DTO
+                    // flattens its `extra` map out of the result object, so a
+                    // raw `Null` fails `from_value::<R>` for every `R` and
+                    // would report `ResponseDecode` for an exchange the
+                    // server already accepted. Normalize null to an empty
+                    // object once, at this pending-result boundary, so both
+                    // the typed decode and the raw `request_value` face see
+                    // `{}`. Orphan responses keep their verbatim raw frame.
+                    let value = object.get("result").cloned().unwrap_or(Value::Null);
+                    PendingResult::Result(if value.is_null() { json!({}) } else { value })
                 }
                 (false, true) => {
                     let error = serde_json::from_value::<RpcError>(
@@ -2676,6 +2688,52 @@ mod tests {
             .ok_or("missing terminal failure after a double-field frame")?;
         assert_eq!(terminal.kind, ConnectionFailureKind::InvalidMessage);
         assert!(client.is_closed());
+        Ok(())
+    }
+
+    /// 14-O-1 regression: the pin types `JSONRPCResponse.result` as `true`
+    /// (any JSON) and JSON-RPC 2.0 permits a null result, so an accepted
+    /// `turn/interrupt` may answer exactly `{"id":N,"result":null}`. The null
+    /// is normalized to `{}` at the pending-result boundary, so the typed
+    /// `EmptyResponse` decode — and the raw `request_value` face — resolve Ok
+    /// instead of failing with `ResponseDecode` for an exchange the fake
+    /// server already accepted.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn null_result_response_resolves_ok_for_typed_and_raw_faces()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let profile = tempfile::tempdir()?;
+        let script = r#"
+            IFS= read -r init || exit 190
+            printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
+            IFS= read -r initialized || exit 191
+            IFS= read -r interrupt || exit 192
+            case "$interrupt" in *'"method":"turn/interrupt"'*'"threadId":"thr_1"'*'"turnId":"turn_1"'*) ;; *) exit 193 ;; esac
+            printf '%s\n' '{"id":2,"result":null}'
+            IFS= read -r raw || exit 194
+            printf '%s\n' '{"id":3,"result":null}'
+            IFS= read -r until_eof
+        "#;
+        let compatibility = fake_runtime(Path::new("/bin/sh"))?;
+        let mut config = AppServerConfig::new("/bin/sh", profile.path(), compatibility);
+        config.arguments = vec![OsString::from("-c"), OsString::from(script)];
+        let client = AppServerClient::spawn(config, ClientInfo::new("test", "1.0.0")).await?;
+
+        client
+            .turn_interrupt(TurnInterruptParams {
+                thread_id: "thr_1".to_owned(),
+                turn_id: "turn_1".to_owned(),
+            })
+            .await?;
+        // The raw face observes the same normalization: a null result arrives
+        // as an empty object, never as a value no map-flattened DTO could
+        // decode.
+        assert_eq!(
+            client.request_value("test/raw-null", None).await?,
+            json!({})
+        );
+
+        client.close().await?;
         Ok(())
     }
 

@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::Error;
+use crate::{Error, error::PaginationFault};
 
 /// Records an already-requested forward cursor so a later page cannot repeat it.
 pub(crate) fn seed_seen(seen: &mut HashSet<String>, after: Option<&str>) {
@@ -29,12 +29,16 @@ pub(crate) fn reject_before_cursor(has_before: bool, resource: &str) -> Result<(
 /// instead, mirroring openai-python's `data[-1].id` fallback. Only when both
 /// are unavailable does pagination fail closed; empty and repeated cursors
 /// always fail closed.
+///
+/// Fail-closed outcomes report [`Error::Pagination`]: both faults are
+/// server-side anomalies, not client configuration (14-H-1). The faulting
+/// page's `x-request-id` is not carried yet.
 pub(crate) fn next_cursor(
     has_more: bool,
     last_id: Option<&str>,
     last_item_id: Option<&str>,
     seen: &mut HashSet<String>,
-    resource: &str,
+    resource: &'static str,
 ) -> Result<Option<String>, Error> {
     if !has_more {
         return Ok(None);
@@ -42,18 +46,15 @@ pub(crate) fn next_cursor(
     let cursor = last_id
         .filter(|cursor| !cursor.is_empty())
         .or_else(|| last_item_id.filter(|cursor| !cursor.is_empty()))
-        .ok_or_else(|| {
-            Error::InvalidConfiguration(
-                format!(
-                    "{resource} page advertises more results without a last_id or last item id"
-                )
-                .into(),
-            )
+        .ok_or_else(|| Error::Pagination {
+            resource,
+            reason: PaginationFault::MissingCursor,
         })?;
     if !seen.insert(cursor.to_owned()) {
-        return Err(Error::InvalidConfiguration(
-            format!("{resource} pagination returned a repeated cursor").into(),
-        ));
+        return Err(Error::Pagination {
+            resource,
+            reason: PaginationFault::RepeatedCursor,
+        });
     }
     Ok(Some(cursor.to_owned()))
 }
@@ -62,6 +63,7 @@ pub(crate) fn next_cursor(
 mod tests {
     use super::{next_cursor, reject_before_cursor, seed_seen};
     use crate::Error;
+    use crate::error::PaginationFault;
     use std::collections::HashSet;
 
     #[test]
@@ -76,16 +78,46 @@ mod tests {
     fn next_cursor_rejects_missing_empty_and_repeated_ids() {
         let mut seen = HashSet::new();
         let missing = next_cursor(true, None, None, &mut seen, "batch").expect_err("missing");
-        assert!(matches!(missing, Error::InvalidConfiguration(_)));
+        // 14-H-1: both faults are server-side anomalies reported through the
+        // dedicated variant, never as a client-configuration problem.
+        assert!(matches!(
+            &missing,
+            Error::Pagination {
+                resource: "batch",
+                reason: PaginationFault::MissingCursor
+            }
+        ));
+        assert_eq!(
+            missing.to_string(),
+            "automatic batch pagination failed closed: \
+             page advertises more results without a last_id or last item id"
+        );
 
         let empty = next_cursor(true, Some(""), None, &mut seen, "batch").expect_err("empty");
-        assert!(matches!(empty, Error::InvalidConfiguration(_)));
+        assert!(matches!(
+            &empty,
+            Error::Pagination {
+                resource: "batch",
+                reason: PaginationFault::MissingCursor
+            }
+        ));
 
         let first = next_cursor(true, Some("cursor_1"), None, &mut seen, "batch").expect("first");
         assert_eq!(first.as_deref(), Some("cursor_1"));
         let repeated =
             next_cursor(true, Some("cursor_1"), None, &mut seen, "batch").expect_err("repeat");
-        assert!(matches!(repeated, Error::InvalidConfiguration(_)));
+        assert!(matches!(
+            &repeated,
+            Error::Pagination {
+                resource: "batch",
+                reason: PaginationFault::RepeatedCursor
+            }
+        ));
+        assert_eq!(
+            repeated.to_string(),
+            "automatic batch pagination failed closed: \
+             server returned an already-requested cursor"
+        );
     }
 
     #[test]
@@ -106,7 +138,13 @@ mod tests {
         // cursor wins when both are present.
         let mut seen = HashSet::new();
         let error = next_cursor(true, None, Some(""), &mut seen, "batch").expect_err("empty");
-        assert!(matches!(error, Error::InvalidConfiguration(_)));
+        assert!(matches!(
+            &error,
+            Error::Pagination {
+                resource: "batch",
+                reason: PaginationFault::MissingCursor
+            }
+        ));
 
         let mut seen = HashSet::new();
         let next = next_cursor(true, Some("cursor_1"), Some("item_9"), &mut seen, "batch")
@@ -122,6 +160,8 @@ mod tests {
         seed_seen(&mut seen, Some("after_1"));
         assert_eq!(seen.len(), 1);
         reject_before_cursor(false, "vector-store").expect("forward only");
+        // A `before` cursor on an automatic stream *is* caller configuration,
+        // so that rejection keeps the InvalidConfiguration classification.
         let error = reject_before_cursor(true, "vector-store").expect_err("before");
         assert!(matches!(error, Error::InvalidConfiguration(_)));
     }

@@ -683,15 +683,26 @@ impl SseEndpointPolicy {
     }
 
     fn classify(&self, frame: &SseFrame) -> FrameClassification {
-        let event = frame.event.as_deref();
-        if event.is_some_and(|name| contains(&self.remote_error_events, name)) {
-            FrameClassification::RemoteError
-        } else if contains(&self.consumed_data_sentinels, &frame.data) {
+        // The consumed data sentinel is checked first (14-C-3): openai-python
+        // tests the `[DONE]` data before any error event (`_streaming.py:64`,
+        // sentinel ahead of the remote-error branch) and openai-node likewise
+        // guards its data handling (`streaming.ts:106`) before its error
+        // dispatch (`streaming.ts:122`). A combined `event: error` +
+        // `data: [DONE]` frame therefore ends the stream cleanly instead of
+        // raising a remote error. The sentinel itself stays exact-match (D0269:
+        // Rust and node compare the whole data line; python's prefix match is
+        // the outlier), so `[DONE]`-with-trailing-junk is not consumed.
+        if contains(&self.consumed_data_sentinels, &frame.data) {
             FrameClassification::ConsumedTerminal
-        } else if event.is_some_and(|name| contains(&self.terminal_events, name)) {
-            FrameClassification::EmittedTerminal
         } else {
-            FrameClassification::Event
+            let event = frame.event.as_deref();
+            if event.is_some_and(|name| contains(&self.remote_error_events, name)) {
+                FrameClassification::RemoteError
+            } else if event.is_some_and(|name| contains(&self.terminal_events, name)) {
+                FrameClassification::EmittedTerminal
+            } else {
+                FrameClassification::Event
+            }
         }
     }
 
@@ -840,14 +851,33 @@ impl SseStreamDecoder {
     /// Process EOF according to the endpoint policy.
     ///
     /// A required terminal marker missing at EOF is a fail-stop
-    /// [`SseDecodeError::UnexpectedEof`].
+    /// [`SseDecodeError::UnexpectedEof`]; dispatches already classified from
+    /// the EOF flush are dropped in that case. Callers that need them (14-G-1)
+    /// use [`SseStreamDecoder::finish_with_flushed`].
     pub fn finish(&mut self) -> Result<Vec<SseDispatch>, SseDecodeError> {
-        self.ensure_active()?;
+        self.finish_with_flushed()
+            .map_err(|(error, _dispatches)| error)
+    }
+
+    /// Process EOF according to the endpoint policy, keeping the classified
+    /// EOF-flushed dispatches even when EOF itself fails.
+    ///
+    /// When a `RequireTerminal` policy fails at EOF, the frames flushed from a
+    /// final unterminated event block are still classified and returned beside
+    /// the [`SseDecodeError::UnexpectedEof`]. Without them, a data-only
+    /// terminal frame (no `event:` line, so the terminal table cannot match)
+    /// would be classified as a plain [`SseDispatch::Event`] and silently lost
+    /// under the error. A decoder-level flush error never produced frames, so
+    /// its error carries an empty vector.
+    pub fn finish_with_flushed(
+        &mut self,
+    ) -> Result<Vec<SseDispatch>, (SseDecodeError, Vec<SseDispatch>)> {
+        self.ensure_active().map_err(|error| (error, Vec::new()))?;
         let frames = match self.decoder.finish() {
             Ok(frames) => frames,
             Err(error) => {
                 self.state = SseStreamState::Failed;
-                return Err(error);
+                return Err((error, Vec::new()));
             }
         };
         let dispatches = self.classify_frames(frames);
@@ -863,9 +893,12 @@ impl SseStreamDecoder {
             }
             SseEofBehavior::RequireTerminal => {
                 self.state = SseStreamState::Failed;
-                Err(SseDecodeError::UnexpectedEof {
-                    expected: self.policy.expected_terminal(),
-                })
+                Err((
+                    SseDecodeError::UnexpectedEof {
+                        expected: self.policy.expected_terminal(),
+                    },
+                    dispatches,
+                ))
             }
         }
     }
@@ -1394,5 +1427,84 @@ mod tests {
         assert_eq!(dispatches.len(), 1);
         assert!(matches!(dispatches[0], SseDispatch::Terminal(_)));
         assert_eq!(decoder.state(), SseStreamState::Completed);
+    }
+
+    #[test]
+    fn a_consumed_data_sentinel_wins_over_a_remote_error_event_name() {
+        // 14-C-3: the same frame carrying `event: error` and `data: [DONE]`
+        // ends the stream cleanly through the sentinel. Both official SDKs
+        // check the sentinel before any error event (python `_streaming.py:64`
+        // and node `streaming.ts:106`, both ahead of node's error dispatch at
+        // `streaming.ts:122`); the previous remote-error-first order raised
+        // instead.
+        for policy in [
+            SseEndpointPolicy::legacy_done(),
+            SseEndpointPolicy::responses(),
+        ] {
+            let mut decoder = SseStreamDecoder::with_default_limits(policy);
+            let dispatches = ok(decoder.push(b"event: error\ndata: [DONE]\n\ndata: ignored\n\n"));
+            assert!(
+                dispatches.is_empty(),
+                "the sentinel frame is consumed, not dispatched"
+            );
+            assert_eq!(decoder.state(), SseStreamState::Completed);
+        }
+    }
+
+    #[test]
+    fn a_done_sentinel_with_trailing_junk_is_not_consumed() {
+        // D0269: `[DONE]` stays exact-match — Rust and node compare the whole
+        // joined data line, so a sentinel with trailing junk is an ordinary
+        // event (python's prefix match is the recorded outlier). RequireTerminal
+        // must therefore still fail at EOF instead of the junk completing it.
+        let mut decoder = SseStreamDecoder::with_default_limits(SseEndpointPolicy::legacy_done());
+        let dispatches = ok(decoder.push(b"data: [DONE] trailing\n\n"));
+        assert_eq!(dispatches.len(), 1);
+        assert!(matches!(dispatches[0], SseDispatch::Event(_)));
+        assert_eq!(dispatches[0].frame().data.as_ref(), "[DONE] trailing");
+        assert_eq!(decoder.state(), SseStreamState::Active);
+        assert!(matches!(
+            decoder.finish(),
+            Err(SseDecodeError::UnexpectedEof { .. })
+        ));
+    }
+
+    #[test]
+    fn finish_with_flushed_keeps_eof_flushed_dispatches_under_unexpected_eof() {
+        // 14-G-1: a data-only terminal frame (no `event:` line, so the
+        // terminal-event table cannot match it) flushed at EOF used to be
+        // classified as a plain Event and then dropped under the
+        // UnexpectedEof, hiding the terminal payload from the caller.
+        let policy = || {
+            SseEndpointPolicy::new(SseEofBehavior::RequireTerminal)
+                .with_terminal_event("speech.audio.done")
+                .with_consumed_data_sentinel("[DONE]")
+                .with_remote_error_event("error")
+        };
+        let mut decoder = SseStreamDecoder::with_default_limits(policy());
+        assert!(ok(decoder.push(b"data: {\"type\":\"speech.audio.done\"}")).is_empty());
+
+        let (error, flushed) = match decoder.finish_with_flushed() {
+            Ok(dispatches) => panic!("expected UnexpectedEof, got {dispatches:?}"),
+            Err((error, flushed)) => (error, flushed),
+        };
+        assert!(matches!(error, SseDecodeError::UnexpectedEof { .. }));
+        assert_eq!(flushed.len(), 1);
+        assert!(matches!(flushed[0], SseDispatch::Event(_)));
+        assert_eq!(
+            flushed[0].frame().data.as_ref(),
+            "{\"type\":\"speech.audio.done\"}"
+        );
+        assert_eq!(decoder.state(), SseStreamState::Failed);
+
+        // A decoder-level flush error never produced frames, so its error
+        // carries an empty dispatch vector.
+        let mut inactive = SseStreamDecoder::with_default_limits(policy());
+        assert!(inactive.push(b"data: \xff\n\n").is_err());
+        let (error, flushed) = inactive
+            .finish_with_flushed()
+            .expect_err("a failed decoder rejects finish");
+        assert!(matches!(error, SseDecodeError::StreamInactive { .. }));
+        assert!(flushed.is_empty());
     }
 }

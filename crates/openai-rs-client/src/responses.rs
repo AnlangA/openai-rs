@@ -1274,7 +1274,13 @@ mod tests {
             .await
             .expect("repeated cursor surfaces")
             .expect_err("repeated cursor fails closed");
-        assert!(matches!(error, Error::InvalidConfiguration(_)));
+        assert!(matches!(
+            error,
+            Error::Pagination {
+                reason: crate::error::PaginationFault::RepeatedCursor,
+                ..
+            }
+        ));
         assert!(stream.next().await.is_none());
         assert!(captured.recv().await.is_some());
         assert!(captured.recv().await.is_some());
@@ -1307,7 +1313,13 @@ mod tests {
             .await
             .expect("empty cursor surfaces")
             .expect_err("empty last_id fails closed");
-        assert!(matches!(error, Error::InvalidConfiguration(_)));
+        assert!(matches!(
+            error,
+            Error::Pagination {
+                reason: crate::error::PaginationFault::MissingCursor,
+                ..
+            }
+        ));
         assert!(stream.next().await.is_none());
         assert!(captured.recv().await.is_some());
         assert!(

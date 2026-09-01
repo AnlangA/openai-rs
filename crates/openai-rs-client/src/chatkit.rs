@@ -716,10 +716,12 @@ mod tests {
                 .is_ok()
         );
         match pages.next().await.expect("second repeated-cursor page") {
-            Err(Error::InvalidConfiguration(message)) => {
+            Err(Error::Pagination { resource, reason }) => {
+                assert_eq!(resource, "ChatKit item");
+                assert_eq!(reason, crate::error::PaginationFault::RepeatedCursor);
                 assert!(
-                    message.to_string().contains("repeated cursor"),
-                    "unexpected message: {message}"
+                    reason.to_string().contains("already-requested cursor"),
+                    "unexpected fault message: {reason}"
                 );
             }
             other => panic!("expected a repeated-cursor failure, got {other:?}"),

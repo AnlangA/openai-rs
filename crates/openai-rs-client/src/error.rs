@@ -279,7 +279,12 @@ impl ApiError {
 
     #[must_use]
     pub fn is_server_error(&self) -> bool {
-        self.status().is_server_error()
+        // The bound is numeric, not `StatusCode::is_server_error()` (exactly
+        // 500..=599): openai-python classes every status >= 500 as
+        // InternalServerError (`_client.py:855-856`), matching the transport's
+        // retry fallback (D0264), so a representable non-standard 6xx
+        // (`StatusCode::from_u16(600)` is `Ok`) stays a server error here too.
+        self.status().as_u16() >= 500
     }
 }
 
@@ -477,6 +482,24 @@ fn value_string(value: Option<&Value>) -> Option<Box<str>> {
     }
 }
 
+/// Why automatic forward pagination failed closed (14-H-1).
+///
+/// Both faults describe a server-side pagination anomaly, not a client
+/// misconfiguration: the page advertised more results without a usable
+/// cursor, or it repeated a cursor that was already requested.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum PaginationFault {
+    /// `has_more` was true but neither `last_id` nor the final element's id
+    /// yielded a non-empty cursor.
+    #[error("page advertises more results without a last_id or last item id")]
+    MissingCursor,
+    /// The server returned a cursor that was already requested, which would
+    /// re-fetch the same page forever.
+    #[error("server returned an already-requested cursor")]
+    RepeatedCursor,
+}
+
 /// Errors produced by the Platform client.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -525,7 +548,12 @@ pub enum Error {
     #[error(transparent)]
     Stream(Box<StreamError>),
 
-    #[error("invalid Responses stream protocol: {message}")]
+    /// A malformed SSE event on any streaming channel.
+    ///
+    /// Constructed by the Responses and media lanes alike, so the rendered
+    /// message is channel-neutral rather than naming Responses (14-D-1, the
+    /// D0195 stance; only the `message` field carries lane specifics).
+    #[error("invalid stream protocol: {message}")]
     StreamProtocol {
         message: &'static str,
         request_id: Option<Box<str>>,
@@ -566,6 +594,17 @@ pub enum Error {
 
     #[error("invalid client configuration: {0}")]
     InvalidConfiguration(Box<str>),
+
+    /// Automatic forward pagination failed closed on a server-side cursor
+    /// anomaly (14-H-1). `resource` names the collection being paged; the
+    /// fault is not a client configuration problem, so it is not
+    /// [`Error::InvalidConfiguration`]. The `x-request-id` of the page that
+    /// triggered the fault is not carried yet.
+    #[error("automatic {resource} pagination failed closed: {reason}")]
+    Pagination {
+        resource: &'static str,
+        reason: PaginationFault,
+    },
 
     #[error("request payload exceeds the {limit_bytes}-byte limit before transport")]
     RequestPayloadTooLarge { limit_bytes: usize },
@@ -675,6 +714,7 @@ impl Error {
             | Self::StreamProtocol { .. }
             | Self::Accumulator(_)
             | Self::InvalidConfiguration(_)
+            | Self::Pagination { .. }
             | Self::InvalidPathParameter { .. }
             | Self::RequestPayloadTooLarge { .. } => None,
             #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
@@ -703,6 +743,7 @@ impl Error {
             | Self::EncodeQuery(_)
             | Self::Accumulator(_)
             | Self::InvalidConfiguration(_)
+            | Self::Pagination { .. }
             | Self::InvalidPathParameter { .. }
             | Self::RequestPayloadTooLarge { .. } => None,
             #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
@@ -967,6 +1008,43 @@ mod tests {
             assert_eq!(error.kind(), None);
             assert_eq!(error.request_id(), Some("req_bad"));
         }
+    }
+
+    #[test]
+    fn api_error_is_server_error_is_numeric_above_500() {
+        // 14-D-2a (D0264): openai-python classes any status >= 500 as
+        // InternalServerError, so the boundary is numeric rather than
+        // `StatusCode::is_server_error()` (exactly 500..=599) — a
+        // representable non-standard 6xx still counts as a server error.
+        fn server_error_for(status: u16) -> bool {
+            let meta = ResponseMeta::new(
+                StatusCode::from_u16(status).expect("representable status"),
+                None,
+                RateLimitMetadata::default(),
+            );
+            ApiError::from_body(meta, b"{}", false).is_server_error()
+        }
+        assert!(!server_error_for(499));
+        assert!(server_error_for(500));
+        assert!(server_error_for(599));
+        assert!(server_error_for(600));
+    }
+
+    #[test]
+    fn stream_protocol_display_is_channel_neutral() {
+        // 14-D-1: the variant is constructed by the media lanes as well as
+        // Responses, so the rendered prefix must not name one channel
+        // (the D0195 stance).
+        let error = Error::StreamProtocol {
+            message: "the SSE event field and JSON type discriminator differ",
+            request_id: None,
+            body: BodyPreview::from_bytes(b"{}", false),
+        };
+        assert_eq!(
+            error.to_string(),
+            "invalid stream protocol: the SSE event field and JSON type discriminator differ"
+        );
+        assert!(!error.to_string().contains("Responses"));
     }
 
     #[test]

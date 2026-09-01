@@ -1159,8 +1159,11 @@ impl PreparedReplayableSource {
                 verify_path_snapshot(path, snapshot).await?;
                 let file = tokio::fs::File::open(path)
                     .await
-                    .map_err(|_| source_error())?;
-                let opened = file.metadata().await.map_err(|_| source_error())?;
+                    .map_err(|error| source_io_error(&error))?;
+                let opened = file
+                    .metadata()
+                    .await
+                    .map_err(|error| source_io_error(&error))?;
                 if FileSnapshot::from_metadata(&opened)? != *snapshot {
                     return Err(source_changed());
                 }
@@ -1190,9 +1193,11 @@ struct FileSnapshot {
 impl FileSnapshot {
     fn from_metadata(metadata: &std::fs::Metadata) -> Result<Self, Error> {
         if !metadata.is_file() {
-            return Err(source_error());
+            return Err(source_not_a_regular_file());
         }
-        let modified = metadata.modified().map_err(|_| source_error())?;
+        let modified = metadata
+            .modified()
+            .map_err(|error| source_io_error(&error))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
@@ -1218,9 +1223,9 @@ impl FileSnapshot {
 async fn snapshot_path(path: &Path) -> Result<FileSnapshot, Error> {
     let metadata = tokio::fs::symlink_metadata(path)
         .await
-        .map_err(|_| source_error())?;
+        .map_err(|error| source_io_error(&error))?;
     if metadata.file_type().is_symlink() {
-        return Err(source_error());
+        return Err(source_is_a_symlink());
     }
     FileSnapshot::from_metadata(&metadata)
 }
@@ -1289,6 +1294,36 @@ fn apply_part_metadata(
 
 fn source_error() -> Error {
     Error::InvalidConfiguration("multipart source is not a readable regular file".into())
+}
+
+/// A filesystem failure observed while preparing or reopening a multipart
+/// path source (14-H-2).
+///
+/// `Error::InvalidConfiguration` cannot carry a `#[source]` chain, so the
+/// `io::Error` is inlined instead: its `Display` (which includes the OS error
+/// code) plus its `ErrorKind`. The two actionable cases are named separately —
+/// a missing path and anything else unreadable — instead of collapsing every
+/// failure into one message. Carrying the error as a real `#[source]` needs a
+/// new source-bearing variant in `error.rs` (the `Error::ResponseBody`
+/// pattern), which belongs to that file's owner.
+fn source_io_error(error: &std::io::Error) -> Error {
+    let kind = error.kind();
+    let message = if kind == std::io::ErrorKind::NotFound {
+        format!("multipart source path was not found: {error} (kind: {kind:?})")
+    } else {
+        format!("multipart source is not readable: {error} (kind: {kind:?})")
+    };
+    Error::InvalidConfiguration(message.into())
+}
+
+/// The source exists but is not a regular file (directory, fifo, ...).
+fn source_not_a_regular_file() -> Error {
+    Error::InvalidConfiguration("multipart source is not a regular file".into())
+}
+
+/// The source resolves to a symlink; identity snapshots cannot be trusted.
+fn source_is_a_symlink() -> Error {
+    Error::InvalidConfiguration("multipart source is a symlink, not a regular file".into())
 }
 
 fn source_changed() -> Error {
@@ -1778,6 +1813,94 @@ mod tests {
         tokio::fs::remove_file(&path)
             .await
             .expect("remove test source");
+    }
+
+    #[test]
+    fn source_io_error_inlines_the_io_display_and_kind() {
+        // 14-H-2: the two filesystem failure classes are named separately and
+        // the `io::Error` text is inlined; a `#[source]`-carrying variant
+        // needs error.rs' owner.
+        let not_found = source_io_error(&std::io::Error::from(std::io::ErrorKind::NotFound));
+        match not_found {
+            Error::InvalidConfiguration(message) => {
+                assert!(message.contains("was not found"), "unexpected: {message}");
+                assert!(message.contains("NotFound"), "kind inlined: {message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let denied = source_io_error(&std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        match denied {
+            Error::InvalidConfiguration(message) => {
+                assert!(message.contains("not readable"), "unexpected: {message}");
+                assert!(
+                    message.contains("PermissionDenied"),
+                    "kind inlined: {message}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn path_source_preflight_names_the_failure_cases() {
+        // 14-H-2: preflight used to fold every failure into one message; a
+        // missing path and a non-regular file are now distinguished before
+        // any transport work happens.
+        let missing = ReplayableMultipartSource::from_path(
+            std::env::temp_dir().join("openai-rs-definitely-missing-source"),
+        );
+        let error = PreparedReplayableSource::prepare(&missing)
+            .await
+            .map(|_| "unexpectedly prepared")
+            .expect_err("missing path fails preflight");
+        match &error {
+            Error::InvalidConfiguration(message) => {
+                assert!(message.contains("was not found"), "unexpected: {message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let directory = ReplayableMultipartSource::from_path(std::env::temp_dir());
+        let error = PreparedReplayableSource::prepare(&directory)
+            .await
+            .map(|_| "unexpectedly prepared")
+            .expect_err("directory source fails preflight");
+        match &error {
+            Error::InvalidConfiguration(message) => {
+                assert!(
+                    message.contains("not a regular file"),
+                    "unexpected: {message}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        #[cfg(unix)]
+        {
+            let target = std::env::temp_dir()
+                .join(format!("openai-rs-symlink-target-{}", std::process::id()));
+            tokio::fs::write(&target, b"target")
+                .await
+                .expect("write symlink target");
+            let link =
+                std::env::temp_dir().join(format!("openai-rs-symlink-link-{}", std::process::id()));
+            let _ = tokio::fs::remove_file(&link).await;
+            std::os::unix::fs::symlink(&target, &link).expect("create test symlink");
+            let symlinked = ReplayableMultipartSource::from_path(link.clone());
+            let error = PreparedReplayableSource::prepare(&symlinked)
+                .await
+                .map(|_| "unexpectedly prepared")
+                .expect_err("symlink source fails preflight");
+            match &error {
+                Error::InvalidConfiguration(message) => {
+                    assert!(message.contains("symlink"), "unexpected: {message}");
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+            let _ = tokio::fs::remove_file(&link).await;
+            let _ = tokio::fs::remove_file(&target).await;
+        }
     }
 
     #[tokio::test]

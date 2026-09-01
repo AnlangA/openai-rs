@@ -101,12 +101,12 @@ impl ResponseEventStream {
                 }
             }
 
-            let dispatches = match decoder.finish() {
-                Ok(dispatches) => dispatches,
-                Err(source) => {
-                    yield Err(sse_error(source, &stream_meta));
-                    return;
-                }
+            // 14-G-1: EOF-flushed dispatches survive a failing EOF, so a final
+            // unterminated frame is delivered (or fails its own decode) before
+            // the UnexpectedEof surfaces instead of being dropped under it.
+            let (dispatches, eof_error) = match decoder.finish_with_flushed() {
+                Ok(dispatches) => (dispatches, None),
+                Err((source, flushed)) => (flushed, Some(source)),
             };
             for dispatch in dispatches {
                 match dispatch {
@@ -135,6 +135,9 @@ impl ResponseEventStream {
                         return;
                     }
                 }
+            }
+            if let Some(source) = eof_error {
+                yield Err(sse_error(source, &stream_meta));
             }
         };
 

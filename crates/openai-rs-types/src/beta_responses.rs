@@ -3082,6 +3082,21 @@ impl BetaCreateStreamingResponseRequest {
     pub fn into_non_streaming(self) -> BetaCreateResponseRequest {
         self.request
     }
+
+    /// Splits the typestate into its body and the stored `stream_options`
+    /// slot, preserving an explicit `null`.
+    ///
+    /// Used by [`BetaResponsesCreateEvent::from_streaming`] to carry SSE
+    /// payload options onto the WebSocket create event (14-F-1).
+    #[must_use]
+    pub fn into_parts(
+        self,
+    ) -> (
+        BetaCreateResponseRequest,
+        Omittable<Nullable<ResponseStreamOptions>>,
+    ) {
+        (self.request, self.stream_options)
+    }
 }
 
 impl Serialize for BetaCreateStreamingResponseRequest {
@@ -4335,6 +4350,7 @@ literal_tag!(ResponsesCreateEventTag, ResponseCreate, "response.create");
 #[derive(Debug, Clone, PartialEq)]
 pub struct BetaResponsesCreateEvent {
     request: BetaCreateResponseRequest,
+    stream_options: Omittable<Nullable<ResponseStreamOptions>>,
     stream_id: Omittable<String>,
 }
 
@@ -4344,8 +4360,49 @@ impl BetaResponsesCreateEvent {
     pub fn from_request(request: BetaCreateResponseRequest) -> Self {
         Self {
             request,
+            stream_options: Omittable::Omitted,
             stream_id: Omittable::Omitted,
         }
+    }
+
+    /// Converts a beta HTTP streaming create body to a WebSocket create
+    /// event, preserving its `stream_options` (14-F-1).
+    ///
+    /// The pinned `BetaResponsesClientEventResponseCreate` schema embeds
+    /// `BetaCreateResponse`, which carries `stream_options`
+    /// (`BetaResponseStreamOptions`), and openai-python's WebSocket
+    /// `response.create` forwards the parameter
+    /// (`resources/beta/responses/responses.py`, `stream_options=`); only the
+    /// HTTP `stream` flag is documented as implicit over the WebSocket.
+    /// The SSE typestate's stored [`Omittable`] slot — including an explicit
+    /// `null` — is carried over verbatim so the WS lane matches the SSE lane.
+    #[must_use]
+    pub fn from_streaming(request: BetaCreateStreamingResponseRequest) -> Self {
+        let (request, stream_options) = request.into_parts();
+        Self {
+            request,
+            stream_options,
+            stream_id: Omittable::Omitted,
+        }
+    }
+
+    /// Sets SSE payload options on the WebSocket create event.
+    ///
+    /// Mirrors [`BetaCreateStreamingResponseRequest::stream_options`]: the
+    /// pinned WS create schema embeds the same `stream_options` member the
+    /// SSE lane uses, so obfuscation tuning survives the transport switch
+    /// (14-F-1).
+    #[must_use]
+    pub fn stream_options(mut self, options: ResponseStreamOptions) -> Self {
+        self.stream_options = Omittable::Value(Nullable::Value(options));
+        self
+    }
+
+    /// Sends `stream_options: null` on the WebSocket create event.
+    #[must_use]
+    pub fn stream_options_null(mut self) -> Self {
+        self.stream_options = Omittable::Value(Nullable::Null);
+        self
     }
 
     /// Routes the response through one FIFO WebSocket lane.
@@ -4379,14 +4436,19 @@ impl Serialize for BetaResponsesCreateEvent {
         S: Serializer,
     {
         let mut object = serialized_object(&self.request).map_err(serde::ser::Error::custom)?;
+        // The pinned WS create notes only document `stream` as implicit over
+        // the WebSocket ("`stream` is implicit over WebSocket and should not
+        // be sent"), so `stream_options` stays forwardable (14-F-1) while the
+        // HTTP-only flag is dropped defensively.
         object.remove("stream");
-        object.remove("stream_options");
         object.insert(
             "type".to_owned(),
             serde_json::to_value(ResponsesCreateEventTag::ResponseCreate)
                 .map_err(serde::ser::Error::custom)?,
         );
         insert_omittable(&mut object, "stream_id", &self.stream_id)
+            .map_err(serde::ser::Error::custom)?;
+        insert_omittable(&mut object, "stream_options", &self.stream_options)
             .map_err(serde::ser::Error::custom)?;
         Value::Object(object).serialize(serializer)
     }
@@ -4408,8 +4470,14 @@ impl<'de> Deserialize<'de> for BetaResponsesCreateEvent {
             ));
         }
         let stream_id = take_omittable(&mut object, "stream_id").map_err(D::Error::custom)?;
+        let stream_options =
+            take_omittable(&mut object, "stream_options").map_err(D::Error::custom)?;
         let request = serde_json::from_value(Value::Object(object)).map_err(D::Error::custom)?;
-        Ok(Self { request, stream_id })
+        Ok(Self {
+            request,
+            stream_options,
+            stream_id,
+        })
     }
 }
 
@@ -4768,6 +4836,13 @@ impl BetaWebSocketErrorEvent {
         &self.error
     }
 
+    /// Returns the agent that owns this error when the service sent one
+    /// (14-F-4), mirroring [`BetaResponseStreamEvent::agent`].
+    #[must_use]
+    pub fn agent(&self) -> Option<&BetaAgent> {
+        non_null(&self.agent)
+    }
+
     /// Returns the HTTP status when the service sent one.
     #[must_use]
     pub fn status(&self) -> Option<u16> {
@@ -4843,12 +4918,42 @@ impl BetaResponsesServerEvent {
     /// inside [`Self::Response`] and the lane-scoped [`Self::WebSocketError`]
     /// envelope; it does not change how the client delivers the event (see
     /// the enum-level documentation).
+    ///
+    /// [`Self::InjectFailed`] is deliberately excluded (14-F-5): the pinned
+    /// `BetaResponseInjectFailedEvent` is a per-inject rejection — "Emitted
+    /// when injected input could not be committed to a response. The event
+    /// returns the uncommitted raw input so the client can retry it in
+    /// another response when appropriate" — with scoped codes
+    /// (`response_already_completed`, `response_not_found`), not a
+    /// stream-level failure. Branching on `inject.failed` should match the
+    /// variant directly; openai-python and openai-node expose no `is_error`
+    /// equivalent on their event classes to align with instead.
     #[must_use]
     pub const fn is_error(&self) -> bool {
         match self {
             Self::WebSocketError(_) => true,
             Self::Response(event) => event.is_error(),
             Self::InjectCreated(_) | Self::InjectFailed(_) => false,
+        }
+    }
+
+    /// Borrows the SSE-shaped response lifecycle event when this is one
+    /// (14-F-6), mirroring the GA `ResponsesServerEvent::event`.
+    #[must_use]
+    pub const fn event(&self) -> Option<&BetaResponseStreamEvent> {
+        match self {
+            Self::Response(event) => Some(event),
+            Self::InjectCreated(_) | Self::InjectFailed(_) | Self::WebSocketError(_) => None,
+        }
+    }
+
+    /// Consumes the SSE-shaped response lifecycle event when this is one
+    /// (14-F-6), mirroring the GA `ResponsesServerEvent::into_event`.
+    #[must_use]
+    pub fn into_event(self) -> Option<BetaResponseStreamEvent> {
+        match self {
+            Self::Response(event) => Some(*event),
+            Self::InjectCreated(_) | Self::InjectFailed(_) | Self::WebSocketError(_) => None,
         }
     }
 }
@@ -5924,6 +6029,104 @@ mod tests {
     }
 
     #[test]
+    fn server_event_is_error_excludes_per_inject_rejections() {
+        // 14-F-5: inject.failed carries an `error` payload, but the pinned
+        // `BetaResponseInjectFailedEvent` scopes it to one rejected inject
+        // ("returns the uncommitted raw input so the client can retry it in
+        // another response when appropriate") with per-inject codes
+        // (`response_already_completed`, `response_not_found`), so it is not a
+        // stream-level failure and is_error() deliberately reports false.
+        // Consumers branch on the variant itself to retry the inject.
+        let failed: BetaResponsesServerEvent = serde_json::from_value(json!({
+            "type": "response.inject.failed",
+            "response_id": "resp_1",
+            "input": [],
+            "error": {
+                "code": "response_already_completed",
+                "message": "response already completed"
+            },
+            "sequence_number": 5
+        }))
+        .expect("decode inject failed");
+        assert!(matches!(failed, BetaResponsesServerEvent::InjectFailed(_)));
+        assert!(!failed.is_error());
+    }
+
+    #[test]
+    fn server_event_event_accessors_cover_the_response_variant() {
+        // 14-F-6: the GA `ResponsesServerEvent::event`/`into_event` pair has
+        // no beta counterpart, leaving multiplexed consumers matching every
+        // variant to reach the SSE-shaped payload.
+        let lifecycle: BetaResponsesServerEvent = serde_json::from_value(json!({
+            "type": "response.created",
+            "sequence_number": 1,
+            "agent": {"agent_name": "root/subagent"},
+            "response": response_fixture(json!([]))
+        }))
+        .expect("decode lifecycle event");
+        let event = lifecycle.event().expect("lifecycle event accessor");
+        assert_eq!(
+            event.agent().map(BetaAgent::agent_name),
+            Some("root/subagent")
+        );
+        let owned = lifecycle.into_event().expect("into_event accessor");
+        assert_eq!(owned.sequence_number(), Some(1));
+
+        let inject: BetaResponsesServerEvent = serde_json::from_value(json!({
+            "type": "response.inject.created",
+            "response_id": "resp_beta_1",
+            "sequence_number": 2
+        }))
+        .expect("decode inject created");
+        assert!(inject.event().is_none());
+        assert!(inject.into_event().is_none());
+
+        let websocket_error: BetaResponsesServerEvent = serde_json::from_value(json!({
+            "type": "error",
+            "error": {"code": null, "message": "invalid event", "param": null, "type": "invalid_request_error"}
+        }))
+        .expect("decode WebSocket error envelope");
+        assert!(websocket_error.event().is_none());
+        assert!(websocket_error.into_event().is_none());
+    }
+
+    #[test]
+    fn websocket_error_event_exposes_the_owning_agent() {
+        // 14-F-4: the envelope decodes `agent` but had no accessor, unlike
+        // `BetaResponseStreamEvent::agent`.
+        let fixture = json!({
+            "type": "error",
+            "error": {
+                "code": "bad_event",
+                "message": "invalid event",
+                "param": null,
+                "type": "invalid_request_error"
+            },
+            "agent": {"agent_name": "root/research"},
+            "status": 400
+        });
+        let event: BetaWebSocketErrorEvent =
+            serde_json::from_value(fixture.clone()).expect("decode routed WebSocket error");
+        assert_eq!(
+            event.agent().map(BetaAgent::agent_name),
+            Some("root/research")
+        );
+        let agentless: BetaWebSocketErrorEvent = serde_json::from_value(json!({
+            "type": "error",
+            "error": {
+                "code": null,
+                "message": "invalid event",
+                "param": null,
+                "type": "invalid_request_error"
+            },
+            "agent": null
+        }))
+        .expect("decode null agent");
+        assert!(agentless.agent().is_none());
+        assert_eq!(serde_json::to_value(&event).expect("round trip"), fixture);
+    }
+
+    #[test]
     fn beta_agent_items_split_param_and_resource_shapes() {
         // Param side (BetaAgentMessageItemParam &c.): id/agent stay optional
         // and nullable, and are omitted by default.
@@ -6990,6 +7193,79 @@ mod tests {
                 CreateResponseConstraintError::StreamId { .. }
             ))
         ));
+    }
+
+    #[test]
+    fn websocket_create_event_forwards_stream_options_and_drops_stream() {
+        // 14-F-1: the pinned `BetaResponsesClientEventResponseCreate` embeds
+        // `BetaCreateResponse`, whose `stream_options` member
+        // openai-python also forwards on the socket, so the WS serializer
+        // must keep it while still dropping the HTTP-only `stream` flag
+        // ("`stream` is implicit over WebSocket and should not be sent").
+        let event = BetaResponsesCreateEvent::from_request(BetaCreateResponseRequest::new(
+            "gpt-test", "hello",
+        ))
+        .stream_options(ResponseStreamOptions::default().include_obfuscation(false));
+        let value = serde_json::to_value(&event).expect("serialize WS create");
+        assert_eq!(value["type"], "response.create");
+        assert_eq!(value["stream_options"]["include_obfuscation"], false);
+        assert!(
+            value.get("stream").is_none(),
+            "the HTTP-only stream flag must stay dropped"
+        );
+        let decoded: BetaResponsesCreateEvent =
+            serde_json::from_value(value).expect("decode WS create");
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode keeps stream_options")["stream_options"]
+                ["include_obfuscation"],
+            false
+        );
+
+        // The streaming typestate conversion carries the stored slot —
+        // including an explicit null — over verbatim.
+        let streaming = BetaCreateStreamingResponseRequest::new("gpt-test", "hello")
+            .stream_options(ResponseStreamOptions::default().include_obfuscation(false));
+        let converted = BetaResponsesCreateEvent::from_streaming(streaming);
+        assert_eq!(
+            serde_json::to_value(&converted).expect("serialize converted")["stream_options"]["include_obfuscation"],
+            false
+        );
+        let null_converted = BetaResponsesCreateEvent::from_streaming(
+            BetaCreateStreamingResponseRequest::new("gpt-test", "hello").stream_options_null(),
+        );
+        assert_eq!(
+            serde_json::to_value(&null_converted).expect("serialize null slot")["stream_options"],
+            Value::Null
+        );
+
+        // A plain request still omits the key entirely, and decode keeps
+        // rejecting an HTTP `stream` flag.
+        let plain = serde_json::to_value(BetaResponsesCreateEvent::from_request(
+            BetaCreateResponseRequest::new("gpt-test", "hello"),
+        ))
+        .expect("serialize plain create");
+        assert!(plain.get("stream_options").is_none());
+        assert!(
+            serde_json::from_value::<BetaResponsesCreateEvent>(json!({
+                "type": "response.create",
+                "model": "gpt-test",
+                "stream": true
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn sse_streaming_request_encode_is_unchanged_by_ws_stream_options() {
+        // 14-F-1 regression guard: the SSE lane still writes `stream: true`
+        // next to its `stream_options` and the WS-only lane key never leaks
+        // into it.
+        let request = BetaCreateStreamingResponseRequest::new("gpt-test", "hello")
+            .stream_options(ResponseStreamOptions::default().include_obfuscation(false));
+        let value = serde_json::to_value(&request).expect("serialize SSE request");
+        assert_eq!(value["stream"], true);
+        assert_eq!(value["stream_options"]["include_obfuscation"], false);
+        assert!(value.get("stream_id").is_none());
     }
 
     #[test]

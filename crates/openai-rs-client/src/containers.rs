@@ -873,7 +873,13 @@ mod tests {
             .await
             .expect("stream fails closed")
             .expect_err("no resolvable cursor");
-        assert!(matches!(error, Error::InvalidConfiguration(_)));
+        assert!(matches!(
+            error,
+            Error::Pagination {
+                reason: crate::error::PaginationFault::MissingCursor,
+                ..
+            }
+        ));
         drop(pages);
         let captures = captures.lock().expect("capture lock");
         assert_eq!(captures.len(), 1);

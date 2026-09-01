@@ -509,12 +509,14 @@ where
                     return;
                 }
             }
-            let dispatches = match decoder.finish() {
-                Ok(dispatches) => dispatches,
-                Err(source) => {
-                    yield Err(media_sse_error(source, &stream_meta));
-                    return;
-                }
+            // 14-G-1: EOF-flushed dispatches survive a failing EOF. A data-only
+            // terminal frame (no `event:` line, so the policy's terminal table
+            // cannot match it) flushes at EOF as a plain event; yield it before
+            // the UnexpectedEof instead of losing the terminal payload under
+            // the error.
+            let (dispatches, eof_error) = match decoder.finish_with_flushed() {
+                Ok(dispatches) => (dispatches, None),
+                Err((source, flushed)) => (flushed, Some(source)),
             };
             for dispatch in dispatches {
                 match dispatch {
@@ -535,6 +537,9 @@ where
                         return;
                     }
                 }
+            }
+            if let Some(source) = eof_error {
+                yield Err(media_sse_error(source, &stream_meta));
             }
         };
         Ok(Self {
@@ -1843,6 +1848,123 @@ mod tests {
             other => panic!("expected unexpected EOF, got {other:?}"),
         }
         assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn eof_flushed_data_only_terminal_is_delivered_before_unexpected_eof() {
+        // 14-G-1: the terminal frame carries no `event:` line and no trailing
+        // blank line, so it only surfaces through the EOF flush. The policy's
+        // terminal table matches event names, so it classifies as a plain
+        // event and used to be dropped under the UnexpectedEof; the typed
+        // payload must now be delivered first and the EOF error follow it.
+        let body = Bytes::from_static(
+            concat!(
+                "event: speech.audio.delta\n",
+                "data: {\"type\":\"speech.audio.delta\",\"audio\":\"UklGRg==\"}\n\n",
+                "data: {\"type\":\"speech.audio.done\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}",
+            )
+            .as_bytes(),
+        );
+        let (client, _captured) = serve_once(SSE_MIME, body).await;
+        let mut stream = speech_stream(&client).await;
+        assert!(matches!(
+            stream.next().await.expect("delta").expect("typed delta"),
+            SpeechStreamEvent::AudioDelta(_)
+        ));
+        assert!(matches!(
+            stream
+                .next()
+                .await
+                .expect("EOF-flushed done")
+                .expect("typed flushed done"),
+            SpeechStreamEvent::AudioDone(_)
+        ));
+        let error = stream
+            .next()
+            .await
+            .expect("EOF error item")
+            .expect_err("terminal requirement still fails after the flushed payload");
+        match error {
+            Error::Sse {
+                source: SseDecodeError::UnexpectedEof { .. },
+                request_id,
+            } => assert_eq!(request_id.as_deref(), Some("req_media")),
+            other => panic!("expected unexpected EOF, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn dropping_a_typed_stream_closes_the_server_connection() {
+        // 14-M-2: nothing pinned that dropping the typed stream tears down the
+        // authenticated connection. The server writes one event and then holds
+        // the response body open forever; `serve_connection` resolves only
+        // once hyper observes the peer going away, so its completion — bounded
+        // by a timeout — is the closure signal.
+        let prefix = Bytes::from_static(
+            concat!(
+                "event: speech.audio.delta\n",
+                "data: {\"type\":\"speech.audio.delta\",\"audio\":\"UklGRg==\"}\n\n",
+            )
+            .as_bytes(),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind drop-observation server");
+        let address = listener
+            .local_addr()
+            .expect("drop-observation server address");
+        let (closed, saw_close) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept drop-observation request");
+            let service = service_fn(move |_: Request<Incoming>| {
+                let prefix = prefix.clone();
+                async move {
+                    let body = http_body_util::StreamBody::new(
+                        futures_util::stream::iter(vec![Ok::<_, std::io::Error>(
+                            hyper::body::Frame::data(prefix),
+                        )])
+                        .chain(futures_util::stream::pending()),
+                    );
+                    Ok::<_, Infallible>(
+                        hyper::Response::builder()
+                            .status(StatusCode::OK)
+                            .header(header::CONTENT_TYPE, SSE_MIME)
+                            .header("x-request-id", "req_media")
+                            .body(body)
+                            .expect("drop-observation response"),
+                    )
+                }
+            });
+            // Whether the aborted body surfaces as a serve error or a clean
+            // shutdown is irrelevant; either way this future resolves only
+            // after the client-side connection goes away.
+            let _ = http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+            let _ = closed.send(());
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("drop-observation base URL");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test API key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .retry_policy(RetryPolicy::disabled())
+            .build()
+            .expect("drop-observation client");
+        let mut stream = speech_stream(&client).await;
+        assert!(matches!(
+            stream.next().await.expect("delta").expect("typed delta"),
+            SpeechStreamEvent::AudioDelta(_)
+        ));
+        drop(stream);
+        tokio::time::timeout(std::time::Duration::from_secs(10), saw_close)
+            .await
+            .expect("server observed the dropped stream closing the connection")
+            .expect("server task signaled");
     }
 
     #[tokio::test]

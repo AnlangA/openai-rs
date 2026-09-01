@@ -10,17 +10,17 @@ use std::{
 
 use futures_core::Stream;
 use futures_util::{SinkExt, StreamExt};
-use http::{Method, StatusCode, header};
+use http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use openai_rs_types::{
     ResponseId,
     beta_responses::{
         BetaCompactResponseRequest, BetaCompactedResponse, BetaCountInputTokensRequest,
         BetaCreateResponseRequest, BetaCreateStreamingResponseRequest, BetaInputTokenCountResponse,
         BetaListInputItemsParams, BetaResponse, BetaResponseInjectEvent, BetaResponseItemList,
-        BetaResponseStreamEvent, BetaResponsesClientEvent, BetaResponsesServerEvent,
-        BetaRetrieveResponseParams, BetaRetrieveResponseStreamParams,
+        BetaResponseStreamEvent, BetaResponsesClientEvent, BetaResponsesCreateEvent,
+        BetaResponsesServerEvent, BetaRetrieveResponseParams, BetaRetrieveResponseStreamParams,
     },
-    responses::DeletedResponse,
+    responses::{DeletedResponse, ResponseAccumulator},
 };
 use serde::Serialize;
 use tokio::net::TcpStream;
@@ -144,6 +144,11 @@ impl BetaResponses {
     ///
     /// The SSE lane carries the static beta header alongside the `beta=true`
     /// query (see [`execute_beta_json`]).
+    ///
+    /// Once the SSE handshake succeeds, transport errors (including
+    /// mid-stream timeouts) are terminal: the stream yields the error and
+    /// ends, and no automatic retry happens. Re-issue the request to
+    /// recover (D0244).
     pub async fn create_stream(
         &self,
         request: BetaCreateStreamingResponseRequest,
@@ -186,6 +191,11 @@ impl BetaResponses {
     ///
     /// The SSE lane carries the static beta header alongside the `beta=true`
     /// query (see [`execute_beta_json`]).
+    ///
+    /// Once the SSE handshake succeeds, transport errors (including
+    /// mid-stream timeouts) are terminal: the stream yields the error and
+    /// ends, and no automatic retry happens. Re-issue the request to
+    /// recover (D0244).
     pub async fn retrieve_stream(
         &self,
         response_id: &ResponseId,
@@ -545,6 +555,25 @@ impl BetaResponseEventStream {
             body: BodyPreview::from_bytes(&[], false),
         })
     }
+
+    /// Continues reduction with a caller-supplied accumulator (14-F-6),
+    /// mirroring the GA `ResponseEventStream::collect_with`, which is useful
+    /// after explicitly validated stream resumption.
+    ///
+    /// The accumulator consumes the stable core codec
+    /// ([`BetaResponseStreamEvent::core`]), so the reduced value is the GA
+    /// [`Response`](openai_rs_types::responses::Response); the beta-only
+    /// overlays (agent routing, lane ids, and the beta response snapshot
+    /// behind [`Self::collect_final`]) are not folded into it.
+    pub async fn collect_with(
+        mut self,
+        mut accumulator: ResponseAccumulator,
+    ) -> Result<openai_rs_types::responses::Response, Error> {
+        while let Some(event) = self.next().await {
+            accumulator.push(event?.core().clone())?;
+        }
+        accumulator.finish().map_err(Error::from)
+    }
 }
 
 impl Stream for BetaResponseEventStream {
@@ -593,8 +622,21 @@ pub enum BetaWebSocketReconnectPolicy {
     },
 }
 
+/// Header names the beta WebSocket handshake always sets from authenticated
+/// client state, so caller-supplied static headers may not override them
+/// (14-F-2).
+const PROTECTED_HANDSHAKE_HEADERS: [&str; 4] = [
+    "authorization",
+    "openai-organization",
+    "openai-project",
+    "x-client-request-id",
+];
+
 /// Bounded resource configuration for a beta Responses WebSocket.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// [`Clone`]-but-not-`Copy` since 14-F-2: an opt-in static-header slot is
+/// owned data, unlike the numeric limits around it.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BetaResponsesWebSocketConfig {
     max_message_bytes: usize,
     max_frame_bytes: usize,
@@ -602,6 +644,7 @@ pub struct BetaResponsesWebSocketConfig {
     max_queued_write_bytes: usize,
     connect_timeout: Duration,
     reconnect: BetaWebSocketReconnectPolicy,
+    extra_static_headers: Vec<(HeaderName, HeaderValue)>,
 }
 
 impl BetaResponsesWebSocketConfig {
@@ -614,6 +657,7 @@ impl BetaResponsesWebSocketConfig {
             max_queued_write_bytes: DEFAULT_MAX_QUEUED_WRITE_BYTES,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             reconnect: BetaWebSocketReconnectPolicy::Never,
+            extra_static_headers: Vec::new(),
         }
     }
 
@@ -653,6 +697,56 @@ impl BetaResponsesWebSocketConfig {
         self
     }
 
+    /// Sends `OpenAI-Beta: responses_multi_agent=v1` on the handshake
+    /// (14-F-2), the preview-gate escape hatch the official examples attach
+    /// manually because their WebSocket clients expose no typed slot for it
+    /// (openai-python `examples/responses/multi_agent_websocket.py`,
+    /// openai-node `examples/responses/multi-agent-websocket.ts`).
+    ///
+    /// Opt-in and off by default: the pinned beta WebSocket face is reachable
+    /// without the header (D0210), so the default handshake stays
+    /// header-free.
+    #[must_use]
+    pub fn with_beta_header(self) -> Self {
+        self.extra_static_header(BETA_HEADER, BETA_VALUE)
+            .expect("the pinned beta header name and value are valid")
+    }
+
+    /// Adds one static header to the WebSocket handshake (14-F-2), refusing
+    /// the headers the handshake already sets from authenticated client
+    /// state: `Authorization`, `OpenAI-Organization`, `OpenAI-Project`, and
+    /// `X-Client-Request-Id`.
+    ///
+    /// The header is sent on every (re)connect attempt of this config, so it
+    /// must be static per connection; per-request state belongs on the event
+    /// stream instead.
+    pub fn extra_static_header(
+        mut self,
+        name: &'static str,
+        value: &'static str,
+    ) -> Result<Self, Error> {
+        let name = HeaderName::try_from(name).map_err(|error| {
+            invalid_configuration(format!(
+                "beta WebSocket static header name {name:?} is invalid: {error}"
+            ))
+        })?;
+        let value = HeaderValue::try_from(value).map_err(|error| {
+            invalid_configuration(format!(
+                "beta WebSocket static header value for {name:?} is invalid: {error}"
+            ))
+        })?;
+        if PROTECTED_HANDSHAKE_HEADERS
+            .iter()
+            .any(|protected| name.as_str() == *protected)
+        {
+            return Err(invalid_configuration(format!(
+                "beta WebSocket static header {name:?} is managed by the client and cannot be overridden"
+            )));
+        }
+        self.extra_static_headers.push((name, value));
+        Ok(self)
+    }
+
     fn validate(self) -> Result<Self, Error> {
         if self.max_message_bytes == 0 || self.max_frame_bytes == 0 {
             return Err(invalid_configuration(
@@ -685,7 +779,7 @@ impl BetaResponsesWebSocketConfig {
         Ok(self)
     }
 
-    fn tungstenite(self) -> TungsteniteConfig {
+    fn tungstenite(&self) -> TungsteniteConfig {
         TungsteniteConfig::default()
             .write_buffer_size(self.write_buffer_bytes)
             .max_write_buffer_size(self.max_queued_write_bytes)
@@ -726,13 +820,20 @@ impl BetaResponsesWebSocket {
         loop {
             let authorization = transport.authorization().await?;
             let generation = authorization.generation;
-            let request = websocket_request(
+            let mut request = websocket_request(
                 &url,
                 authorization.header,
                 transport.organization(),
                 transport.project(),
                 transport.client_request_id(),
             )?;
+            // 14-F-2: opt-in static headers ride the shared handshake builder's
+            // request without touching it; the protected set was already
+            // refused by `extra_static_header`, so the client-managed headers
+            // above cannot be overridden here.
+            for (name, value) in &config.extra_static_headers {
+                request.headers_mut().insert(name.clone(), value.clone());
+            }
             let connect = connect_socket(request, config.tungstenite(), connector.clone());
             match tokio::time::timeout(config.connect_timeout, connect).await {
                 Ok(Ok((socket, response))) => {
@@ -823,6 +924,24 @@ impl BetaResponsesWebSocket {
         self.send_event(BetaResponsesClientEvent::create_on_stream(
             stream_id, request,
         ))
+        .await
+    }
+
+    /// Sends a beta `response.create` event built from a streaming request,
+    /// preserving its `stream_options` (14-F-1).
+    ///
+    /// The pinned WebSocket create schema embeds the same `stream_options`
+    /// member the SSE lane uses and openai-python forwards it on the socket,
+    /// so an SSE-shaped request can move to the WebSocket face without
+    /// losing its obfuscation tuning; only the HTTP `stream` flag is dropped
+    /// (it is implicit over the WebSocket).
+    pub async fn send_create_streaming(
+        &mut self,
+        request: BetaCreateStreamingResponseRequest,
+    ) -> Result<(), Error> {
+        self.send_event(BetaResponsesClientEvent::Create(Box::new(
+            BetaResponsesCreateEvent::from_streaming(request),
+        )))
         .await
     }
 
@@ -943,6 +1062,25 @@ impl BetaResponsesWebSocket {
                 }
             }
         }
+    }
+
+    /// Receives one event and also feeds a caller-owned single-lane
+    /// accumulator (14-F-6), mirroring the GA `ResponsesWebSocket::recv_into`.
+    ///
+    /// Multiplexed callers should use [`Self::recv`], route by
+    /// [`BetaResponsesServerEvent::stream_id`], then push the stable core of
+    /// the matching lane's event into its accumulator.
+    pub async fn recv_into(
+        &mut self,
+        accumulator: &mut ResponseAccumulator,
+    ) -> Result<Option<BetaResponsesServerEvent>, Error> {
+        let event = self.recv().await?;
+        if let Some(event) = &event
+            && let Some(stream_event) = event.event()
+        {
+            accumulator.push(stream_event.core().clone())?;
+        }
+        Ok(event)
     }
 
     /// Initiates the WebSocket close handshake.
@@ -1200,6 +1338,7 @@ mod tests {
         BetaResponseIncludable, BetaResponseInputItem, BetaResponseItemOrder,
     };
     use openai_rs_types::kernel::UnknownTaggedObject;
+    use openai_rs_types::responses::ResponseStreamOptions;
     use serde_json::{Value, json};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -1725,6 +1864,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn beta_create_stream_sends_stream_options_on_the_sse_lane() {
+        // 14-F-1: the SSE lane keeps writing `stream: true` next to its
+        // `stream_options` and stays untouched by the WebSocket fix.
+        let body = format!(
+            "event: response.completed\ndata: {}\n\n",
+            json!({
+                "type": "response.completed",
+                "sequence_number": 1,
+                "response": serde_json::from_str::<Value>(&response_json("completed"))
+                    .expect("completed response JSON")
+            })
+        );
+        let (base_url, captured) = serve_once(StatusCode::OK, "text/event-stream", body).await;
+        let mut stream = client(base_url)
+            .beta_responses()
+            .create_stream(
+                BetaCreateStreamingResponseRequest::new("gpt-test", "hello")
+                    .stream_options(ResponseStreamOptions::default().include_obfuscation(false)),
+            )
+            .await
+            .expect("open beta SSE stream");
+        assert!(stream.next().await.expect("terminal event").is_ok());
+        assert!(stream.next().await.is_none());
+
+        let request = captured.await.expect("captured SSE create");
+        let body: Value = serde_json::from_slice(&request.body).expect("stream JSON");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_obfuscation"], false);
+    }
+
+    #[tokio::test]
+    async fn beta_stream_collect_with_reduces_through_the_stable_core() {
+        // 14-F-6: the GA `collect_with` parity. The caller-owned accumulator
+        // consumes the stable core codec, so the reduction yields the GA
+        // `Response` even though the stream surfaces beta events.
+        let upper = concat!(
+            "event: response.output_item.added\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_beta\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]},\"sequence_number\":1}\n\n",
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_beta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello \",\"sequence_number\":2,\"logprobs\":[]}\n\n",
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_beta\",\"output_index\":0,\"content_index\":0,\"delta\":\"beta\",\"sequence_number\":3,\"logprobs\":[]}\n\n",
+        );
+        let (base_url, _captured) =
+            serve_once(StatusCode::OK, "text/event-stream", upper.to_owned()).await;
+        let mut accumulator = ResponseAccumulator::new();
+        let mut upper_stream = client(base_url)
+            .beta_responses()
+            .create_stream(BetaCreateStreamingResponseRequest::new("gpt-test", "hello"))
+            .await
+            .expect("upper-half handshake");
+        let mut interrupted = false;
+        while let Some(item) = upper_stream.next().await {
+            match item {
+                Ok(event) => {
+                    accumulator
+                        .push(event.core().clone())
+                        .expect("accept upper-half event");
+                }
+                Err(error) => {
+                    assert!(
+                        matches!(error, Error::Sse { .. }),
+                        "interruption must be an SSE error, got {error:?}"
+                    );
+                    interrupted = true;
+                }
+            }
+        }
+        assert!(interrupted, "the upper half must end interrupted");
+        assert_eq!(accumulator.last_sequence_number(), Some(3));
+
+        let lower = concat!(
+            "event: response.output_text.done\n",
+            "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_beta\",\"output_index\":0,\"content_index\":0,\"text\":\"Hello beta\",\"sequence_number\":4,\"logprobs\":[]}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"sequence_number\":5,\"response\":{\"id\":\"resp_beta_resume\",\"created_at\":1,\"error\":null,\"incomplete_details\":null,\"instructions\":null,\"metadata\":null,\"model\":\"gpt-test\",\"object\":\"response\",\"output\":[{\"type\":\"message\",\"id\":\"msg_beta\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello beta\",\"annotations\":[],\"logprobs\":[]}]}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[],\"top_p\":1.0,\"status\":\"completed\"}}\n\n",
+        );
+        let (base_url, _captured) =
+            serve_once(StatusCode::OK, "text/event-stream", lower.to_owned()).await;
+        let response = client(base_url)
+            .beta_responses()
+            .retrieve_stream(
+                &ResponseId::new("resp_beta_resume"),
+                BetaRetrieveResponseStreamParams::new().starting_after(3),
+            )
+            .await
+            .expect("resume handshake")
+            .collect_with(accumulator)
+            .await
+            .expect("resumed terminal response");
+        assert_eq!(response.id(), "resp_beta_resume");
+        assert_eq!(response.output_text(), "Hello beta");
+    }
+
+    #[tokio::test]
     async fn beta_create_stream_rejects_non_sse_content_type() {
         // 8-05(b): the beta SSE handshake fails closed on a JSON body, the
         // same guard the GA lane pins.
@@ -1779,7 +2013,13 @@ mod tests {
             .await
             .expect("repeated cursor surfaces")
             .expect_err("repeated cursor fails closed");
-        assert!(matches!(error, Error::InvalidConfiguration(_)));
+        assert!(matches!(
+            error,
+            Error::Pagination {
+                reason: crate::error::PaginationFault::RepeatedCursor,
+                ..
+            }
+        ));
         assert!(stream.next().await.is_none());
         assert!(captured.recv().await.is_some());
         assert!(captured.recv().await.is_some());
@@ -1811,7 +2051,13 @@ mod tests {
             .await
             .expect("empty cursor surfaces")
             .expect_err("empty last_id fails closed");
-        assert!(matches!(error, Error::InvalidConfiguration(_)));
+        assert!(matches!(
+            error,
+            Error::Pagination {
+                reason: crate::error::PaginationFault::MissingCursor,
+                ..
+            }
+        ));
         assert!(stream.next().await.is_none());
         assert!(captured.recv().await.is_some());
         assert!(
@@ -2066,6 +2312,198 @@ mod tests {
             sent.get("stream").is_none(),
             "the create event must drop the REST-only stream key"
         );
+
+        socket.close().await.expect("close beta WebSocket");
+    }
+
+    /// 14-F-1: the WS create face forwards `stream_options` from a streaming
+    /// request (openai-python's socket `response.create` does the same) while
+    /// still dropping the REST-only `stream` key.
+    #[tokio::test]
+    async fn beta_websocket_create_streaming_preserves_stream_options() {
+        let (client, handshake, sent_event) = websocket_server().await;
+        let mut socket = client
+            .beta_responses()
+            .connect()
+            .await
+            .expect("connect beta WebSocket");
+        socket
+            .send_create_streaming(
+                BetaCreateStreamingResponseRequest::new("gpt-test", "hello")
+                    .stream_options(ResponseStreamOptions::default().include_obfuscation(false)),
+            )
+            .await
+            .expect("send streaming response.create");
+        let event = socket
+            .recv()
+            .await
+            .expect("receive lane event")
+            .expect("one server event");
+        assert_eq!(event.stream_id(), Some("lane_1"));
+
+        let handshake = handshake.await.expect("captured beta handshake");
+        // D0210 default: the handshake stays header-free without the opt-in.
+        assert_eq!(handshake.beta_header, None);
+        let sent = sent_event.await.expect("captured create event");
+        assert_eq!(sent["type"], "response.create");
+        assert_eq!(sent["model"], "gpt-test");
+        assert_eq!(sent["input"], "hello");
+        assert_eq!(sent["stream_options"]["include_obfuscation"], false);
+        assert!(
+            sent.get("stream").is_none(),
+            "the create event must drop the REST-only stream key"
+        );
+
+        socket.close().await.expect("close beta WebSocket");
+    }
+
+    /// 14-F-2: the multi-agent preview gate the official examples attach by
+    /// hand (openai-python `examples/responses/multi_agent_websocket.py`,
+    /// openai-node `examples/responses/multi-agent-websocket.ts`) is available
+    /// as an opt-in static handshake header; the default handshake carries
+    /// neither it nor any other extra header (D0210).
+    #[tokio::test]
+    async fn beta_websocket_handshake_carries_opt_in_beta_header() {
+        let (client, handshake, sent_event) = websocket_server().await;
+        let mut socket = client
+            .beta_responses()
+            .connect_with(BetaResponsesWebSocketConfig::new().with_beta_header())
+            .await
+            .expect("connect beta WebSocket with the preview gate header");
+        socket
+            .send_create(BetaCreateResponseRequest::new("gpt-test", "hello"))
+            .await
+            .expect("send response.create");
+        let _ = socket
+            .recv()
+            .await
+            .expect("receive lane event")
+            .expect("one server event");
+
+        let handshake = handshake.await.expect("captured beta handshake");
+        assert_eq!(handshake.path_and_query, "/v1/responses");
+        assert_eq!(handshake.beta_header.as_deref(), Some(BETA_VALUE));
+        assert_eq!(
+            handshake.authorization.as_deref(),
+            Some("Bearer test-placeholder-key"),
+            "the client-managed Authorization header stays intact"
+        );
+        let sent = sent_event.await.expect("captured create event");
+        assert_eq!(sent["type"], "response.create");
+
+        socket.close().await.expect("close beta WebSocket");
+    }
+
+    #[test]
+    fn beta_websocket_config_refuses_protected_static_headers() {
+        // 14-F-2: only headers the handshake does not already manage may be
+        // attached; the authenticated set is refused in every casing.
+        for name in [
+            "Authorization",
+            "authorization",
+            "OpenAI-Organization",
+            "OpenAI-Project",
+            "X-Client-Request-Id",
+        ] {
+            match BetaResponsesWebSocketConfig::new().extra_static_header(name, "value") {
+                Err(Error::InvalidConfiguration(reason)) => {
+                    assert!(
+                        reason.contains("cannot be overridden"),
+                        "unexpected refusal reason for {name}: {reason}"
+                    );
+                }
+                unexpected => panic!("expected {name} to be refused, got {unexpected:?}"),
+            }
+        }
+        let customized = BetaResponsesWebSocketConfig::new()
+            .extra_static_header("X-Custom-Gateway", "eu-west")
+            .expect("an unmanaged header is accepted");
+        assert_ne!(
+            customized,
+            BetaResponsesWebSocketConfig::new(),
+            "the accepted static header must change the config"
+        );
+        assert!(
+            BetaResponsesWebSocketConfig::new()
+                .extra_static_header("Bad Header Name", "value")
+                .is_err()
+        );
+        assert_eq!(
+            BetaResponsesWebSocketConfig::new().with_beta_header(),
+            BetaResponsesWebSocketConfig::new()
+                .extra_static_header(BETA_HEADER, BETA_VALUE)
+                .expect("the pinned beta header is valid"),
+            "with_beta_header is the validated generic path"
+        );
+    }
+
+    /// 14-F-6: the beta socket gains the GA `recv_into` convenience — one
+    /// receive that also feeds a caller-owned single-lane accumulator through
+    /// the stable core codec.
+    #[tokio::test]
+    async fn beta_websocket_recv_into_feeds_the_lane_accumulator() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta recv_into server");
+        let address = listener
+            .local_addr()
+            .expect("beta recv_into server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept beta recv_into socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("beta recv_into handshake");
+            let _ = socket.next().await.expect("one client event");
+            socket
+                .send(Message::text(
+                    json!({
+                        "type": "response.output_text.delta",
+                        "stream_id": "lane_1",
+                        "item_id": "msg_1",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "delta": "hello",
+                        "sequence_number": 1,
+                        "logprobs": []
+                    })
+                    .to_string(),
+                ))
+                .await
+                .expect("send beta delta event");
+            let _ = socket.next().await;
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("beta recv_into client base");
+        let client = client(base_url);
+        let mut socket = client
+            .beta_responses()
+            .connect()
+            .await
+            .expect("connect beta WebSocket");
+        socket
+            .send_create(BetaCreateResponseRequest::new("gpt-test", "hello"))
+            .await
+            .expect("send response.create");
+        let mut accumulator = ResponseAccumulator::new();
+        let event = socket
+            .recv_into(&mut accumulator)
+            .await
+            .expect("receive into accumulator")
+            .expect("one server event");
+        assert_eq!(event.stream_id(), Some("lane_1"));
+        assert!(
+            event.event().is_some(),
+            "the delta routes through the Response variant"
+        );
+        assert_eq!(accumulator.output_text(), "hello");
 
         socket.close().await.expect("close beta WebSocket");
     }

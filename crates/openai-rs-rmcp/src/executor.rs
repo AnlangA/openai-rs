@@ -98,6 +98,23 @@ pub trait ResponsesToolExecutor: Send + Sync {
 /// no cancellation notification is sent at all: discovery only freezes a
 /// catalog, so the local result is simply dropped and the outstanding
 /// `tools/list` request is left to complete on its own.
+///
+/// # Progress notifications (14-P-2)
+///
+/// rmcp attaches a progress token to every request this executor sends —
+/// `Peer::send_cancellable_request` sets `_meta.progressToken`
+/// unconditionally, so each `tools/call` advertises one — but the executor
+/// consumes no `notifications/progress`: nothing is forwarded to the
+/// application, and the fixed [`ExecutionControl`] deadline raced inside
+/// [`RmcpExecutor::call_tool`] is never extended by server-sent progress.
+/// rmcp's opt-in idle-timeout reset
+/// (`PeerRequestOptions::reset_timeout_on_progress`, rmcp 3.1.4
+/// `src/service.rs`) is deliberately unused: deadline authority stays wholly
+/// with the caller's [`ExecutionControl`], which cannot be widened
+/// mid-dispatch by the peer. Applications that need progress — to observe
+/// it, or to let it extend the budget — should drive their own rmcp
+/// [`rmcp::ClientHandler`] through [`RmcpExecutor::peer`] instead of the
+/// bridge dispatch.
 #[cfg(feature = "client")]
 #[derive(Debug, Clone)]
 pub struct RmcpExecutor {
@@ -200,6 +217,37 @@ impl ResponsesToolExecutor for RmcpExecutor {
     /// executors. When the bound fires mid-traversal the already-fetched
     /// pages are dropped and no cancellation notification is sent (see the
     /// struct docs).
+    ///
+    /// # Response-cache freshness (14-P-1)
+    ///
+    /// The rmcp client keeps a per-peer response cache (SEP-2549), and this
+    /// delegation inherits both of its observable effects:
+    ///
+    /// - The **first page may be served from cache**: `list_all_tools` starts
+    ///   with rmcp's `Peer::<RoleClient>::list_tools`, which answers a fresh
+    ///   cached entry without crossing the transport.
+    /// - **A failure MAY resolve `Ok` with a stale catalog.** When that
+    ///   first-page fetch fails, rmcp falls back to the expired entry via
+    ///   `stale_cached_response` instead of surfacing the error, because
+    ///   `ClientCacheConfig::serve_stale_on_error` defaults to `true`
+    ///   (rmcp 3.1.4 `src/service/client.rs`, `Peer::<RoleClient>::list_tools`).
+    ///   Entries only exist for servers that send a positive `ttlMs` on their
+    ///   list results — the default TTL is zero and zero-TTL responses are
+    ///   never stored (rmcp `src/service/client/cache.rs`) — so
+    ///   backwards-compatible servers that omit `ttlMs` always hit the wire
+    ///   and keep their failures visible. Later pages (cursor requests) get
+    ///   no stale fallback: rmcp invalidates the tool cache and returns the
+    ///   error.
+    ///
+    /// Callers needing strict freshness can disable the cache through the
+    /// peer before discovery:
+    /// `executor.peer().set_response_cache_config(ClientCacheConfig::disabled())`
+    /// — `ServerSink` is rmcp's client `Peer`, the method and config are
+    /// verified against the locked rmcp 3.1.4 source
+    /// (`src/service/client/cache.rs`), and `ClientCacheConfig` is nameable
+    /// through this crate's `rmcp` re-export
+    /// (`openai_rs::rmcp::rmcp::ClientCacheConfig`), so no direct `rmcp`
+    /// dependency is required.
     async fn list_tools(&self, control: &ExecutionControl) -> Result<Vec<Tool>, BridgeError> {
         preflight_control(control)?;
         tokio::select! {

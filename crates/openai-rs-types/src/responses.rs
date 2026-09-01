@@ -5832,6 +5832,8 @@ impl PromptReference {
 pub struct ResponseStreamOptions {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     include_obfuscation: Omittable<bool>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl ResponseStreamOptions {
@@ -5840,6 +5842,12 @@ impl ResponseStreamOptions {
     pub fn include_obfuscation(mut self, include: bool) -> Self {
         self.include_obfuscation = Omittable::Value(include);
         self
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -17558,6 +17566,29 @@ mod tests {
             serde_json::to_value(decoded_null).expect("re-encode")["stream_options"],
             Value::Null
         );
+    }
+
+    #[test]
+    fn stream_options_retains_unknown_members_across_round_trip() {
+        // 14-A-1: the pin leaves `ResponseStreamOptions` open (same shape as
+        // `PromptCacheOptionsParam`), so an unknown member must survive
+        // decode -> encode instead of being dropped.
+        let request = serde_json::from_value::<CreateStreamingResponseRequest>(json!({
+            "model": "gpt-test",
+            "stream": true,
+            "stream_options": {
+                "include_obfuscation": false,
+                "future_option": "keep-me"
+            }
+        }))
+        .expect("decode stream_options with unknown member");
+        let encoded = serde_json::to_value(&request).expect("re-encode request");
+        assert_eq!(encoded["stream_options"]["include_obfuscation"], false);
+        assert_eq!(encoded["stream_options"]["future_option"], "keep-me");
+
+        let round_tripped = serde_json::from_value::<CreateStreamingResponseRequest>(encoded)
+            .expect("decode re-encoded request");
+        assert_eq!(round_tripped, request);
     }
 
     #[test]

@@ -345,6 +345,11 @@ impl Transport {
         let mut auth_refreshed = false;
 
         loop {
+            // The deadline event fires only here, at loop entry; a stream or
+            // body truncated mid-read by the same budget surfaces as
+            // `Error::ResponseBody` without this event (14-M-1 follow-up: the
+            // read lanes are owned elsewhere and trace.rs is not in scope for
+            // this round).
             let remaining = self
                 .overall_timeout
                 .checked_sub(started.elapsed())

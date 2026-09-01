@@ -66,6 +66,7 @@ pub struct ResponseMeta {
     request_id: Option<Box<str>>,
     rate_limits: RateLimitMetadata,
     retry_after: Option<Box<str>>,
+    poll_after: Option<Box<str>>,
     x_should_retry: Option<bool>,
 }
 
@@ -81,6 +82,10 @@ impl ResponseMeta {
         // stale `Retry-After`); interpreting it into a delay stays owned by
         // the transport's retry loop, which has its own bounds and fallbacks.
         let retry_after = header("retry-after-ms").or_else(|| header("retry-after"));
+        // The server's polling pacing hint is preserved verbatim the same way:
+        // interpreting it into a delay stays owned by the polling loop
+        // (`poll.rs`), which decides whether the hint applies at all.
+        let poll_after = header("openai-poll-after-ms");
         // Only the literal `true`/`false` spellings are kept, so any other
         // value leaves callers on status-code based classification.
         let x_should_retry = headers
@@ -103,6 +108,7 @@ impl ResponseMeta {
                 reset_tokens: header("x-ratelimit-reset-tokens"),
             },
             retry_after,
+            poll_after,
             x_should_retry,
         }
     }
@@ -118,6 +124,7 @@ impl ResponseMeta {
             request_id,
             rate_limits,
             retry_after: None,
+            poll_after: None,
             x_should_retry: None,
         }
     }
@@ -141,6 +148,25 @@ impl ResponseMeta {
     #[must_use]
     pub fn retry_after(&self) -> Option<&str> {
         self.retry_after.as_deref()
+    }
+
+    /// The server's polling pacing hint, as milliseconds.
+    ///
+    /// Reads the `openai-poll-after-ms` response header retained verbatim by
+    /// [`ResponseMeta`]. Both official SDKs expose the same hint — openai-python
+    /// parses it in its Vector Stores poll helpers with a 1000 ms fallback
+    /// (`src/openai/lib/_vector_stores.py:16-22`) and openai-node reads it in
+    /// its shared poller with a 5000 ms fallback (`src/lib/polling.ts:117-145`)
+    /// — and neither applies a deadline to the sleeps it paces. Here the parsed
+    /// milliseconds are returned only when the header parses as a whole-number
+    /// `u64` (openai-python's strict `int()` semantics); any other value
+    /// (missing, empty, fractional, suffixed, negative) yields `None` so
+    /// callers fall back to their own interval.
+    #[must_use]
+    pub fn poll_after_ms(&self) -> Option<u64> {
+        self.poll_after
+            .as_deref()
+            .and_then(|value| value.parse().ok())
     }
 
     /// The literal `x-should-retry` header, when it was exactly `true` or
@@ -265,5 +291,26 @@ mod tests {
             None
         );
         assert_eq!(rate_limited_meta(&[]).should_retry(), None);
+    }
+
+    #[test]
+    fn poll_after_ms_parses_whole_milliseconds_and_drops_everything_else() {
+        // openai-python reads the header with `int()` and a 1000 ms fallback
+        // (`src/openai/lib/_vector_stores.py:16-22`); anything that does not
+        // parse as a whole number keeps callers on their own interval.
+        assert_eq!(
+            rate_limited_meta(&[("openai-poll-after-ms", "1000")]).poll_after_ms(),
+            Some(1000)
+        );
+        for absent_or_unparseable in [
+            rate_limited_meta(&[]),
+            rate_limited_meta(&[("openai-poll-after-ms", "")]),
+            rate_limited_meta(&[("openai-poll-after-ms", "1.5")]),
+            rate_limited_meta(&[("openai-poll-after-ms", "1000ms")]),
+            rate_limited_meta(&[("openai-poll-after-ms", "-250")]),
+            rate_limited_meta(&[("openai-poll-after-ms", "soon")]),
+        ] {
+            assert_eq!(absent_or_unparseable.poll_after_ms(), None);
+        }
     }
 }

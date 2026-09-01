@@ -7,10 +7,10 @@ use std::{
 use futures_core::Stream;
 use futures_util::StreamExt;
 use http::header;
-use openai_rs_types::chat::ChatCompletionChunk;
+use openai_rs_types::chat::{ChatCompletion, ChatCompletionChunk};
 
 use crate::{
-    BodyPreview, Error, ResponseMeta, StreamError,
+    BodyPreview, ChatCompletionAccumulator, Error, ResponseMeta, StreamError,
     sse::{SseDispatch, SseEndpointPolicy, SseLimits, SseStreamDecoder, SseStreamState},
     transport::deserialize_json,
 };
@@ -18,6 +18,45 @@ use crate::{
 type ChunkStream = Pin<Box<dyn Stream<Item = Result<ChatCompletionChunk, Error>> + Send + 'static>>;
 
 /// A bounded stream of typed Chat Completions chunks.
+///
+/// # Accumulating a completion
+///
+/// Both official SDKs fold a chunk stream into a `ChatCompletion` next to the
+/// raw deltas (openai-python `ChatCompletionStreamState`,
+/// `lib/streaming/chat/_completions.py:292`; openai-node
+/// `ChatCompletionStream.ts:1817`). The Rust mirror is
+/// [`ChatCompletionAccumulator`]: push every chunk until the stream drains
+/// (the required `[DONE]` sentinel is consumed by the transport), then take
+/// the final snapshot — or use [`collect_final`](Self::collect_final), which
+/// performs the same fold in one call.
+///
+/// ```no_run
+/// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+/// use futures_util::StreamExt;
+/// use openai_rs_client::{ApiKey, ChatCompletionAccumulator, Client};
+/// use openai_rs_types::chat::{ChatCompletionRequest, ChatUserMessage};
+///
+/// let client = Client::builder(ApiKey::new("sk-demo")?).build()?;
+/// let request = ChatCompletionRequest::new(
+///     "gpt-4o",
+///     ChatUserMessage::text("Tell me a joke."),
+/// )
+/// .into_streaming();
+/// let mut stream = client.chat_completions().create_stream(request).await?;
+///
+/// let mut accumulator = ChatCompletionAccumulator::new();
+/// while let Some(chunk) = stream.next().await {
+///     accumulator.push(&chunk?);
+///     // The in-progress completion, mirroring openai-python's
+///     // `current_completion_snapshot`.
+///     let _snapshot = accumulator.snapshot();
+/// }
+/// // The loop only ends cleanly after the `[DONE]` sentinel.
+/// accumulator.mark_done();
+/// let _completion = accumulator.finish()?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct ChatCompletionEventStream {
     meta: ResponseMeta,
     inner: ChunkStream,
@@ -134,6 +173,34 @@ impl ChatCompletionEventStream {
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.meta.request_id()
+    }
+
+    /// Reduces all chunks into the accumulated [`ChatCompletion`].
+    ///
+    /// Mirrors [`ResponseEventStream::collect_final`](crate::ResponseEventStream::collect_final)
+    /// and openai-python's `get_final_completion`. Fails on the first stream
+    /// error (transport, decode, or in-band remote error), and fails if the
+    /// stream ends without any `finish_reason` or the `[DONE]` sentinel.
+    pub async fn collect_final(self) -> Result<ChatCompletion, Error> {
+        self.collect_with(ChatCompletionAccumulator::new()).await
+    }
+
+    /// Continues reduction with a caller-supplied accumulator, which is useful
+    /// after explicitly validated stream resumption.
+    ///
+    /// Mirrors [`ResponseEventStream::collect_with`](crate::ResponseEventStream::collect_with):
+    /// every decoded chunk is pushed into `accumulator`, a clean end of stream
+    /// (the transport-consumed `[DONE]` sentinel) marks the fold done, and the
+    /// first error item aborts the reduction.
+    pub async fn collect_with(
+        mut self,
+        mut accumulator: ChatCompletionAccumulator,
+    ) -> Result<ChatCompletion, Error> {
+        while let Some(chunk) = self.next().await {
+            accumulator.push(&chunk?);
+        }
+        accumulator.mark_done();
+        accumulator.finish()
     }
 }
 
@@ -377,5 +444,133 @@ mod tests {
             other => panic!("expected a decode error, got {other:?}"),
         }
         assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn event_error_lane_yields_one_stream_error_and_ends_cleanly() {
+        // 14-C-2: the `event: error` remote-error lane
+        // (`SseEndpointPolicy::legacy_done().with_remote_error_event("error")`,
+        // mirroring openai-node's `sse.event === 'error'` dispatch) yields
+        // exactly one stream error and terminates; later frames are never
+        // delivered.
+        let body = format!(
+            "event: error\n\ndata: {{\"error\":{{\"message\":\"bad Bearer private\",\"code\":\"stream_failed\"}}}}\n\ndata: {CHUNK}\n\ndata: [DONE]\n\n"
+        );
+        let mut stream = stream_over(&body);
+        let error = stream
+            .next()
+            .await
+            .expect("remote error item")
+            .expect_err("event error lane");
+        match error {
+            Error::Stream(error) => {
+                assert_eq!(error.request_id(), Some("req_chat_stream"));
+                assert_eq!(error.code(), Some("stream_failed"));
+                assert!(!error.message().contains("private"));
+            }
+            other => panic!("expected stream error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn flat_error_body_without_event_line_fails_once() {
+        // 14-C-2: a flat `{"message":...}` body carries no `error` key and no
+        // `event:` line, so it is not a remote-error frame (D0193's truthiness
+        // predicate passes) and the typed chunk decode fails instead; the
+        // fail-stop posture still yields exactly one error item.
+        let body = concat!(
+            "data: {\"message\":\"bad Bearer private\",\"type\":\"server_error\",\"code\":\"flat\"}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut stream = stream_over(body);
+        let error = stream
+            .next()
+            .await
+            .expect("error item")
+            .expect_err("flat body is not a chunk");
+        match error {
+            Error::Decode {
+                meta_status,
+                request_id,
+                ..
+            } => {
+                assert_eq!(meta_status, StatusCode::OK);
+                assert_eq!(request_id.as_deref(), Some("req_chat_stream"));
+            }
+            other => panic!("expected a decode error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn collect_final_folds_chunks_into_a_completion() {
+        // The accumulate recipe end to end: content plus an interleaved
+        // tool call, a finish_reason chunk, the usage-only final chunk, and
+        // the transport-consumed [DONE] sentinel.
+        let tool_start = r#"{"id":"chatcmpl_1","choices":[{"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":"}}]},"finish_reason":null,"index":0}],"created":1,"model":"test-model","object":"chat.completion.chunk"}"#;
+        let tool_arguments = r#"{"id":"chatcmpl_1","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"Oslo\"}"}}]},"finish_reason":null,"index":0}],"created":1,"model":"test-model","object":"chat.completion.chunk"}"#;
+        let finish = r#"{"id":"chatcmpl_1","choices":[{"delta":{},"finish_reason":"tool_calls","index":0}],"created":1,"model":"test-model","object":"chat.completion.chunk"}"#;
+        let usage = r#"{"id":"chatcmpl_1","choices":[],"created":1,"model":"test-model","object":"chat.completion.chunk","usage":{"prompt_tokens":4,"completion_tokens":6,"total_tokens":10}}"#;
+        let body = format!(
+            "data: {CHUNK}\n\ndata: {tool_start}\n\ndata: {tool_arguments}\n\ndata: {finish}\n\ndata: {usage}\n\ndata: [DONE]\n\n"
+        );
+        let completion = stream_over(&body)
+            .collect_final()
+            .await
+            .expect("folded completion");
+        assert_eq!(completion.id, "chatcmpl_1");
+        assert_eq!(completion.model.as_str(), "test-model");
+        assert_eq!(completion.created, 1);
+        assert_eq!(completion.choices[0].finish_reason.as_str(), "tool_calls");
+        assert_eq!(
+            completion.choices[0].message.content,
+            Nullable::Value(String::from("hello"))
+        );
+        let calls = match &completion.choices[0].message.tool_calls {
+            Omittable::Value(Nullable::Value(calls)) => calls,
+            other => panic!("tool calls must fold, got {other:?}"),
+        };
+        match &calls[0] {
+            openai_rs_types::chat::ChatToolCall::Function(call) => {
+                assert_eq!(call.id, "call_1");
+                assert_eq!(call.function.name, "get_weather");
+                assert_eq!(call.function.arguments.as_str(), r#"{"city":"Oslo"}"#);
+            }
+            other => panic!("expected a function tool call, got {other:?}"),
+        }
+        match &completion.usage {
+            Omittable::Value(usage) => {
+                assert_eq!(
+                    (
+                        usage.prompt_tokens,
+                        usage.completion_tokens,
+                        usage.total_tokens
+                    ),
+                    (4, 6, 10)
+                );
+            }
+            _ => panic!("the usage-only final chunk must be captured"),
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_with_fails_on_a_mid_stream_error() {
+        // 14-C-1's error lane: an in-band remote error aborts the fold instead
+        // of producing a partial completion.
+        let body = format!(
+            "data: {CHUNK}\n\ndata: {{\"error\":{{\"message\":\"bad Bearer private\",\"code\":\"stream_failed\"}}}}\n\ndata: [DONE]\n\n"
+        );
+        let error = stream_over(&body)
+            .collect_final()
+            .await
+            .expect_err("mid-stream remote error aborts the fold");
+        match error {
+            Error::Stream(error) => {
+                assert_eq!(error.code(), Some("stream_failed"));
+                assert!(!error.message().contains("private"));
+            }
+            other => panic!("expected stream error, got {other:?}"),
+        }
     }
 }

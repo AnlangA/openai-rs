@@ -69,6 +69,27 @@
 //! client handed to `with_client` still comes from the caller's own stack:
 //! rmcp does not re-export it, and the client crate's `reqwest` re-export
 //! (D0231) rides the other, 0.12 stack.
+//!
+//! # RMCP peer behaviors inherited by `RmcpExecutor` (14-P-1 / 14-P-2)
+//!
+//! Two rmcp 3.1.4 client-peer behaviors surface through
+//! [`RmcpExecutor`] and are documented in full on the
+//! executor:
+//!
+//! - **Response cache.** The rmcp client caches list responses per peer
+//!   (SEP-2549). A `tools/list` first page may be served from a fresh cache
+//!   entry, and a first-page *failure* MAY resolve `Ok` with a stale cached
+//!   catalog, because `serve_stale_on_error` defaults to `true` — but only
+//!   for servers that send a positive `ttlMs`. Strict-freshness callers can
+//!   disable the cache via
+//!   `executor.peer().set_response_cache_config(rmcp::ClientCacheConfig::disabled())`
+//!   (see [`RmcpExecutor::list_tools`] docs for the verified paths).
+//! - **Progress.** Every `tools/call` advertises a progress token, yet the
+//!   executor consumes no progress notifications and the fixed
+//!   [`ExecutionControl`] deadline is never extended
+//!   by progress; rmcp's `reset_timeout_on_progress` is unused. Applications
+//!   needing progress should drive their own `rmcp::ClientHandler` through
+//!   [`RmcpExecutor::peer`](crate::RmcpExecutor::peer).
 
 mod arguments;
 mod bridge;

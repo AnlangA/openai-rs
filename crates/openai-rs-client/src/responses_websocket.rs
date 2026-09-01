@@ -13,7 +13,10 @@ use openai_rs_types::responses::{
 };
 use tokio::net::TcpStream;
 #[cfg(feature = "realtime")]
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{
+    Message, Utf8Bytes,
+    protocol::frame::{CloseFrame, coding::CloseCode},
+};
 use tokio_tungstenite::{
     Connector, MaybeTlsStream, WebSocketStream,
     tungstenite::{
@@ -51,10 +54,12 @@ pub(crate) type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// [`WebSocketReconnectPolicy::InitialConnect`] retries only handshake-time
 /// failures: transport errors (I/O, TLS), handshake timeouts, and non-101
 /// rejections whose HTTP status is retryable on the REST face too — 408, 429,
-/// and every 5xx (7-08). Any other rejection — a 401 (after the single
-/// credential refresh) or a 4xx such as 404 — surfaces from the attempt that
-/// produced it, and the REST-only `x-should-retry` override and 409 stay REST
-/// contract details: a WebSocket handshake replays no conflicting mutation.
+/// and every status >= 500 (7-08; the numeric bound, which also covers a
+/// representable non-standard 6xx, is D0264). Any other rejection — a 401
+/// (after the single credential refresh) or a 4xx such as 404 — surfaces from
+/// the attempt that produced it, and the REST-only `x-should-retry` override
+/// and 409 stay REST contract details: a WebSocket handshake replays no
+/// conflicting mutation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 #[cfg(feature = "realtime")]
@@ -444,10 +449,20 @@ impl ResponsesWebSocket {
         Ok(event)
     }
 
-    /// Initiates the WebSocket close handshake.
+    /// Initiates the WebSocket close handshake with the RFC 6455 normal
+    /// closure code 1000 and an empty reason — the same explicit-code posture
+    /// as the Realtime socket (14-E-2): openai-python's `close()` defaults to
+    /// `code=1000` and openai-node's to `1000`/`"OK"`, while an unframed empty
+    /// close body is observed by the peer as the abnormal 1005.
     pub async fn close(&mut self) -> Result<(), Error> {
         if !self.closed {
-            self.socket.close(None).await.map_err(map_websocket_error)?;
+            self.socket
+                .close(Some(CloseFrame {
+                    code: CloseCode::Normal,
+                    reason: Utf8Bytes::default(),
+                }))
+                .await
+                .map_err(map_websocket_error)?;
             self.closed = true;
         }
         Ok(())
@@ -619,15 +634,20 @@ pub(crate) fn websocket_connector(
 
 /// Handshake failures a `WebSocketReconnectPolicy::InitialConnect` policy may
 /// replay: transport errors (I/O, TLS) plus non-101 rejections whose HTTP
-/// status is retryable on the REST face (408, 429, 5xx — 7-08). Everything
-/// else — 4xx rejections such as 401/404, protocol violations, capacity
-/// errors — surfaces from the attempt that produced it.
+/// status is retryable on the REST face (408, 429, every status >= 500 — 7-08,
+/// D0264). Everything else — 4xx rejections such as 401/404, protocol
+/// violations, capacity errors — surfaces from the attempt that produced it.
 pub(crate) fn retryable_connect_error(error: &tungstenite::Error) -> bool {
     match error {
         tungstenite::Error::Io(_) | tungstenite::Error::Tls(_) => true,
         tungstenite::Error::Http(response) => {
             let status = response.status().as_u16();
-            matches!(status, 408 | 429) || (500..=599).contains(&status)
+            // The >= 500 bound is numeric, not `is_server_error()` (exactly
+            // 500..=599): the REST retry fallback compares the raw code, so a
+            // representable non-standard 6xx handshake rejection retries here
+            // too — openai-python (`_base_client.py:851-853`) and openai-node
+            // (`client.ts:1606-1607`) both use `status >= 500` (D0264).
+            matches!(status, 408 | 429) || status >= 500
         }
         _ => false,
     }
@@ -860,8 +880,11 @@ mod tests {
     #[test]
     fn retryable_connect_error_covers_the_rest_retry_statuses() {
         // 7-08: a non-101 rejection carrying a REST-retryable status (408/429
-        // and every 5xx) joins I/O and TLS as replayable handshake failures;
-        // the remaining 4xx surface from the attempt that produced them.
+        // and every status >= 500) joins I/O and TLS as replayable handshake
+        // failures; the remaining 4xx surface from the attempt that produced
+        // them. The >= 500 bound is numeric (D0264): a representable
+        // non-standard 6xx such as 600 retries exactly like the REST fallback,
+        // while 499 — one below the bound — still surfaces.
         let rejection = |status: u16| {
             let response = http::Response::builder()
                 .status(StatusCode::from_u16(status).expect("raw rejection status"))
@@ -869,13 +892,13 @@ mod tests {
                 .expect("handshake rejection response");
             tungstenite::Error::Http(Box::new(response))
         };
-        for status in [408_u16, 429, 500, 502, 503, 599] {
+        for status in [408_u16, 429, 500, 502, 503, 599, 600] {
             assert!(
                 retryable_connect_error(&rejection(status)),
                 "{status} must be retryable"
             );
         }
-        for status in [400_u16, 401, 403, 404, 409, 422] {
+        for status in [400_u16, 401, 403, 404, 409, 422, 499] {
             assert!(
                 !retryable_connect_error(&rejection(status)),
                 "{status} must surface instead of retrying"

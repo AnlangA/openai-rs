@@ -21,7 +21,10 @@ use reqwest::multipart::{Form, Part};
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tokio_tungstenite::tungstenite::{
     Message, Utf8Bytes,
-    protocol::{WebSocketConfig as TungsteniteConfig, frame::CloseFrame},
+    protocol::{
+        WebSocketConfig as TungsteniteConfig,
+        frame::{CloseFrame, coding::CloseCode},
+    },
 };
 use url::Url;
 
@@ -626,6 +629,28 @@ struct RealtimeKeepaliveState {
 }
 
 /// A typed GA Realtime WebSocket.
+///
+/// The connection URL and its handshake headers are derived from the
+/// [`Client`] configuration alone: there is deliberately no per-connection
+/// `extra_headers` escape hatch like openai-python's
+/// `Realtime.connect(..., extra_headers=...)`
+/// (`resources/realtime/realtime.py:99-136`) and no way to substitute a raw
+/// `wss` URL like openai-node's `buildRealtimeURL`. A caller who needs
+/// gateway- or proxy-specific handshake headers should configure them on the
+/// client or front the connection at the network layer; a per-connection
+/// override knob stays out of scope until someone actually demands it
+/// (14-E-3).
+///
+/// [`send`](Self::send) and [`recv`](Self::recv) both need `&mut self`, and
+/// the socket is never split into halves — splitting would strand the
+/// automatic Pong replies and the keepalive probes on one half. The intended
+/// concurrency shape is the owning-task pattern (14-E-4): move the socket
+/// into exactly one task that owns it for its whole lifetime and bridges it
+/// to the rest of the application over two `tokio::sync::mpsc` channels —
+/// server events flow out through one, client events and shutdown flow in
+/// through the other. Callers then `select!` on the *channels*, never on the
+/// socket itself, so every wire read/write interleaving stays owned by one
+/// place.
 pub struct RealtimeWebSocket {
     socket: Socket,
     meta: ResponseMeta,
@@ -640,11 +665,19 @@ impl RealtimeWebSocket {
     ///
     /// The handshake is deliberately single-shot (4-20): a failed or timed-out
     /// handshake surfaces as [`Error::WebSocketHandshake`] /
-    /// [`Error::WebSocketTransport`] and is never retried automatically. Both
-    /// official baselines agree — openai-node and openai-python do not retry
-    /// WebSocket connections — and a blind reconnect could attach to a
-    /// half-provisioned target. The Responses WebSocket exposes initial-connect
-    /// retries as an opt-in surface
+    /// [`Error::WebSocketTransport`] and is never retried automatically, and
+    /// this socket never reconnects after an established connection is lost
+    /// (14-E-1). openai-node never reconnects a WebSocket. The pinned
+    /// openai-python now ships an *opt-in* reconnect lane: `Realtime.connect(...,
+    /// on_reconnecting=..., max_retries=5, initial_delay=0.5, max_delay=8.0)`
+    /// (`resources/realtime/realtime.py:99-136`), whose `_reconnect()` retries
+    /// the recoverable close codes {1001, 1005, 1006, 1011, 1012, 1013, 1015}
+    /// (`types/websocket_reconnection.py:48-64`) with backoff and jitter —
+    /// and it stays off unless the caller supplies `on_reconnecting`. This
+    /// crate deliberately keeps the no-auto-reconnect stance on both counts:
+    /// a blind reconnect could attach to a half-provisioned target, and client
+    /// events may have side effects a replay would duplicate. The Responses
+    /// WebSocket exposes initial-connect retries as an opt-in surface
     /// (`WebSocketReconnectPolicy::InitialConnect` in `responses_websocket`);
     /// Realtime intentionally does not offer that knob, because a Realtime
     /// connection is bound to session state (one model, the transcription
@@ -927,9 +960,22 @@ impl RealtimeWebSocket {
         }
     }
 
+    /// Initiates the WebSocket close handshake with the RFC 6455 normal
+    /// closure code 1000 and an empty reason. openai-python's Realtime
+    /// `close()` defaults to `code=1000` (`resources/realtime/realtime.py`)
+    /// and openai-node's default is `1000`/`"OK"` on both transports
+    /// (`ws.ts:202-214`, `websocket.ts:336-348`); an unframed empty close
+    /// body would instead be observed by the peer as the abnormal 1005
+    /// (14-E-2), so the code is sent explicitly.
     pub async fn close(&mut self) -> Result<(), Error> {
         if !self.closed {
-            self.socket.close(None).await.map_err(map_websocket_error)?;
+            self.socket
+                .close(Some(CloseFrame {
+                    code: CloseCode::Normal,
+                    reason: Utf8Bytes::default(),
+                }))
+                .await
+                .map_err(map_websocket_error)?;
             self.closed = true;
         }
         Ok(())
@@ -1669,6 +1715,76 @@ mod tests {
             observed,
             Some((1011_u16, "upstream model failed".to_owned())),
             "the server saw its coded close accepted"
+        );
+    }
+
+    /// Accepts one WebSocket, waits for the client-initiated close frame, and
+    /// reports exactly what the client put on the wire (code and reason)
+    /// before draining. The drain only ends when the client drops its side,
+    /// so the value is reported first — awaiting the drain from the test
+    /// would deadlock.
+    async fn client_close_observer_server() -> (Client, oneshot::Receiver<Option<(u16, String)>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind client-close server");
+        let address = listener.local_addr().expect("client-close server address");
+        let (sender, receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client-close socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("client-close server handshake");
+            let mut observed = None;
+            while let Some(message) = socket.next().await {
+                if let Message::Close(frame) = message.expect("valid client-close frame") {
+                    observed = frame
+                        .map(|frame| (u16::from(frame.code), frame.reason.as_str().to_owned()));
+                    break;
+                }
+            }
+            let _ = sender.send(observed);
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("client-close client base");
+        let client = Client::builder(ApiKey::new("test-placeholder-key").expect("test key"))
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("client-close client");
+        (client, receiver)
+    }
+
+    #[tokio::test]
+    async fn client_initiated_close_sends_the_normal_1000_code() {
+        // 14-E-2: a client-initiated close must carry an explicit code — the
+        // RFC 6455 normal 1000 — instead of an empty close body, which the
+        // peer observes as the abnormal 1005. openai-python's Realtime
+        // `close()` defaults to `code=1000` (`resources/realtime/realtime.py`)
+        // and openai-node's to `1000`/`"OK"` on both transports
+        // (`ws.ts:202-214`, `websocket.ts:336-348`); the reason stays empty
+        // like python's default.
+        let (client, observed) = client_close_observer_server().await;
+        let mut socket = client
+            .realtime()
+            .connect("gpt-realtime/test")
+            .await
+            .expect("connect Realtime WebSocket");
+        socket.close().await.expect("close Realtime socket");
+        assert!(socket.is_closed());
+        let observed = tokio::time::timeout(Duration::from_secs(5), observed)
+            .await
+            .expect("timely server observation")
+            .expect("server observed the client close");
+        assert_eq!(
+            observed,
+            Some((1000_u16, String::new())),
+            "the client-sent close frame must carry code 1000 with an empty reason"
         );
     }
 

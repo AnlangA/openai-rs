@@ -850,7 +850,13 @@ mod tests {
             .expect("first page");
         assert_eq!(first.data().len(), 1);
         let second = pages.next().await.expect("repeated cursor error");
-        assert!(matches!(second, Err(Error::InvalidConfiguration(_))));
+        assert!(matches!(
+            second,
+            Err(Error::Pagination {
+                reason: crate::error::PaginationFault::RepeatedCursor,
+                ..
+            })
+        ));
         assert!(pages.next().await.is_none());
 
         let captures = captures.lock().expect("capture lock").clone();

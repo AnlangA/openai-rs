@@ -1018,7 +1018,13 @@ mod tests {
             .list_pages(ListFineTuningJobsParams::default());
         assert!(pages.next().await.expect("first page").is_ok());
         let second = pages.next().await.expect("second page result");
-        assert!(matches!(second, Err(Error::InvalidConfiguration(_))));
+        assert!(matches!(
+            second,
+            Err(Error::Pagination {
+                reason: crate::error::PaginationFault::RepeatedCursor,
+                ..
+            })
+        ));
     }
 
     #[tokio::test]
@@ -1100,7 +1106,13 @@ mod tests {
         // With no usable cursor of any kind the stream fails closed instead of
         // re-requesting the same first page forever.
         let first = pages.next().await.expect("page result");
-        assert!(matches!(first, Err(Error::InvalidConfiguration(_))));
+        assert!(matches!(
+            first,
+            Err(Error::Pagination {
+                reason: crate::error::PaginationFault::MissingCursor,
+                ..
+            })
+        ));
         assert!(pages.next().await.is_none());
     }
 }

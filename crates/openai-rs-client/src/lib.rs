@@ -53,6 +53,7 @@ mod auth;
 mod batches;
 #[cfg(feature = "beta-responses-multi-agent")]
 mod beta_responses;
+mod chat_accumulator;
 mod chat_completions;
 mod chat_stream;
 #[cfg(feature = "beta-chatkit")]
@@ -111,6 +112,7 @@ pub use beta_responses::{
     BetaResponseInputTokens, BetaResponses, BetaResponsesWebSocket, BetaResponsesWebSocketConfig,
     BetaWebSocketReconnectPolicy,
 };
+pub use chat_accumulator::ChatCompletionAccumulator;
 pub use chat_completions::{
     ChatCompletionMessagePageStream, ChatCompletionMessages, ChatCompletionPageStream,
     ChatCompletions,
@@ -130,7 +132,7 @@ pub use containers::{
 pub use content_provenance::*;
 pub use conversations::{ConversationItemPageStream, ConversationItems, Conversations};
 pub use core_resources::{Embeddings, Models, Moderations};
-pub use error::{ApiError, BodyPreview, Error, StreamError};
+pub use error::{ApiError, BodyPreview, Error, PaginationFault, StreamError};
 #[cfg(feature = "legacy-evals")]
 pub use evals::{
     EvalPageStream, EvalRunOutputItemPageStream, EvalRunOutputItems, EvalRunPageStream,

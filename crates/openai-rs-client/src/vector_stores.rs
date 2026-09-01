@@ -195,6 +195,11 @@ impl VectorStores {
 
     /// Polls until a store completes or expires. Dropping the future also
     /// cancels the in-flight request and sleep.
+    ///
+    /// Start from [`PollOptions::for_vector_stores`]: the interval stays
+    /// unpinned so each sleep follows the retrieve response's
+    /// `openai-poll-after-ms` hint when the server sends one, exactly like the
+    /// official Vector Stores poll helpers.
     pub async fn poll(
         &self,
         vector_store_id: &VectorStoreId,
@@ -351,6 +356,11 @@ impl VectorStoreFiles {
     }
 
     /// Polls one attached file until it completes, fails, or is cancelled.
+    ///
+    /// Start from [`PollOptions::for_vector_stores`]: the interval stays
+    /// unpinned so each sleep follows the retrieve response's
+    /// `openai-poll-after-ms` hint when the server sends one, exactly like the
+    /// official Vector Stores file poll helpers.
     pub async fn poll(
         &self,
         vector_store_id: &VectorStoreId,
@@ -486,6 +496,11 @@ impl VectorStoreFileBatches {
     }
 
     /// Polls a file batch until it completes, fails, or is cancelled.
+    ///
+    /// Start from [`PollOptions::for_vector_stores`]: the interval stays
+    /// unpinned so each sleep follows the retrieve response's
+    /// `openai-poll-after-ms` hint when the server sends one, exactly like the
+    /// official Vector Stores file-batch poll helpers.
     pub async fn poll(
         &self,
         vector_store_id: &VectorStoreId,
@@ -792,6 +807,16 @@ mod tests {
     }
 
     async fn serve_script(responses: Vec<String>) -> (Client, Arc<Mutex<Vec<CapturedRequest>>>) {
+        serve_script_with_poll_hint(responses, None).await
+    }
+
+    /// Like [`serve_script`], optionally stamping an `openai-poll-after-ms`
+    /// header on every scripted response so polling tests can exercise the
+    /// server pacing hint end to end.
+    async fn serve_script_with_poll_hint(
+        responses: Vec<String>,
+        poll_after_ms: Option<&'static str>,
+    ) -> (Client, Arc<Mutex<Vec<CapturedRequest>>>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind vector-store server");
@@ -808,11 +833,13 @@ mod tests {
                 let responses = Arc::clone(&responses);
                 let next_response = Arc::clone(&next_response);
                 let captures = Arc::clone(&server_captures);
+                let poll_after_ms = poll_after_ms;
                 tokio::spawn(async move {
                     let service = service_fn(move |request: Request<Incoming>| {
                         let responses = Arc::clone(&responses);
                         let next_response = Arc::clone(&next_response);
                         let captures = Arc::clone(&captures);
+                        let poll_after_ms = poll_after_ms;
                         async move {
                             let method = request.method().clone();
                             let path_and_query = request
@@ -863,11 +890,15 @@ mod tests {
                             } else {
                                 StatusCode::INTERNAL_SERVER_ERROR
                             };
+                            let mut response = hyper::Response::builder()
+                                .status(status)
+                                .header(http::header::CONTENT_TYPE, "application/json")
+                                .header("x-request-id", format!("req_vs_{index}"));
+                            if let Some(poll_after_ms) = poll_after_ms {
+                                response = response.header("openai-poll-after-ms", poll_after_ms);
+                            }
                             Ok::<_, Infallible>(
-                                hyper::Response::builder()
-                                    .status(status)
-                                    .header(http::header::CONTENT_TYPE, "application/json")
-                                    .header("x-request-id", format!("req_vs_{index}"))
+                                response
                                     .body(Full::new(Bytes::from(body)))
                                     .expect("vector-store response"),
                             )
@@ -1236,6 +1267,39 @@ mod tests {
             )
             .await;
         assert!(matches!(result, Err(PollError::Cancelled)));
+        assert_eq!(captures.lock().expect("capture lock").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn store_poll_follows_the_server_pacing_hint_through_the_preset() {
+        // 14-I-1: `for_vector_stores` leaves the interval unpinned, so the
+        // poller sleeps for the retrieve response's `openai-poll-after-ms`
+        // hint instead of the 1 s fallback. With a 250 ms hint and a 700 ms
+        // deadline the poll completes; sleeping the 1 s fallback would have
+        // exceeded the deadline and failed closed instead.
+        let (client, captures) = serve_script_with_poll_hint(
+            vec![
+                store_json("vs_paced", "in_progress"),
+                store_json("vs_paced", "completed"),
+            ],
+            Some("250"),
+        )
+        .await;
+        let started = std::time::Instant::now();
+        let response = client
+            .vector_stores()
+            .poll(
+                &VectorStoreId::new("vs_paced"),
+                PollOptions::for_vector_stores().with_timeout(Duration::from_millis(700)),
+            )
+            .await
+            .expect("hint-paced poll completes inside the deadline");
+        assert!(matches!(response.status(), VectorStoreStatus::Completed));
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(200) && elapsed < Duration::from_millis(690),
+            "poll should be paced by the 250 ms hint, took {elapsed:?}"
+        );
         assert_eq!(captures.lock().expect("capture lock").len(), 2);
     }
 
