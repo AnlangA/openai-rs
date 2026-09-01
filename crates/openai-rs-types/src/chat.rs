@@ -1331,6 +1331,44 @@ impl ChatCompletionFunction {
 
 literal_tag!(FunctionToolTag, Function, "function");
 
+/// Inclusive maximum for a Chat function-tool (`tools[].function`) name.
+///
+/// The pinned OpenAPI states the bound in prose rather than JSON-Schema
+/// `maxLength`/`pattern` keywords: `ChatCompletionTool.function` refs
+/// `FunctionObject`, whose `name` reads "Must be a-z, A-Z, 0-9, or contain
+/// underscores and dashes, with a maximum length of 64"
+/// (spec/upstream/openapi-2026-08-29.json, FunctionObject.name at ~line
+/// 31670; the deprecated legacy `ChatCompletionFunctions.name` at ~line
+/// 21390 repeats the same 64-char rule). This is stricter than the
+/// Responses channel's [`crate::responses::MAX_FUNCTION_TOOL_NAME_CHARS`]
+/// (128), so the two channels validate against separate constants.
+pub const MAX_CHAT_FUNCTION_TOOL_NAME_CHARS: usize = 64;
+
+/// Minimum length of a Chat function name (the pin's prose rule makes the
+/// name required, so the lower bound is 1).
+pub const MIN_CHAT_FUNCTION_TOOL_NAME_CHARS: usize = 1;
+
+/// Checks a Chat function name against the pin's prose rule (non-empty, at
+/// most [`MAX_CHAT_FUNCTION_TOOL_NAME_CHARS`] characters, a-z/A-Z/0-9/_/-),
+/// reporting through the request-level constraint error. Mirrors the
+/// Responses channel's `validate_function_tool_name` shape.
+fn validate_chat_function_name(name: &str) -> Result<(), CreateChatCompletionConstraintError> {
+    let actual = name.chars().count();
+    let charset_ok = name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-');
+    if !(MIN_CHAT_FUNCTION_TOOL_NAME_CHARS..=MAX_CHAT_FUNCTION_TOOL_NAME_CHARS).contains(&actual)
+        || !charset_ok
+    {
+        return Err(CreateChatCompletionConstraintError::FunctionName {
+            actual,
+            minimum: MIN_CHAT_FUNCTION_TOOL_NAME_CHARS,
+            maximum: MAX_CHAT_FUNCTION_TOOL_NAME_CHARS,
+        });
+    }
+    Ok(())
+}
+
 /// A function tool definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatFunctionTool {
@@ -1350,7 +1388,14 @@ impl ChatFunctionTool {
         }
     }
 
-    /// Builds a strict Chat function tool from `T`'s `schemars` JSON Schema definition.
+    /// Builds a strict Chat function tool from `T`'s `schemars` JSON Schema
+    /// definition.
+    ///
+    /// The name is validated against the chat pin's 1..=64 range (the
+    /// `FunctionObject.name` prose rule, see
+    /// [`MAX_CHAT_FUNCTION_TOOL_NAME_CHARS`]), mirroring the Responses
+    /// channel's `FunctionTool::for_type` check (D0247) with the Chat pin's
+    /// stricter bound.
     #[cfg(feature = "structured-output")]
     pub fn for_type<T: schemars::JsonSchema>(
         name: impl Into<String>,
@@ -1358,6 +1403,7 @@ impl ChatFunctionTool {
     ) -> Result<Self, crate::StructuredError> {
         let name = name.into();
         let description = description.into();
+        crate::structured::validate_chat_function_tool_name(&name)?;
         let mut schema = serde_json::to_value(schemars::schema_for!(T))
             .map_err(crate::StructuredError::Encode)?;
         crate::structured::normalize_strict_schema(&mut schema)?;
@@ -2282,6 +2328,16 @@ pub enum CreateChatCompletionConstraintError {
         minimum: usize,
         maximum: usize,
     },
+    /// A `tools[].function.name` or deprecated `functions[].name` is empty,
+    /// over 64 characters, or uses characters outside a-z/A-Z/0-9/_/-
+    /// (the `FunctionObject.name` prose rule; the deprecated
+    /// `ChatCompletionFunctions.name` repeats it).
+    #[error("function name must be {minimum}..={maximum} chars of a-z/A-Z/0-9/_/-, got {actual}")]
+    FunctionName {
+        actual: usize,
+        minimum: usize,
+        maximum: usize,
+    },
 }
 
 /// One successful classification inside a Chat moderation-results list.
@@ -2649,6 +2705,18 @@ impl ChatCompletionRequestBody {
                 minimum: MIN_CHAT_FUNCTIONS,
                 maximum: MAX_CHAT_FUNCTIONS,
             });
+        }
+        if let Omittable::Value(tools) = &self.tools {
+            for tool in tools {
+                if let ChatTool::Function(function) = tool {
+                    validate_chat_function_name(&function.function.name)?;
+                }
+            }
+        }
+        if let Omittable::Value(functions) = &self.functions {
+            for function in functions {
+                validate_chat_function_name(&function.name)?;
+            }
         }
         Ok(())
     }
@@ -3933,6 +4001,81 @@ mod tests {
             ok(serde_json::from_str::<Value>(content))["temperature"],
             24
         );
+    }
+
+    #[test]
+    fn chat_function_tool_for_type_enforces_the_64_char_name_pin() {
+        // 12-02: `for_type` used to skip name validation entirely, unlike the
+        // Responses mirror (D0247). The chat pin's `FunctionObject.name`
+        // prose caps `tools[].function.name` at 64 characters — stricter than
+        // the Responses channel's 128 — and restricts the charset to
+        // a-z/A-Z/0-9/underscore/dash.
+        #[derive(Debug, Clone, PartialEq, schemars::JsonSchema)]
+        struct TypedArgs {
+            city: String,
+        }
+
+        let tool = ChatFunctionTool::for_type::<TypedArgs>("a".repeat(64), "Boundary tool")
+            .expect("64-char tool name is pin-legal");
+        assert_eq!(tool.function.name.chars().count(), 64);
+
+        let rejected = ChatFunctionTool::for_type::<TypedArgs>("a".repeat(65), "Over the chat pin")
+            .expect_err("65-char tool name must fail the chat pin");
+        assert!(matches!(
+            rejected,
+            crate::structured::StructuredError::InvalidName(_)
+        ));
+
+        let invalid = ChatFunctionTool::for_type::<TypedArgs>("bad name!", "Invalid charset")
+            .expect_err("characters outside a-z/A-Z/0-9/_/- must fail");
+        assert!(matches!(
+            invalid,
+            crate::structured::StructuredError::InvalidName(_)
+        ));
+    }
+
+    #[test]
+    fn validate_enforces_function_names_on_tools_and_legacy_functions() {
+        let mut request = CreateChatCompletionRequest::new(
+            "gpt-5.6-sol",
+            ChatUserMessage::text("Weather in Shanghai?"),
+        );
+
+        let hand_built = ChatFunctionTool::new(
+            ChatFunctionDefinition::new("a".repeat(65)).with_description("Over the chat pin"),
+        );
+        request.body.tools = Omittable::Value(vec![ChatTool::Function(hand_built)]);
+        assert_eq!(
+            request.validate(),
+            Err(CreateChatCompletionConstraintError::FunctionName {
+                actual: 65,
+                minimum: MIN_CHAT_FUNCTION_TOOL_NAME_CHARS,
+                maximum: MAX_CHAT_FUNCTION_TOOL_NAME_CHARS,
+            })
+        );
+
+        let mut legacy = CreateChatCompletionRequest::new(
+            "gpt-5.6-sol",
+            ChatUserMessage::text("Weather in Shanghai?"),
+        );
+        legacy.body.functions = Omittable::Value(vec![ChatCompletionFunction::new("bad name!")]);
+        assert_eq!(
+            legacy.validate(),
+            Err(CreateChatCompletionConstraintError::FunctionName {
+                actual: 9,
+                minimum: MIN_CHAT_FUNCTION_TOOL_NAME_CHARS,
+                maximum: MAX_CHAT_FUNCTION_TOOL_NAME_CHARS,
+            })
+        );
+
+        let mut valid = CreateChatCompletionRequest::new(
+            "gpt-5.6-sol",
+            ChatUserMessage::text("Weather in Shanghai?"),
+        );
+        valid.body.tools = Omittable::Value(vec![ChatTool::Function(ChatFunctionTool::new(
+            ChatFunctionDefinition::new("a".repeat(64)),
+        ))]);
+        assert!(valid.validate().is_ok());
     }
 
     #[test]

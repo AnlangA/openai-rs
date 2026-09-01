@@ -2591,20 +2591,24 @@ fn encode_query<Q: Serialize + ?Sized>(query: &Q) -> Result<Vec<(String, String)
 /// (`null` and the empty string serialize to nothing, so the key is
 /// omitted entirely rather than sent as `key=`; other falsy scalars like
 /// `0`/`false` still encode) comes from `_qs.py`, while arrays take the
-/// bracketed spelling `name[]` from openai-node's client-level
-/// `stringifyQuery` (`qs.stringify(query, { arrayFormat: 'brackets' })`)
-/// and from the pinned OpenAPI's own spelling of the five audit-log
-/// filters (`actor_emails[]`/`actor_ids[]`/`event_types[]`/
-/// `project_ids[]`/`resource_ids[]`; the pin spells the remaining
-/// Administration/Usage array filters — usage `project_ids`/`sources`/
-/// `sizes`/`vector_store_ids`/`context_levels`, users `emails`,
-/// certificates `include` — without the suffix, and openai-python's
-/// client-level `Querystring()` still repeats those plain keys, so the
-/// two official SDKs disagree; this channel follows node and the audit
-/// spelling, uniformly bracketed). Nested object leaves keep the
-/// `name[child]` form (`effective_at[gt]`). Arrays recurse through the
-/// same leaf rule, so `null`/`""` items inside an array are dropped just
-/// like top-level fields.
+/// bracketed spelling `name[]` from both official SDKs' client-level
+/// serializers: openai-node's `stringifyQuery`
+/// (`qs.stringify(query, { arrayFormat: 'brackets' })`, pinned
+/// openai-node `src/internal/utils/query.ts`) and openai-python's
+/// `OpenAI`/`AsyncOpenAI` `qs` override
+/// (`Querystring(array_format="brackets")`, pinned openai-python
+/// `_client.py:519-520` and `1261-1262`), which supersedes `_qs.py`'s
+/// `"repeat"` default for every resource. The pinned OpenAPI itself is
+/// mixed: it spells the five audit-log filters with the suffix
+/// (`actor_emails[]`/`actor_ids[]`/`event_types[]`/`project_ids[]`/
+/// `resource_ids[]`) while the remaining Administration/Usage array
+/// filters — usage `project_ids`/`sources`/`sizes`/`vector_store_ids`/
+/// `context_levels`, users `emails`, certificates `include` — appear
+/// without it; because both official SDKs bracket uniformly at the client
+/// level, this channel is uniformly bracketed as well. Nested object
+/// leaves keep the `name[child]` form (`effective_at[gt]`). Arrays recurse
+/// through the same leaf rule, so `null`/`""` items inside an array are
+/// dropped just like top-level fields.
 fn append_query_value(
     pairs: &mut Vec<(String, String)>,
     name: &str,

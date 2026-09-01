@@ -1659,6 +1659,21 @@ pub enum BatchJsonlError {
         /// Repeated identifier.
         custom_id: String,
     },
+    /// A request line carried an empty custom identifier.
+    ///
+    /// The Batch API requires a unique, non-empty `custom_id` on every input
+    /// line so results can be correlated with their requests. Input
+    /// construction ([`BatchCustomId::new`]) already rejects the empty
+    /// string, but a decoded-and-replayed output row or a hand-built
+    /// [`BatchLine`] with an empty identifier could otherwise be re-encoded
+    /// and only rejected server-side, after the whole file was uploaded.
+    /// [`BatchJsonlWriter::write_line`] rejects it at encode time instead,
+    /// mirroring the exact-emptiness rule the constructor applies.
+    #[error("batch custom_id at line {line} must not be empty")]
+    EmptyCustomId {
+        /// One-based line number.
+        line: usize,
+    },
     /// One input file cannot mix endpoint URLs.
     #[error("batch JSONL line {line} uses endpoint {actual:?}; expected {expected:?}")]
     MixedEndpoints {
@@ -1735,6 +1750,13 @@ impl<W: Write> BatchJsonlWriter<W> {
     }
 
     /// Encodes and writes one typed request line followed by `\n`.
+    ///
+    /// `custom_id` must be non-empty, exactly like [`BatchLine::new`]: a
+    /// decoded output row or a hand-built line with an empty identifier is
+    /// rejected with [`BatchJsonlError::EmptyCustomId`] before anything is
+    /// written, because the Batch API requires a unique, non-empty
+    /// `custom_id` on every input line and would only reject the file after
+    /// upload.
     pub fn write_line<O>(&mut self, line: &BatchLine<O>) -> Result<(), BatchJsonlError>
     where
         O: Serialize,
@@ -1747,6 +1769,9 @@ impl<W: Write> BatchJsonlWriter<W> {
             return Err(BatchJsonlError::TooManyLines {
                 limit: self.max_lines,
             });
+        }
+        if line.custom_id().as_str().is_empty() {
+            return Err(BatchJsonlError::EmptyCustomId { line: next_line });
         }
         if self.custom_ids.contains(line.custom_id().as_str()) {
             return Err(BatchJsonlError::DuplicateCustomId {
@@ -2576,6 +2601,56 @@ mod tests {
             writer.write_line(&line),
             Err(BatchJsonlError::DuplicateCustomId { .. })
         ));
+    }
+
+    #[test]
+    fn writer_rejects_empty_custom_ids_before_writing() {
+        // 12-04: `BatchCustomId` decodes empty server echoes losslessly
+        // (D0153), so a decoded-and-replayed row can reach the writer with an
+        // empty identifier. The Batch API requires a unique, non-empty
+        // `custom_id` on input lines, so the writer must reject it at encode
+        // time instead of letting the whole uploaded batch fail later.
+        let empty: BatchLine<serde_json::Value> = serde_json::from_value(json!({
+            "custom_id": "",
+            "method": "POST",
+            "url": "/v1/responses",
+            "body": {}
+        }))
+        .expect("empty custom_id decodes losslessly");
+        assert!(empty.custom_id().as_str().is_empty());
+
+        let mut writer = BatchJsonlWriter::new(Vec::new());
+        assert!(matches!(
+            writer.write_line(&empty),
+            Err(BatchJsonlError::EmptyCustomId { line: 1 })
+        ));
+        assert!(!writer.is_poisoned());
+        assert!(writer.into_inner().is_empty(), "nothing is written");
+    }
+
+    #[test]
+    fn writer_keeps_accepting_lines_after_an_empty_custom_id_rejection() {
+        let empty: BatchLine<serde_json::Value> = serde_json::from_value(json!({
+            "custom_id": "",
+            "method": "POST",
+            "url": "/v1/responses",
+            "body": {}
+        }))
+        .expect("empty custom_id decodes losslessly");
+        let normal = BatchLine::new("line-1", BatchEndpoint::Responses, json!({})).expect("line");
+        let expected = serde_json::to_vec(&normal).expect("encode normal line");
+        let mut writer = BatchJsonlWriter::new(Vec::new());
+        assert!(matches!(
+            writer.write_line(&empty),
+            Err(BatchJsonlError::EmptyCustomId { line: 1 })
+        ));
+        writer
+            .write_line(&normal)
+            .expect("normal line still writes");
+        assert_eq!(writer.line_count(), 1);
+        let written = writer.into_inner();
+        assert_eq!(&written[..expected.len()], &expected[..]);
+        assert_eq!(written[expected.len()], b'\n');
     }
 
     #[test]

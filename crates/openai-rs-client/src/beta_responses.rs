@@ -1504,7 +1504,10 @@ mod tests {
         assert_eq!(request.method, Method::GET);
         assert_eq!(
             request.path_and_query,
-            "/v1/responses/resp%2Fa%20b?beta=true&include=file_search_call.results"
+            // `include[]` percent-encodes its brackets on the wire
+            // (`include%5B%5D=`, same as the Administration channel's
+            // bracketed filters).
+            "/v1/responses/resp%2Fa%20b?beta=true&include%5B%5D=file_search_call.results"
         );
         assert_eq!(request.beta_header.as_deref(), Some(BETA_VALUE));
 
@@ -1612,7 +1615,7 @@ mod tests {
         assert_eq!(request.method, Method::GET);
         assert_eq!(
             request.path_and_query,
-            "/v1/responses/resp_1/input_items?beta=true&after=item_0&include=reasoning.encrypted_content&limit=20&order=asc"
+            "/v1/responses/resp_1/input_items?beta=true&after=item_0&include%5B%5D=reasoning.encrypted_content&limit=20&order=asc"
         );
         assert_eq!(request.beta_header.as_deref(), Some(BETA_VALUE));
 
@@ -1714,7 +1717,7 @@ mod tests {
         assert_eq!(captured.method, Method::GET);
         assert_eq!(
             captured.path_and_query,
-            "/v1/responses/resp_resume?beta=true&include=reasoning.encrypted_content&stream=true&include_obfuscation=false&starting_after=41"
+            "/v1/responses/resp_resume?beta=true&include%5B%5D=reasoning.encrypted_content&stream=true&include_obfuscation=false&starting_after=41"
         );
         // The SSE lane carries the static beta header (see
         // `execute_beta_json`).

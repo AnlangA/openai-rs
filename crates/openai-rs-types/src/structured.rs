@@ -547,6 +547,16 @@ pub(crate) fn validate_function_tool_name(name: &str) -> Result<(), StructuredEr
     validate_name(name, crate::responses::MAX_FUNCTION_TOOL_NAME_CHARS)
 }
 
+/// Validates a Chat function-tool name against the chat pin's 1..=64 range.
+///
+/// The chat channel's `tools[].function.name` (`FunctionObject.name`) caps
+/// names at 64 characters in the pin's prose, stricter than the Responses
+/// function-tool bound of 128, so [`crate::chat::ChatFunctionTool::for_type`]
+/// validates against this separate limit (the D0247 per-channel split).
+pub(crate) fn validate_chat_function_tool_name(name: &str) -> Result<(), StructuredError> {
+    validate_name(name, crate::chat::MAX_CHAT_FUNCTION_TOOL_NAME_CHARS)
+}
+
 /// Validates a `text.format` `json_schema` name against the pin's 64-char
 /// maximum, which is stricter than the function-tool limit.
 fn validate_response_format_name(name: &str) -> Result<(), StructuredError> {

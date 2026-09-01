@@ -638,9 +638,9 @@ mod tests {
             "/v1/conversations/conv%2Fa%20b/items"
         );
         assert!(
-            create_items_url.query_pairs().any(|(name, value)| {
-                name == "include" && value == "reasoning.encrypted_content"
-            })
+            create_items_url
+                .query_pairs()
+                .any(|(name, value)| name == "include[]" && value == "reasoning.encrypted_content")
         );
         let create_items_body =
             serde_json::from_slice::<Value>(&captures[4].body).expect("create items body");
@@ -654,7 +654,7 @@ mod tests {
             "/v1/conversations/conv%2Fa%20b/items/msg%2Fx%20y"
         );
         assert!(retrieve_item_url.query_pairs().any(|(name, value)| {
-            name == "include" && value == "message.input_image.image_url"
+            name == "include[]" && value == "message.input_image.image_url"
         }));
         assert_eq!(captures[6].method, Method::DELETE);
 
@@ -664,7 +664,7 @@ mod tests {
         assert!(query.contains(&("limit".into(), "2".into())));
         assert!(query.contains(&("order".into(), "asc".into())));
         assert!(query.contains(&("after".into(), "msg cursor".into())));
-        assert!(query.contains(&("include".into(), "web_search_call.action.sources".into())));
+        assert!(query.contains(&("include[]".into(), "web_search_call.action.sources".into())));
         assert!(captures.iter().all(|request| {
             request.authorization.as_deref() == Some("Bearer test-placeholder-key")
         }));
@@ -816,7 +816,10 @@ mod tests {
         assert_eq!(captured.method, Method::GET);
         assert_eq!(
             captured.path_and_query,
-            "/v1/conversations/conv%2Fa%20b/items?limit=2&order=asc&after=msg+cursor&include=web_search_call.action.sources"
+            // `include[]` percent-encodes its brackets on the wire
+            // (`include%5B%5D=`, same as the Administration channel's
+            // bracketed filters).
+            "/v1/conversations/conv%2Fa%20b/items?limit=2&order=asc&after=msg+cursor&include%5B%5D=web_search_call.action.sources"
         );
         assert_eq!(captured.content_type, None);
         assert!(captured.body.is_empty());

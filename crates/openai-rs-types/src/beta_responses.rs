@@ -1201,6 +1201,8 @@ pub struct BetaAgentMessage {
     kind: AgentMessageTag,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     agent: Omittable<BetaAgent>,
+    #[serde(flatten)]
+    extra: ExtraFields,
 }
 
 impl BetaAgentMessage {
@@ -1219,6 +1221,7 @@ impl BetaAgentMessage {
             recipient: recipient.into(),
             kind: AgentMessageTag::AgentMessage,
             agent: Omittable::Omitted,
+            extra: ExtraFields::new(),
         }
     }
 
@@ -1258,6 +1261,12 @@ impl BetaAgentMessage {
     pub fn agent_ref(&self) -> Option<&BetaAgent> {
         omitted_ref(&self.agent)
     }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 impl From<BetaAgentMessage> for BetaAgentMessageParam {
@@ -1296,6 +1305,8 @@ pub struct BetaMultiAgentCallParam {
     id: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     agent: Omittable<Nullable<BetaAgent>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
 }
 
 impl BetaMultiAgentCallParam {
@@ -1312,6 +1323,7 @@ impl BetaMultiAgentCallParam {
             kind: MultiAgentCallTag::MultiAgentCall,
             id: Omittable::Omitted,
             agent: Omittable::Omitted,
+            extra: ExtraFields::new(),
         })
     }
 
@@ -1329,6 +1341,7 @@ impl BetaMultiAgentCallParam {
             kind: MultiAgentCallTag::MultiAgentCall,
             id: Omittable::Omitted,
             agent: Omittable::Omitted,
+            extra: ExtraFields::new(),
         }
     }
 
@@ -1394,6 +1407,12 @@ impl BetaMultiAgentCallParam {
     /// the request.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_multi_agent_call_id(&self.call_id)
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -1500,6 +1519,7 @@ impl From<BetaMultiAgentCall> for BetaMultiAgentCallParam {
                 Omittable::Value(agent) => Omittable::Value(Nullable::Value(agent)),
                 Omittable::Omitted => Omittable::Omitted,
             },
+            extra: ExtraFields::new(),
         }
     }
 }
@@ -1693,6 +1713,8 @@ pub struct BetaMultiAgentCallOutput {
     kind: MultiAgentCallOutputTag,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     agent: Omittable<BetaAgent>,
+    #[serde(flatten)]
+    extra: ExtraFields,
 }
 
 impl BetaMultiAgentCallOutput {
@@ -1711,6 +1733,7 @@ impl BetaMultiAgentCallOutput {
             output: output.into_iter().collect(),
             kind: MultiAgentCallOutputTag::MultiAgentCallOutput,
             agent: Omittable::Omitted,
+            extra: ExtraFields::new(),
         }
     }
 
@@ -1749,6 +1772,12 @@ impl BetaMultiAgentCallOutput {
     #[must_use]
     pub fn agent_ref(&self) -> Option<&BetaAgent> {
         omitted_ref(&self.agent)
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -2364,6 +2393,8 @@ pub struct BetaPromptCacheOptionsParam {
     mode: Omittable<BetaPromptCacheMode>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     ttl: Omittable<BetaPromptCacheTtl>,
+    #[serde(flatten)]
+    extra: ExtraFields,
 }
 
 impl BetaPromptCacheOptionsParam {
@@ -2384,6 +2415,12 @@ impl BetaPromptCacheOptionsParam {
         self.ttl = Omittable::Value(BetaPromptCacheTtl::ThirtyMinutes);
         self
     }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Official beta response-echo `BetaPromptCacheOptions`.
@@ -2393,13 +2430,19 @@ impl BetaPromptCacheOptionsParam {
 pub struct BetaPromptCacheOptions {
     mode: BetaPromptCacheMode,
     ttl: BetaPromptCacheTtl,
+    #[serde(flatten)]
+    extra: ExtraFields,
 }
 
 impl BetaPromptCacheOptions {
     /// Creates a complete official response-echo object.
     #[must_use]
     pub fn new(mode: BetaPromptCacheMode, ttl: BetaPromptCacheTtl) -> Self {
-        Self { mode, ttl }
+        Self {
+            mode,
+            ttl,
+            extra: ExtraFields::new(),
+        }
     }
 
     /// Returns the applied prompt-cache mode.
@@ -2412,6 +2455,12 @@ impl BetaPromptCacheOptions {
     #[must_use]
     pub const fn ttl(&self) -> &BetaPromptCacheTtl {
         &self.ttl
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -3261,6 +3310,8 @@ pub struct BetaCompactResponseRequest {
     prompt_cache_retention: Omittable<Nullable<BetaPromptCacheRetention>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     service_tier: Omittable<Nullable<BetaCompactServiceTier>>,
+    #[serde(flatten)]
+    extra: ExtraFields,
 }
 
 impl BetaCompactResponseRequest {
@@ -3276,6 +3327,7 @@ impl BetaCompactResponseRequest {
             prompt_cache_options: Omittable::Omitted,
             prompt_cache_retention: Omittable::Omitted,
             service_tier: Omittable::Omitted,
+            extra: ExtraFields::new(),
         }
     }
 
@@ -3291,6 +3343,7 @@ impl BetaCompactResponseRequest {
             prompt_cache_options: Omittable::Omitted,
             prompt_cache_retention: Omittable::Omitted,
             service_tier: Omittable::Omitted,
+            extra: ExtraFields::new(),
         }
     }
 
@@ -3436,6 +3489,12 @@ impl BetaCompactResponseRequest {
             validate_beta_response_input(input)?;
         }
         Ok(())
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -4331,6 +4390,8 @@ pub struct BetaResponseInjectCreatedEvent {
     kind: ResponseInjectCreatedTag,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     stream_id: Omittable<String>,
+    #[serde(flatten)]
+    extra: ExtraFields,
 }
 
 impl BetaResponseInjectCreatedEvent {
@@ -4348,6 +4409,12 @@ impl BetaResponseInjectCreatedEvent {
     pub fn stream_id(&self) -> Option<&str> {
         omitted_ref(&self.stream_id).map(String::as_str)
     }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 crate::open_string_enum! {
@@ -4363,6 +4430,8 @@ crate::open_string_enum! {
 pub struct BetaResponseInjectError {
     code: BetaResponseInjectErrorCode,
     message: String,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl BetaResponseInjectError {
@@ -4374,6 +4443,12 @@ impl BetaResponseInjectError {
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -4394,6 +4469,8 @@ pub struct BetaResponseInjectFailedEvent {
     kind: ResponseInjectFailedTag,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     stream_id: Omittable<String>,
+    #[serde(flatten)]
+    extra: ExtraFields,
 }
 
 impl BetaResponseInjectFailedEvent {
@@ -4420,6 +4497,12 @@ impl BetaResponseInjectFailedEvent {
     #[must_use]
     pub fn stream_id(&self) -> Option<&str> {
         omitted_ref(&self.stream_id).map(String::as_str)
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -4536,10 +4619,11 @@ impl BetaWebSocketErrorEvent {
 /// variant.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-// WebSocketError grew past the smaller inject variants once its envelope
-// started retaining future fields through ExtraFields; boxing one payload
-// would be a breaking public-API refactor tracked separately from wire
-// fixes, mirroring the stable ResponsesServerEvent stance.
+// Every decode-side variant (including the inject events) retains future
+// fields through ExtraFields, so WebSocketError is no longer alone in size;
+// boxing one payload would be a breaking public-API refactor tracked
+// separately from wire fixes, mirroring the stable ResponsesServerEvent
+// stance.
 #[allow(clippy::large_enum_variant)]
 pub enum BetaResponsesServerEvent {
     Response(Box<BetaResponseStreamEvent>),
@@ -5381,6 +5465,185 @@ mod tests {
             "unknown envelope fields must stay lossless"
         );
         assert_eq!(serde_json::to_value(event).expect("round trip"), fixture);
+    }
+
+    #[test]
+    fn beta_prompt_cache_dtos_retain_unknown_fields() {
+        let param_fixture = json!({
+            "mode": "implicit",
+            "ttl": "30m",
+            "future_prompt_cache_field": {"retry": 2}
+        });
+        let param: BetaPromptCacheOptionsParam = serde_json::from_value(param_fixture.clone())
+            .expect("decode beta prompt-cache options param");
+        assert_eq!(
+            param.extra_fields().get("future_prompt_cache_field"),
+            Some(&json!({"retry": 2})),
+            "unknown prompt-cache param fields must stay lossless"
+        );
+        assert_eq!(
+            serde_json::to_value(&param).expect("round trip"),
+            param_fixture
+        );
+
+        let echo_fixture = json!({
+            "mode": "implicit",
+            "ttl": "30m",
+            "future_echo_field": true
+        });
+        let echo: BetaPromptCacheOptions = serde_json::from_value(echo_fixture.clone())
+            .expect("decode beta prompt-cache response echo");
+        assert_eq!(echo.mode(), &BetaPromptCacheMode::Implicit);
+        assert_eq!(echo.ttl(), &BetaPromptCacheTtl::ThirtyMinutes);
+        assert_eq!(
+            echo.extra_fields().get("future_echo_field"),
+            Some(&json!(true)),
+            "unknown prompt-cache echo fields must stay lossless"
+        );
+        assert_eq!(
+            serde_json::to_value(&echo).expect("round trip"),
+            echo_fixture
+        );
+    }
+
+    #[test]
+    fn beta_agent_and_multi_agent_items_retain_unknown_fields() {
+        let message_fixture = json!({
+            "id": "amsg_1",
+            "author": "root",
+            "recipient": "child",
+            "content": [{"type": "input_text", "text": "hi"}],
+            "type": "agent_message",
+            "future_agent_field": 7
+        });
+        let message: BetaAgentMessage = serde_json::from_value(message_fixture.clone())
+            .expect("decode beta agent message resource");
+        assert_eq!(message.id(), "amsg_1");
+        assert_eq!(message.author(), "root");
+        assert_eq!(message.recipient(), "child");
+        assert_eq!(
+            message.extra_fields().get("future_agent_field"),
+            Some(&json!(7)),
+            "unknown agent message fields must stay lossless"
+        );
+        assert_eq!(
+            serde_json::to_value(&message).expect("round trip"),
+            message_fixture
+        );
+
+        let call_fixture = json!({
+            "action": "list_agents",
+            "arguments": "{}",
+            "call_id": "call_1",
+            "type": "multi_agent_call",
+            "future_call_field": false
+        });
+        let call: BetaMultiAgentCallParam = serde_json::from_value(call_fixture.clone())
+            .expect("decode beta multi-agent call param");
+        assert_eq!(call.call_id(), "call_1");
+        assert_eq!(call.action().as_str(), "list_agents");
+        assert_eq!(
+            call.extra_fields().get("future_call_field"),
+            Some(&json!(false)),
+            "unknown multi-agent call fields must stay lossless"
+        );
+        assert_eq!(
+            serde_json::to_value(&call).expect("round trip"),
+            call_fixture
+        );
+
+        let output_fixture = json!({
+            "action": "list_agents",
+            "call_id": "call_1",
+            "id": "maco_1",
+            "output": [],
+            "type": "multi_agent_call_output",
+            "future_output_field": {"nested": [1]}
+        });
+        let output: BetaMultiAgentCallOutput = serde_json::from_value(output_fixture.clone())
+            .expect("decode beta multi-agent call output");
+        assert_eq!(output.id(), "maco_1");
+        assert!(output.output().is_empty());
+        assert_eq!(
+            output.extra_fields().get("future_output_field"),
+            Some(&json!({"nested": [1]})),
+            "unknown multi-agent output fields must stay lossless"
+        );
+        assert_eq!(
+            serde_json::to_value(&output).expect("round trip"),
+            output_fixture
+        );
+    }
+
+    #[test]
+    fn beta_inject_server_events_retain_unknown_fields() {
+        let created_fixture = json!({
+            "type": "response.inject.created",
+            "response_id": "resp_1",
+            "sequence_number": 4,
+            "stream_id": "lane.1",
+            "future_inject_field": true
+        });
+        let created: BetaResponseInjectCreatedEvent =
+            serde_json::from_value(created_fixture.clone()).expect("decode inject.created");
+        assert_eq!(created.response_id(), "resp_1");
+        assert_eq!(created.sequence_number(), 4);
+        assert_eq!(created.stream_id(), Some("lane.1"));
+        assert_eq!(
+            created.extra_fields().get("future_inject_field"),
+            Some(&json!(true)),
+            "unknown inject.created fields must stay lossless"
+        );
+        assert_eq!(
+            serde_json::to_value(&created).expect("round trip"),
+            created_fixture
+        );
+
+        let failed_fixture = json!({
+            "type": "response.inject.failed",
+            "error": {
+                "code": "response_not_found",
+                "message": "no such response",
+                "future_error_field": 9
+            },
+            "input": [],
+            "response_id": "resp_1",
+            "sequence_number": 5,
+            "future_failed_field": "kept"
+        });
+        let failed: BetaResponseInjectFailedEvent =
+            serde_json::from_value(failed_fixture.clone()).expect("decode inject.failed");
+        assert_eq!(failed.error().message(), "no such response");
+        assert_eq!(
+            failed.error().extra_fields().get("future_error_field"),
+            Some(&json!(9)),
+            "unknown nested inject error fields must stay lossless"
+        );
+        assert_eq!(
+            failed.extra_fields().get("future_failed_field"),
+            Some(&json!("kept")),
+            "unknown inject.failed fields must stay lossless"
+        );
+        assert_eq!(
+            serde_json::to_value(&failed).expect("round trip"),
+            failed_fixture
+        );
+    }
+
+    #[test]
+    fn beta_compact_request_retains_unknown_fields() {
+        let fixture = json!({
+            "model": "gpt-5.6-sol",
+            "future_compact_field": {"tier": "auto"}
+        });
+        let decoded: BetaCompactResponseRequest =
+            serde_json::from_value(fixture.clone()).expect("decode beta compact request");
+        assert_eq!(
+            decoded.extra_fields().get("future_compact_field"),
+            Some(&json!({"tier": "auto"})),
+            "unknown compact request fields must stay lossless"
+        );
+        assert_eq!(serde_json::to_value(&decoded).expect("round trip"), fixture);
     }
 
     #[test]

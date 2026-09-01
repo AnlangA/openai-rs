@@ -901,6 +901,19 @@ fn validate_operation_route(route: &str, path: &[PathSegment<'_>]) -> Result<(),
 /// an empty string both serialize to nothing, so the query key is omitted
 /// entirely rather than sent as `key=`. Other falsy scalars (`0`, `false`)
 /// still encode, because only the serialized string being empty drops the key.
+/// Array fields use the bracketed spelling `name[]`: both official clients
+/// override their querystring serializer at construction — openai-python's
+/// `OpenAI`/`AsyncOpenAI` return `Querystring(array_format="brackets")`
+/// (pinned openai-python `_client.py:519-520` and `1261-1262`;
+/// `_qs.py:104-109` implements brackets as `key + "[]"`, superseding the
+/// `"repeat"` default at `_qs.py:26`) and openai-node's client-level
+/// `stringifyQuery` is `qs.stringify(query, { arrayFormat: 'brackets' })`
+/// (`src/internal/utils/query.ts`). The pinned OpenAPI itself is mixed: its
+/// platform query strings are spelled bare, while its curl examples spell
+/// the multipart transcription form field and the Administration
+/// certificates filter as `include[]=` — the client-level serializer
+/// evidence is decisive here. This also matches the Administration
+/// channel's bracket rule (`admin.rs::append_query_value`, D0238).
 /// When every field is dropped this leaves the URL untouched, without a
 /// dangling `?`.
 fn append_query<T>(url: &mut Url, query: &T) -> Result<(), Error>
@@ -938,9 +951,14 @@ where
                     }
                 }
                 serde_json::Value::Array(values) => {
+                    // openai-python's client-level `Querystring(array_format
+                    // = "brackets")` override (see the doc comment above)
+                    // spells every list item `name[]`, so the key is built
+                    // once outside the loop and reused for each scalar item.
+                    let array_name = format!("{name}[]");
                     for value in values {
                         if let Some(value) = query_scalar(&name, value)? {
-                            serializer.append_pair(&name, &value);
+                            serializer.append_pair(&array_name, &value);
                             appended = true;
                         }
                     }
@@ -1060,7 +1078,7 @@ mod tests {
             vec![
                 ("limit".to_owned(), "0".to_owned()),
                 ("active".to_owned(), "false".to_owned()),
-                ("ids".to_owned(), "file_1".to_owned()),
+                ("ids[]".to_owned(), "file_1".to_owned()),
             ]
         );
 

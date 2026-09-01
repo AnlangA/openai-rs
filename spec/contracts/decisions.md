@@ -4632,3 +4632,58 @@ until a decision is recorded here and its fixtures pass.
 - Impact: documentation and ledger only.
 - Overrides: none
 - Tests: existing suites.
+
+## D0251 — Platform-channel query arrays take the bracketed `name[]` spelling
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `append_query` (platform transport), the Administration `append_query_value` doc comment
+- Sources: round-12 item 12-01 plus the 12-05 comment correction (问题12.md) — openai-python's client classes override the querystring serializer at construction (`_client.py:519-520` sync and `1261-1262` async: `Querystring(array_format="brackets")`; `_qs.py:104-109` implements the format as `key + "[]"` per list item), superseding `_qs.py`'s `"repeat"` default (`_qs.py:26`) for every platform resource; openai-node's client-level `stringifyQuery` uses `qs.stringify(query, { arrayFormat: 'brackets' })` (`src/internal/utils/query.ts`), so both official SDKs agree on brackets at the client level; the pinned OpenAPI is itself mixed — its platform query strings are spelled bare, while its curl examples spell `include[]=` on the multipart transcription form field (pin line 530) and the Administration certificates filter (pin line 5244), so the client-level serializer evidence is decisive; D0238 had already chosen brackets for the Administration channel, leaving the platform channel the sole bare-repeat holdout (the round-7 deferral background).
+- Decision: the platform `append_query` Array branch appends every scalar item under `name[]` (key built once per field); the scalar drop rule (null/empty-string items dropped via `query_scalar`, D0145) is unchanged, nested objects remain rejected, and the doc comment now carries the python/node/pin citations. The Administration comment's false claim that "openai-python's client-level `Querystring()` still repeats those plain keys" is corrected to record the override; the pin's mixed filter spelling stays as historical context and Administration behavior is unchanged.
+- Impact: `openai-rs-client` platform wire encoding — request URLs for every array-valued query parameter (e.g. `include`) change from `include=a&include=b` to `include[]=a&include[]=b`; the `url` crate percent-encodes the brackets in raw assertions (`include%5B%5D=`), matching the Administration precedent. Both official SDK clients emit this form and the pin's examples use it.
+- Overrides: amends D0145 (which documented only the scalar drop rule; the array spelling was unspecified there) and closes the deferral noted alongside D0238.
+- Tests: the transport unit test's `ids[]` assertion plus the updated client-crate URL assertions across responses/conversations/beta_responses tests (`include%5B%5D=…`).
+
+## D0252 — Chat function names validate at `for_type` and at request level against the chat 64-char pin
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `ChatFunctionTool::for_type`, `MAX_CHAT_FUNCTION_TOOL_NAME_CHARS`, `validate_chat_function_tool_name`, `CreateChatCompletionRequest::validate` (`FunctionName` constraint variant), `validate_chat_function_name`
+- Sources: round-12 item 12-02 (问题12.md) plus review item 13 — D0247 added name validation to Responses' `FunctionTool::for_type` but the chat entry point validated nothing, and the Responses channel also validates names at request level (`FunctionTool::validate` feeding create-request validation through `validate_response_tools`) while chat's `CreateChatCompletionRequest::validate` checked nothing about tool names; the pinned spec carries no JSON-Schema `maxLength`/`pattern` on the chat function name — the bound is prose on `FunctionObject.name` (`spec/upstream/openapi-2026-08-29.json` line 31670; the deprecated `ChatCompletionFunctions.name` repeats it at line 21390): "Must be a-z, A-Z, 0-9, or contain underscores and dashes, with a maximum length of 64".
+- Decision: a dedicated `MAX_CHAT_FUNCTION_TOOL_NAME_CHARS = 64` (stricter than Responses' 128-char tool bound, per the chat pin) backs `validate_chat_function_tool_name` around the shared `validate_name` charset rule for `for_type`, mirroring the D0247 Responses shape. Request level: a `FunctionName { actual, minimum, maximum }` variant joins `CreateChatCompletionConstraintError` (non_exhaustive, additive) fed by a `validate_chat_function_name` helper; `CreateChatCompletionRequest::validate` walks `tools[].function.name` and the deprecated `functions[].name` (both carry the same pin prose), so a hand-built tool surfaces the violation client-side exactly as Responses does. The builder typestate's `validate` delegates to the same body.
+- Impact: `openai-rs-types` chat function-tool construction and create-request validation (previously invalid names surfaced only server-side).
+- Overrides: none
+- Tests: `chat_function_tool_for_type_enforces_the_64_char_name_pin`, `validate_enforces_function_names_on_tools_and_legacy_functions`.
+
+## D0253 — Beta decode-side DTOs complete the ExtraFields mirror
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `BetaPromptCacheOptions(Param)`, `BetaAgentMessage`, `BetaMultiAgentCallParam`/`BetaMultiAgentCallOutput`, `BetaResponseInjectCreatedEvent`/`BetaResponseInjectFailedEvent`/`BetaResponseInjectError`, `BetaCompactResponseRequest` in `openai-rs-types/src/beta_responses.rs`
+- Sources: round-12 item 12-03 (问题12.md) — each listed beta decode type's GA mirror in responses.rs carries `#[serde(flatten)] extra: ExtraFields` (`PromptCacheOptions(Param)`, `OutputMessage`, `FunctionCall`/`LocalShellCall`(+Output), the server lifecycle events via the macro-defined family, `ResponsesWebSocketErrorDetails` for the nested error payload, `CompactResponseRequest`) while the beta copies silently dropped unknown keys, so a beta decode→encode round-trip was lossy where the GA one was not.
+- Decision: the flatten field, constructor updates, and `extra_fields()` accessors are added wherever the GA mirror has them. Two split decisions from the GA evidence: `BetaResponseInjectEvent` (the client `response.inject` event) is deliberately skipped because its GA mirror `ResponsesCreateEvent` also omits extra (it flattens `CreateResponseBody`, which has none); `BetaResponseInjectError` is included with `#[serde(default, flatten)]` because GA nested error payloads (`ResponsesWebSocketErrorDetails`) retain extra and without it `inject.failed`'s `error` object stays lossy. The stale `BetaResponsesServerEvent` enum comment claiming only the WebSocketError envelope retains future fields is refreshed. Encode output is unchanged (empty `ExtraFields` serializes no keys).
+- Impact: `openai-rs-types` beta Responses decode (unknown keys now survive round-trips); additive.
+- Overrides: none
+- Tests: `beta_prompt_cache_dtos_retain_unknown_fields`, `beta_agent_and_multi_agent_items_retain_unknown_fields`, `beta_inject_server_events_retain_unknown_fields`, `beta_compact_request_retains_unknown_fields`.
+
+## D0254 — `BatchJsonlWriter::write_line` rejects an empty `custom_id`
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `BatchJsonlWriter::write_line`, `BatchJsonlError::EmptyCustomId`
+- Sources: round-12 item 12-04 (问题12.md) — decoding already rejects rows with an empty `custom_id` (`BatchCustomId::new` refuses exactly-empty strings with `BatchValidationError::EmptyCustomId`, no whitespace trimming), but the writer checked nothing, so a decoded-and-replayed or hand-built `BatchLine` could re-encode an empty id the batch API rejects (unique non-empty `custom_id` is a documented batch requirement).
+- Decision: `write_line` mirrors the decoder's exact semantics (exactly-empty string, no trimming) with a new `BatchJsonlError::EmptyCustomId { line }` variant styled after `NonObjectBody`; the check runs after the line-count bound and before the duplicate check, and a rejection leaves the writer unpoisoned.
+- Impact: `openai-rs-types` batch JSONL writer (closes the decode-through bypass).
+- Overrides: none
+- Tests: `writer_rejects_empty_custom_ids_before_writing`, `writer_keeps_accepting_lines_after_an_empty_custom_id_rejection`.
+
+## D0255 — Round-12 recorded positions
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `top_logprobs` null item, `Response.store` superset, realtime `include` nullable superset, beta wrapper null-strip redundancy, codex receive-side None→null asymmetry, evals `per_model_usage` lenience, the safety webhook pattern, adjacent beta DTOs left without ExtraFields
+- Sources: round-12 audit observations (问题12.md item 12-06 and the per-domain notes).
+- Decision: `top_logprobs` items decode `null` as the explicit null-echo shape — openai-python and openai-node both type the list with nullable items and the pin's own example payloads round-trip it, so the pin-lag stands arbitrated toward the SDK consensus; `Response.store` keeps its superset enum (the shared DTO spans pins that differ); realtime's `include` keeps the nullable superset decode; the beta wrappers' null-strip path stays despite being unreachable through builders (the direct wire type is public API); codex's receive-side None→null normalization asymmetry stays recorded (send side matches the wire, receive side is deliberately lossless); evals `per_model_usage` keeps lenient numeric decoding (the pin's own aggregate rows disagree on field presence); the safety webhook pattern constant keeps its pin spelling; `BetaAgentMessageParam`, `BetaMultiAgentCall`, `BetaMultiAgentCallOutputParam` remain without ExtraFields for now — their GA mirrors were not part of the round-12 evidence set and D0253 deliberately covers only the audited family (flagged for the next serde-lens pass).
+- Impact: ledger only.
+- Overrides: none
+- Tests: existing suites.

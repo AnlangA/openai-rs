@@ -924,7 +924,7 @@ mod tests {
         assert_eq!(url.path(), "/v1/responses/resp_query/input_items");
         let query = url.query_pairs().collect::<Vec<_>>();
         assert!(query.contains(&("after".into(), "item cursor".into())));
-        assert!(query.contains(&("include".into(), "reasoning.encrypted_content".into())));
+        assert!(query.contains(&("include[]".into(), "reasoning.encrypted_content".into())));
         assert!(query.contains(&("limit".into(), "2".into())));
         assert!(query.contains(&("order".into(), "asc".into())));
         assert!(captured.body.is_empty());
@@ -1054,7 +1054,10 @@ mod tests {
         assert!(query.contains(&("stream".into(), "true".into())));
         assert!(query.contains(&("starting_after".into(), "41".into())));
         assert!(query.contains(&("include_obfuscation".into(), "false".into())));
-        assert_eq!(query.iter().filter(|(key, _)| key == "include").count(), 2);
+        assert_eq!(
+            query.iter().filter(|(key, _)| key == "include[]").count(),
+            2
+        );
     }
 
     #[tokio::test]
@@ -1085,14 +1088,14 @@ mod tests {
         assert_eq!(
             query
                 .iter()
-                .filter(|(key, value)| key == "include" && value == "file_search_call.results")
+                .filter(|(key, value)| key == "include[]" && value == "file_search_call.results")
                 .count(),
             1
         );
         assert_eq!(
             query
                 .iter()
-                .filter(|(key, value)| key == "include" && value == "future.include.value")
+                .filter(|(key, value)| key == "include[]" && value == "future.include.value")
                 .count(),
             1,
             "unknown include values serialize verbatim"
