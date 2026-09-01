@@ -5017,3 +5017,14 @@ until a decision is recorded here and its fixtures pass.
 - Impact: test robustness and ledger text only.
 - Overrides: none
 - Tests: `keepalive_times_out_idle_connection_without_inbound_frames` (relaxed), the full suite.
+
+## D0286 — Round-19 closeout record
+
+- Status: accepted
+- Reviewed: 2026-09-02
+- Scope: the sixteen-domain closeout audit of rounds 11-18
+- Sources: round-19 closeout (问题19.md).
+- Decision: every finding across rounds 11-18 is verified fixed in code (tests green) or ledgered as a deliberate position/follow-up — zero unaddressed items and zero medium/high wire divergence across all sixteen domains. One cosmetic fix landed (问题13.md's 信息组 status cell updated to 已落档 D0269). The surviving deferred items are all recorded: the per-resource query-parity harness beyond admin and inline param-schema lowering (D0280 P-2), the pagination-error request-id and multipart source-chain diagnostics, the mid-stream deadline WARN, the rmcp later-page stale-fallback e2e, the xtask fixture-generator proposal (D0284), `Response.conversation` accessor, the webhook Clock seam, and the ~96-op admin loopback stance — none is a correctness debt. Pins verified frozen and internally consistent; final independent gate run green.
+- Impact: ledger and one documentation cell only.
+- Overrides: none
+- Tests: existing suites (1252/0).
