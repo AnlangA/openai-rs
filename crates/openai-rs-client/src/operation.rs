@@ -31,7 +31,10 @@ pub(crate) enum ResponseMode {
 pub(crate) enum RetryClass {
     Safe,
     Replayable,
+    /// Only constructed on the realtime lanes; `legacy-realtime` alone keeps
+    /// the variant unconstructed (narrow-combo dead-code, round 18).
     #[cfg(any(feature = "realtime", feature = "legacy-realtime"))]
+    #[cfg_attr(not(feature = "realtime"), allow(dead_code))]
     Never,
 }
 

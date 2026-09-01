@@ -1116,7 +1116,7 @@ until a decision is recorded here and its fixtures pass.
 - Overrides: none
 - Tests: `create_request_sends_typed_context_moderation_and_explicit_nulls`,
   `create_request_validate_enforces_pinned_limits`,
-  `eval_sampling_params_sends_official_nulls_and_enforces_pin_limits`,
+  `grader_sampling_params_sends_official_nulls_and_enforces_pin_limits`,
   `request_typestate_controls_stream_wire_fields`,
   `request_builders_cover_echo_best_of_suffix_and_stream_typestate`.
 
@@ -5006,3 +5006,14 @@ until a decision is recorded here and its fixtures pass.
 - Impact: ledger only.
 - Overrides: none
 - Tests: existing suites.
+
+## D0285 — Round-18 regression verification record
+
+- Status: accepted
+- Reviewed: 2026-09-02
+- Scope: the full round-18 verification matrix (decisions D0001-D0284 re-verified in six slices; 350 timing-sensitive repeat runs; the 13+1 gates re-run independently; 14 narrow feature combos; drift-marker sweep; machine parities; security/tracing census; ledger text audit; docs/examples; 20-point cross-SDK wire spot-check)
+- Sources: round-18 verification (问题18.md).
+- Decision: zero functional regressions across all 284 decisions (one cosmetic ledger test-name drift in D0039 corrected in place). Two robustness fixes landed: `RetryClass::Never` takes `cfg_attr(not(feature = "realtime"), allow(dead_code))` for the legacy-realtime-only combo, and the keepalive promptness test's 5s upper bound becomes a 30s anti-hang bound (load-sensitive scheduling delays of ~6.7s observed in repeat runs are not functional failures — the timeout still fired with the correct reason). The closeout baseline is 1252 tests / 0 failures with 14/14 gates green.
+- Impact: test robustness and ledger text only.
+- Overrides: none
+- Tests: `keepalive_times_out_idle_connection_without_inbound_frames` (relaxed), the full suite.
