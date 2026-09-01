@@ -168,7 +168,10 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
     ///
     /// Runs under the [`request_timeout`](Self::request_timeout) total budget
     /// (default 600s): connection establishment, the request, and the full
-    /// JSON response body must all fit inside it.
+    /// JSON response body must all fit inside it. If the request fails with
+    /// 401 and is retried once with a refreshed token, the retry gets its own
+    /// budget, so the worst-case wall time is up to ~2× the configured budget
+    /// plus one token-refresh round trip.
     pub async fn create(&self, request: &CreateResponseRequest) -> Result<Response, DirectError> {
         let body = serde_json::to_value(request)?;
         validate_body(&body, false)?;
@@ -879,7 +882,7 @@ mod tests {
             let (mut stream, _) = listener.accept().await?;
             let mut request = vec![0_u8; 16 * 1024];
             let _ = stream.read(&mut request).await?;
-            let body = b"data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hi\",\"sequence_number\":1,\"logprobs\":[]}\n\ndata: [DONE]\n\n";
+            let body = b"data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hi\",\"sequence_number\":1,\"logprobs\":[]}\n\ndata: {\"type\":\"response.completed\",\"sequence_number\":2,\"response\":{\"id\":\"resp_stream\",\"created_at\":1,\"error\":null,\"incomplete_details\":null,\"instructions\":null,\"metadata\":null,\"model\":\"gpt-test\",\"object\":\"response\",\"output\":[],\"parallel_tool_calls\":true,\"temperature\":null,\"tool_choice\":\"auto\",\"tools\":[],\"top_p\":null}}\n\ndata: [DONE]\n\n";
             let headers = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
@@ -897,6 +900,19 @@ mod tests {
         match event {
             ResponseStreamEvent::OutputTextDelta(delta) => assert_eq!(delta.delta(), "Hi"),
             other => return Err(format!("unexpected SSE event: {other:?}").into()),
+        }
+        // 17-J-4: a terminal-shape lifecycle event reuses the platform
+        // codec's `Response` payload verbatim.
+        let terminal = stream
+            .next_event()
+            .await
+            .ok_or("missing terminal event")??;
+        match terminal {
+            ResponseStreamEvent::Completed(completed) => {
+                assert_eq!(completed.sequence_number(), 2);
+                assert_eq!(completed.response().id(), "resp_stream");
+            }
+            other => return Err(format!("unexpected terminal event: {other:?}").into()),
         }
         assert!(stream.next_event().await.is_none());
         server.await??;
@@ -947,6 +963,196 @@ mod tests {
         ] {
             assert!(super::validate_body(&absent_or_false, false).is_ok());
         }
+    }
+
+    /// 17-J-1: the streaming-lane 401-recovery — same scripted loopback shape
+    /// as the create-lane test, but the retried request is a `stream` call and
+    /// the success is a `text/event-stream` body whose events must all arrive
+    /// through the refreshed token's connection.
+    #[tokio::test]
+    async fn stream_retries_once_with_a_refreshed_token_after_a_401()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let mut backend_authorizations = Vec::new();
+            for round in 0..3 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut request = vec![0_u8; 16 * 1024];
+                let _ = stream.readable().await;
+                let read = stream.try_read(&mut request).unwrap_or(0);
+                let captured = String::from_utf8_lossy(&request[..read]).to_string();
+                let authorization = captured
+                    .to_ascii_lowercase()
+                    .lines()
+                    .find(|line| line.starts_with("authorization:"))
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_default();
+                if captured.starts_with("POST /oauth/token") {
+                    let body = br#"{"access_token":"access-refreshed","expires_in":3600}"#;
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream.write_all(headers.as_bytes()).await?;
+                    stream.write_all(body).await?;
+                } else if round == 0 {
+                    backend_authorizations.push(authorization);
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: 42\r\nConnection: close\r\n\r\n{\"error\":{\"code\":\"token_expired\",\"message\":\"x\"}}",
+                        )
+                        .await?;
+                } else {
+                    backend_authorizations.push(authorization);
+                    let accept_stream = captured.contains("accept: text/event-stream");
+                    let body = b"data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"refreshed\",\"sequence_number\":1,\"logprobs\":[]}\n\ndata: [DONE]\n\n";
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    assert!(accept_stream, "the retry must stay a streaming request");
+                    stream.write_all(headers.as_bytes()).await?;
+                    stream.write_all(body).await?;
+                }
+            }
+            Ok::<_, std::io::Error>(backend_authorizations)
+        });
+
+        let store = Arc::new(EphemeralStore::default());
+        store
+            .save(&StoredCodexSession::fixture(
+                "access-secret",
+                "refresh-secret",
+                u64::MAX,
+                ChatGptAccountId::fixture("acct-123")?,
+            ))
+            .await?;
+        let auth = DirectAuthClient::with_test_token_endpoint(url::Url::parse(&format!(
+            "http://{address}/oauth/token"
+        ))?)?;
+        let manager = Arc::new(TokenManager::new(store, auth));
+        let endpoint = url::Url::parse(&format!("http://{address}/backend-api/codex/responses"))?;
+        let client = DirectCodexResponsesClient::with_test_endpoint(manager, endpoint)?;
+        let request = CreateResponseRequest::new("gpt-test", ResponseInput::Text("hello".into()))
+            .into_streaming();
+        let mut stream = client.stream(&request).await?;
+        let event = stream.next_event().await.ok_or("missing SSE event")??;
+        match event {
+            ResponseStreamEvent::OutputTextDelta(delta) => {
+                assert_eq!(delta.delta(), "refreshed")
+            }
+            other => return Err(format!("unexpected SSE event: {other:?}").into()),
+        }
+        assert!(stream.next_event().await.is_none());
+
+        let authorizations = server.await??;
+        assert_eq!(authorizations.len(), 2, "exactly one retry after the 401");
+        assert!(
+            authorizations[0].contains("bearer access-secret"),
+            "the failed request carried the cached token: {}",
+            authorizations[0]
+        );
+        assert!(
+            authorizations[1].contains("bearer access-refreshed"),
+            "the retry carried the refreshed token: {}",
+            authorizations[1]
+        );
+        Ok(())
+    }
+
+    /// 17-J-2: a second 401 after the refresh is terminal — the client made
+    /// exactly two backend attempts (cached token, refreshed token) and no
+    /// third refresh/retry cycle, surfacing the 401 as the final error.
+    #[tokio::test]
+    async fn a_second_401_after_the_refresh_surfaces_as_a_terminal_error()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let mut backend_authorizations = Vec::new();
+            let mut refreshes = 0_usize;
+            // Three connections total: 401, token refresh, 401 again. A
+            // fourth (a third backend attempt) would never be accepted, so
+            // the loop simply stops — the counts below prove it never came.
+            for round in 0..3 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut request = vec![0_u8; 16 * 1024];
+                let _ = stream.readable().await;
+                let read = stream.try_read(&mut request).unwrap_or(0);
+                let captured = String::from_utf8_lossy(&request[..read]).to_string();
+                let authorization = captured
+                    .to_ascii_lowercase()
+                    .lines()
+                    .find(|line| line.starts_with("authorization:"))
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_default();
+                if captured.starts_with("POST /oauth/token") {
+                    refreshes += 1;
+                    let body = br#"{"access_token":"access-refreshed","expires_in":3600}"#;
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream.write_all(headers.as_bytes()).await?;
+                    stream.write_all(body).await?;
+                } else {
+                    backend_authorizations.push(authorization);
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: 42\r\nConnection: close\r\n\r\n{\"error\":{\"code\":\"token_expired\",\"message\":\"x\"}}",
+                        )
+                        .await?;
+                    let _ = round;
+                }
+            }
+            Ok::<_, std::io::Error>((backend_authorizations, refreshes))
+        });
+
+        let store = Arc::new(EphemeralStore::default());
+        store
+            .save(&StoredCodexSession::fixture(
+                "access-secret",
+                "refresh-secret",
+                u64::MAX,
+                ChatGptAccountId::fixture("acct-123")?,
+            ))
+            .await?;
+        let auth = DirectAuthClient::with_test_token_endpoint(url::Url::parse(&format!(
+            "http://{address}/oauth/token"
+        ))?)?;
+        let manager = Arc::new(TokenManager::new(store, auth));
+        let endpoint = url::Url::parse(&format!("http://{address}/backend-api/codex/responses"))?;
+        let client = DirectCodexResponsesClient::with_test_endpoint(manager, endpoint)?;
+        let request = CreateResponseRequest::new("gpt-test", ResponseInput::Text("hello".into()))
+            .into_streaming();
+        let error = client
+            .stream(&request)
+            .await
+            .err()
+            .ok_or("the second 401 must surface as a terminal error")?;
+        assert!(
+            matches!(&error, DirectError::HttpStatus { status: 401, .. }),
+            "unexpected error: {error:?}"
+        );
+
+        let (authorizations, refreshes) = server.await??;
+        assert_eq!(refreshes, 1, "exactly one refresh cycle");
+        assert_eq!(
+            authorizations.len(),
+            2,
+            "exactly two backend attempts, no third try"
+        );
+        assert!(
+            authorizations[1].contains("bearer access-refreshed"),
+            "the second attempt carried the refreshed token: {}",
+            authorizations[1]
+        );
+        Ok(())
     }
 
     /// 8-22: the 401-recovery lane end to end — the first request fails with

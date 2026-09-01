@@ -1047,6 +1047,122 @@ mod tests {
         assert!(!error.to_string().contains("Responses"));
     }
 
+    #[tokio::test]
+    async fn transport_and_timeout_errors_never_leak_the_request_url() {
+        // 17-D-3: `from_reqwest` strips the request URL (opaque cursors and
+        // signed query values ride it), so neither `Display` nor `Debug` of
+        // the public variants can echo it back.
+        let url = "http://127.0.0.1:9/v1/models?cursor=opaque-secret";
+        let connect_error = reqwest::Client::new()
+            .get(url)
+            .send()
+            .await
+            .expect_err("the connection to the discarded port must fail");
+        assert!(
+            connect_error
+                .url()
+                .is_some_and(|carried| carried.as_str().contains("cursor=opaque-secret")),
+            "the raw reqwest error must carry the URL for the redaction to matter"
+        );
+        assert!(
+            !connect_error.is_timeout(),
+            "the discarded-port error must be the Transport lane"
+        );
+        let transport = Error::from_reqwest(connect_error);
+        assert!(matches!(transport, Error::Transport(_)));
+
+        // A socket that accepts and stays silent yields the Timeout lane.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the silent server");
+        let silent = listener.local_addr().expect("silent server address");
+        tokio::spawn(async move {
+            let _accepted = listener.accept().await;
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        });
+        let timeout_error = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(20))
+            .build()
+            .expect("timeout client")
+            .get(format!("http://{silent}/v1/files?cursor=opaque-secret"))
+            .send()
+            .await
+            .expect_err("the silent socket must time out");
+        assert!(timeout_error.is_timeout(), "{timeout_error:?}");
+        let timeout = Error::from_reqwest(timeout_error);
+        assert!(matches!(timeout, Error::Timeout(_)));
+
+        for error in [&transport, &timeout] {
+            let display = error.to_string();
+            let debug = format!("{error:?}");
+            for rendered in [&display, &debug] {
+                // The request URL (scheme, path, query cursor) must never
+                // render. The raw socket address inside the OS connect error
+                // is not URL-derived and may appear in `Debug`.
+                for leaked in ["opaque-secret", "cursor=", "http://", "/v1/"] {
+                    assert!(
+                        !rendered.contains(leaked),
+                        "rendered error must not leak the URL substring {leaked:?}: {rendered}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pagination_and_response_body_display_pins() {
+        // 17-D-3: pin the exact `Display` surfaces of two variants whose
+        // rendered text is part of the public contract.
+        let missing = Error::Pagination {
+            resource: "files",
+            reason: PaginationFault::MissingCursor,
+        };
+        assert_eq!(
+            missing.to_string(),
+            "automatic files pagination failed closed: page advertises more \
+             results without a last_id or last item id"
+        );
+        let repeated = Error::Pagination {
+            resource: "vector_stores",
+            reason: PaginationFault::RepeatedCursor,
+        };
+        assert_eq!(
+            repeated.to_string(),
+            "automatic vector_stores pagination failed closed: server returned an \
+             already-requested cursor"
+        );
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let raw = rt.block_on(async {
+            reqwest::Client::new()
+                .get("http://127.0.0.1:9/v1/files")
+                .send()
+                .await
+                .expect_err("the connection to the discarded port must fail")
+        });
+        let body = Error::from_response_body(
+            raw,
+            &ResponseMeta::new(
+                StatusCode::BAD_GATEWAY,
+                Some("req_body".into()),
+                RateLimitMetadata::default(),
+            ),
+        );
+        let display = body.to_string();
+        assert!(
+            display
+                .starts_with("failed while reading HTTP response body (status 502 Bad Gateway): "),
+            "the status must be rendered inline: {display}"
+        );
+        assert!(
+            !display.contains("127.0.0.1"),
+            "the redacted source must not echo the URL: {display}"
+        );
+    }
+
     #[test]
     fn api_error_exposes_retry_hints_from_response_headers() {
         let mut headers = HeaderMap::new();

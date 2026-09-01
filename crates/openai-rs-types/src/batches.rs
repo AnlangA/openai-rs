@@ -2330,6 +2330,66 @@ mod tests {
     }
 
     #[test]
+    fn result_line_error_outcome_roundtrips_error_payload_and_extras() {
+        // 17-E-1: the `(Null, Value)` wire arm - a failed-request output
+        // line with `response: null` and a structured `error` object - must
+        // decode into `BatchLineOutcome::Error`, keep the error payload's
+        // fields (plus unknown error keys through its flatten), and
+        // re-encode to the identical wire object.
+        let line = json!({
+            "id": "batch_req_err",
+            "custom_id": "line-err",
+            "response": null,
+            "error": {
+                "code": "rate_limit_exceeded",
+                "message": "Request exceeded the batch rate limit.",
+                "param": "model",
+                "future_error_key": {"detail": "retained"}
+            },
+            "future": {"retained": true}
+        });
+        let decoded: BatchResultLine<serde_json::Value> =
+            serde_json::from_value(line.clone()).expect("decode failed-request result line");
+        let BatchLineOutcome::Error(error) = decoded.outcome() else {
+            panic!("expected error outcome for response=null + error object");
+        };
+        assert_eq!(error.code(), "rate_limit_exceeded");
+        assert_eq!(error.message(), "Request exceeded the batch rate limit.");
+        let extras = error
+            .extra_fields()
+            .iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            extras,
+            std::collections::BTreeMap::from([
+                ("param", &json!("model")),
+                ("future_error_key", &json!({"detail": "retained"}))
+            ]),
+            "unknown error properties survive the flatten"
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode error line"),
+            line,
+            "decode/encode round-trip keeps response=null and the error payload"
+        );
+
+        // Both outcomes present at once is rejected with the dedicated
+        // message rather than silently preferring one arm.
+        let both = serde_json::from_value::<BatchResultLine<serde_json::Value>>(json!({
+            "id": "batch_req_1",
+            "custom_id": "line-1",
+            "response": {"status_code": 200, "request_id": "req_1", "body": {"ok": true}},
+            "error": {"code": "late_failure", "message": "failed after the response"}
+        }))
+        .expect_err("response and error cannot coexist");
+        assert!(
+            both.to_string()
+                .contains("batch result line cannot contain both response and error"),
+            "unexpected rejection message: {both}"
+        );
+    }
+
+    #[test]
     fn non_success_http_body_does_not_require_the_success_dto() {
         assert!(BatchLineResponse::new(400, "req", true).is_err());
         assert!(BatchLineResponse::<bool>::error(200, "req", json!({})).is_err());

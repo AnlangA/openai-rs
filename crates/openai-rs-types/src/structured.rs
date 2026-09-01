@@ -952,6 +952,40 @@ mod tests {
         tree: TreeBranch,
     }
 
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    struct VecOuter {
+        /// Doc comment on the vector-of-nested field.
+        items: Vec<NestedInner>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    struct OptOuter {
+        /// Doc comment on the optional nested field.
+        maybe: Option<NestedInner>,
+    }
+
+    /// Collects every `$ref` pointer in the document.
+    fn collect_refs(value: &serde_json::Value, refs: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(object) => {
+                for (key, child) in object {
+                    if key == "$ref" {
+                        if let serde_json::Value::String(pointer) = child {
+                            refs.push(pointer.clone());
+                        }
+                    }
+                    collect_refs(child, refs);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items {
+                    collect_refs(child, refs);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn assert_no_ref_with_siblings(value: &serde_json::Value) {
         match value {
             serde_json::Value::Object(object) => {
@@ -1077,6 +1111,116 @@ mod tests {
             nested["properties"],
             schema["$defs"]["NestedInner"]["properties"]
         );
+    }
+
+    #[test]
+    fn vec_and_option_ref_fields_keep_resolvable_strict_shapes() {
+        // 17-I-1: a doc comment on a `Vec<Inner>` or `Option<Inner>` field
+        // stays on the property itself, so the nested `$ref` appears as a
+        // bare sole-key reference inside `items` / `anyOf` - the one legal
+        // strict-mode `$ref` shape that passes through untouched. The
+        // definitions those references resolve to must still be walked as
+        // object schemas, and the optional field must carry the crate's
+        // nullable `anyOf` branch.
+        let tool =
+            TypedFunction::<VecOuter, OptOuter>::new("ref_shapes").expect("valid function schema");
+
+        let vec_schema = tool.parameters_schema();
+        assert_no_ref_with_siblings(vec_schema);
+        let items = &vec_schema["properties"]["items"];
+        assert_eq!(items["type"], "array");
+        assert_eq!(
+            items["description"],
+            "Doc comment on the vector-of-nested field."
+        );
+        assert_eq!(items["items"]["$ref"], "#/$defs/NestedInner");
+        // Every remaining `$ref` in the emitted schema resolves locally.
+        let mut refs = Vec::new();
+        collect_refs(vec_schema, &mut refs);
+        assert!(!refs.is_empty(), "schemars keeps the bare items reference");
+        for reference in refs {
+            let pointer = reference
+                .strip_prefix("#/")
+                .expect("references stay local to the document");
+            let mut node = vec_schema.as_object().expect("object root");
+            for segment in pointer.split('/').filter(|segment| !segment.is_empty()) {
+                node = node
+                    .get(segment)
+                    .and_then(serde_json::Value::as_object)
+                    .expect("reference target exists in the document");
+            }
+            assert_eq!(
+                node["type"], "object",
+                "reference {reference} targets an object"
+            );
+        }
+        // The referenced definition itself was normalized to strict shape.
+        let definition = &vec_schema["$defs"]["NestedInner"];
+        assert_eq!(definition["type"], "object");
+        assert_eq!(definition["properties"]["label"]["type"], "string");
+        assert_eq!(definition["required"], json!(["label"]));
+        assert_eq!(definition["additionalProperties"], false);
+
+        let opt_schema = tool.output_schema();
+        assert_no_ref_with_siblings(opt_schema);
+        let maybe = &opt_schema["properties"]["maybe"];
+        let variants = maybe["anyOf"].as_array().expect("nullable anyOf branch");
+        assert_eq!(variants.len(), 2);
+        assert_eq!(variants[0]["$ref"], "#/$defs/NestedInner");
+        // The crate's nullable convention: the null branch is a bare
+        // `{"type": "null"}` object.
+        assert_eq!(variants[1], json!({ "type": "null" }));
+        // A field that was not pre-listed as required stays required while
+        // being nullable.
+        assert!(
+            opt_schema["required"]
+                .as_array()
+                .expect("required list")
+                .contains(&json!("maybe"))
+        );
+        // The referenced optional definition is normalized identically.
+        assert_eq!(
+            opt_schema["$defs"]["NestedInner"],
+            vec_schema["$defs"]["NestedInner"]
+        );
+    }
+
+    #[test]
+    fn nested_dollar_schema_key_survives_normalization() {
+        // 17-I-2: only the ROOT `$schema` dialect declaration is stripped
+        // (D0247). A `$schema` key nested inside a property is data as far
+        // as this crate is concerned and must survive the walk untouched.
+        let mut schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": ["inner"],
+            "properties": {
+                "inner": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {"label": {"type": "string"}}
+                }
+            }
+        });
+        normalize_strict_schema(&mut schema).expect("nested $schema is not rejected");
+        assert!(
+            schema.get("$schema").is_none(),
+            "the root declaration alone is stripped"
+        );
+        assert_eq!(
+            schema["properties"]["inner"]["$schema"],
+            "https://json-schema.org/draft/2020-12/schema",
+            "a non-root $schema key must survive normalization"
+        );
+        assert_eq!(
+            count_dollar_schema_keys(&schema),
+            1,
+            "exactly the nested declaration remains: {schema}"
+        );
+        // The surrounding keywords were still normalized.
+        assert_eq!(schema["properties"]["inner"]["additionalProperties"], false);
+        assert_eq!(schema["properties"]["inner"]["required"], json!(["label"]));
+        assert_eq!(schema["additionalProperties"], false);
     }
 
     #[test]

@@ -1,0 +1,6 @@
+event: response.created
+data: {"type":"a"}
+
+event: response.completed
+data: {"type":"b"}
+

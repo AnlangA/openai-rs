@@ -4984,3 +4984,25 @@ until a decision is recorded here and its fixtures pass.
 - Impact: ledger only.
 - Overrides: none
 - Tests: existing suites.
+
+## D0283 — Round-17 test-debt clearance and coverage hardening
+
+- Status: accepted
+- Reviewed: 2026-09-02
+- Scope: the round-17 queued debts (rmcp cache e2e, codex fake-child D0267/D0281 fields, finish_with_flushed adoption on chat/completions/beta lanes, five doc follow-ups, drift status/location diffing) and the audited coverage gaps closed by six test agents
+- Sources: round-17 findings (问题17.md) — the ledgered follow-ups from D0277/D0279/D0280/D0282/D0281's reports plus the twelve-domain test-gap census (431/431 ledger Tests references verified present and runnable).
+- Decision: queued debts cleared — rmcp gains ttlMs/fail-first-page harness plus three cache e2e (hit-skips-wire, disabled-restores-wire, stale-serves-Ok); codex fake-child fixtures carry every D0267/D0281 field asserted through both lanes; chat/completions/beta SSE loops adopt `finish_with_flushed` (beta documented as diagnostic-only since its codec requires the event field); docs gain the pagination-ergonomics section, files_list example, direct 401-budget note, arguments-sealing note, and poll server-paced note; drift.rs now diffs success statuses and parameter locations (with path-item params). Coverage gaps closed: batch error-outcome decode arms (17-E-1), the beta 61-branch exhaustive decode table + 3 preview discriminators (17-C-1), WS lane-scoped error envelope + sibling-lane survival and two-lane recv_into routing (17-C-2), RealtimeSession all-field round-trip (17-C-3), accumulator fold edges (index gaps/reordering, refusal+content, empty arrays, empty arguments; the empty-array pin records a deliberate python divergence) (17-B-1), non-finite validation + n=128 boundary (17-B-3), future-dated Retry-After + shrinking retry budget (17-D-1/2), URL redaction and Display pins (17-D-3), Response conversation/background/prompt-cache echo decode + follow_up_from all-seven-fields + stream-true decode gate + concurrent SSE streams (17-A/17-H-2), admin 502-retry loopback (17-F-2), seven admin DTO decode fixtures + WireSecret redaction pin (17-F-1), schemars Vec/Option ref shapes + nested $schema survival (17-I-1/2), codex-direct streaming 401 retry + double-401 terminal + terminal-event decode (17-J-1/2/4), rmcp concurrent dispatch interleave (17-H-1), codex Thread joins the wire sample (17-K-3), and the fuzz crate gains a responses_input_item target plus 27 seed corpus files (17-G-2).
+- Impact: test-only plus docs and the drift tool; no production behavior changes.
+- Overrides: none
+- Tests: the thirty-plus tests enumerated above (all green under --all-features).
+
+## D0284 — Round-17 recorded positions
+
+- Status: accepted
+- Reviewed: 2026-09-02
+- Scope: fixture-generator proposal; admin per-op loopback stance; ~96 unloopbacked admin ops; list-alias target assertion; webhook Clock variant; direct redirect branches; expires_in default; stderr flood; cancel-during-backoff/upload-drop; x-should-retry×budget; poller mid-flight cancel; nested VS filters; wandb decode; schemars bare-sole-key refs; Response.conversation accessor gap; accumulator empty-array divergence; ledger Tests census.
+- Sources: round-17 informational findings (问题17.md 信息组).
+- Decision: a narrow xtask fixture-from-pin generator is proposed (10 high-value schema families, synthetic authority class, regenerates on pin bumps) — recorded as a candidate, not committed; admin stays at ~26 loopbacked ops with DTO-level machine parities carrying the rest (a full ~96-server sweep judged not worth maintenance; an alias-target assertion is the recommended cheap addition); `WebhookVerificationError::Clock` stays untested (needs a clock-injection seam; two-line branch); codex-direct redirect branches on stream/auth lanes stay defense-in-depth-untested; `expires_in`-absent default and the mid-flight-cancel/upload-drop lanes are noted as residual gaps at low risk; schemars 1.0.4's bare sole-key refs inside items/anyOf are documented as deliberately passed through (sibling inlining is property-level only); `Response.conversation` lacks an accessor (pinned via Debug until a types touch adds one); the accumulator's empty-tool_calls-array explicit-`[]` pin records the python divergence deliberately; the 17-L census (431/431 ledger Tests present and runnable) is the round-18 regression baseline.
+- Impact: ledger only.
+- Overrides: none
+- Tests: existing suites.

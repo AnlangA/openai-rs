@@ -5295,6 +5295,83 @@ mod tests {
     }
 
     #[test]
+    fn chat_create_rejects_non_finite_sampling_and_penalty_fields() {
+        // 17-B-3: `NaN` and both infinities are rejected for every floating
+        // field — a non-finite value can never satisfy the pinned range even
+        // when comparisons with `NaN` are all false, because the guard checks
+        // `is_finite()` first.
+        let base = || CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hi"));
+        type FieldAssign = fn(&mut CreateChatCompletionRequest, f64);
+        type ErrorMatches = fn(&CreateChatCompletionConstraintError) -> bool;
+        let cases: [(FieldAssign, ErrorMatches); 4] = [
+            (
+                |body, value| {
+                    body.body.temperature = Omittable::Value(Nullable::Value(value));
+                },
+                |error| {
+                    matches!(
+                        error,
+                        CreateChatCompletionConstraintError::Temperature { .. }
+                    )
+                },
+            ),
+            (
+                |body, value| {
+                    body.body.top_p = Omittable::Value(Nullable::Value(value));
+                },
+                |error| matches!(error, CreateChatCompletionConstraintError::TopP { .. }),
+            ),
+            (
+                |body, value| {
+                    body.body.frequency_penalty = Omittable::Value(Nullable::Value(value));
+                },
+                |error| {
+                    matches!(
+                        error,
+                        CreateChatCompletionConstraintError::FrequencyPenalty { .. }
+                    )
+                },
+            ),
+            (
+                |body, value| {
+                    body.body.presence_penalty = Omittable::Value(Nullable::Value(value));
+                },
+                |error| {
+                    matches!(
+                        error,
+                        CreateChatCompletionConstraintError::PresencePenalty { .. }
+                    )
+                },
+            ),
+        ];
+        for (assign, is_expected) in cases {
+            for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let mut request = base();
+                assign(&mut request, value);
+                let error = match request.validate() {
+                    Err(error) => error,
+                    Ok(_) => panic!("non-finite {value} must never pass validation"),
+                };
+                assert!(
+                    is_expected(&error),
+                    "expected the field-specific rejection for {value}, got {error:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chat_create_accepts_the_upper_choices_boundary() {
+        // 17-B-3: `n = MAX_CHAT_CHOICES` (128) is the inclusive upper bound.
+        let mut boundary =
+            CreateChatCompletionRequest::new("gpt-5.6-sol", ChatUserMessage::text("hi"));
+        boundary.body.n = Omittable::Value(Nullable::Value(MAX_CHAT_CHOICES));
+        boundary
+            .validate()
+            .expect("n = 128 is the inclusive upper bound");
+    }
+
+    #[test]
     fn stored_chat_update_and_list_match_openapi_inventory() {
         let update =
             UpdateChatCompletionRequest::new(BTreeMap::from([("topic".into(), "demo".into())]));

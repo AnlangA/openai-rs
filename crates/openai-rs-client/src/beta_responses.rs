@@ -503,18 +503,27 @@ impl BetaResponseEventStream {
                     return;
                 }
             }
-            let dispatches = match decoder.finish() {
-                Ok(dispatches) => dispatches,
-                Err(source) => {
-                    yield Err(Error::Sse {
+            // 14-G-1: EOF-flushed dispatches survive a failing EOF. A
+            // data-only terminal frame (no `event:` line, so the policy's
+            // terminal table cannot match it) flushes at EOF as a plain
+            // event; yield it before the UnexpectedEof instead of losing the
+            // terminal payload under the error.
+            let (dispatches, eof_error) = match decoder.finish_with_flushed() {
+                Ok(dispatches) => (dispatches, None),
+                Err((source, flushed)) => (
+                    flushed,
+                    Some(Error::Sse {
                         source,
                         request_id: stream_meta.request_id().map(Box::<str>::from),
-                    });
-                    return;
-                }
+                    }),
+                ),
             };
             for dispatch in dispatches {
                 match decode_beta_dispatch(dispatch, &stream_meta) {
+                    Ok(Some(event)) if event.is_terminal() => {
+                        yield Ok(event);
+                        return;
+                    }
                     Ok(Some(event)) => yield Ok(event),
                     Ok(None) => return,
                     Err(error) => {
@@ -522,6 +531,9 @@ impl BetaResponseEventStream {
                         return;
                     }
                 }
+            }
+            if let Some(error) = eof_error {
+                yield Err(error);
             }
         };
         Ok(Self {
@@ -1832,6 +1844,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn eof_flushed_data_only_terminal_is_delivered_before_unexpected_eof() {
+        // 14-G-1: the final `response.completed` frame carries no `event:`
+        // line and no trailing blank line, so it only surfaces through the
+        // EOF flush as a plain event; the policy's terminal table matches
+        // event names and cannot classify it. Unlike the media lane, the beta
+        // typed codec requires the SSE event field, so a data-only frame can
+        // never decode to a terminal event; the corner cannot deliver a
+        // terminal payload. Adopting `finish_with_flushed` still surfaces the
+        // flushed frame to the typed codec, whose StreamProtocol error (with
+        // the body preview) is strictly more diagnostic than the generic
+        // UnexpectedEof that plain `finish()` would raise instead.
+        let created = json!({
+            "type": "response.created",
+            "sequence_number": 1,
+            "agent": {"agent_name": "root"},
+            "response": serde_json::from_str::<Value>(&response_json("in_progress"))
+                .expect("created response JSON")
+        });
+        let completed = json!({
+            "type": "response.completed",
+            "sequence_number": 2,
+            "agent": {"agent_name": "root"},
+            "response": serde_json::from_str::<Value>(&response_json("completed"))
+                .expect("completed response JSON")
+        });
+        let body = format!("event: response.created\ndata: {created}\n\ndata: {completed}");
+        let (base_url, _captured) = serve_once(StatusCode::OK, "text/event-stream", body).await;
+        let mut stream = client(base_url)
+            .beta_responses()
+            .create_stream(BetaCreateStreamingResponseRequest::new("gpt-test", "hello"))
+            .await
+            .expect("open beta SSE stream");
+        assert!(
+            stream
+                .next()
+                .await
+                .expect("created event")
+                .expect("valid created event")
+                .response()
+                .is_some()
+        );
+        let error = stream
+            .next()
+            .await
+            .expect("EOF-flushed frame surfaces through the codec")
+            .expect_err("data-only frame cannot decode without its event field");
+        match error {
+            Error::StreamProtocol { message, .. } => {
+                assert!(message.contains("missing its SSE event field"));
+            }
+            other => panic!("expected stream protocol error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
     async fn beta_retrieve_stream_encodes_resume_query() {
         let (base_url, captured) = serve_once(
             StatusCode::OK,
@@ -3064,5 +3132,104 @@ mod tests {
                 .is_none(),
             "a retired beta socket reports EOF on every later recv"
         );
+    }
+
+    #[tokio::test]
+    async fn beta_error_envelope_is_lane_scoped_and_keeps_sibling_lanes_flowing() {
+        // 17-C-2(a): on one socket, lane A receives an `error` envelope
+        // (nested error object) while lane B still receives its
+        // `response.created`. The envelope is delivered as `Ok` — it failed
+        // one request, not the connection — so the socket stays open and the
+        // sibling lane's event still arrives.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind beta lane-error server");
+        let address = listener
+            .local_addr()
+            .expect("beta lane-error server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept beta lane-error socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("beta lane-error handshake");
+            socket
+                .send(Message::text(
+                    json!({
+                        "type": "error",
+                        "error": {
+                            "code": "lane_failed",
+                            "message": "the lane request failed",
+                            "param": null,
+                            "type": "server_error"
+                        },
+                        "stream_id": "lane_a",
+                        "sequence_number": 1
+                    })
+                    .to_string(),
+                ))
+                .await
+                .expect("send lane-error envelope");
+            socket
+                .send(Message::text(
+                    json!({
+                        "type": "response.created",
+                        "sequence_number": 2,
+                        "stream_id": "lane_b",
+                        "response": serde_json::from_str::<Value>(&response_json("in_progress"))
+                            .expect("created response JSON")
+                    })
+                    .to_string(),
+                ))
+                .await
+                .expect("send sibling-lane created event");
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("beta lane-error base URL");
+        let client = client(base_url);
+        let mut socket = client
+            .beta_responses()
+            .connect()
+            .await
+            .expect("connect beta lane-error WebSocket");
+
+        let error_event = socket
+            .recv()
+            .await
+            .expect("receive the lane-error envelope")
+            .expect("a lane-scoped error envelope is an Ok delivery");
+        assert!(error_event.is_error());
+        match &error_event {
+            BetaResponsesServerEvent::WebSocketError(event) => {
+                assert_eq!(event.error().code(), Some("lane_failed"));
+                assert_eq!(event.error().error_type(), "server_error");
+            }
+            other => panic!("expected a WebSocketError envelope, got {other:?}"),
+        }
+        assert_eq!(error_event.stream_id(), Some("lane_a"));
+        assert!(
+            !socket.is_closed(),
+            "a lane-scoped error envelope must not retire the beta socket"
+        );
+
+        let sibling = socket
+            .recv()
+            .await
+            .expect("the sibling lane still drains")
+            .expect("the sibling-lane created event decodes");
+        assert_eq!(sibling.stream_id(), Some("lane_b"));
+        assert!(matches!(
+            sibling,
+            BetaResponsesServerEvent::Response(_) | BetaResponsesServerEvent::InjectCreated(_)
+        ));
+        socket.close().await.expect("close beta WebSocket");
     }
 }

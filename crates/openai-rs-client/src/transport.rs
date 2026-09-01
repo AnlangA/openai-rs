@@ -1228,6 +1228,41 @@ mod tests {
         assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
     }
 
+    #[test]
+    fn future_dated_http_date_retry_after_resolves_within_the_bound() {
+        // 17-D-1: a date-form `Retry-After` slightly ahead of `now` resolves
+        // to a positive delay within the default 120s bound, so it is a
+        // `Valid` delay (not the past-date `Absent` fallback).
+        let maximum = RetryPolicy::openai_compatible().max_server_delay;
+        let ahead = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(2));
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            header::RETRY_AFTER,
+            HeaderValue::from_str(&ahead).expect("valid future-date header"),
+        );
+        match server_retry_delay(&headers, maximum) {
+            ServerDelay::Valid(delay) => {
+                assert!(
+                    delay <= Duration::from_secs(2),
+                    "a 2s-ahead date must resolve to at most the elapsed 2s, got {delay:?}"
+                );
+                assert!(!delay.is_zero(), "a future date carries a positive delay");
+            }
+            other => panic!("a near-future date must be a valid delay, got {other:?}"),
+        }
+
+        // A date beyond the 120s cap is `TooLong`, the same branch an
+        // over-bound numeric value takes (and the retry loop then falls back
+        // to local exponential backoff rather than adopting the delay).
+        let far = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(600));
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            header::RETRY_AFTER,
+            HeaderValue::from_str(&far).expect("valid far-future-date header"),
+        );
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+    }
+
     #[derive(Clone)]
     struct ScriptedResponse {
         status: http::StatusCode,
@@ -1409,6 +1444,101 @@ mod tests {
         assert!(
             elapsed < Duration::from_secs(60),
             "over-bound `Retry-After` must not be slept, waited {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_second_attempts_timeout_is_the_remaining_overall_budget() {
+        // 17-D-2: after a first attempt consumes time, the retry loop's
+        // per-attempt `timeout(remaining)` shrinks to the leftover budget, not
+        // the full overall timeout. The first attempt spends 1.2s of a 2s
+        // budget before answering a retryable 429 with a 1ms
+        // `retry-after-ms`, so the second attempt may only run ~0.8s: it is
+        // pointed at a socket that stays silent for 1.5s — longer than the
+        // remaining budget but shorter than the full one — and must be cut
+        // off by the client at ~2s total. A second attempt armed with the
+        // full 2s would instead run to ~3.2s.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the budget-probe server");
+        let address = listener.local_addr().expect("budget-probe address");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let server_attempts = Arc::clone(&attempts);
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let attempts = Arc::clone(&server_attempts);
+                tokio::spawn(async move {
+                    let service = service_fn(move |_request: Request<Incoming>| {
+                        let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                        async move {
+                            if attempt == 0 {
+                                // Spend 1.2s of the 2s budget, then ask for a
+                                // 1ms retry so the second attempt starts
+                                // almost immediately.
+                                tokio::time::sleep(Duration::from_millis(1200)).await;
+                                Ok::<_, Infallible>(
+                                    hyper::Response::builder()
+                                        .status(http::StatusCode::TOO_MANY_REQUESTS)
+                                        .header(header::CONTENT_TYPE, "application/json")
+                                        .header("retry-after-ms", "1")
+                                        .body(Full::new(Bytes::from_static(
+                                            br#"{"error":{"message":"limited","type":"rate_limit_error"}}"#,
+                                        )))
+                                        .expect("budget-probe first response"),
+                                )
+                            } else {
+                                // Stay silent far beyond the remaining budget
+                                // (but within the full one); the client must
+                                // time this attempt out itself.
+                                tokio::time::sleep(Duration::from_millis(1500)).await;
+                                Ok(hyper::Response::builder()
+                                    .status(http::StatusCode::OK)
+                                    .body(Full::new(Bytes::from_static(
+                                        br#"{"object":"list","data":[]}"#,
+                                    )))
+                                    .expect("budget-probe late response"))
+                            }
+                        }
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+
+        let base_url = Url::parse(&format!("http://{address}/v1/")).expect("budget-probe base URL");
+        let key = ApiKey::new("test-placeholder-key").expect("valid test key");
+        let client = Client::builder(key)
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("budget-probe loopback client")
+            .with_request_timeout(Duration::from_secs(2));
+
+        let started = Instant::now();
+        let error = client
+            .models()
+            .list()
+            .await
+            .expect_err("the shrunken second attempt must time out");
+        let elapsed = started.elapsed();
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "exactly one retry must be attempted"
+        );
+        assert!(
+            matches!(error, Error::Timeout(_) | Error::Transport(_)),
+            "expected the second attempt's own timeout, got {error:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(2600),
+            "the second attempt ran {elapsed:?}; a per-attempt timeout of the \
+             remaining budget would have cut it off near 2s"
         );
     }
 

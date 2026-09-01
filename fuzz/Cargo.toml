@@ -27,6 +27,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "responses_input_item"
+path = "fuzz_targets/responses_input_item.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "responses_stream_event"
 path = "fuzz_targets/responses_stream_event.rs"
 test = false

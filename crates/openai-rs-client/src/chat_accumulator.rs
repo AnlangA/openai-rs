@@ -1166,6 +1166,209 @@ mod tests {
     }
 
     #[test]
+    fn tool_calls_indices_gap_and_arrival_reordering_sort_by_index() {
+        // 17-B-1a: index 2 arrives before index 0 and index 1 never arrives;
+        // the fold keys by the chunk `index` (not arrival order), so the
+        // snapshot emits the surviving calls sorted by index with no
+        // placeholder left behind for the missing slot.
+        let mut accumulator = ChatCompletionAccumulator::new();
+        let base = json!({
+            "id": "chatcmpl_1",
+            "created": 1,
+            "model": "gpt-4o",
+        });
+        let with_calls = |calls: Value, finish: Value| {
+            let mut body = base.clone();
+            body["choices"] = json!([{
+                "delta": {"role": "assistant", "tool_calls": calls},
+                "finish_reason": finish,
+                "index": 0
+            }]);
+            chunk(body)
+        };
+        // The highest index arrives first, before any lower one exists.
+        accumulator.push(&with_calls(
+            json!([{
+                "index": 2,
+                "id": "call_third",
+                "type": "function",
+                "function": {"name": "third", "arguments": "{\"c\":3}"}
+            }]),
+            Value::Null,
+        ));
+        let snapshot = accumulator
+            .snapshot()
+            .expect("mid-stream snapshot after the out-of-order chunk");
+        let calls = match &snapshot.choices[0].message.tool_calls {
+            Omittable::Value(Nullable::Value(calls)) => calls,
+            other => panic!("tool calls must be present mid-stream, got {other:?}"),
+        };
+        assert_eq!(
+            serde_json::to_value(calls).expect("encode mid-stream calls"),
+            json!([{
+                "id": "call_third",
+                "type": "function",
+                "function": {"name": "third", "arguments": "{\"c\":3}"}
+            }]),
+            "a lone index-2 call must still be emitted, ordered by its own index"
+        );
+
+        accumulator.push(&with_calls(
+            json!([{
+                "index": 0,
+                "id": "call_first",
+                "type": "function",
+                "function": {"name": "first", "arguments": "{\"a\":1}"}
+            }]),
+            json!("tool_calls"),
+        ));
+        let completion = accumulator.finish().expect("terminal completion");
+        let calls = match &completion.choices[0].message.tool_calls {
+            Omittable::Value(Nullable::Value(calls)) => calls,
+            other => panic!("tool calls must accumulate, got {other:?}"),
+        };
+        // The arrival order was 2 then 0; the snapshot order is 0 then 2, and
+        // the never-observed index 1 leaves no gap entry.
+        let ids = calls
+            .iter()
+            .map(|call| match call {
+                openai_rs_types::chat::ChatToolCall::Function(call) => call.id.as_str(),
+                other => panic!("expected function calls, got {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["call_first", "call_third"]);
+        assert_eq!(
+            serde_json::to_value(calls).expect("encode tool calls"),
+            json!([
+                {
+                    "id": "call_first",
+                    "type": "function",
+                    "function": {"name": "first", "arguments": "{\"a\":1}"}
+                },
+                {
+                    "id": "call_third",
+                    "type": "function",
+                    "function": {"name": "third", "arguments": "{\"c\":3}"}
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn refusal_and_content_fold_independently_on_the_same_choice() {
+        // 17-B-1b: both string lanes accumulate on one choice without the
+        // refusal delta disturbing the content fold or vice versa.
+        let mut accumulator = ChatCompletionAccumulator::new();
+        let with_delta = |delta: Value, finish: Value| {
+            chunk(json!({
+                "id": "chatcmpl_1",
+                "created": 1,
+                "model": "gpt-4o",
+                "choices": [{
+                    "delta": delta,
+                    "finish_reason": finish,
+                    "index": 0
+                }]
+            }))
+        };
+        accumulator.push(&with_delta(
+            json!({"role": "assistant", "content": "I can", "refusal": null}),
+            Value::Null,
+        ));
+        accumulator.push(&with_delta(
+            json!({"content": "not", "refusal": "I must"}),
+            Value::Null,
+        ));
+        accumulator.push(&with_delta(
+            json!({"content": " help.", "refusal": " decline."}),
+            json!("stop"),
+        ));
+        let completion = accumulator.finish().expect("terminal completion");
+        let message = &completion.choices[0].message;
+        assert_eq!(
+            message.content,
+            Nullable::Value(String::from("I cannot help."))
+        );
+        assert_eq!(
+            message.refusal,
+            Omittable::Value(Nullable::Value(String::from("I must decline.")))
+        );
+    }
+
+    #[test]
+    fn an_empty_tool_calls_array_chunk_pins_the_current_behavior() {
+        // 17-B-1c: an explicit `"tool_calls": []` sets `tool_calls_seen`, so
+        // the snapshot carries an empty array. openai-python instead leaves
+        // the field unset when no entry was observed (`_deltas.py:44-60`
+        // assigns per entry), so this deliberately pins OUR divergence: the
+        // empty array is observable on the decoded message.
+        let mut accumulator = ChatCompletionAccumulator::new();
+        accumulator.push(&chunk(json!({
+            "id": "chatcmpl_1",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{
+                "delta": {"role": "assistant", "tool_calls": []},
+                "finish_reason": json!("stop"),
+                "index": 0
+            }]
+        })));
+        let completion = accumulator.finish().expect("terminal completion");
+        assert_eq!(
+            completion.choices[0].message.tool_calls,
+            Omittable::Value(Nullable::Value(Vec::new())),
+            "an observed empty `tool_calls` array is pinned as an empty list, \
+             unlike openai-python which leaves the field unset"
+        );
+
+        // A choice that never observed the field keeps it omitted.
+        let mut untouched = ChatCompletionAccumulator::new();
+        untouched.push(&chunk(content_text("Hello", json!("stop"))));
+        let completion = untouched.finish().expect("terminal completion");
+        assert_eq!(completion.choices[0].message.tool_calls, Omittable::Omitted);
+    }
+
+    #[test]
+    fn empty_string_arguments_chunks_concatenate_harmlessly() {
+        // 17-B-1d: some streams split JSON arguments across chunks where one
+        // side of the split is the empty string; the fold is a plain
+        // `push_str`, so the empty piece contributes nothing.
+        let mut accumulator = ChatCompletionAccumulator::new();
+        let with_arguments = |arguments: &str, finish: Value| {
+            chunk(json!({
+                "id": "chatcmpl_1",
+                "created": 1,
+                "model": "gpt-4o",
+                "choices": [{
+                    "delta": {"tool_calls": [{
+                        "index": 0,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "echo", "arguments": arguments}
+                    }]},
+                    "finish_reason": finish,
+                    "index": 0
+                }]
+            }))
+        };
+        accumulator.push(&with_arguments("", Value::Null));
+        accumulator.push(&with_arguments("{\"a\"", Value::Null));
+        accumulator.push(&with_arguments("", Value::Null));
+        accumulator.push(&with_arguments(":1}", json!("tool_calls")));
+        let completion = accumulator.finish().expect("terminal completion");
+        let calls = match &completion.choices[0].message.tool_calls {
+            Omittable::Value(Nullable::Value(calls)) => calls,
+            other => panic!("tool calls must accumulate, got {other:?}"),
+        };
+        match &calls[0] {
+            openai_rs_types::chat::ChatToolCall::Function(call) => {
+                assert_eq!(call.function.arguments.as_str(), "{\"a\":1}");
+            }
+            other => panic!("expected a function call, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn merge_delta_value_mirrors_the_python_fold_rules() {
         // Strings concatenate, numbers add, objects recurse, `type` replaces.
         let mut acc = json!({

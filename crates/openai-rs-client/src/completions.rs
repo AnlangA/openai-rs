@@ -137,12 +137,14 @@ impl CompletionEventStream {
                 }
             }
 
-            let dispatches = match decoder.finish() {
-                Ok(dispatches) => dispatches,
-                Err(source) => {
-                    yield Err(sse_error(source, &stream_meta));
-                    return;
-                }
+            // 14-G-1: EOF-flushed dispatches survive a failing EOF. A final
+            // data chunk in an unterminated event block (no trailing blank
+            // line, no `[DONE]` sentinel) flushes at EOF as a plain event;
+            // yield it before the UnexpectedEof instead of losing the chunk
+            // payload under the error.
+            let (dispatches, eof_error) = match decoder.finish_with_flushed() {
+                Ok(dispatches) => (dispatches, None),
+                Err((source, flushed)) => (flushed, Some(source)),
             };
             for dispatch in dispatches {
                 match dispatch {
@@ -163,6 +165,9 @@ impl CompletionEventStream {
                         return;
                     }
                 }
+            }
+            if let Some(source) = eof_error {
+                yield Err(sse_error(source, &stream_meta));
             }
         };
         Ok(Self {
@@ -605,6 +610,44 @@ mod tests {
             .await
             .expect("EOF flush error")
             .expect_err("missing [DONE] sentinel");
+        match error {
+            Error::Sse {
+                source: crate::sse::SseDecodeError::UnexpectedEof { .. },
+                ..
+            } => {}
+            other => panic!("expected unexpected EOF, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn eof_flushed_unterminated_chunk_is_delivered_before_unexpected_eof() {
+        // 14-G-1: the final chunk sits in an unterminated event block (no
+        // trailing blank line and no `[DONE]` sentinel), so it only surfaces
+        // through the EOF flush and used to be dropped under the
+        // UnexpectedEof. The typed chunk must be delivered first and the EOF
+        // error follow it.
+        let body = format!("data: {}", completion_json("This", Value::Null));
+        let (client, _captured) = serve_once("text/event-stream; charset=utf-8", body).await;
+        let mut stream = client
+            .completions()
+            .create_stream(CreateStreamingCompletionRequest::new(
+                "gpt-3.5-turbo-instruct",
+                "Say hello",
+            ))
+            .await
+            .expect("stream handshake");
+        let chunk = stream
+            .next()
+            .await
+            .expect("EOF-flushed chunk")
+            .expect("typed flushed chunk");
+        assert_eq!(chunk.choices()[0].text(), "This");
+        let error = stream
+            .next()
+            .await
+            .expect("EOF error item")
+            .expect_err("sentinel requirement still fails after the flushed chunk");
         match error {
             Error::Sse {
                 source: crate::sse::SseDecodeError::UnexpectedEof { .. },

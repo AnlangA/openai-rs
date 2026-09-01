@@ -15,7 +15,7 @@ use rmcp::model::{
 };
 use rmcp::service::{ClientLifecycleMode, RequestContext, RunningService};
 use rmcp::transport::Transport;
-use rmcp::{ErrorData as McpError, RoleClient, RoleServer, ServerHandler};
+use rmcp::{ClientCacheConfig, ErrorData as McpError, RoleClient, RoleServer, ServerHandler};
 use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, mpsc};
 
@@ -34,14 +34,23 @@ const INPUT_REQUIRED_TOOL: &str = "input_required_tool";
 struct ProbeState {
     calls: Arc<AtomicUsize>,
     list_requests: Arc<AtomicUsize>,
+    fail_first_page: Arc<AtomicBool>,
     slow_started: Arc<Notify>,
     slow_cancelled: Arc<Notify>,
     slow_cancellations: Arc<AtomicUsize>,
+    /// 17-H-1 concurrency probe: number of `rich/tool` calls currently
+    /// inside the handler, and the high-water mark observed so far.
+    in_flight: Arc<AtomicUsize>,
+    max_in_flight: Arc<AtomicUsize>,
 }
 
 #[derive(Clone)]
 struct ProbeServer {
     state: ProbeState,
+    /// Positive `ttlMs` stamped on every `tools/list` page so the rmcp
+    /// client's SEP-2549 response cache stores them. `None` keeps the
+    /// zero-TTL behaviour of backwards-compatible servers.
+    ttl_ms: Option<u64>,
 }
 
 impl ProbeServer {
@@ -56,6 +65,15 @@ impl ProbeServer {
         .into_iter()
         .map(|name| Tool::new(name, format!("{name} fixture"), object_schema()))
         .collect()
+    }
+
+    fn page(tools: Vec<Tool>, next_cursor: Option<&str>, ttl_ms: Option<u64>) -> ListToolsResult {
+        let mut result = ListToolsResult::with_all_items(tools);
+        result.next_cursor = next_cursor.map(str::to_owned);
+        if let Some(ttl_ms) = ttl_ms {
+            result = result.with_ttl_ms(ttl_ms);
+        }
+        result
     }
 }
 
@@ -80,11 +98,15 @@ impl ServerHandler for ProbeServer {
             .and_then(|params| params.cursor.as_deref())
             .is_some_and(|cursor| cursor == "probe-page-2");
         if second_page {
-            Ok(ListToolsResult::with_all_items(tools[3..].to_vec()))
+            Ok(Self::page(tools[3..].to_vec(), None, self.ttl_ms))
+        } else if self.state.fail_first_page.load(Ordering::SeqCst) {
+            Err(McpError::internal_error("forced first-page failure", None))
         } else {
-            let mut result = ListToolsResult::with_all_items(tools[..3].to_vec());
-            result.next_cursor = Some("probe-page-2".to_owned());
-            Ok(result)
+            Ok(Self::page(
+                tools[..3].to_vec(),
+                Some("probe-page-2"),
+                self.ttl_ms,
+            ))
         }
     }
 
@@ -96,6 +118,14 @@ impl ServerHandler for ProbeServer {
         self.state.calls.fetch_add(1, Ordering::SeqCst);
         match request.name.as_ref() {
             RICH_TOOL => {
+                // 17-H-1: track handler concurrency and hold each call briefly
+                // open so concurrent dispatches observably interleave.
+                let entered = self.state.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                self.state
+                    .max_in_flight
+                    .fetch_max(entered, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                self.state.in_flight.fetch_sub(1, Ordering::SeqCst);
                 let city = request
                     .arguments
                     .as_ref()
@@ -169,9 +199,20 @@ struct Harness {
 
 impl Harness {
     async fn connect() -> Self {
+        Self::connect_with_ttl(None).await
+    }
+
+    /// A harness whose `tools/list` pages carry a positive `ttlMs` (SEP-2549
+    /// response-cache disclosure), so the rmcp client caches them.
+    async fn connect_cached(ttl_ms: u64) -> Self {
+        Self::connect_with_ttl(Some(ttl_ms)).await
+    }
+
+    async fn connect_with_ttl(ttl_ms: Option<u64>) -> Self {
         let state = ProbeState::default();
         let server = ProbeServer {
             state: state.clone(),
+            ttl_ms,
         };
         let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
         let server_task = tokio::spawn(async move {
@@ -256,6 +297,90 @@ async fn discovery_merges_every_paginated_tools_list_page() {
     for mcp_name in [RICH_TOOL, SLOW_TOOL, INPUT_REQUIRED_TOOL] {
         let _ = harness.openai_name(mcp_name);
     }
+    harness.close().await;
+}
+
+/// 16-rmcp-17-1: a server that discloses a positive `ttlMs` on its
+/// `tools/list` pages fills the rmcp client's SEP-2549 response cache, so a
+/// second discovery is served entirely from cache — every page (including
+/// cursor pages, which are cached independently) stays off the wire.
+#[tokio::test]
+async fn cached_ttl_discovery_skips_the_wire_on_the_second_traversal() {
+    let harness = Harness::connect_cached(60_000).await;
+    assert_eq!(harness.state.list_requests.load(Ordering::SeqCst), 2);
+
+    let second = ResponsesToolBridge::discover(
+        RmcpExecutor::new(harness.client.peer().clone()),
+        CatalogPolicy::default(),
+        &ExecutionControl::default(),
+    )
+    .await
+    .expect("cached discovery must still produce a catalog");
+    assert_eq!(second.catalog().len(), ProbeServer::tools().len());
+    assert_eq!(
+        harness.state.list_requests.load(Ordering::SeqCst),
+        2,
+        "a cached traversal must not cross the transport"
+    );
+
+    harness.close().await;
+}
+
+/// 16-rmcp-17-1 (D0279 escape hatch): `ClientCacheConfig::disabled()` on the
+/// peer removes both the cache hits and the cache writes, so a discovery run
+/// with the cache disabled always crosses the transport even when a fresh
+/// cached entry exists.
+#[tokio::test]
+async fn disabling_the_response_cache_restores_wire_discovery() {
+    let harness = Harness::connect_cached(60_000).await;
+    assert_eq!(harness.state.list_requests.load(Ordering::SeqCst), 2);
+
+    harness
+        .client
+        .peer()
+        .set_response_cache_config(ClientCacheConfig::disabled())
+        .await;
+    let second = ResponsesToolBridge::discover(
+        RmcpExecutor::new(harness.client.peer().clone()),
+        CatalogPolicy::default(),
+        &ExecutionControl::default(),
+    )
+    .await
+    .expect("cache-disabled discovery must still produce a catalog");
+    assert_eq!(second.catalog().len(), ProbeServer::tools().len());
+    assert_eq!(
+        harness.state.list_requests.load(Ordering::SeqCst),
+        4,
+        "a cache-disabled traversal must re-fetch both pages"
+    );
+
+    harness.close().await;
+}
+
+/// 16-rmcp-17-1: with `serve_stale_on_error` at its default (enabled), a
+/// first-page `tools/list` failure falls back to the expired cached entry, so
+/// discovery still resolves `Ok` with the full catalog instead of surfacing
+/// the protocol error. The cached first page carries the pagination cursor,
+/// and the live second page still succeeds.
+#[tokio::test]
+async fn stale_cached_first_page_serves_discovery_when_the_refetch_fails() {
+    let harness = Harness::connect_cached(50).await;
+    assert_eq!(harness.state.list_requests.load(Ordering::SeqCst), 2);
+
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    harness.state.fail_first_page.store(true, Ordering::SeqCst);
+    let stale = ResponsesToolBridge::discover(
+        RmcpExecutor::new(harness.client.peer().clone()),
+        CatalogPolicy::default(),
+        &ExecutionControl::default(),
+    )
+    .await
+    .expect("a stale cached first page must resolve discovery Ok");
+    assert_eq!(stale.catalog().len(), ProbeServer::tools().len());
+    // One wire attempt for the failed first page plus one live second page;
+    // the expired first page itself came from the stale fallback.
+    assert_eq!(harness.state.list_requests.load(Ordering::SeqCst), 4);
+
     harness.close().await;
 }
 
@@ -818,4 +943,71 @@ async fn discovery_deadline_ends_a_stalled_tools_list_traversal() {
     scripter.abort();
     let closed = client.close().await;
     assert!(closed.is_ok(), "client close must complete");
+}
+
+/// 17-H-1: N concurrent `tools/call` invocations over a single bridge and
+/// its in-process server — every dispatch completes successfully, each
+/// result correlates with its own arguments, exactly N calls reach the
+/// server, and the server observably interleaved them (more than one call
+/// inside the handler at the same time) rather than serializing.
+#[tokio::test]
+async fn concurrent_dispatches_all_complete_and_interleave_over_one_bridge() {
+    const CONCURRENCY: usize = 6;
+    let harness = Harness::connect().await;
+    let name = harness.openai_name(RICH_TOOL);
+    let bridge = harness.bridge.clone();
+
+    let mut set = tokio::task::JoinSet::new();
+    for index in 0..CONCURRENCY {
+        let bridge = bridge.clone();
+        let name = name.clone();
+        set.spawn(async move {
+            bridge
+                .dispatch_parts(
+                    &format!("call_concurrent_{index}"),
+                    &name,
+                    &format!("{{\"city\":\"city{index}\"}}"),
+                    &ExecutionControl::default(),
+                )
+                .await
+        });
+    }
+
+    let mut cities = Vec::new();
+    while let Some(joined) = set.join_next().await {
+        let outcome = joined.expect("dispatch task must join");
+        let Ok(DispatchOutcome::Success(output)) = outcome else {
+            panic!("every concurrent dispatch must succeed, got {outcome:?}");
+        };
+        let payload = output
+            .deserialize_output::<Value>()
+            .expect("lossless MCP result envelope must be JSON");
+        let city = payload["structuredContent"]["city"]
+            .as_str()
+            .expect("structured city")
+            .to_owned();
+        assert_eq!(
+            payload["content"][0]["text"],
+            format!("weather:{city}"),
+            "text content must correlate with the same call's arguments"
+        );
+        cities.push(city);
+    }
+
+    cities.sort();
+    let expected = (0..CONCURRENCY)
+        .map(|index| format!("city{index}"))
+        .collect::<Vec<_>>();
+    assert_eq!(cities, expected, "ids and results must correlate");
+    assert_eq!(
+        harness.state.calls.load(Ordering::SeqCst),
+        CONCURRENCY,
+        "exactly one server call per dispatch"
+    );
+    assert!(
+        harness.state.max_in_flight.load(Ordering::SeqCst) >= 2,
+        "the in-process server must interleave concurrent calls instead of serializing them"
+    );
+
+    harness.close().await;
 }

@@ -82,5 +82,9 @@ required-features = ["client"]
 name = "rmcp_bridge"
 required-features = ["rmcp"]
 
+[[example]]
+name = "files_list"
+required-features = ["client"]
+
 [lints]
 workspace = true

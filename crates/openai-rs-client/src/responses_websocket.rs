@@ -1833,4 +1833,95 @@ mod tests {
             "the replayed handshake must carry the refreshed bearer token"
         );
     }
+
+    #[tokio::test]
+    async fn two_interleaved_lanes_feed_two_accumulators_by_stream_id() {
+        // One multiplexed socket, two lanes: the caller drives `recv_into`
+        // with the accumulator selected for the lane whose turn it is (the
+        // scripted order is deterministic) and cross-checks the returned
+        // stream_id so no delta can land in the wrong accumulator.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind interleaved-lane server");
+        let address = listener
+            .local_addr()
+            .expect("interleaved-lane server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept interleaved-lane socket");
+            let mut socket = accept_hdr_async(
+                stream,
+                |_request: &server::Request, response: server::Response| {
+                    Ok::<_, server::ErrorResponse>(response)
+                },
+            )
+            .await
+            .expect("interleaved-lane handshake");
+            let delta = |lane: &str, item: &str, text: &str, sequence: u64| {
+                json!({
+                    "type": "response.output_text.delta",
+                    "stream_id": lane,
+                    "item_id": item,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": text,
+                    "sequence_number": sequence,
+                    "logprobs": []
+                })
+                .to_string()
+            };
+            for frame in [
+                delta("lane_a", "msg_a", "alpha ", 1),
+                delta("lane_b", "msg_b", "beta", 1),
+                delta("lane_a", "msg_a", "gamma", 2),
+            ] {
+                socket
+                    .send(Message::text(frame))
+                    .await
+                    .expect("send interleaved delta");
+            }
+            while socket.next().await.is_some() {}
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("interleaved-lane base URL");
+        let key = ApiKey::new("test-placeholder-key").expect("test key");
+        let client = Client::builder(key)
+            .base_url(base_url)
+            .allow_insecure_loopback(true)
+            .build()
+            .expect("interleaved-lane client");
+        let mut socket = client
+            .responses()
+            .connect()
+            .await
+            .expect("connect interleaved-lane WebSocket");
+
+        let mut lane_a = ResponseAccumulator::new();
+        let mut lane_b = ResponseAccumulator::new();
+        let expected_lanes = ["lane_a", "lane_b", "lane_a"];
+        for lane in expected_lanes {
+            let accumulator = if lane == "lane_a" {
+                &mut lane_a
+            } else {
+                &mut lane_b
+            };
+            let event = socket
+                .recv_into(accumulator)
+                .await
+                .expect("receive interleaved event")
+                .expect("one interleaved event");
+            assert_eq!(
+                event.stream_id(),
+                Some(lane),
+                "each delta must arrive on its scripted lane"
+            );
+            assert!(event.event().is_some());
+        }
+        assert_eq!(lane_a.output_text(), "alpha gamma");
+        assert_eq!(lane_b.output_text(), "beta");
+
+        socket.close().await.expect("close interleaved socket");
+    }
 }

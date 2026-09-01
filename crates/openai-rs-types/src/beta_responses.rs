@@ -7501,4 +7501,668 @@ mod tests {
             );
         }
     }
+
+    // Minimal payload builders for the exhaustive WebSocket-server-event
+    // table (17-C-1). The shapes mirror the GA exhaustive fixture table in
+    // `responses.rs` (`every_stable_stream_event_tag_decodes_routes_and_
+    // reencodes`); they are re-derived locally because the beta payload
+    // wrapper layers agent/lane metadata on top of the stable core.
+    fn beta_exhaustive_event_response_value() -> Value {
+        json!({
+            "id": "resp_exhaustive",
+            "created_at": 1,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "metadata": null,
+            "model": "gpt-test",
+            "object": "response",
+            "output": [],
+            "parallel_tool_calls": true,
+            "temperature": null,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": null
+        })
+    }
+
+    fn beta_lifecycle_stream_event(tag: &str) -> Value {
+        json!({
+            "type": tag,
+            "sequence_number": 1,
+            "response": beta_exhaustive_event_response_value()
+        })
+    }
+
+    fn beta_item_snapshot_stream_event(tag: &str) -> Value {
+        json!({
+            "type": tag,
+            "output_index": 0,
+            "item": {
+                "type": "message",
+                "id": "msg_exhaustive",
+                "status": "completed",
+                "role": "assistant",
+                "content": []
+            },
+            "sequence_number": 1
+        })
+    }
+
+    fn beta_content_part_stream_event(tag: &str) -> Value {
+        json!({
+            "type": tag,
+            "item_id": "msg_exhaustive",
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "output_text", "text": "hi", "annotations": [], "logprobs": []},
+            "sequence_number": 1
+        })
+    }
+
+    fn beta_tool_status_stream_event(tag: &str) -> Value {
+        json!({
+            "type": tag,
+            "item_id": "tool_exhaustive",
+            "output_index": 0,
+            "sequence_number": 1
+        })
+    }
+
+    /// Branch predicate for the stable core of one pinned SSE discriminator.
+    type BetaCoreBranch = fn(&ResponseStreamEvent) -> bool;
+
+    #[test]
+    fn every_beta_server_event_tag_decodes_routes_and_reencodes() {
+        // Beta mirror of the GA exhaustive SSE table (17-C-1): all 58 pinned
+        // stable tags route through the `Response(_)` arm into their typed
+        // stable core (never a silent `Unknown` downgrade), and the three
+        // preview-only WebSocket discriminators route to their own arms.
+        let table: &[(&str, Value, BetaCoreBranch)] = &[
+            // Audio family: official events carry no output binding fields.
+            (
+                "response.audio.delta",
+                json!({"type": "response.audio.delta", "delta": "==audio==", "sequence_number": 1}),
+                |core| matches!(core, ResponseStreamEvent::AudioDelta(_)),
+            ),
+            (
+                "response.audio.done",
+                json!({"type": "response.audio.done", "sequence_number": 1}),
+                |core| matches!(core, ResponseStreamEvent::AudioDone(_)),
+            ),
+            (
+                "response.audio.transcript.delta",
+                json!({
+                    "type": "response.audio.transcript.delta",
+                    "delta": "spoken",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::AudioTranscriptDelta(_)),
+            ),
+            (
+                "response.audio.transcript.done",
+                json!({"type": "response.audio.transcript.done", "sequence_number": 1}),
+                |core| matches!(core, ResponseStreamEvent::AudioTranscriptDone(_)),
+            ),
+            // Code-interpreter hosted tool: code delta/done plus lifecycle trio.
+            (
+                "response.code_interpreter_call_code.delta",
+                json!({
+                    "type": "response.code_interpreter_call_code.delta",
+                    "output_index": 0,
+                    "item_id": "ci_exhaustive",
+                    "delta": "print(1)",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::CodeInterpreterCodeDelta(_)),
+            ),
+            (
+                "response.code_interpreter_call_code.done",
+                json!({
+                    "type": "response.code_interpreter_call_code.done",
+                    "output_index": 0,
+                    "item_id": "ci_exhaustive",
+                    "code": "print(1)",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::CodeInterpreterCodeDone(_)),
+            ),
+            (
+                "response.code_interpreter_call.completed",
+                beta_tool_status_stream_event("response.code_interpreter_call.completed"),
+                |core| matches!(core, ResponseStreamEvent::CodeInterpreterCompleted(_)),
+            ),
+            (
+                "response.code_interpreter_call.in_progress",
+                beta_tool_status_stream_event("response.code_interpreter_call.in_progress"),
+                |core| matches!(core, ResponseStreamEvent::CodeInterpreterInProgress(_)),
+            ),
+            (
+                "response.code_interpreter_call.interpreting",
+                beta_tool_status_stream_event("response.code_interpreter_call.interpreting"),
+                |core| matches!(core, ResponseStreamEvent::CodeInterpreterInterpreting(_)),
+            ),
+            // Response lifecycle, including the queued/in_progress snapshots.
+            (
+                "response.queued",
+                beta_lifecycle_stream_event("response.queued"),
+                |core| matches!(core, ResponseStreamEvent::Queued(_)),
+            ),
+            (
+                "response.created",
+                beta_lifecycle_stream_event("response.created"),
+                |core| matches!(core, ResponseStreamEvent::Created(_)),
+            ),
+            (
+                "response.in_progress",
+                beta_lifecycle_stream_event("response.in_progress"),
+                |core| matches!(core, ResponseStreamEvent::InProgress(_)),
+            ),
+            (
+                "response.completed",
+                beta_lifecycle_stream_event("response.completed"),
+                |core| matches!(core, ResponseStreamEvent::Completed(_)),
+            ),
+            (
+                "response.failed",
+                beta_lifecycle_stream_event("response.failed"),
+                |core| matches!(core, ResponseStreamEvent::Failed(_)),
+            ),
+            (
+                "response.incomplete",
+                beta_lifecycle_stream_event("response.incomplete"),
+                |core| matches!(core, ResponseStreamEvent::Incomplete(_)),
+            ),
+            // Item and content-part snapshots.
+            (
+                "response.output_item.added",
+                beta_item_snapshot_stream_event("response.output_item.added"),
+                |core| matches!(core, ResponseStreamEvent::OutputItemAdded(_)),
+            ),
+            (
+                "response.output_item.done",
+                beta_item_snapshot_stream_event("response.output_item.done"),
+                |core| matches!(core, ResponseStreamEvent::OutputItemDone(_)),
+            ),
+            (
+                "response.content_part.added",
+                beta_content_part_stream_event("response.content_part.added"),
+                |core| matches!(core, ResponseStreamEvent::ContentPartAdded(_)),
+            ),
+            (
+                "response.content_part.done",
+                beta_content_part_stream_event("response.content_part.done"),
+                |core| matches!(core, ResponseStreamEvent::ContentPartDone(_)),
+            ),
+            (
+                "response.output_text.delta",
+                json!({
+                    "type": "response.output_text.delta",
+                    "item_id": "msg_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "hi",
+                    "logprobs": [],
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::OutputTextDelta(_)),
+            ),
+            (
+                "response.output_text.done",
+                json!({
+                    "type": "response.output_text.done",
+                    "item_id": "msg_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "text": "hi",
+                    "logprobs": [],
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::OutputTextDone(_)),
+            ),
+            // Refusal delta family.
+            (
+                "response.refusal.delta",
+                json!({
+                    "type": "response.refusal.delta",
+                    "item_id": "msg_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "cannot",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::RefusalDelta(_)),
+            ),
+            (
+                "response.refusal.done",
+                json!({
+                    "type": "response.refusal.done",
+                    "item_id": "msg_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "refusal": "cannot help",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::RefusalDone(_)),
+            ),
+            // Function-call argument deltas.
+            (
+                "response.function_call_arguments.delta",
+                json!({
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_exhaustive",
+                    "output_index": 0,
+                    "delta": "{\"city\":",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::FunctionCallArgumentsDelta(_)),
+            ),
+            (
+                "response.function_call_arguments.done",
+                json!({
+                    "type": "response.function_call_arguments.done",
+                    "item_id": "fc_exhaustive",
+                    "output_index": 0,
+                    "name": "weather",
+                    "arguments": "{}",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::FunctionCallArgumentsDone(_)),
+            ),
+            // File-search hosted-tool lifecycle trio.
+            (
+                "response.file_search_call.completed",
+                beta_tool_status_stream_event("response.file_search_call.completed"),
+                |core| matches!(core, ResponseStreamEvent::FileSearchCompleted(_)),
+            ),
+            (
+                "response.file_search_call.in_progress",
+                beta_tool_status_stream_event("response.file_search_call.in_progress"),
+                |core| matches!(core, ResponseStreamEvent::FileSearchInProgress(_)),
+            ),
+            (
+                "response.file_search_call.searching",
+                beta_tool_status_stream_event("response.file_search_call.searching"),
+                |core| matches!(core, ResponseStreamEvent::FileSearchSearching(_)),
+            ),
+            // Shell command and shell output content families.
+            (
+                "response.shell_call_command.added",
+                json!({
+                    "type": "response.shell_call_command.added",
+                    "output_index": 0,
+                    "command_index": 0,
+                    "command": "ls",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::ShellCommandAdded(_)),
+            ),
+            (
+                "response.shell_call_command.delta",
+                json!({
+                    "type": "response.shell_call_command.delta",
+                    "output_index": 0,
+                    "command_index": 0,
+                    "delta": "-la",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::ShellCommandDelta(_)),
+            ),
+            (
+                "response.shell_call_command.done",
+                json!({
+                    "type": "response.shell_call_command.done",
+                    "output_index": 0,
+                    "command_index": 0,
+                    "command": "ls -la",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::ShellCommandDone(_)),
+            ),
+            (
+                "response.shell_call_output_content.delta",
+                json!({
+                    "type": "response.shell_call_output_content.delta",
+                    "item_id": "shell_exhaustive",
+                    "output_index": 0,
+                    "command_index": 0,
+                    "delta": {},
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::ShellOutputContentDelta(_)),
+            ),
+            (
+                "response.shell_call_output_content.done",
+                json!({
+                    "type": "response.shell_call_output_content.done",
+                    "item_id": "shell_exhaustive",
+                    "output_index": 0,
+                    "command_index": 0,
+                    "output": [],
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::ShellOutputContentDone(_)),
+            ),
+            // Reasoning summary part/text and reasoning text delta families.
+            (
+                "response.reasoning_summary_part.added",
+                json!({
+                    "type": "response.reasoning_summary_part.added",
+                    "item_id": "rs_exhaustive",
+                    "output_index": 0,
+                    "summary_index": 0,
+                    "part": {"type": "summary_text", "text": "thought"},
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::ReasoningSummaryPartAdded(_)),
+            ),
+            (
+                "response.reasoning_summary_part.done",
+                json!({
+                    "type": "response.reasoning_summary_part.done",
+                    "item_id": "rs_exhaustive",
+                    "output_index": 0,
+                    "summary_index": 0,
+                    "part": {"type": "summary_text", "text": "thought"},
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::ReasoningSummaryPartDone(_)),
+            ),
+            (
+                "response.reasoning_summary_text.delta",
+                json!({
+                    "type": "response.reasoning_summary_text.delta",
+                    "item_id": "rs_exhaustive",
+                    "output_index": 0,
+                    "summary_index": 0,
+                    "delta": "thought",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::ReasoningSummaryTextDelta(_)),
+            ),
+            (
+                "response.reasoning_summary_text.done",
+                json!({
+                    "type": "response.reasoning_summary_text.done",
+                    "item_id": "rs_exhaustive",
+                    "output_index": 0,
+                    "summary_index": 0,
+                    "text": "thought",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::ReasoningSummaryTextDone(_)),
+            ),
+            (
+                "response.reasoning_text.delta",
+                json!({
+                    "type": "response.reasoning_text.delta",
+                    "item_id": "rs_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "thinking",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::ReasoningTextDelta(_)),
+            ),
+            (
+                "response.reasoning_text.done",
+                json!({
+                    "type": "response.reasoning_text.done",
+                    "item_id": "rs_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "text": "thinking",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::ReasoningTextDone(_)),
+            ),
+            // Web-search hosted-tool lifecycle trio.
+            (
+                "response.web_search_call.completed",
+                beta_tool_status_stream_event("response.web_search_call.completed"),
+                |core| matches!(core, ResponseStreamEvent::WebSearchCompleted(_)),
+            ),
+            (
+                "response.web_search_call.in_progress",
+                beta_tool_status_stream_event("response.web_search_call.in_progress"),
+                |core| matches!(core, ResponseStreamEvent::WebSearchInProgress(_)),
+            ),
+            (
+                "response.web_search_call.searching",
+                beta_tool_status_stream_event("response.web_search_call.searching"),
+                |core| matches!(core, ResponseStreamEvent::WebSearchSearching(_)),
+            ),
+            // Image-generation hosted tool: lifecycle trio plus partial image.
+            (
+                "response.image_generation_call.completed",
+                beta_tool_status_stream_event("response.image_generation_call.completed"),
+                |core| matches!(core, ResponseStreamEvent::ImageGenerationCompleted(_)),
+            ),
+            (
+                "response.image_generation_call.generating",
+                beta_tool_status_stream_event("response.image_generation_call.generating"),
+                |core| matches!(core, ResponseStreamEvent::ImageGenerationGenerating(_)),
+            ),
+            (
+                "response.image_generation_call.in_progress",
+                beta_tool_status_stream_event("response.image_generation_call.in_progress"),
+                |core| matches!(core, ResponseStreamEvent::ImageGenerationInProgress(_)),
+            ),
+            (
+                "response.image_generation_call.partial_image",
+                json!({
+                    "type": "response.image_generation_call.partial_image",
+                    "output_index": 0,
+                    "item_id": "img_exhaustive",
+                    "partial_image_index": 0,
+                    "partial_image_b64": "cGFydGlhbA==",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::ImageGenerationPartialImage(_)),
+            ),
+            // Native remote MCP call and list-tools families.
+            (
+                "response.mcp_call_arguments.delta",
+                json!({
+                    "type": "response.mcp_call_arguments.delta",
+                    "item_id": "mcp_exhaustive",
+                    "output_index": 0,
+                    "delta": "{\"query\":",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::McpCallArgumentsDelta(_)),
+            ),
+            (
+                "response.mcp_call_arguments.done",
+                json!({
+                    "type": "response.mcp_call_arguments.done",
+                    "item_id": "mcp_exhaustive",
+                    "output_index": 0,
+                    "arguments": "{}",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::McpCallArgumentsDone(_)),
+            ),
+            (
+                "response.mcp_call.in_progress",
+                beta_tool_status_stream_event("response.mcp_call.in_progress"),
+                |core| matches!(core, ResponseStreamEvent::McpCallInProgress(_)),
+            ),
+            (
+                "response.mcp_call.completed",
+                beta_tool_status_stream_event("response.mcp_call.completed"),
+                |core| matches!(core, ResponseStreamEvent::McpCallCompleted(_)),
+            ),
+            (
+                "response.mcp_call.failed",
+                beta_tool_status_stream_event("response.mcp_call.failed"),
+                |core| matches!(core, ResponseStreamEvent::McpCallFailed(_)),
+            ),
+            (
+                "response.mcp_list_tools.in_progress",
+                beta_tool_status_stream_event("response.mcp_list_tools.in_progress"),
+                |core| matches!(core, ResponseStreamEvent::McpListToolsInProgress(_)),
+            ),
+            (
+                "response.mcp_list_tools.completed",
+                beta_tool_status_stream_event("response.mcp_list_tools.completed"),
+                |core| matches!(core, ResponseStreamEvent::McpListToolsCompleted(_)),
+            ),
+            (
+                "response.mcp_list_tools.failed",
+                beta_tool_status_stream_event("response.mcp_list_tools.failed"),
+                |core| matches!(core, ResponseStreamEvent::McpListToolsFailed(_)),
+            ),
+            // Annotation and custom-tool input deltas.
+            (
+                "response.output_text.annotation.added",
+                json!({
+                    "type": "response.output_text.annotation.added",
+                    "item_id": "msg_exhaustive",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "annotation_index": 0,
+                    "annotation": {
+                        "type": "file_path",
+                        "file_id": "file_exhaustive",
+                        "index": 0
+                    },
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::OutputTextAnnotationAdded(_)),
+            ),
+            (
+                "response.custom_tool_call_input.delta",
+                json!({
+                    "type": "response.custom_tool_call_input.delta",
+                    "output_index": 0,
+                    "item_id": "ct_exhaustive",
+                    "delta": "{\"rows\":",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::CustomToolCallInputDelta(_)),
+            ),
+            (
+                "response.custom_tool_call_input.done",
+                json!({
+                    "type": "response.custom_tool_call_input.done",
+                    "output_index": 0,
+                    "item_id": "ct_exhaustive",
+                    "input": "{\"rows\": []}",
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::CustomToolCallInputDone(_)),
+            ),
+            // Standalone SSE error event: no nested `error` envelope, so the
+            // beta router keeps it inside the stable `Response(_)` arm.
+            (
+                "error",
+                json!({
+                    "type": "error",
+                    "code": null,
+                    "message": "exhaustive",
+                    "param": null,
+                    "sequence_number": 1
+                }),
+                |core| matches!(core, ResponseStreamEvent::Error(_)),
+            ),
+        ];
+
+        let mut table_tags: Vec<&str> = table.iter().map(|(tag, _, _)| *tag).collect();
+        table_tags.sort_unstable();
+        let mut pinned: Vec<&str> =
+            crate::responses::STABLE_RESPONSE_STREAM_EVENT_DISCRIMINATORS.to_vec();
+        pinned.sort_unstable();
+        assert_eq!(
+            table_tags, pinned,
+            "the beta exhaustive fixture table must track the pinned discriminator manifest"
+        );
+
+        for (tag, payload, core_is_branch) in table {
+            let decoded: BetaResponsesServerEvent = serde_json::from_value(payload.clone())
+                .unwrap_or_else(|error| panic!("decode {tag}: {error}"));
+            let BetaResponsesServerEvent::Response(event) = &decoded else {
+                panic!("tag {tag} must route through the Response arm, got {decoded:?}");
+            };
+            assert!(
+                core_is_branch(event.core()),
+                "tag {tag} must keep its typed stable core instead of {:?}",
+                event.core()
+            );
+            assert_eq!(decoded.sequence_number(), Some(1), "tag {tag}");
+            assert_eq!(
+                serde_json::to_value(&decoded)
+                    .unwrap_or_else(|error| panic!("encode {tag}: {error}")),
+                *payload,
+                "tag {tag} must re-encode to its minimal payload"
+            );
+        }
+    }
+
+    #[test]
+    fn beta_only_server_event_discriminators_route_to_preview_arms() {
+        // The three preview-only WebSocket discriminators (17-C-1) must never
+        // fall through to the stable `Response(_)` arm: inject.created,
+        // inject.failed, and the error envelope with a nested `error` object.
+        let created = json!({
+            "type": "response.inject.created",
+            "response_id": "resp_exhaustive",
+            "sequence_number": 1,
+            "stream_id": "lane.exhaustive"
+        });
+        let decoded: BetaResponsesServerEvent =
+            serde_json::from_value(created.clone()).expect("decode inject.created");
+        assert!(matches!(
+            decoded,
+            BetaResponsesServerEvent::InjectCreated(_)
+        ));
+        assert_eq!(decoded.sequence_number(), Some(1));
+        assert_eq!(decoded.stream_id(), Some("lane.exhaustive"));
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode inject.created"),
+            created
+        );
+
+        let failed = json!({
+            "type": "response.inject.failed",
+            "response_id": "resp_exhaustive",
+            "input": [],
+            "error": {
+                "code": "response_not_found",
+                "message": "no such response"
+            },
+            "sequence_number": 1
+        });
+        let decoded: BetaResponsesServerEvent =
+            serde_json::from_value(failed.clone()).expect("decode inject.failed");
+        assert!(matches!(decoded, BetaResponsesServerEvent::InjectFailed(_)));
+        assert_eq!(decoded.sequence_number(), Some(1));
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode inject.failed"),
+            failed
+        );
+
+        let envelope = json!({
+            "type": "error",
+            "error": {
+                "code": null,
+                "message": "exhaustive envelope",
+                "param": null,
+                "type": "invalid_request_error"
+            },
+            "sequence_number": 1
+        });
+        let decoded: BetaResponsesServerEvent =
+            serde_json::from_value(envelope.clone()).expect("decode error envelope");
+        assert!(matches!(
+            decoded,
+            BetaResponsesServerEvent::WebSocketError(_)
+        ));
+        assert_eq!(decoded.sequence_number(), Some(1));
+        assert!(decoded.is_error());
+        assert_eq!(
+            serde_json::to_value(&decoded).expect("re-encode error envelope"),
+            envelope
+        );
+    }
 }

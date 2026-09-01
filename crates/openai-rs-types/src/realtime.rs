@@ -6458,4 +6458,195 @@ mod tests {
             RealtimeTruncation::Mode(RealtimeTruncationMode::Auto)
         ));
     }
+
+    #[test]
+    fn session_updated_populates_every_realtime_session_field() {
+        // 17-C-3: a `session.updated` payload that exercises every wire
+        // field of the GA Realtime session object must decode into the
+        // typed struct field-for-field and re-encode to the identical
+        // object.
+        let event = json!({
+            "event_id": "event_1",
+            "type": "session.updated",
+            "session": {
+                "type": "realtime",
+                "object": "realtime.session",
+                "id": "sess_full",
+                "expires_at": 1_790_000_000_i64,
+                "output_modalities": ["text", "audio"],
+                "model": "gpt-realtime",
+                "instructions": "You are a helpful assistant.",
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm"},
+                        "transcription": {
+                            "model": "gpt-4o-transcribe",
+                            "language": null,
+                            "prompt": ""
+                        },
+                        "noise_reduction": null
+                    },
+                    "output": {
+                        "format": {"type": "audio/pcm"},
+                        "voice": "alloy",
+                        "speed": 0.9
+                    }
+                },
+                "include": ["reasoning.encrypted_content"],
+                "tracing": {
+                    "workflow_name": "support",
+                    "group_id": "g-1",
+                    "metadata": {"channel": "voice"}
+                },
+                "tools": [{
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Get the weather for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                        "additionalProperties": false
+                    }
+                }],
+                "tool_choice": "auto",
+                "reasoning": {"effort": "medium"},
+                "max_output_tokens": "inf",
+                "truncation": {
+                    "type": "retention_ratio",
+                    "retention_ratio": 0.5,
+                    "token_limits": {"post_instructions": -1}
+                },
+                "prompt": {"id": "prompt_1", "version": "2"}
+            }
+        });
+        let decoded: RealtimeServerEvent =
+            serde_json::from_value(event.clone()).expect("session.updated decodes");
+        let RealtimeServerEvent::SessionUpdated(updated) = decoded else {
+            panic!("expected session.updated event");
+        };
+        let RealtimeSessionState::Realtime(session) = &updated.session else {
+            panic!("expected realtime session state");
+        };
+
+        assert_eq!(session.id, "sess_full");
+        assert_eq!(session.expires_at, Omittable::Value(1_790_000_000_i64));
+        assert_eq!(
+            session.output_modalities,
+            Omittable::Value(vec![
+                RealtimeOutputModality::Text,
+                RealtimeOutputModality::Audio
+            ])
+        );
+        assert_eq!(session.model, Omittable::Value("gpt-realtime".to_owned()));
+        assert_eq!(
+            session.instructions,
+            Omittable::Value("You are a helpful assistant.".to_owned())
+        );
+
+        let Omittable::Value(audio) = &session.audio else {
+            panic!("expected audio state");
+        };
+        let Omittable::Value(input) = &audio.input else {
+            panic!("expected audio input");
+        };
+        assert!(matches!(
+            &input.format,
+            Omittable::Value(RealtimeAudioFormat::Pcm(_))
+        ));
+        let Omittable::Value(Nullable::Value(transcription)) = &input.transcription else {
+            panic!("expected transcription config");
+        };
+        assert_eq!(transcription.language, Omittable::Value(Nullable::Null));
+        assert!(matches!(
+            &input.noise_reduction,
+            Omittable::Value(Nullable::Null)
+        ));
+        let Omittable::Value(output) = &audio.output else {
+            panic!("expected audio output");
+        };
+        assert!(matches!(
+            &output.format,
+            Omittable::Value(RealtimeAudioFormat::Pcm(_))
+        ));
+        assert_eq!(output.voice, Omittable::Value(RealtimeVoiceName::Alloy));
+        assert_eq!(output.speed, Omittable::Value(0.9));
+
+        assert_eq!(
+            session.include,
+            Omittable::Value(Nullable::Value(vec![
+                "reasoning.encrypted_content".to_owned()
+            ]))
+        );
+        let Omittable::Value(Nullable::Value(RealtimeTracing::Config(tracing))) = &session.tracing
+        else {
+            panic!("expected granular tracing config");
+        };
+        assert_eq!(
+            tracing.workflow_name,
+            Omittable::Value("support".to_owned())
+        );
+        assert_eq!(tracing.group_id, Omittable::Value("g-1".to_owned()));
+        assert_eq!(
+            tracing.metadata,
+            Omittable::Value(BTreeMap::from([("channel".to_owned(), json!("voice"))]))
+        );
+
+        let Omittable::Value(tools) = &session.tools else {
+            panic!("expected tools");
+        };
+        assert_eq!(tools.len(), 1);
+        let RealtimeTool::Function(function) = &tools[0] else {
+            panic!("expected function tool");
+        };
+        assert_eq!(function.name, Omittable::Value("get_weather".to_owned()));
+        assert_eq!(
+            function.description,
+            Omittable::Value("Get the weather for a city.".to_owned())
+        );
+        assert_eq!(
+            function.parameters,
+            Omittable::Value(json!({
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": false
+            }))
+        );
+        assert!(matches!(
+            &session.tool_choice,
+            Omittable::Value(RealtimeToolChoice::Mode(RealtimeToolChoiceMode::Auto))
+        ));
+        assert_eq!(
+            session.reasoning,
+            Omittable::Value(RealtimeReasoning {
+                effort: Omittable::Value(RealtimeReasoningEffort::Medium),
+                extra: ExtraFields::new()
+            })
+        );
+        assert_eq!(
+            session.max_output_tokens,
+            Omittable::Value(RealtimeMaxOutputTokens::Unlimited)
+        );
+        let Omittable::Value(RealtimeTruncation::RetentionRatio(truncation)) = &session.truncation
+        else {
+            panic!("expected retention-ratio truncation");
+        };
+        assert_eq!(truncation.retention_ratio, 0.5);
+        let Omittable::Value(limits) = &truncation.token_limits else {
+            panic!("expected token limits");
+        };
+        assert_eq!(limits.post_instructions, Omittable::Value(-1));
+        assert_eq!(
+            session.prompt,
+            Omittable::Value(Nullable::Value(
+                PromptReference::new("prompt_1").version("2")
+            ))
+        );
+
+        assert_eq!(
+            serde_json::to_value(&updated).expect("re-encode session.updated"),
+            event
+        );
+    }
 }

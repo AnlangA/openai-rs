@@ -4221,6 +4221,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_get_retries_502_to_success_across_two_attempts() {
+        // D0264/D0272 admin parity: a 5xx (502) on a safe GET is retryable
+        // without any `Retry-After`, and the follow-up 200 succeeds.
+        let (base_url, attempts) = serve_scripted_admin_responses(vec![
+            ScriptedAdminResponse {
+                status: StatusCode::BAD_GATEWAY,
+                retry_after: None,
+                body: r#"{"error":{"message":"bad gateway","type":"server_error"}}"#,
+            },
+            ScriptedAdminResponse {
+                status: StatusCode::OK,
+                retry_after: None,
+                body: r#"{"object":"list","data":[],"has_more":false}"#,
+            },
+        ])
+        .await;
+        let client = loopback_admin_client(base_url, RetryPolicy::openai_compatible());
+
+        let users = client
+            .users()
+            .list(&AdminListParams::default())
+            .await
+            .expect("retried admin user list after 502");
+        assert!(users.data.is_empty());
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "the 502 retry must consume exactly two attempts"
+        );
+    }
+
+    #[tokio::test]
     async fn admin_post_retry_is_gated_by_replayable_mutations() {
         let (base_url, attempts) = serve_scripted_admin_responses(vec![ScriptedAdminResponse {
             status: StatusCode::TOO_MANY_REQUESTS,

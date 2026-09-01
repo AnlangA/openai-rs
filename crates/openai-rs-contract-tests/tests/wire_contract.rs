@@ -1,6 +1,6 @@
 use std::{fmt::Debug, future::Future};
 
-use openai_rs_codex::{ManagedAppServerCredential, RuntimeCompatibility};
+use openai_rs_codex::{ManagedAppServerCredential, RuntimeCompatibility, Thread};
 use openai_rs_rmcp::{CatalogPolicy, ToolCatalog};
 use openai_rs_types::{
     CreateEmbeddingRequest, CreateEmbeddingResponse, CreateModerationRequest,
@@ -52,6 +52,10 @@ fn public_json_dtos_are_bidirectional_owned_types() {
     assert_wire::<Model>();
     assert_wire::<FileObject>();
     assert_wire::<Upload>();
+
+    // 17-K-3: the codex app-server `Thread` DTO is a bidirectional wire type
+    // from the pinned v2 protocol schema.
+    assert_wire::<Thread>();
 
     assert_owned_runtime::<ManagedAppServerCredential>();
     assert_owned_runtime::<RuntimeCompatibility>();

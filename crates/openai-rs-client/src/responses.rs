@@ -279,6 +279,9 @@ impl Responses {
     }
 
     /// Polls a background response until it reaches a terminal status (completed, failed, incomplete, or cancelled).
+    ///
+    /// With default [`PollOptions`] the polling pace is server-controlled via
+    /// the `openai-poll-after-ms` hint on each retrieve response (D0275).
     pub async fn poll(
         &self,
         response_id: &ResponseId,
@@ -1479,6 +1482,180 @@ mod tests {
         }
         assert_eq!(error.request_id(), Some("req_loopback"));
         assert!(stream.next().await.is_none());
+    }
+
+    #[test]
+    fn retrieve_response_stream_params_requires_stream_true() {
+        // `stream=false` cannot decode: resuming a Response stream is the only
+        // supported mode for these query parameters.
+        assert!(
+            serde_json::from_value::<RetrieveResponseStreamParams>(json!({"stream": false}))
+                .is_err(),
+            "stream=false must fail closed at decode time"
+        );
+        // With `stream` omitted the field defaults to true and re-encodes as
+        // `stream=true` on the wire.
+        let params: RetrieveResponseStreamParams =
+            serde_json::from_value(json!({"include": []})).expect("stream defaults to true");
+        let encoded = serde_json::to_value(&params).expect("encode params");
+        assert_eq!(encoded["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn response_decodes_conversation_background_and_prompt_cache_echo() {
+        let mut fixture = serde_json::from_str::<Value>(RESPONSE_FIXTURE).expect("base fixture");
+        fixture["conversation"] = json!({"id": "conv_1"});
+        fixture["background"] = json!(true);
+        fixture["prompt_cache_key"] = json!("cache-key-1");
+        fixture["prompt_cache_options"] = json!({"mode": "explicit", "ttl": "30m"});
+        fixture["output"] = json!([{
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Hi there", "annotations": [], "logprobs": []}]
+        }]);
+
+        let (base_url, _captured) =
+            serve_sequence(vec![(StatusCode::OK, fixture.to_string())]).await;
+        let response = client(base_url)
+            .responses()
+            .retrieve(&ResponseId::new("resp_echo"))
+            .await
+            .expect("retrieved echo response");
+
+        assert_eq!(response.id(), "resp_wire");
+        assert_eq!(response.status(), Some(&ResponseStatus::Completed));
+        assert_eq!(response.output_text(), "Hi there");
+        assert_eq!(response.background(), Some(true));
+        assert_eq!(response.prompt_cache_key(), Some("cache-key-1"));
+        let options = response
+            .prompt_cache_options()
+            .expect("echoed prompt-cache options");
+        assert_eq!(
+            serde_json::to_value(options.mode()).expect("encode mode"),
+            json!("explicit")
+        );
+        assert_eq!(
+            serde_json::to_value(options.ttl()).expect("encode ttl"),
+            json!("30m")
+        );
+        // Accessor gap (17-A-2): the decoded `Response` exposes no
+        // `conversation()` accessor and no `Serialize` impl, so the
+        // conversation reference can only be pinned through the debug
+        // representation of the decoded value.
+        assert!(
+            format!("{response:?}").contains("conv_1"),
+            "the conversation reference must survive decoding, got {response:?}"
+        );
+    }
+
+    #[test]
+    fn follow_up_from_copies_all_seven_stable_prefix_fields() {
+        use openai_rs_types::responses::{
+            PromptCacheOptionsParam, ReasoningConfig, ReasoningEffort, ResponseTextConfig,
+            TextFormat, TextFormatText, ToolChoice,
+        };
+
+        let previous = CreateResponseRequest::new("test-model", "first")
+            .instructions("Stay concise.")
+            .tool_choice(ToolChoice::Required)
+            .text(ResponseTextConfig::new(TextFormat::Text(
+                TextFormatText::default(),
+            )))
+            .reasoning(ReasoningConfig::new().effort(ReasoningEffort::Low))
+            .prompt_cache_key("cache-key-1")
+            .prompt_cache_options(PromptCacheOptionsParam::new().thirty_minutes());
+        let response: Response =
+            serde_json::from_str(RESPONSE_FIXTURE).expect("stored response fixture");
+
+        let follow = CreateResponseRequest::follow_up_from(&previous, &response, "next");
+        let value = serde_json::to_value(&follow).expect("serialize follow-up");
+        assert_eq!(value["previous_response_id"], "resp_wire");
+        assert_eq!(value["instructions"], "Stay concise.");
+        assert_eq!(value["tool_choice"], "required");
+        assert_eq!(value["text"]["format"]["type"], "text");
+        assert_eq!(value["reasoning"]["effort"], "low");
+        assert_eq!(value["prompt_cache_key"], "cache-key-1");
+        assert_eq!(value["prompt_cache_options"]["ttl"], "30m");
+        assert_eq!(value["input"], "next");
+    }
+
+    #[tokio::test]
+    async fn concurrent_create_streams_share_one_client_without_cross_talk() {
+        // One `Client` (one shared pool) fans out three concurrent SSE
+        // streams; each scripted connection echoes a delta derived from the
+        // request's own model so per-stream routing stays assertable.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind concurrent SSE server");
+        let address = listener.local_addr().expect("concurrent SSE address");
+        tokio::spawn(async move {
+            for _ in 0..3 {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let service = service_fn(move |request: Request<Incoming>| async move {
+                        let bytes = request
+                            .into_body()
+                            .collect()
+                            .await
+                            .expect("read concurrent request body")
+                            .to_bytes();
+                        let model = serde_json::from_slice::<Value>(&bytes)
+                            .expect("request JSON")
+                            .get("model")
+                            .and_then(Value::as_str)
+                            .expect("request model")
+                            .to_owned();
+                        let body = format!(
+                            "event: response.output_text.delta\n\
+                                 data: {{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"delta for {model}\",\"sequence_number\":1,\"logprobs\":[]}}\n\n\
+                                 data: [DONE]\n\n",
+                        );
+                        let response = hyper::Response::builder()
+                            .status(StatusCode::OK)
+                            .header(http::header::CONTENT_TYPE, "text/event-stream")
+                            .header("x-request-id", "req_loopback")
+                            .body(Full::new(Bytes::from(body)))
+                            .expect("build concurrent SSE response");
+                        Ok::<_, Infallible>(response)
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        let base_url =
+            Url::parse(&format!("http://{address}/v1/")).expect("concurrent SSE base URL");
+        let client = client(base_url);
+
+        let drain = |client: Client, model: &'static str| async move {
+            let mut stream = client
+                .responses()
+                .create_stream(CreateResponseRequest::new(model, "hello").into_streaming())
+                .await
+                .expect("stream handshake");
+            let event = stream
+                .next()
+                .await
+                .expect("one event")
+                .expect("typed event");
+            match event {
+                ResponseStreamEvent::OutputTextDelta(delta) => delta.delta().to_owned(),
+                other => panic!("unexpected stream event: {other:?}"),
+            }
+        };
+        let (a, b, c) = tokio::join!(
+            drain(client.clone(), "model-a"),
+            drain(client.clone(), "model-b"),
+            drain(client, "model-c"),
+        );
+        assert_eq!(a, "delta for model-a");
+        assert_eq!(b, "delta for model-b");
+        assert_eq!(c, "delta for model-c");
     }
 
     #[tokio::test]

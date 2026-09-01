@@ -6578,4 +6578,207 @@ mod tests {
             Err(AdminConstraintError::CertificateIds { actual: 0, .. })
         ));
     }
+
+    #[test]
+    fn group_dtos_decode_pin_and_round_trip() {
+        // Pinned `GroupResponse` (spec/upstream/openapi-2026-08-29.json):
+        // required id/name/created_at/is_scim_managed/group_type.
+        let create_fixture = json!({
+            "id": "group_1",
+            "name": "Platform",
+            "created_at": 100,
+            "is_scim_managed": false,
+            "group_type": "group",
+            "future_group_field": {"kept": true}
+        });
+        let created = ok(serde_json::from_value::<GroupResponse>(
+            create_fixture.clone(),
+        ));
+        assert_eq!(created.id, "group_1");
+        assert_eq!(created.group_type, GroupType::Group);
+        assert!(created.extra().contains_key("future_group_field"));
+        assert_eq!(ok(serde_json::to_value(&created)), create_fixture);
+        assert!(
+            serde_json::from_value::<GroupResponse>(json!({
+                "id": "group_1",
+                "name": "Platform",
+                "created_at": 100,
+                "is_scim_managed": false
+            }))
+            .is_err(),
+            "pinned GroupResponse requires group_type"
+        );
+
+        // Pinned `GroupResourceWithSuccess` (update-group response): the
+        // frozen schema omits `group_type` entirely.
+        let update_fixture = json!({
+            "id": "group_1",
+            "name": "Platform renamed",
+            "created_at": 100,
+            "is_scim_managed": true
+        });
+        let updated = ok(serde_json::from_value::<GroupResourceWithSuccess>(
+            update_fixture.clone(),
+        ));
+        assert_eq!(updated.name, "Platform renamed");
+        assert_eq!(ok(serde_json::to_value(&updated)), update_fixture);
+
+        // Pinned `GroupUserAssignment` (create-group-user response):
+        // required object/user_id/group_id.
+        let assignment_fixture = json!({
+            "object": "group.user",
+            "user_id": "user-abc123",
+            "group_id": "group_1"
+        });
+        let assignment = ok(serde_json::from_value::<GroupUserAssignment>(
+            assignment_fixture.clone(),
+        ));
+        assert_eq!(assignment.object, AssignmentObject::GroupUser);
+        assert_eq!(assignment.user_id, "user-abc123");
+        assert_eq!(ok(serde_json::to_value(&assignment)), assignment_fixture);
+
+        // Pinned `GroupUserDeletedResource` (delete-group-user response):
+        // required object/deleted only.
+        let deleted_fixture = json!({
+            "object": "group.user.deleted",
+            "deleted": true
+        });
+        let deleted = ok(serde_json::from_value::<GroupUserDeletedResource>(
+            deleted_fixture.clone(),
+        ));
+        assert_eq!(deleted.object, AssignmentObject::GroupUserDeleted);
+        assert!(deleted.deleted);
+        assert_eq!(ok(serde_json::to_value(&deleted)), deleted_fixture);
+    }
+
+    #[test]
+    fn user_role_assignment_decodes_nested_user_and_role() {
+        // Pinned `UserRoleAssignment`: required object/user/role; `user` is
+        // the full `User` schema, `role` is the `Role` schema.
+        let fixture = json!({
+            "object": "user.role",
+            "user": {
+                "object": "organization.user",
+                "id": "user-abc123",
+                "added_at": 100,
+                "name": "Ada Lovelace",
+                "email": "ada@example.test",
+                "user_future": 7
+            },
+            "role": {
+                "object": "role",
+                "id": "role_1",
+                "name": "reader",
+                "description": "Read-only access",
+                "permissions": ["project.read"],
+                "resource_type": "organization",
+                "predefined_role": false,
+                "role_future": true
+            }
+        });
+        let assignment = ok(serde_json::from_value::<UserRoleAssignment>(
+            fixture.clone(),
+        ));
+        assert_eq!(assignment.object, AssignmentObject::UserRole);
+        assert_eq!(assignment.user.id, "user-abc123");
+        assert_eq!(
+            assignment.user.name,
+            Omittable::Value(Nullable::Value("Ada Lovelace".to_owned()))
+        );
+        assert!(assignment.user.extra().contains_key("user_future"));
+        assert_eq!(assignment.role.id, "role_1");
+        assert_eq!(assignment.role.permissions, vec!["project.read".to_owned()]);
+        assert!(assignment.role.extra().contains_key("role_future"));
+        assert_eq!(ok(serde_json::to_value(&assignment)), fixture);
+    }
+
+    #[test]
+    fn project_user_name_and_email_are_explicit_null_tri_state() {
+        // Pinned `ProjectUser`: required object/id/role/added_at; name and
+        // email are optional, so omitted, explicit null, and a value are
+        // three distinct decode outcomes that must survive a re-encode.
+        let base = json!({
+            "object": "organization.project.user",
+            "id": "user-abc123",
+            "role": "owner",
+            "added_at": 100
+        });
+        let omitted = ok(serde_json::from_value::<ProjectUser>(base.clone()));
+        assert_eq!(omitted.name, Omittable::Omitted);
+        assert_eq!(omitted.email, Omittable::Omitted);
+        assert_eq!(ok(serde_json::to_value(&omitted)), base);
+
+        let mut nulled = base.clone();
+        nulled["name"] = Value::Null;
+        nulled["email"] = Value::Null;
+        let nulled = ok(serde_json::from_value::<ProjectUser>(nulled.clone()));
+        assert_eq!(nulled.name, Omittable::Value(Nullable::Null));
+        assert_eq!(nulled.email, Omittable::Value(Nullable::Null));
+        assert_eq!(
+            ok(serde_json::to_value(&nulled)),
+            json!({
+                "object": "organization.project.user",
+                "id": "user-abc123",
+                "role": "owner",
+                "added_at": 100,
+                "name": null,
+                "email": null
+            }),
+            "an explicit null must not collapse to an omitted field"
+        );
+
+        let mut valued_json = base;
+        valued_json["name"] = json!("Ada Lovelace");
+        valued_json["email"] = json!("ada@example.test");
+        valued_json["future_project_user"] = json!([1]);
+        let valued = ok(serde_json::from_value::<ProjectUser>(valued_json.clone()));
+        assert_eq!(
+            valued.name,
+            Omittable::Value(Nullable::Value("Ada Lovelace".to_owned()))
+        );
+        assert!(valued.extra.contains_key("future_project_user"));
+        assert_eq!(ok(serde_json::to_value(&valued)), valued_json);
+    }
+
+    #[test]
+    fn service_account_api_key_body_decodes_and_redacts_its_secret() {
+        // Pinned `ServiceAccountApiKeyBody`: required object/value/name/
+        // created_at/id. The unredacted `value` is wire-serializable but must
+        // never surface through Debug (mirroring
+        // `admin_key_requiredness_and_secret_redaction_are_exact`).
+        let fixture = json!({
+            "object": "organization.project.service_account.api_key",
+            "value": "sk-proj-service-account-secret",
+            "name": "CI deploy key",
+            "created_at": 100,
+            "id": "key_1",
+            "future_key_field": "kept"
+        });
+        let body = ok(serde_json::from_value::<ServiceAccountApiKeyBody>(
+            fixture.clone(),
+        ));
+        let debug = format!("{body:?}");
+        assert!(
+            !debug.contains("sk-proj-service-account-secret"),
+            "Debug leaked the secret: {debug}"
+        );
+        assert!(
+            debug.contains("[REDACTED]"),
+            "Debug must print the redaction marker: {debug}"
+        );
+        assert!(body.extra.contains_key("future_key_field"));
+        assert_eq!(ok(serde_json::to_value(&body)), fixture);
+
+        let mut missing = fixture;
+        match &mut missing {
+            Value::Object(object) => {
+                object.remove("value");
+            }
+            _ => panic!("fixture must be object"),
+        }
+        assert!(
+            serde_json::from_value::<ServiceAccountApiKeyBody>(missing).is_err(),
+            "pinned ServiceAccountApiKeyBody requires value"
+        );
+    }
 }

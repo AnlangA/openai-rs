@@ -155,6 +155,31 @@ The verified surface includes:
 - Unknown response fields and events are retained only where the wire contract
   is intentionally forward-compatible.
 
+## Pagination ergonomics (for python/node migrants)
+
+The official Python and Node SDKs hide cursor paging behind auto-paging
+iterators (`for file in client.files.list(...)`, `for await ...`). This crate
+instead exposes page-at-a-time streams: each resource offers a
+`list_pages`-style method (for example
+[`Files::list_pages`](../crates/openai-rs-client/src/files.rs)) that yields one
+full `ApiResponse<...Page>` per HTTP round trip, validates the returned cursor
+(rejecting repeated or missing cursors), advances the `after` parameter
+automatically, and ends the stream once `has_more` is exhausted. Callers that
+want item-at-a-time iteration simply flatten while consuming the stream:
+
+```rust
+while let Some(page) = stream.try_next().await? {
+    for file in page.data() { /* ... */ }
+}
+```
+
+This keeps request IDs, rate-limit headers, and per-page metadata observable,
+which the auto-paging iterators in the official SDKs discard. See
+`examples/files_list.rs` for a complete `list_pages`-to-exhaustion loop. The
+one deliberate exception is the Administration client (decision D0223): its
+sealed manifest pages manually via `AdminCursorPage::next_after_with` rather
+than a `list_pages` stream.
+
 ## Official API lifecycle and deprecation timeline (2026-08-30)
 
 | Official service / endpoint | Lifecycle status & milestone | SDK disposition |

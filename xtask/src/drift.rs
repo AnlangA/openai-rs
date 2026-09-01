@@ -19,6 +19,10 @@ struct OperationMeta {
     deprecated: bool,
     required_params: BTreeSet<String>,
     optional_params: BTreeSet<String>,
+    // name -> `in` (location), e.g. "query" / "header" / "path" / "cookie"
+    param_locations: BTreeMap<String, String>,
+    // Success status codes declared on responses, e.g. "200", "201"
+    success_statuses: BTreeSet<String>,
 }
 
 #[derive(Debug, Default)]
@@ -169,6 +173,43 @@ pub fn compute_drift(from_path: &Path, to_path: &Path) -> Result<DriftReport> {
                     ));
                 }
 
+                // Check success-status changes (200 <-> 201 flip etc.)
+                if from_op.success_statuses != to_op.success_statuses {
+                    report.breaking_changes.push(format!(
+                        "operation `{op_id}` success status codes changed: [{}] -> [{}]",
+                        from_op
+                            .success_statuses
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        to_op
+                            .success_statuses
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+
+                // Check parameter location (in) changes, e.g. query -> header
+                for (param, to_loc) in &to_op.param_locations {
+                    match from_op.param_locations.get(param) {
+                        Some(from_loc) => {
+                            if from_loc != to_loc {
+                                report.breaking_changes.push(format!(
+                                    "operation `{op_id}` parameter `{param}` moved from `{from_loc}` to `{to_loc}`"
+                                ));
+                            }
+                        }
+                        None => {
+                            report.additive_changes.push(format!(
+                                "operation `{op_id}` parameter `{param}` now declares location `{to_loc}`"
+                            ));
+                        }
+                    }
+                }
+
                 // Check added required parameters (breaking)
                 for req in &to_op.required_params {
                     if !from_op.required_params.contains(req) {
@@ -290,16 +331,37 @@ fn extract_operations(doc: &Value) -> Result<BTreeMap<String, OperationMeta>> {
 
             let mut required_params = BTreeSet::new();
             let mut optional_params = BTreeSet::new();
+            let mut param_locations = BTreeMap::new();
 
+            // Operation-level parameters plus shared path-item parameters
+            // (OpenAPI 3: path-item `parameters` apply to every operation).
+            let mut all_params: Vec<&Value> = Vec::new();
             if let Some(params) = op.get("parameters").and_then(Value::as_array) {
-                for p in params {
-                    if let Some(p_name) = p.get("name").and_then(Value::as_str) {
-                        let is_req = p.get("required").and_then(Value::as_bool).unwrap_or(false);
-                        if is_req {
-                            required_params.insert(p_name.to_owned());
-                        } else {
-                            optional_params.insert(p_name.to_owned());
-                        }
+                all_params.extend(params.iter());
+            }
+            if let Some(params) = path_obj.get("parameters").and_then(Value::as_array) {
+                all_params.extend(params.iter());
+            }
+            for p in all_params {
+                if let Some(p_name) = p.get("name").and_then(Value::as_str) {
+                    let is_req = p.get("required").and_then(Value::as_bool).unwrap_or(false);
+                    if is_req {
+                        required_params.insert(p_name.to_owned());
+                    } else {
+                        optional_params.insert(p_name.to_owned());
+                    }
+                    if let Some(location) = p.get("in").and_then(Value::as_str) {
+                        param_locations.insert(p_name.to_owned(), location.to_owned());
+                    }
+                }
+            }
+
+            // Success responses: 2xx status keys under `responses`.
+            let mut success_statuses = BTreeSet::new();
+            if let Some(responses) = op.get("responses").and_then(Value::as_object) {
+                for status in responses.keys() {
+                    if status.starts_with("2") {
+                        success_statuses.insert(status.clone());
                     }
                 }
             }
@@ -312,6 +374,8 @@ fn extract_operations(doc: &Value) -> Result<BTreeMap<String, OperationMeta>> {
                     deprecated,
                     required_params,
                     optional_params,
+                    param_locations,
+                    success_statuses,
                 },
             );
         }
@@ -358,5 +422,91 @@ mod tests {
         assert!(!is_sunset_schema_family("Eval"));
         assert!(!is_sunset_schema_family("FineTuningJob"));
         assert!(is_sunset_schema_family("Assistant"));
+    }
+
+    fn spec_with_operation(
+        status_from: &str,
+        status_to: &str,
+        in_from: &str,
+        in_to: &str,
+    ) -> (String, String) {
+        let from = serde_json::json!({
+            "paths": {
+                "/files/{file_id}": {
+                    "get": {
+                        "operationId": "retrieveFile",
+                        "parameters": [
+                            {"name": "file_id", "in": "path", "required": true},
+                            {"name": "purpose", "in": in_from, "required": false}
+                        ],
+                        "responses": {status_from: {"description": "ok"}}
+                    }
+                }
+            }
+        })
+        .to_string();
+        let to = serde_json::json!({
+            "paths": {
+                "/files/{file_id}": {
+                    "get": {
+                        "operationId": "retrieveFile",
+                        "parameters": [
+                            {"name": "file_id", "in": "path", "required": true},
+                            {"name": "purpose", "in": in_to, "required": false}
+                        ],
+                        "responses": {status_to: {"description": "ok"}}
+                    }
+                }
+            }
+        })
+        .to_string();
+        (from, to)
+    }
+
+    #[test]
+    fn status_code_and_param_location_changes_are_reported() {
+        let (from, to) = spec_with_operation("200", "201", "query", "header");
+        let from_path = std::env::temp_dir().join("drift_from.json");
+        let to_path = std::env::temp_dir().join("drift_to.json");
+        fs::write(&from_path, &from).expect("write from spec");
+        fs::write(&to_path, &to).expect("write to spec");
+
+        let report = compute_drift(&from_path, &to_path).expect("compute drift");
+
+        assert!(
+            report
+                .breaking_changes
+                .iter()
+                .any(|c| c.contains("retrieveFile") && c.contains("200") && c.contains("201")),
+            "expected success-status change in breaking_changes, got {:?}",
+            report.breaking_changes
+        );
+        assert!(
+            report
+                .breaking_changes
+                .iter()
+                .any(|c| c.contains("purpose") && c.contains("query") && c.contains("header")),
+            "expected parameter location change in breaking_changes, got {:?}",
+            report.breaking_changes
+        );
+    }
+
+    #[test]
+    fn identical_status_and_location_produce_no_changes() {
+        let (from, to) = spec_with_operation("200", "200", "query", "query");
+        let from_path = std::env::temp_dir().join("drift_from_same.json");
+        let to_path = std::env::temp_dir().join("drift_to_same.json");
+        fs::write(&from_path, &from).expect("write from spec");
+        fs::write(&to_path, &to).expect("write to spec");
+
+        let report = compute_drift(&from_path, &to_path).expect("compute drift");
+        assert!(
+            !report
+                .breaking_changes
+                .iter()
+                .any(|c| c.contains("retrieveFile") || c.contains("purpose")),
+            "unexpected changes: {:?}",
+            report.breaking_changes
+        );
     }
 }

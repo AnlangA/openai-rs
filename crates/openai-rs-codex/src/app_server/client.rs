@@ -1405,10 +1405,11 @@ mod tests {
         AppServerClient, AppServerConfig, AppServerEvent, AppServerLimits, StderrTail, sha256_file,
     };
     use crate::{
-        BrowserLoginOptions, CancelLoginStatus, ClientInfo, ConnectionFailureKind, Error,
-        Notification, PlanType, RateLimitReachedType, RpcError, RpcId, RuntimeCompatibility,
-        RuntimeIdentity, ThreadStartParams, TurnInterruptParams, TurnStartParams, TurnStatus,
-        W3cTraceContext,
+        ApprovalsReviewer, AskForApprovalMode, BrowserLoginOptions, CancelLoginStatus, ClientInfo,
+        ConnectionFailureKind, Error, Notification, PlanType, RateLimitReachedType, RpcError,
+        RpcId, RuntimeCompatibility, RuntimeIdentity, SandboxPolicy, SessionSource,
+        SessionSourceMode, ThreadSourceKind, ThreadStartParams, ThreadStatus, TurnInterruptParams,
+        TurnItemsView, TurnStartParams, TurnStatus, W3cTraceContext,
     };
     use openai_rs_types::kernel::{Nullable, Omittable};
 
@@ -1767,12 +1768,12 @@ mod tests {
 
             IFS= read -r thread || exit 45
             case "$thread" in *'"method":"thread/start"'*) ;; *) exit 46 ;; esac
-            printf '%s\n' '{"id":8,"result":{"thread":{"id":"thr_123","sessionId":"thr_123","futureThreadField":true},"model":"gpt-test","modelProvider":"openai"}}'
+            printf '%s\n' '{"id":8,"result":{"thread":{"id":"thr_123","sessionId":"thr_123","futureThreadField":true,"status":{"type":"idle"},"source":"appServer","threadSource":"cli","cliVersion":"0.9.0"},"model":"gpt-test","modelProvider":"openai","approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":{"type":"dangerFullAccess"}}}'
 
             IFS= read -r turn || exit 47
             case "$turn" in *'"method":"turn/start"'*'"threadId":"thr_123"'*'"type":"text"'*'"text":"hello"'*) ;; *) exit 48 ;; esac
-            printf '%s\n' '{"id":9,"result":{"turn":{"id":"turn_456","status":"inProgress","futureTurnField":7}}}'
-            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thr_123","turn":{"id":"turn_456","status":"completed"}}}'
+            printf '%s\n' '{"id":9,"result":{"turn":{"id":"turn_456","status":"inProgress","futureTurnField":7,"itemsView":"summary"}}}'
+            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thr_123","turn":{"id":"turn_456","status":"completed","itemsView":"notLoaded"}}}'
 
             IFS= read -r interrupt || exit 49
             case "$interrupt" in *'"method":"turn/interrupt"'*'"threadId":"thr_123"'*'"turnId":"turn_456"'*) ;; *) exit 50 ;; esac
@@ -1817,11 +1818,32 @@ mod tests {
         let thread = client.thread_start(ThreadStartParams::default()).await?;
         assert_eq!(thread.thread.id, "thr_123");
         assert_eq!(thread.thread.extra["futureThreadField"], Value::Bool(true));
+        // D0267/D0281: the negotiated thread fields surface typed through the
+        // request lane, not only via direct DTO decode.
+        assert_eq!(
+            thread.approval_policy,
+            Some(AskForApprovalMode::OnRequest.into())
+        );
+        assert_eq!(thread.approvals_reviewer, Some(ApprovalsReviewer::User));
+        assert_eq!(
+            thread.sandbox,
+            Some(SandboxPolicy::DangerFullAccess {
+                extra: serde_json::Map::new()
+            })
+        );
+        assert_eq!(thread.thread.status, Some(ThreadStatus::Idle));
+        assert_eq!(
+            thread.thread.source,
+            Some(SessionSource::Mode(SessionSourceMode::AppServer))
+        );
+        assert_eq!(thread.thread.thread_source, Some(ThreadSourceKind::Cli));
+        assert_eq!(thread.thread.cli_version.as_deref(), Some("0.9.0"));
         let turn = client
             .turn_start(TurnStartParams::text("thr_123", "hello"))
             .await?;
         assert_eq!(turn.turn.id, "turn_456");
         assert_eq!(turn.turn.extra["futureTurnField"], Value::from(7));
+        assert_eq!(turn.turn.items_view, Some(TurnItemsView::Summary));
         client
             .turn_interrupt(TurnInterruptParams {
                 thread_id: "thr_123".to_owned(),
@@ -1835,6 +1857,7 @@ mod tests {
                 Notification::TurnCompleted(completed) => {
                     assert_eq!(completed.thread_id, "thr_123");
                     assert_eq!(completed.turn.status, TurnStatus::Completed);
+                    assert_eq!(completed.turn.items_view, Some(TurnItemsView::NotLoaded));
                 }
                 other => return Err(format!("unexpected notification: {other:?}").into()),
             },
@@ -2750,8 +2773,8 @@ mod tests {
             IFS= read -r init || exit 180
             printf '%s\n' '{"id":1,"result":{"userAgent":"fake/1","codexHome":"/fake/home","platformFamily":"unix","platformOs":"test"}}'
             IFS= read -r initialized || exit 181
-            printf '%s\n' '{"method":"thread/started","params":{"thread":{"id":"thr_123"}}}'
-            printf '%s\n' '{"method":"turn/started","params":{"threadId":"thr_123","turn":{"id":"turn_456","status":"inProgress"}}}'
+            printf '%s\n' '{"method":"thread/started","params":{"thread":{"id":"thr_123","status":{"type":"idle"},"source":"appServer","threadSource":"cli","cliVersion":"0.9.0"}}}'
+            printf '%s\n' '{"method":"turn/started","params":{"threadId":"thr_123","turn":{"id":"turn_456","status":"inProgress","itemsView":"summary"}}}'
             printf '%s\n' '{"method":"item/started","params":{"threadId":"thr_123","turnId":"turn_456","item":{"type":"agentMessage","id":"item_1","text":""},"startedAtMs":1730947200000}}'
             printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thr_123","turnId":"turn_456","itemId":"item_1","delta":" incre"}}'
             printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thr_123","turnId":"turn_456","itemId":"item_1","delta":"mental"}}'
@@ -2767,13 +2790,32 @@ mod tests {
         let AppServerEvent::Notification(notification) = event else {
             return Err(format!("unexpected event: {event:?}").into());
         };
-        assert!(matches!(*notification, Notification::ThreadStarted(_)));
+        // D0267/D0281: the D0281 thread fields surface typed through the
+        // notification lane, not only via direct DTO decode.
+        match *notification {
+            Notification::ThreadStarted(started) => {
+                assert_eq!(started.thread.status, Some(ThreadStatus::Idle));
+                assert_eq!(
+                    started.thread.source,
+                    Some(SessionSource::Mode(SessionSourceMode::AppServer))
+                );
+                assert_eq!(started.thread.thread_source, Some(ThreadSourceKind::Cli));
+                assert_eq!(started.thread.cli_version.as_deref(), Some("0.9.0"));
+            }
+            other => return Err(format!("unexpected notification: {other:?}").into()),
+        }
 
         let event = client.next_event().await.ok_or("missing turn/started")?;
         let AppServerEvent::Notification(notification) = event else {
             return Err(format!("unexpected event: {event:?}").into());
         };
-        assert!(matches!(*notification, Notification::TurnStarted(_)));
+        match *notification {
+            Notification::TurnStarted(started) => {
+                assert_eq!(started.thread_id, "thr_123");
+                assert_eq!(started.turn.items_view, Some(TurnItemsView::Summary));
+            }
+            other => return Err(format!("unexpected notification: {other:?}").into()),
+        }
 
         let event = client.next_event().await.ok_or("missing item/started")?;
         match event {
