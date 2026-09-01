@@ -55,6 +55,20 @@
 //! built with `no_proxy()` (or one explicit proxy) to restore the
 //! deterministic client-crate posture; or scrub the proxy variables from the
 //! environment before the transport is constructed.
+//!
+//! Every rmcp-side spelling that mitigation needs is nameable through the
+//! `rmcp` re-export at this crate's root (13-P-1): the transport is
+//! `rmcp::transport::StreamableHttpClientTransport` — a type alias generic
+//! over the HTTP client, constructed with a
+//! `rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig`
+//! — and `RmcpExecutor::new`'s peer parameter is `rmcp::service::ServerSink`
+//! (paths verified against the locked rmcp 3.1.4 source: `src/transport.rs`
+//! and `src/service/client.rs`). A facade-only consumer therefore writes
+//! `openai_rs::rmcp::rmcp::transport::…` instead of taking a direct
+//! `rmcp = "=3.1.4"` dependency kept in manual lockstep. Only the `reqwest`
+//! client handed to `with_client` still comes from the caller's own stack:
+//! rmcp does not re-export it, and the client crate's `reqwest` re-export
+//! (D0231) rides the other, 0.12 stack.
 
 mod arguments;
 mod bridge;
@@ -81,6 +95,18 @@ pub use executor::RmcpExecutor;
 // facade-only consumers need them re-exported alongside the trait to
 // implement it.
 pub use result::{EncodedToolResult, ResultEncoding, ToolResultEnvelope, encode_tool_result};
+/// Re-export of the `rmcp` crate this bridge is written against.
+///
+/// The `rmcp::model` re-export below is the convenience path for the executor
+/// trait's signatures; this one makes the rest of the locked crate nameable
+/// through the facade chain too — `rmcp::service::ServerSink` (the
+/// `RmcpExecutor::new` peer parameter) and the
+/// `rmcp::transport::StreamableHttpClientTransport` constructor named by the
+/// proxy mitigation above — so a facade-only consumer never needs a direct
+/// `rmcp = "=3.1.4"` dependency kept in manual lockstep (13-P-1). Mirrors the
+/// client crate's `pub use reqwest` precedent (D0231): the re-export adds
+/// naming, not new capability.
+pub use rmcp;
 pub use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
 
 /// OpenAI-native remote MCP wire types.
@@ -95,4 +121,46 @@ pub mod native_remote {
         McpListTools, McpListedTool, McpRequireApproval, McpTool, McpToolChoice, McpToolFilter,
         ResponseTool,
     };
+}
+
+#[cfg(test)]
+mod tests {
+    /// 13-P-1: the re-exported `rmcp` module keeps the peer type required by
+    /// `RmcpExecutor::new` nameable through this crate — `crate::rmcp` here,
+    /// `openai_rs::rmcp::rmcp` for a facade consumer — without a direct
+    /// `rmcp` dependency, mirroring the codex alias nameability tests
+    /// (D0243/D0249).
+    #[cfg(feature = "client")]
+    #[test]
+    fn rmcp_service_types_are_nameable_through_the_crate() {
+        fn assert_sink_nameable(
+            sink: Option<crate::rmcp::service::ServerSink>,
+        ) -> Option<crate::rmcp::service::ServerSink> {
+            sink
+        }
+        assert!(assert_sink_nameable(None).is_none());
+    }
+
+    /// 13-P-1: the streamable-HTTP transport named by the proxy mitigation is
+    /// likewise nameable. The alias itself cannot be value-asserted: its
+    /// HTTP-client parameter has no nameable default without a direct
+    /// `reqwest` 0.13 dependency, and `StreamableHttpClientWorker` puts
+    /// `C: StreamableHttpClient` on the struct definition, so the alias path
+    /// is asserted by import (an anonymous import is still resolved and
+    /// type-checked) and its non-generic `with_client` config parameter by
+    /// value.
+    #[cfg(any(feature = "http-rustls", feature = "http-native-tls"))]
+    #[test]
+    fn rmcp_transport_types_are_nameable_through_the_crate() {
+        #[allow(unused_imports)]
+        use crate::rmcp::transport::StreamableHttpClientTransport as _;
+        use crate::rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+
+        fn assert_config_nameable(
+            config: Option<StreamableHttpClientTransportConfig>,
+        ) -> Option<StreamableHttpClientTransportConfig> {
+            config
+        }
+        assert!(assert_config_nameable(None).is_none());
+    }
 }

@@ -751,10 +751,10 @@ fn retryable_operation(class: RetryClass, policy: RetryPolicy) -> bool {
 ///
 /// `x-should-retry` is authoritative when present as exactly `true`/`false`;
 /// anything else — a garbage value or an absent header — falls back to the
-/// status-only rule: 408, 409, 429, and every 5xx are retryable, every other
-/// 4xx is not. The three lanes previously carried verbatim copies of this
-/// predicate; they now share this one so a single truth table pins them all
-/// (8-10).
+/// status-only rule: 408, 409, 429, and every status >= 500 are retryable,
+/// every other 4xx is not. The three lanes previously carried verbatim copies
+/// of this predicate; they now share this one so a single truth table pins
+/// them all (8-10).
 pub(crate) fn should_retry_response(response: &reqwest::Response) -> bool {
     match response
         .headers()
@@ -764,8 +764,16 @@ pub(crate) fn should_retry_response(response: &reqwest::Response) -> bool {
         Some("true") => true,
         Some("false") => false,
         Some(_) | None => {
+            // The >= 500 bound is numeric, not `is_server_error()` (which is
+            // exactly 500..=599): both official SDKs compare the raw code, so
+            // a representable non-standard 6xx (`StatusCode::from_u16(600)`
+            // is `Ok`) also retries — openai-python's `should_retry`
+            // (`_base_client.py:851-853`: `if response.status_code >= 500:
+            // return True`) and openai-node's `shouldRetry`
+            // (`client.ts:1606-1607`: `if (response.status >= 500) return
+            // true;`).
             matches!(response.status().as_u16(), 408 | 409 | 429)
-                || response.status().is_server_error()
+                || response.status().as_u16() >= 500
         }
     }
 }
@@ -1431,14 +1439,20 @@ mod tests {
     fn should_retry_response_truth_table() {
         // 8-10: the truth table shared by the JSON transport, the multipart
         // lanes, and the Administration channel. Without the header only
-        // 408/409/429/5xx retry; every other 4xx is terminal.
-        for status in [400_u16, 401, 403, 404, 410, 422] {
+        // 408/409/429/>=500 retry; every other 4xx is terminal. The 499/600
+        // pair pins the boundary as a numeric `>= 500` compare — not
+        // `is_server_error()` (500..=599) — so a representable non-standard
+        // 6xx like 600 retries exactly as it does in both official SDKs
+        // (openai-python `_base_client.py:851-853`, openai-node
+        // `client.ts:1606-1607`), while 499 stays terminal; 999 guards the
+        // top of `StatusCode::from_u16`'s representable range.
+        for status in [400_u16, 401, 403, 404, 410, 422, 499] {
             assert!(
                 !should_retry_response(&classified_response(status, None)),
                 "{status} without the header must not retry"
             );
         }
-        for status in [408_u16, 409, 429, 500, 502, 503, 599] {
+        for status in [408_u16, 409, 429, 500, 502, 503, 599, 600, 999] {
             assert!(
                 should_retry_response(&classified_response(status, None)),
                 "{status} without the header must retry"
@@ -1446,13 +1460,13 @@ mod tests {
         }
 
         // The explicit override beats the status in both directions.
-        for status in [400_u16, 404, 408, 500] {
+        for status in [400_u16, 404, 408, 500, 600] {
             assert!(
                 should_retry_response(&classified_response(status, Some("true"))),
                 "`x-should-retry: true` must force a retry of {status}"
             );
         }
-        for status in [408_u16, 409, 429, 503] {
+        for status in [408_u16, 409, 429, 503, 600] {
             assert!(
                 !should_retry_response(&classified_response(status, Some("false"))),
                 "`x-should-retry: false` must suppress the {status} retry"

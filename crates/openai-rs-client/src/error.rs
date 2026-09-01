@@ -155,31 +155,63 @@ pub struct ApiError {
 
 impl ApiError {
     pub(crate) fn from_body(meta: ResponseMeta, body: &[u8], truncated: bool) -> Self {
-        let envelope = serde_json::from_slice::<ApiErrorEnvelope>(body).ok();
-        let typed = envelope.map(|envelope| envelope.error);
+        let flat = serde_json::from_slice::<ApiErrorBody>(body).ok();
+        let nested = serde_json::from_slice::<ApiErrorEnvelope>(body).ok();
         let body = BodyPreview::from_bytes(body, truncated);
         // Every envelope field is extracted independently: a field whose wire
         // type does not match is dropped on its own instead of invalidating
         // the whole envelope, matching the per-field `get` semantics of the
-        // official clients.
-        let message = typed
+        // official clients. The flat top-level object wins per field and the
+        // nested `{"error":{..}}` envelope only fills fields the flat form did
+        // not carry — the same precedence `StreamError::from_body` applies
+        // (D0195/D0196), removing the ApiError/StreamError asymmetry.
+        // openai-python reads error fields off `body.get("error", body)`
+        // (`_client.py:835`, field reads in `_exceptions.py:71-79`), so a
+        // gateway's flat `{"message":..,"type":..,"code":..}` body surfaces
+        // its fields instead of collapsing every field to the generic status
+        // message; when the top-level object carries no usable `error` key
+        // (absent, or not a map — exactly the bodies for which the nested
+        // parse above fails) the top-level object *is* the error body. The
+        // standard nested envelope behaves exactly as before: its flat parse
+        // succeeds with every field absent, so the nested values decide.
+        let message = flat
             .as_ref()
             .and_then(|error| value_string(error.message.as_ref()))
+            .or_else(|| {
+                nested
+                    .as_ref()
+                    .and_then(|envelope| value_string(envelope.error.message.as_ref()))
+            })
             .unwrap_or_else(|| {
                 format!("OpenAI API returned HTTP {}", meta.status()).into_boxed_str()
             });
         Self {
             meta,
             message,
-            kind: typed
+            kind: flat
                 .as_ref()
-                .and_then(|error| value_string(error.kind.as_ref())),
-            param: typed
+                .and_then(|error| value_string(error.kind.as_ref()))
+                .or_else(|| {
+                    nested
+                        .as_ref()
+                        .and_then(|envelope| value_string(envelope.error.kind.as_ref()))
+                }),
+            param: flat
                 .as_ref()
-                .and_then(|error| value_string(error.param.as_ref())),
-            code: typed
+                .and_then(|error| value_string(error.param.as_ref()))
+                .or_else(|| {
+                    nested
+                        .as_ref()
+                        .and_then(|envelope| value_string(envelope.error.param.as_ref()))
+                }),
+            code: flat
                 .as_ref()
-                .and_then(|error| value_string(error.code.as_ref())),
+                .and_then(|error| value_string(error.code.as_ref()))
+                .or_else(|| {
+                    nested
+                        .as_ref()
+                        .and_then(|envelope| value_string(envelope.error.code.as_ref()))
+                }),
             body,
         }
     }
@@ -842,6 +874,45 @@ mod tests {
         let error = ApiError::from_body(meta, br#"{"error":{}}"#, false);
         assert_eq!(error.message(), "OpenAI API returned HTTP 502 Bad Gateway");
         assert_eq!(error.to_string(), "OpenAI API error (502 Bad Gateway)");
+    }
+
+    #[test]
+    fn api_error_flat_body_surfaces_every_field() {
+        // 13-M-2: a gateway's flat `{"message":..,"type":..,"code":..}` body
+        // previously failed the nested-envelope decode and lost all four
+        // fields; openai-python reads them off `body.get("error", body)`
+        // (`_client.py:835`), and this mirrors StreamError's flat form.
+        let meta = ResponseMeta::new(StatusCode::BAD_GATEWAY, None, RateLimitMetadata::default());
+        let error = ApiError::from_body(
+            meta,
+            br#"{"message":"upstream unavailable","type":"gateway_error","param":"model","code":"bad_gateway"}"#,
+            false,
+        );
+        assert_eq!(error.message(), "upstream unavailable");
+        assert_eq!(error.kind(), Some("gateway_error"));
+        assert_eq!(error.param(), Some("model"));
+        assert_eq!(error.code(), Some("bad_gateway"));
+        assert_eq!(
+            error.to_string(),
+            "OpenAI API error (502 Bad Gateway), code bad_gateway"
+        );
+    }
+
+    #[test]
+    fn api_error_flat_fields_win_and_nested_fills_the_gaps() {
+        // The same precedence StreamError applies (D0195/D0196): flat fields
+        // decide, the nested `{"error":{..}}` envelope only fills fields the
+        // flat form did not carry.
+        let meta = ResponseMeta::new(StatusCode::BAD_GATEWAY, None, RateLimitMetadata::default());
+        let error = ApiError::from_body(
+            meta,
+            br#"{"message":"flat message","type":"flat_type","error":{"message":"nested message","type":"nested_type","code":"nested_code","param":"nested_param"}}"#,
+            false,
+        );
+        assert_eq!(error.message(), "flat message");
+        assert_eq!(error.kind(), Some("flat_type"));
+        assert_eq!(error.code(), Some("nested_code"));
+        assert_eq!(error.param(), Some("nested_param"));
     }
 
     #[test]

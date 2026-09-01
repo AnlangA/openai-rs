@@ -2340,48 +2340,171 @@ pub enum CreateChatCompletionConstraintError {
     },
 }
 
+literal_tag!(
+    ChatModerationResultTag,
+    ModerationResult,
+    "moderation_result"
+);
+
 /// One successful classification inside a Chat moderation-results list.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-#[non_exhaustive]
-pub enum ChatModerationClassification {
-    /// Successful classification for one input.
-    #[serde(rename = "moderation_result")]
-    Result {
-        /// Category name to flagged boolean.
-        categories: BTreeMap<String, bool>,
-        /// Category name to the input modalities that contributed to the score.
-        category_applied_input_types: BTreeMap<String, Vec<ModerationInputType>>,
-        /// Category name to raw score.
-        category_scores: BTreeMap<String, f64>,
-        /// Whether any category flagged the content.
-        flagged: bool,
-        /// Moderation model that produced the result.
-        model: String,
-    },
+///
+/// Fields mirror the pinned python model, which allows extra properties
+/// (13-L-1), so unknown sibling keys survive decode and re-encoding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatModerationResult {
+    #[serde(rename = "type")]
+    kind: ChatModerationResultTag,
+    /// Category name to flagged boolean.
+    pub categories: BTreeMap<String, bool>,
+    /// Category name to the input modalities that contributed to the score.
+    pub category_applied_input_types: BTreeMap<String, Vec<ModerationInputType>>,
+    /// Category name to raw score.
+    pub category_scores: BTreeMap<String, f64>,
+    /// Whether any category flagged the content.
+    pub flagged: bool,
+    /// Moderation model that produced the result.
+    pub model: String,
+    /// Future fields retained while decoding.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
-/// Successful result list or error for one Chat moderation direction.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-#[non_exhaustive]
-pub enum ChatCompletionModerationOutcome {
-    /// Successful classifications for one direction.
-    #[serde(rename = "moderation_results")]
-    Results {
-        /// Moderation model used for this direction.
-        model: String,
-        /// One result per moderated input.
-        results: Vec<ChatModerationClassification>,
-    },
-    /// Failure while moderating one direction.
-    #[serde(rename = "error")]
-    Error {
-        /// Service error code.
-        code: String,
-        /// Human-readable error message.
-        message: String,
-    },
+impl ChatModerationResult {
+    /// Creates a successful classification.
+    #[must_use]
+    pub fn new(
+        categories: BTreeMap<String, bool>,
+        category_applied_input_types: BTreeMap<String, Vec<ModerationInputType>>,
+        category_scores: BTreeMap<String, f64>,
+        flagged: bool,
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: ChatModerationResultTag::ModerationResult,
+            categories,
+            category_applied_input_types,
+            category_scores,
+            flagged,
+            model: model.into(),
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+// 13-L-1: the classification union retains any future `type` tag verbatim
+// instead of failing the whole ChatCompletion decode.
+strict_tagged_union! {
+    /// One classification inside a Chat moderation-results list.
+    pub enum ChatModerationClassification {
+        Result(ChatModerationResult) = "moderation_result",
+    }
+}
+
+impl From<ChatModerationResult> for ChatModerationClassification {
+    fn from(value: ChatModerationResult) -> Self {
+        Self::Result(value)
+    }
+}
+
+literal_tag!(
+    ChatModerationResultsTag,
+    ModerationResults,
+    "moderation_results"
+);
+literal_tag!(ChatModerationErrorTag, Error, "error");
+
+/// Successful classifications for one Chat moderation direction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatModerationResults {
+    #[serde(rename = "type")]
+    kind: ChatModerationResultsTag,
+    /// Moderation model used for this direction.
+    pub model: String,
+    /// One result per moderated input.
+    pub results: Vec<ChatModerationClassification>,
+    /// Future fields retained while decoding.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ChatModerationResults {
+    /// Creates a successful classification list for one direction.
+    #[must_use]
+    pub fn new(model: impl Into<String>, results: Vec<ChatModerationClassification>) -> Self {
+        Self {
+            kind: ChatModerationResultsTag::ModerationResults,
+            model: model.into(),
+            results,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Failure while moderating one Chat moderation direction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatModerationError {
+    #[serde(rename = "type")]
+    kind: ChatModerationErrorTag,
+    /// Service error code.
+    pub code: String,
+    /// Human-readable error message.
+    pub message: String,
+    /// Future fields retained while decoding.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ChatModerationError {
+    /// Creates a failed moderation outcome.
+    #[must_use]
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            kind: ChatModerationErrorTag::Error,
+            code: code.into(),
+            message: message.into(),
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+// 13-L-1: the outcome union retains any future `type` tag verbatim instead of
+// failing the whole ChatCompletion decode.
+strict_tagged_union! {
+    /// Successful result list or error for one Chat moderation direction.
+    pub enum ChatCompletionModerationOutcome {
+        Results(ChatModerationResults) = "moderation_results",
+        Error(ChatModerationError) = "error",
+    }
+}
+
+impl From<ChatModerationResults> for ChatCompletionModerationOutcome {
+    fn from(value: ChatModerationResults) -> Self {
+        Self::Results(value)
+    }
+}
+
+impl From<ChatModerationError> for ChatCompletionModerationOutcome {
+    fn from(value: ChatModerationError) -> Self {
+        Self::Error(value)
+    }
 }
 
 /// Typed Chat Completions moderation echo (`moderation_results` list, not the
@@ -4793,12 +4916,152 @@ mod tests {
         let moderation = completion.moderation().expect("typed chat moderation");
         assert!(matches!(
             moderation.input(),
-            ChatCompletionModerationOutcome::Results { results, .. } if results.len() == 1
+            ChatCompletionModerationOutcome::Results(results) if results.results.len() == 1
         ));
+        assert!(
+            matches!(
+                moderation.output(),
+                ChatCompletionModerationOutcome::Error(error) if error.code == "moderation_unavailable"
+            ),
+            "output moderation must decode the pinned error outcome"
+        );
+    }
+
+    #[test]
+    fn chat_moderation_unions_retain_future_tags_losslessly() {
+        // 13-L-1: the moderation unions used to be closed `tag = "type"`
+        // enums, so a future outcome tag would have failed the whole
+        // ChatCompletion decode. Unknown tags must now be retained verbatim.
+        let classification_wire = json!({
+            "type": "moderation_result_v2",
+            "flagged": true,
+            "scores": {"hate": 0.9},
+            "note": {"nested": [1, 2]}
+        });
+        let classification: ChatModerationClassification =
+            serde_json::from_value(classification_wire.clone()).expect("future classification tag");
+        let ChatModerationClassification::Unknown(unknown) = &classification else {
+            panic!("future classification tag must stay unknown");
+        };
+        assert_eq!(unknown.discriminator(), "moderation_result_v2");
+        assert_eq!(unknown.raw().get("flagged"), Some(&Value::Bool(true)));
+        assert_eq!(
+            serde_json::to_value(&classification).expect("re-encode classification"),
+            classification_wire
+        );
+
+        let outcome_wire = json!({
+            "type": "deferred_moderation",
+            "until": 12,
+            "detail": "retry later"
+        });
+        let outcome: ChatCompletionModerationOutcome =
+            serde_json::from_value(outcome_wire.clone()).expect("future outcome tag");
+        let ChatCompletionModerationOutcome::Unknown(unknown) = &outcome else {
+            panic!("future outcome tag must stay unknown");
+        };
+        assert_eq!(unknown.discriminator(), "deferred_moderation");
+        assert_eq!(
+            serde_json::to_value(&outcome).expect("re-encode outcome"),
+            outcome_wire
+        );
+
+        // A whole completion keeps decoding when both directions carry the
+        // future tag, and the moderation block round-trips unchanged.
+        let mut fixture = json!({
+            "id": "chatcmpl_2",
+            "object": "chat.completion",
+            "created": 2,
+            "model": "gpt-5.6-sol",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "ok" },
+                "logprobs": null,
+                "finish_reason": "stop"
+            }]
+        });
+        fixture["moderation"] = json!({ "input": outcome_wire, "output": outcome_wire });
+        let completion = ok(serde_json::from_value::<ChatCompletion>(fixture.clone()));
         assert!(matches!(
-            moderation.output(),
-            ChatCompletionModerationOutcome::Error { code, .. } if code == "moderation_unavailable"
+            completion
+                .moderation()
+                .expect("typed chat moderation")
+                .input(),
+            ChatCompletionModerationOutcome::Unknown(_)
         ));
+        let encoded = serde_json::to_value(&completion).expect("re-encode completion");
+        assert_eq!(encoded["moderation"], fixture["moderation"]);
+    }
+
+    #[test]
+    fn chat_moderation_known_outcomes_retain_extra_fields() {
+        // 13-L-1: known moderation tags follow the pinned python models'
+        // extra="allow", so unknown sibling keys survive decode and
+        // re-encoding.
+        let wire = json!({
+            "type": "moderation_results",
+            "model": "omni-moderation-latest",
+            "results": [{
+                "type": "moderation_result",
+                "categories": { "hate": false },
+                "category_applied_input_types": { "hate": ["text"] },
+                "category_scores": { "hate": 0.01 },
+                "flagged": false,
+                "model": "omni-moderation-latest",
+                "result_note": "kept"
+            }],
+            "direction_note": "also kept"
+        });
+        let outcome: ChatCompletionModerationOutcome =
+            serde_json::from_value(wire.clone()).expect("decode moderation results");
+        let ChatCompletionModerationOutcome::Results(results) = &outcome else {
+            panic!("moderation_results must decode typed");
+        };
+        assert_eq!(results.model, "omni-moderation-latest");
+        assert_eq!(
+            results.extra_fields().get("direction_note"),
+            Some(&json!("also kept"))
+        );
+        assert!(
+            !results.extra_fields().contains_key("type"),
+            "tag never leaks into extra"
+        );
+        let ChatModerationClassification::Result(result) = &results.results[0] else {
+            panic!("moderation_result must decode typed");
+        };
+        assert_eq!(
+            result.extra_fields().get("result_note"),
+            Some(&json!("kept"))
+        );
+        assert!(
+            !result.extra_fields().contains_key("type"),
+            "tag never leaks into extra"
+        );
+        assert_eq!(
+            serde_json::to_value(&outcome).expect("re-encode known outcome"),
+            wire
+        );
+
+        let error_wire = json!({
+            "type": "error",
+            "code": "moderation_unavailable",
+            "message": "skipped",
+            "retry_after": 5
+        });
+        let error_outcome: ChatCompletionModerationOutcome =
+            serde_json::from_value(error_wire.clone()).expect("decode moderation error");
+        let ChatCompletionModerationOutcome::Error(error) = &error_outcome else {
+            panic!("error outcome must decode typed");
+        };
+        assert_eq!(error.extra_fields().get("retry_after"), Some(&json!(5)));
+        assert!(
+            !error.extra_fields().contains_key("type"),
+            "tag never leaks into extra"
+        );
+        assert_eq!(
+            serde_json::to_value(&error_outcome).expect("re-encode error outcome"),
+            error_wire
+        );
     }
 
     #[test]

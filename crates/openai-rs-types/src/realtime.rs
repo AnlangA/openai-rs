@@ -1100,10 +1100,17 @@ impl RealtimeRetentionRatioTruncation {
 }
 
 /// Realtime truncation policy.
+///
+/// The pinned union pins only the string modes and the `retention_ratio`
+/// object; a future object-shaped policy (nested inside every
+/// `session.created`/`session.updated` payload) is retained verbatim instead
+/// of failing the whole session event decode (round-13 audit 13-E-1).
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum RealtimeTruncation {
     Mode(RealtimeTruncationMode),
     RetentionRatio(RealtimeRetentionRatioTruncation),
+    Unknown(UnknownRealtimeObject),
 }
 
 impl Serialize for RealtimeTruncation {
@@ -1114,6 +1121,7 @@ impl Serialize for RealtimeTruncation {
         match self {
             Self::Mode(value) => value.serialize(serializer),
             Self::RetentionRatio(value) => value.serialize(serializer),
+            Self::Unknown(value) => value.serialize(serializer),
         }
     }
 }
@@ -1126,14 +1134,14 @@ impl<'de> Deserialize<'de> for RealtimeTruncation {
         let value = Value::deserialize(deserializer)?;
         match value {
             Value::String(value) => Ok(Self::Mode(RealtimeTruncationMode::from_raw(value))),
-            Value::Object(_) => {
-                if object_discriminator(&value).map_err(D::Error::custom)? != "retention_ratio" {
-                    return Err(D::Error::custom("unknown Realtime truncation object type"));
-                }
-                serde_json::from_value(value)
+            Value::Object(_) => match object_discriminator(&value).map_err(D::Error::custom)? {
+                "retention_ratio" => serde_json::from_value(value)
                     .map(Self::RetentionRatio)
-                    .map_err(D::Error::custom)
-            }
+                    .map_err(D::Error::custom),
+                _ => UnknownRealtimeObject::from_value(value)
+                    .map(Self::Unknown)
+                    .map_err(D::Error::custom),
+            },
             _ => Err(D::Error::custom(
                 "Realtime truncation must be a string or object",
             )),
@@ -1175,6 +1183,10 @@ impl RealtimeFunctionTool {
 /// Tool available to a Realtime model.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+// The shared responses `McpTool` payload outgrew the function-tool variant;
+// boxing one arm would be a breaking public-API refactor tracked separately
+// from wire fixes, mirroring the sibling union stances.
+#[allow(clippy::large_enum_variant)]
 pub enum RealtimeTool {
     Function(RealtimeFunctionTool),
     Mcp(McpTool),
@@ -2207,9 +2219,13 @@ impl<'de> Deserialize<'de> for RealtimeConversationItem {
                     "assistant" => serde_json::from_value(value)
                         .map(Self::AssistantMessage)
                         .map_err(D::Error::custom),
-                    _ => Err(D::Error::custom(
-                        "unknown role for known Realtime message tag",
-                    )),
+                    // The pinned message oneOf pins only the system/user/
+                    // assistant roles; a future role keeps the complete item
+                    // in the Unknown arm instead of failing the decode
+                    // (round-13 audit 13-E-1).
+                    _ => UnknownRealtimeObject::from_value(value)
+                        .map(Self::Unknown)
+                        .map_err(D::Error::custom),
                 }
             }
             "function_call" => serde_json::from_value(value)
@@ -2474,10 +2490,19 @@ pub struct RealtimeTranscriptDurationUsage {
 }
 
 /// Usage reported by a Realtime transcription event.
+///
+/// The pinned oneOf pins only `tokens` and `duration`; openai-python and
+/// openai-node are equally fail-closed on a third usage kind, so a future
+/// discriminator is retained verbatim instead of failing the whole
+/// `conversation.item.input_audio_transcription.completed` event decode
+/// (round-13 audit 13-E-1 — decode-widening only; the encode surface of the
+/// known variants is unchanged).
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum RealtimeTranscriptionUsage {
     Tokens(RealtimeTranscriptTokenUsage),
     Duration(RealtimeTranscriptDurationUsage),
+    Unknown(UnknownRealtimeObject),
 }
 
 impl Serialize for RealtimeTranscriptionUsage {
@@ -2488,6 +2513,7 @@ impl Serialize for RealtimeTranscriptionUsage {
         match self {
             Self::Tokens(value) => value.serialize(serializer),
             Self::Duration(value) => value.serialize(serializer),
+            Self::Unknown(value) => value.serialize(serializer),
         }
     }
 }
@@ -2505,7 +2531,9 @@ impl<'de> Deserialize<'de> for RealtimeTranscriptionUsage {
             "duration" => serde_json::from_value(value)
                 .map(Self::Duration)
                 .map_err(D::Error::custom),
-            _ => Err(D::Error::custom("unknown transcription usage type")),
+            _ => UnknownRealtimeObject::from_value(value)
+                .map(Self::Unknown)
+                .map_err(D::Error::custom),
         }
     }
 }
@@ -5256,11 +5284,19 @@ mod tests {
             )
             .is_err()
         );
-        assert!(
-            serde_json::from_value::<RealtimeConversationItem>(
-                json!({"type": "message", "role": "future", "content": []})
-            )
-            .is_err()
+        // A future role on the known `message` tag stays lossless in the
+        // Unknown arm instead of failing the decode (round-13 audit 13-E-1);
+        // only malformed payloads for known tags still error below.
+        let future = json!({"type": "message", "role": "future", "content": []});
+        let decoded_future: RealtimeConversationItem =
+            serde_json::from_value(future.clone()).expect("future role decodes losslessly");
+        assert!(matches!(
+            decoded_future,
+            RealtimeConversationItem::Unknown(_)
+        ));
+        assert_eq!(
+            serde_json::to_value(decoded_future).expect("encode"),
+            future
         );
         assert!(
             serde_json::from_value::<RealtimeConversationItem>(json!({
@@ -6275,5 +6311,151 @@ mod tests {
             panic!("expected transcription object");
         };
         assert_eq!(nested.language, Omittable::Value(Nullable::Null));
+    }
+
+    #[test]
+    fn realtime_nested_unions_retain_unknown_discriminators_losslessly() {
+        // Round-13 audit 13-E-1: three nested closed unions used to hard-error
+        // on unknown discriminators, taking the whole enclosing event down with
+        // them. They now retain the complete semantic JSON object like every
+        // sibling union (module doc promise), keeping decode lossless while
+        // known variants encode exactly as before. openai-python and
+        // openai-node are equally fail-closed here, so this is deliberate
+        // decode-widening, not wire-shape divergence.
+
+        // (a) future transcription-usage kind inside transcription.completed.
+        let usage_event = json!({
+            "event_id": "event_1",
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "item_1",
+            "content_index": 0,
+            "transcript": "hello",
+            "usage": {
+                "type": "future_kind",
+                "seconds": 12,
+                "nested": {"audio": 3}
+            }
+        });
+        let decoded_usage: RealtimeServerEvent =
+            serde_json::from_value(usage_event.clone()).expect("future usage kind decodes");
+        let RealtimeServerEvent::InputAudioTranscriptionCompleted(event) = decoded_usage else {
+            panic!("expected transcription completed event");
+        };
+        let RealtimeTranscriptionUsage::Unknown(usage) = &event.usage else {
+            panic!("expected unknown usage arm");
+        };
+        assert_eq!(usage.discriminator(), "future_kind");
+        assert_eq!(usage.raw().len(), 3);
+        assert_eq!(
+            serde_json::to_value(&event).expect("re-encode completed event"),
+            usage_event
+        );
+
+        // (b) future truncation object inside a session.created payload.
+        let session_event = json!({
+            "event_id": "event_1",
+            "type": "session.created",
+            "session": {
+                "type": "realtime",
+                "id": "sess_1",
+                "object": "realtime.session",
+                "truncation": {
+                    "type": "future_policy",
+                    "retention_ratio": 2.5,
+                    "token_limits": {"post_instructions": -1}
+                }
+            }
+        });
+        let decoded_session: RealtimeServerEvent =
+            serde_json::from_value(session_event.clone()).expect("future truncation decodes");
+        let RealtimeServerEvent::SessionCreated(event) = decoded_session else {
+            panic!("expected session created event");
+        };
+        let RealtimeSessionState::Realtime(session) = &event.session else {
+            panic!("expected realtime session state");
+        };
+        let Omittable::Value(RealtimeTruncation::Unknown(truncation)) = &session.truncation else {
+            panic!("expected unknown truncation arm");
+        };
+        assert_eq!(truncation.discriminator(), "future_policy");
+        assert_eq!(
+            serde_json::to_value(&event).expect("re-encode session event"),
+            session_event
+        );
+
+        // The request-side decode stays lossless too and the pinned
+        // retention-ratio constraints stay opt-in validate concerns only.
+        let decoded_request: RealtimeSessionCreateRequest = serde_json::from_value(json!({
+            "type": "realtime",
+            "truncation": {
+                "type": "future_policy",
+                "retention_ratio": 2.5,
+                "token_limits": {"post_instructions": -1}
+            }
+        }))
+        .expect("request decode stays lossless");
+        assert!(matches!(
+            decoded_request.truncation,
+            Omittable::Value(RealtimeTruncation::Unknown(_))
+        ));
+        decoded_request
+            .validate()
+            .expect("unknown truncation policy carries no pinned constraint");
+
+        // (c) unknown role on a `type: "message"` conversation item.
+        let future_message = json!({
+            "type": "message",
+            "role": "future_role",
+            "content": [{"type": "text", "text": "hi"}]
+        });
+        let decoded_item: RealtimeConversationItem =
+            serde_json::from_value(future_message.clone()).expect("future role decodes");
+        let RealtimeConversationItem::Unknown(item) = &decoded_item else {
+            panic!("expected unknown conversation item arm");
+        };
+        assert_eq!(item.discriminator(), "message");
+        assert_eq!(item.raw()["role"], json!("future_role"));
+        assert_eq!(
+            serde_json::to_value(&decoded_item).expect("re-encode future message"),
+            future_message
+        );
+
+        // The same item stays lossless nested inside conversation.item.created.
+        let item_event = json!({
+            "event_id": "event_1",
+            "type": "conversation.item.created",
+            "item": future_message
+        });
+        let decoded_item_event: RealtimeServerEvent =
+            serde_json::from_value(item_event.clone()).expect("item event decodes");
+        let RealtimeServerEvent::ConversationItemCreated(created) = decoded_item_event else {
+            panic!("expected item created event");
+        };
+        assert!(matches!(created.item, RealtimeConversationItem::Unknown(_)));
+        assert_eq!(
+            serde_json::to_value(&created).expect("re-encode item event"),
+            item_event
+        );
+
+        // Known variants still decode into their typed arms and encode with
+        // the pinned tags, so the widening is strictly additive.
+        let known_usage: RealtimeTranscriptionUsage =
+            serde_json::from_value(json!({"type": "duration", "seconds": 0.5}))
+                .expect("pinned duration usage decodes");
+        assert!(matches!(
+            known_usage,
+            RealtimeTranscriptionUsage::Duration(_)
+        ));
+        let known_truncation: RealtimeTruncation =
+            serde_json::from_value(json!({"type": "retention_ratio", "retention_ratio": 0.8}))
+                .expect("pinned retention_ratio decodes");
+        assert!(matches!(
+            known_truncation,
+            RealtimeTruncation::RetentionRatio(_)
+        ));
+        assert!(matches!(
+            serde_json::from_value::<RealtimeTruncation>(json!("auto")).expect("pinned mode"),
+            RealtimeTruncation::Mode(RealtimeTruncationMode::Auto)
+        ));
     }
 }

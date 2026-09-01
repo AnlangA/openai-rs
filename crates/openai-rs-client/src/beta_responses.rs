@@ -1196,7 +1196,7 @@ mod tests {
     use hyper_util::rt::TokioIo;
     use openai_rs_types::beta_responses::{
         BetaAgentInputText, BetaAgentMessageParam, BetaMultiAgentAction,
-        BetaMultiAgentCallOutputParam, BetaMultiAgentConfig, BetaMultiAgentOutputText,
+        BetaMultiAgentCallOutputParam, BetaMultiAgentConfig, BetaMultiAgentOutputTextParam,
         BetaResponseIncludable, BetaResponseInputItem, BetaResponseItemOrder,
     };
     use openai_rs_types::kernel::UnknownTaggedObject;
@@ -1928,7 +1928,7 @@ mod tests {
                     BetaMultiAgentCallOutputParam::new(
                         BetaMultiAgentAction::WaitAgent,
                         "call_1",
-                        [BetaMultiAgentOutputText::new("done")],
+                        [BetaMultiAgentOutputTextParam::new("done")],
                     ),
                 )],
             ))

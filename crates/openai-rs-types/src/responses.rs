@@ -485,18 +485,30 @@ literal_tag!(PromptCacheBreakpointTag, Explicit, "explicit");
 /// Explicit cache breakpoint attached to an input content part.
 ///
 /// The pinned wire object is `{ "mode": "explicit" }`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+// `Eq` is dropped because the retained future fields hold JSON values.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PromptCacheBreakpoint {
     mode: PromptCacheBreakpointTag,
+    /// Future breakpoint fields retained while decoding.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl PromptCacheBreakpoint {
     /// Constructs an explicit cache breakpoint.
+    // Not `const`: the retained future fields allocate their map eagerly.
     #[must_use]
-    pub const fn explicit() -> Self {
+    pub fn explicit() -> Self {
         Self {
             mode: PromptCacheBreakpointTag::Explicit,
+            extra: ExtraFields::new(),
         }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -2506,6 +2518,9 @@ pub struct McpToolFilter {
     tool_names: Vec<String>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     read_only: Omittable<bool>,
+    /// Future filter fields retained while decoding.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl McpToolFilter {
@@ -2515,6 +2530,7 @@ impl McpToolFilter {
         Self {
             tool_names: tool_names.into_iter().map(Into::into).collect(),
             read_only: Omittable::Omitted,
+            extra: ExtraFields::new(),
         }
     }
 
@@ -2529,6 +2545,12 @@ impl McpToolFilter {
     #[must_use]
     pub fn tool_names(&self) -> &[String] {
         &self.tool_names
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -2549,6 +2571,9 @@ pub struct McpApprovalFilter {
     always: Omittable<McpToolFilter>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     never: Omittable<McpToolFilter>,
+    /// Future filter fields retained while decoding.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl McpApprovalFilter {
@@ -2558,6 +2583,7 @@ impl McpApprovalFilter {
         Self {
             always: Omittable::Value(filter),
             never: Omittable::Omitted,
+            extra: ExtraFields::new(),
         }
     }
 
@@ -2567,13 +2593,24 @@ impl McpApprovalFilter {
         Self {
             always: Omittable::Omitted,
             never: Omittable::Value(filter),
+            extra: ExtraFields::new(),
         }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
 /// Approval policy for a native remote MCP server.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+// Retaining future filter fields widened `McpApprovalFilter`; boxing the
+// filter variant would be a breaking public-API refactor tracked separately
+// from wire fixes.
+#[allow(clippy::large_enum_variant)]
 pub enum McpRequireApproval {
     /// Require approval for every call.
     Always,
@@ -4668,7 +4705,20 @@ impl<'de> Deserialize<'de> for ResponseInputItem {
     where
         D: Deserializer<'de>,
     {
-        let value = Value::deserialize(deserializer)?;
+        let mut value = Value::deserialize(deserializer)?;
+
+        // 13-A-2: the pinned `ItemReferenceParam` branch types `type` as
+        // `anyOf [enum, null]` (python `response_input_item_param.py:670-678`,
+        // node `responses.ts:4988-4997`), so an explicit `"type": null` is
+        // accepted exactly like an absent discriminator. Dropping it here keeps
+        // the payload decode identical to the untagged branch.
+        if value.get("type").is_some_and(Value::is_null) {
+            value
+                .as_object_mut()
+                .ok_or_else(|| D::Error::custom("response input item must be an object"))?
+                .remove("type");
+        }
+
         let object = value
             .as_object()
             .ok_or_else(|| D::Error::custom("response input item must be an object"))?;
@@ -4731,6 +4781,15 @@ impl<'de> Deserialize<'de> for ResponseInputItem {
                 .map_err(D::Error::custom),
             Some("compaction_trigger") => serde_json::from_value(value)
                 .map(Self::CompactionTrigger)
+                .map_err(D::Error::custom),
+            // 13-A-1: `InputItem.oneOf` pins `ItemReferenceParam` with an
+            // explicit `item_reference` tag (python
+            // `response_input_item_param.py:670-678`, node
+            // `responses.ts:4988-4997`); the tagged form routes to the same
+            // stored-item reference as the untagged `{ "id": ... }` form
+            // instead of the Unknown catch-all.
+            Some("item_reference") => serde_json::from_value(value)
+                .map(Self::ItemReference)
                 .map_err(D::Error::custom),
             Some("program") => serde_json::from_value(value)
                 .map(Self::Program)
@@ -5438,13 +5497,26 @@ open_string_enum! {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModerationDirection {
     mode: ModerationMode,
+    /// Future policy fields retained while decoding.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl ModerationDirection {
     /// Creates a direction policy.
+    // Not `const`: the retained future fields allocate their map eagerly.
     #[must_use]
-    pub const fn new(mode: ModerationMode) -> Self {
-        Self { mode }
+    pub fn new(mode: ModerationMode) -> Self {
+        Self {
+            mode,
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -5528,33 +5600,111 @@ open_string_enum! {
     }
 }
 
-/// One successful or failed moderation outcome on a stored response.
+literal_tag!(ModerationResultTag, ModerationResult, "moderation_result");
+literal_tag!(ModerationErrorTag, ModerationError, "error");
+
+/// Successful moderation classification for one direction.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-#[non_exhaustive]
-pub enum ResponseModerationOutcome {
-    /// Successful classification for one direction.
-    #[serde(rename = "moderation_result")]
-    Result {
-        /// Category name to flagged boolean.
+pub struct ResponseModerationResult {
+    #[serde(rename = "type")]
+    kind: ModerationResultTag,
+    /// Category name to flagged boolean.
+    pub categories: BTreeMap<String, bool>,
+    /// Category name to the input modalities that contributed to the score.
+    pub category_applied_input_types: BTreeMap<String, Vec<ModerationInputType>>,
+    /// Category name to raw score.
+    pub category_scores: BTreeMap<String, f64>,
+    /// Whether any category flagged the content.
+    pub flagged: bool,
+    /// Moderation model that produced the result.
+    pub model: String,
+    /// Future outcome fields retained while decoding.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ResponseModerationResult {
+    /// Creates a successful moderation result.
+    #[must_use]
+    pub fn new(
         categories: BTreeMap<String, bool>,
-        /// Category name to the input modalities that contributed to the score.
         category_applied_input_types: BTreeMap<String, Vec<ModerationInputType>>,
-        /// Category name to raw score.
         category_scores: BTreeMap<String, f64>,
-        /// Whether any category flagged the content.
         flagged: bool,
-        /// Moderation model that produced the result.
-        model: String,
-    },
-    /// Failure while moderating one direction.
-    #[serde(rename = "error")]
-    Error {
-        /// Service error code.
-        code: String,
-        /// Human-readable error message.
-        message: String,
-    },
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: ModerationResultTag::ModerationResult,
+            categories,
+            category_applied_input_types,
+            category_scores,
+            flagged,
+            model: model.into(),
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Failed moderation classification for one direction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResponseModerationError {
+    #[serde(rename = "type")]
+    kind: ModerationErrorTag,
+    /// Service error code.
+    pub code: String,
+    /// Human-readable error message.
+    pub message: String,
+    /// Future outcome fields retained while decoding.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
+}
+
+impl ResponseModerationError {
+    /// Creates a failed moderation outcome.
+    #[must_use]
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            kind: ModerationErrorTag::ModerationError,
+            code: code.into(),
+            message: message.into(),
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+// 13-L-1: response unions retain future tagged variants, so this outcome union
+// keeps an `Unknown` catch-all instead of failing the whole stored-response
+// decode when the service introduces a new outcome tag.
+tagged_union! {
+    /// One successful or failed moderation outcome on a stored response.
+    pub enum ResponseModerationOutcome {
+        Result(ResponseModerationResult) => "moderation_result",
+        Error(ResponseModerationError) => "error"
+    }
+}
+
+impl From<ResponseModerationResult> for ResponseModerationOutcome {
+    fn from(value: ResponseModerationResult) -> Self {
+        Self::Result(value)
+    }
+}
+
+impl From<ResponseModerationError> for ResponseModerationOutcome {
+    fn from(value: ResponseModerationError) -> Self {
+        Self::Error(value)
+    }
 }
 
 /// Moderation results echoed on a stored response when requested.
@@ -8403,6 +8553,12 @@ macro_rules! output_item_event {
             pub const fn sequence_number(&self) -> u64 {
                 self.sequence_number
             }
+
+            /// Returns future fields retained while decoding.
+            #[must_use]
+            pub const fn extra_fields(&self) -> &ExtraFields {
+                &self.extra
+            }
         }
     };
 }
@@ -8470,6 +8626,12 @@ macro_rules! content_part_event {
             #[must_use]
             pub const fn sequence_number(&self) -> u64 {
                 self.sequence_number
+            }
+
+            /// Returns future fields retained while decoding.
+            #[must_use]
+            pub const fn extra_fields(&self) -> &ExtraFields {
+                &self.extra
             }
         }
     };
@@ -8549,6 +8711,12 @@ impl OutputTextDeltaEvent {
     pub fn logprobs(&self) -> &[EventLogProb] {
         &self.logprobs
     }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Final assistant text for one content part.
@@ -8585,6 +8753,12 @@ impl OutputTextDoneEvent {
     pub fn logprobs(&self) -> &[EventLogProb] {
         &self.logprobs
     }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 literal_tag!(RefusalDeltaEventTag, RefusalDelta, "response.refusal.delta");
@@ -8616,6 +8790,12 @@ impl RefusalDeltaEvent {
     pub const fn sequence_number(&self) -> u64 {
         self.sequence_number
     }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Final refusal text for one content part.
@@ -8643,6 +8823,12 @@ impl RefusalDoneEvent {
     #[must_use]
     pub const fn sequence_number(&self) -> u64 {
         self.sequence_number
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -8688,6 +8874,12 @@ impl FunctionCallArgumentsDeltaEvent {
     pub const fn sequence_number(&self) -> u64 {
         self.sequence_number
     }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Final JSON argument string for a function call.
@@ -8715,6 +8907,12 @@ impl FunctionCallArgumentsDoneEvent {
     #[must_use]
     pub const fn sequence_number(&self) -> u64 {
         self.sequence_number
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -8748,6 +8946,30 @@ impl McpCallArgumentsDeltaEvent {
     pub fn delta(&self) -> &str {
         &self.delta
     }
+
+    /// Returns the containing item id.
+    #[must_use]
+    pub fn item_id(&self) -> &str {
+        &self.item_id
+    }
+
+    /// Returns the output array index.
+    #[must_use]
+    pub const fn output_index(&self) -> u64 {
+        self.output_index
+    }
+
+    /// Returns the event sequence number.
+    #[must_use]
+    pub const fn sequence_number(&self) -> u64 {
+        self.sequence_number
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 /// Final JSON argument string for a native remote MCP call.
@@ -8768,6 +8990,30 @@ impl McpCallArgumentsDoneEvent {
     #[must_use]
     pub const fn arguments(&self) -> &JsonText {
         &self.arguments
+    }
+
+    /// Returns the containing item id.
+    #[must_use]
+    pub fn item_id(&self) -> &str {
+        &self.item_id
+    }
+
+    /// Returns the output array index.
+    #[must_use]
+    pub const fn output_index(&self) -> u64 {
+        self.output_index
+    }
+
+    /// Returns the event sequence number.
+    #[must_use]
+    pub const fn sequence_number(&self) -> u64 {
+        self.sequence_number
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -8833,6 +9079,12 @@ macro_rules! tool_status_event {
             #[must_use]
             pub const fn sequence_number(&self) -> u64 {
                 self.sequence_number
+            }
+
+            /// Returns future fields retained while decoding.
+            #[must_use]
+            pub const fn extra_fields(&self) -> &ExtraFields {
+                &self.extra
             }
         }
     };
@@ -13697,11 +13949,15 @@ pub const STABLE_RESPONSE_INPUT_SCHEMAS: [&str; 32] = [
 ];
 
 /// Discriminators aligned positionally with [`STABLE_RESPONSE_INPUT_SCHEMAS`].
-/// `<absent:id>` denotes the untagged stored-item reference branch.
+/// The `item_reference` slot is the pinned `ItemReferenceParam`, whose `type`
+/// is `anyOf [enum ["item_reference"], null]` (python
+/// `response_input_item_param.py:670-678`, node `responses.ts:4988-4997`); the
+/// untagged `{ "id": ... }` form decodes to that same branch, so it needs no
+/// separate synthetic marker.
 pub const STABLE_RESPONSE_INPUT_DISCRIMINATORS: [&str; 32] = [
     "message",
     "compaction_trigger",
-    "<absent:id>",
+    "item_reference",
     "program",
     "program_output",
     "message",
@@ -14121,6 +14377,9 @@ impl WebSearchUserLocation {
 pub struct WebSearchFilters {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     allowed_domains: Omittable<Nullable<Vec<String>>>,
+    /// Future filter fields retained while decoding.
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl WebSearchFilters {
@@ -14131,6 +14390,7 @@ impl WebSearchFilters {
             allowed_domains: Omittable::Value(Nullable::Value(
                 domains.into_iter().map(Into::into).collect(),
             )),
+            extra: ExtraFields::new(),
         }
     }
 
@@ -14139,6 +14399,12 @@ impl WebSearchFilters {
     pub fn allowed_domains_null(mut self) -> Self {
         self.allowed_domains = Omittable::Value(Nullable::Null);
         self
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 }
 
@@ -17136,7 +17402,7 @@ mod tests {
         assert_eq!(STABLE_RESPONSE_STREAM_EVENT_DISCRIMINATORS.len(), 58);
 
         for discriminator in STABLE_RESPONSE_INPUT_DISCRIMINATORS {
-            if matches!(discriminator, "compaction_trigger" | "<absent:id>") {
+            if discriminator == "compaction_trigger" {
                 continue;
             }
             let decoded = serde_json::from_value::<ResponseInputItem>(json!({
@@ -20060,14 +20326,15 @@ mod tests {
             Value::Null
         );
         let moderation = response.moderation().expect("typed moderation");
-        assert!(matches!(
-            moderation.input(),
-            ResponseModerationOutcome::Result { flagged: false, .. }
-        ));
-        assert!(matches!(
-            moderation.output(),
-            ResponseModerationOutcome::Error { code, .. } if code == "moderation_unavailable"
-        ));
+        let ResponseModerationOutcome::Result(input) = moderation.input() else {
+            panic!("input moderation must be the result branch");
+        };
+        assert!(!input.flagged);
+        assert_eq!(input.model, "omni-moderation-latest");
+        let ResponseModerationOutcome::Error(output) = moderation.output() else {
+            panic!("output moderation must be the error branch");
+        };
+        assert_eq!(output.code, "moderation_unavailable");
     }
 
     #[test]
@@ -24680,6 +24947,366 @@ mod tests {
             non_string_tag
                 .to_string()
                 .contains("`type` must be a string")
+        );
+    }
+
+    #[test]
+    fn input_item_reference_tag_decodes_and_round_trips() {
+        // 13-A-1: the pinned `ItemReferenceParam` branch carries an explicit
+        // `item_reference` tag (python `response_input_item_param.py:670-678`,
+        // node `responses.ts:4988-4997`), which must reach the typed variant
+        // instead of the Unknown catch-all.
+        let payload = json!({"type": "item_reference", "id": "item_1"});
+        let decoded: ResponseInputItem =
+            serde_json::from_value(payload.clone()).expect("decode tagged item reference");
+        let ResponseInputItem::ItemReference(reference) = &decoded else {
+            panic!("tagged item_reference must decode to the typed variant");
+        };
+        assert_eq!(reference.id(), "item_1");
+        assert_eq!(serde_json::to_value(&decoded).expect("re-encode"), payload);
+
+        let unknown_tag = serde_json::from_value::<ResponseInputItem>(json!({
+            "type": "item_reference"
+        }))
+        .expect_err("tagged item_reference still requires its id");
+        assert!(unknown_tag.to_string().contains("missing field `id`"));
+    }
+
+    #[test]
+    fn input_item_explicit_null_type_routes_like_an_absent_type() {
+        // 13-A-2: `ItemReferenceParam.type` is `anyOf [enum, null]`, so an
+        // explicit null is accepted the same way an absent `type` is.
+        let reference: ResponseInputItem =
+            serde_json::from_value(json!({"id": "item_1", "type": null}))
+                .expect("decode null-typed item reference");
+        assert!(matches!(reference, ResponseInputItem::ItemReference(_)));
+
+        let message: ResponseInputItem = serde_json::from_value(json!({
+            "type": null,
+            "role": "user",
+            "content": "hello"
+        }))
+        .expect("decode null-typed easy message");
+        assert!(matches!(message, ResponseInputItem::Message(_)));
+
+        let neither = serde_json::from_value::<ResponseInputItem>(json!({
+            "output_index": 0,
+            "type": null
+        }))
+        .expect_err("a null type without role or id is still malformed");
+        assert!(neither.to_string().contains("missing `type`"));
+    }
+
+    #[test]
+    fn closed_filter_structs_retain_unknown_fields() {
+        // 13-A-3: the closed filter objects keep future keys lossless instead
+        // of dropping them, and still encode their known keys unchanged.
+        let tool_filter = json!({"tool_names": ["list_tables"], "future_gate": 7});
+        let decoded_filter: McpToolFilter =
+            serde_json::from_value(tool_filter.clone()).expect("decode tool filter");
+        assert_eq!(
+            decoded_filter.extra_fields().get("future_gate"),
+            Some(&json!(7))
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded_filter).expect("re-encode tool filter"),
+            tool_filter
+        );
+        assert_eq!(
+            serde_json::to_value(McpToolFilter::names(["list_tables"]).read_only(true))
+                .expect("encode known keys only"),
+            json!({"tool_names": ["list_tables"], "read_only": true})
+        );
+
+        let approval = json!({
+            "always": {"tool_names": ["list_tables"]},
+            "future_policy": "strict"
+        });
+        let decoded_approval: McpApprovalFilter =
+            serde_json::from_value(approval.clone()).expect("decode approval filter");
+        assert_eq!(
+            decoded_approval.extra_fields().get("future_policy"),
+            Some(&json!("strict"))
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded_approval).expect("re-encode approval filter"),
+            approval
+        );
+
+        let web = json!({"allowed_domains": ["example.com"], "future_filter": true});
+        let decoded_web: WebSearchFilters =
+            serde_json::from_value(web.clone()).expect("decode web filters");
+        assert_eq!(
+            decoded_web.extra_fields().get("future_filter"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded_web).expect("re-encode web filters"),
+            web
+        );
+
+        let direction = json!({"mode": "block", "future_direction": "both"});
+        let decoded_direction: ModerationDirection =
+            serde_json::from_value(direction.clone()).expect("decode moderation direction");
+        assert_eq!(
+            decoded_direction.extra_fields().get("future_direction"),
+            Some(&json!("both"))
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded_direction).expect("re-encode direction"),
+            direction
+        );
+
+        let breakpoint = json!({"mode": "explicit", "future_breakpoint": 1});
+        let decoded_breakpoint: PromptCacheBreakpoint =
+            serde_json::from_value(breakpoint.clone()).expect("decode cache breakpoint");
+        assert_eq!(
+            decoded_breakpoint.extra_fields().get("future_breakpoint"),
+            Some(&json!(1))
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded_breakpoint).expect("re-encode breakpoint"),
+            breakpoint
+        );
+        assert_eq!(
+            serde_json::to_value(PromptCacheBreakpoint::explicit()).expect("encode breakpoint"),
+            json!({"mode": "explicit"})
+        );
+    }
+
+    #[test]
+    fn moderation_outcome_keeps_unknown_tags_and_future_fields() {
+        // 13-L-1: every other response union degrades future tags to Unknown,
+        // so a new moderation outcome tag must not fail the stored-response
+        // decode, and known branches keep future fields.
+        let future = json!({"type": "moderation_pending", "reason": "delayed"});
+        let unknown: ResponseModerationOutcome =
+            serde_json::from_value(future.clone()).expect("decode future outcome tag");
+        let ResponseModerationOutcome::Unknown(retained) = &unknown else {
+            panic!("future outcome tags must stay lossless");
+        };
+        assert_eq!(retained.discriminator(), "moderation_pending");
+        assert_eq!(
+            serde_json::to_value(retained).expect("re-encode unknown outcome"),
+            future
+        );
+
+        let result = json!({
+            "type": "moderation_result",
+            "categories": {"hate": false},
+            "category_applied_input_types": {"hate": ["text"]},
+            "category_scores": {"hate": 0.25},
+            "flagged": false,
+            "model": "omni-moderation-latest",
+            "future_stat": 3
+        });
+        let decoded_result: ResponseModerationOutcome =
+            serde_json::from_value(result.clone()).expect("decode result outcome");
+        let ResponseModerationOutcome::Result(outcome) = &decoded_result else {
+            panic!("moderation_result must decode to the typed branch");
+        };
+        assert!(!outcome.flagged);
+        assert_eq!(outcome.model, "omni-moderation-latest");
+        assert_eq!(outcome.extra_fields().get("future_stat"), Some(&json!(3)));
+        assert_eq!(
+            serde_json::to_value(&decoded_result).expect("re-encode result outcome"),
+            result
+        );
+
+        let error = json!({
+            "type": "error",
+            "code": "moderation_unavailable",
+            "message": "skipped",
+            "future_retryable": false
+        });
+        let decoded_error: ResponseModerationOutcome =
+            serde_json::from_value(error.clone()).expect("decode error outcome");
+        let ResponseModerationOutcome::Error(outcome) = &decoded_error else {
+            panic!("error must decode to the typed branch");
+        };
+        assert_eq!(outcome.code, "moderation_unavailable");
+        assert_eq!(
+            outcome.extra_fields().get("future_retryable"),
+            Some(&json!(false))
+        );
+        assert_eq!(
+            serde_json::to_value(&decoded_error).expect("re-encode error outcome"),
+            error
+        );
+
+        let malformed = serde_json::from_value::<ResponseModerationOutcome>(json!({
+            "type": "moderation_result"
+        }))
+        .expect_err("known outcome tags still validate their payload");
+        assert!(malformed.to_string().contains("missing field"));
+    }
+
+    #[test]
+    fn stream_event_dtos_expose_retained_extra_fields_and_mcp_argument_indices() {
+        // 13-C-1: the three event macro families and the hand-written delta or
+        // done events expose their retained future fields, and the MCP
+        // argument events expose the same accessors as their function-call
+        // siblings.
+        let added: OutputItemAddedEvent = serde_json::from_value(json!({
+            "type": "response.output_item.added",
+            "output_index": 2,
+            "item": {
+                "type": "message",
+                "id": "msg_1",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": []
+            },
+            "sequence_number": 11,
+            "future_note": "added"
+        }))
+        .expect("decode output item added");
+        assert_eq!(added.output_index(), 2);
+        assert_eq!(added.sequence_number(), 11);
+        assert_eq!(
+            added.extra_fields().get("future_note"),
+            Some(&json!("added"))
+        );
+
+        let part: ContentPartAddedEvent = serde_json::from_value(json!({
+            "type": "response.content_part.added",
+            "item_id": "msg_1",
+            "output_index": 2,
+            "content_index": 0,
+            "part": {"type": "output_text", "text": "hello"},
+            "sequence_number": 12,
+            "future_note": "part"
+        }))
+        .expect("decode content part added");
+        assert_eq!(part.item_id(), "msg_1");
+        assert_eq!(part.output_index(), 2);
+        assert_eq!(part.sequence_number(), 12);
+        assert_eq!(part.extra_fields().get("future_note"), Some(&json!("part")));
+
+        let status: McpCallInProgressEvent = serde_json::from_value(json!({
+            "type": "response.mcp_call.in_progress",
+            "item_id": "mcp_1",
+            "output_index": 3,
+            "sequence_number": 13,
+            "future_note": "status"
+        }))
+        .expect("decode mcp call in progress");
+        assert_eq!(status.item_id(), "mcp_1");
+        assert_eq!(status.output_index(), 3);
+        assert_eq!(status.sequence_number(), 13);
+        assert_eq!(
+            status.extra_fields().get("future_note"),
+            Some(&json!("status"))
+        );
+
+        let text_delta: OutputTextDeltaEvent = serde_json::from_value(json!({
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 2,
+            "content_index": 0,
+            "delta": "he",
+            "sequence_number": 14,
+            "future_note": "text delta"
+        }))
+        .expect("decode output text delta");
+        assert_eq!(text_delta.delta(), "he");
+        assert_eq!(
+            text_delta.extra_fields().get("future_note"),
+            Some(&json!("text delta"))
+        );
+
+        let text_done: OutputTextDoneEvent = serde_json::from_value(json!({
+            "type": "response.output_text.done",
+            "item_id": "msg_1",
+            "output_index": 2,
+            "content_index": 0,
+            "text": "hello",
+            "sequence_number": 15
+        }))
+        .expect("decode output text done");
+        assert_eq!(text_done.text(), "hello");
+        assert!(text_done.extra_fields().is_empty());
+
+        let refusal_delta: RefusalDeltaEvent = serde_json::from_value(json!({
+            "type": "response.refusal.delta",
+            "item_id": "msg_1",
+            "output_index": 2,
+            "content_index": 0,
+            "delta": "can",
+            "sequence_number": 16
+        }))
+        .expect("decode refusal delta");
+        assert_eq!(refusal_delta.delta(), "can");
+        assert!(refusal_delta.extra_fields().is_empty());
+
+        let refusal_done: RefusalDoneEvent = serde_json::from_value(json!({
+            "type": "response.refusal.done",
+            "item_id": "msg_1",
+            "output_index": 2,
+            "content_index": 0,
+            "refusal": "cannot help",
+            "sequence_number": 17
+        }))
+        .expect("decode refusal done");
+        assert_eq!(refusal_done.refusal(), "cannot help");
+        assert!(refusal_done.extra_fields().is_empty());
+
+        let function_delta: FunctionCallArgumentsDeltaEvent = serde_json::from_value(json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_1",
+            "output_index": 4,
+            "delta": "{\"city\"",
+            "sequence_number": 18
+        }))
+        .expect("decode function arguments delta");
+        assert_eq!(function_delta.item_id(), "fc_1");
+        assert!(function_delta.extra_fields().is_empty());
+
+        let function_done: FunctionCallArgumentsDoneEvent = serde_json::from_value(json!({
+            "type": "response.function_call_arguments.done",
+            "item_id": "fc_1",
+            "output_index": 4,
+            "name": "weather",
+            "arguments": "{\"city\": \"Paris\"}",
+            "sequence_number": 19
+        }))
+        .expect("decode function arguments done");
+        assert_eq!(function_done.sequence_number(), 19);
+        assert!(function_done.extra_fields().is_empty());
+
+        let mcp_delta: McpCallArgumentsDeltaEvent = serde_json::from_value(json!({
+            "type": "response.mcp_call_arguments.delta",
+            "item_id": "mcp_1",
+            "output_index": 3,
+            "delta": "{\"query\"",
+            "sequence_number": 20,
+            "future_note": "mcp delta"
+        }))
+        .expect("decode mcp arguments delta");
+        assert_eq!(mcp_delta.item_id(), "mcp_1");
+        assert_eq!(mcp_delta.output_index(), 3);
+        assert_eq!(mcp_delta.sequence_number(), 20);
+        assert_eq!(mcp_delta.delta(), "{\"query\"");
+        assert_eq!(
+            mcp_delta.extra_fields().get("future_note"),
+            Some(&json!("mcp delta"))
+        );
+
+        let mcp_done: McpCallArgumentsDoneEvent = serde_json::from_value(json!({
+            "type": "response.mcp_call_arguments.done",
+            "item_id": "mcp_1",
+            "output_index": 3,
+            "arguments": "{\"query\": \"weather\"}",
+            "sequence_number": 21,
+            "future_note": "mcp done"
+        }))
+        .expect("decode mcp arguments done");
+        assert_eq!(mcp_done.item_id(), "mcp_1");
+        assert_eq!(mcp_done.output_index(), 3);
+        assert_eq!(mcp_done.sequence_number(), 21);
+        assert_eq!(
+            mcp_done.extra_fields().get("future_note"),
+            Some(&json!("mcp done"))
         );
     }
 }

@@ -554,11 +554,15 @@ impl GranularAskForApproval {
 /// Mirrors the two-branch `oneOf` of the pinned `v2/AskForApproval`: the
 /// string branch is typed by the open enum [`AskForApprovalMode`] (unknown
 /// strings stay lossless), and the object branch serializes as
-/// `{"granular": {...}}` with the pinned snake_case keys.
+/// `{"granular": {...}}` with the pinned snake_case keys. A third shape a
+/// later app-server introduces stays verbatim in [`AskForApproval::Unknown`]
+/// instead of failing the surrounding response decode (D0237 fallback, 13-O-1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AskForApproval {
     Mode(AskForApprovalMode),
     Granular(GranularAskForApproval),
+    /// A policy shape this crate has not modelled; the payload stays verbatim.
+    Unknown(Value),
 }
 
 impl From<AskForApprovalMode> for AskForApproval {
@@ -587,6 +591,7 @@ impl Serialize for AskForApproval {
                 }
                 Wrapper { granular }.serialize(serializer)
             }
+            Self::Unknown(value) => value.serialize(serializer),
         }
     }
 }
@@ -602,14 +607,22 @@ impl<'de> Deserialize<'de> for AskForApproval {
                 .map(Self::Mode)
                 .map_err(serde::de::Error::custom),
             Value::Object(mut object) => {
-                let granular = object.remove("granular").ok_or_else(|| {
-                    serde::de::Error::custom(
-                        "granular approval policy object requires a `granular` key",
-                    )
-                })?;
-                GranularAskForApproval::deserialize(granular)
-                    .map(Self::Granular)
-                    .map_err(serde::de::Error::custom)
+                let Some(granular) = object.remove("granular") else {
+                    // An object without the pinned `granular` key is a future
+                    // policy shape, not a decode failure: it stays verbatim in
+                    // the Unknown variant (D0237 fallback, 13-O-1).
+                    return Ok(Self::Unknown(Value::Object(object)));
+                };
+                match GranularAskForApproval::deserialize(granular.clone()) {
+                    Ok(granular) => Ok(Self::Granular(granular)),
+                    // A `granular` body that no longer matches the pinned shape
+                    // degrades to the same lossless Unknown instead of failing
+                    // the surrounding response decode.
+                    Err(_) => {
+                        object.insert("granular".to_owned(), granular);
+                        Ok(Self::Unknown(Value::Object(object)))
+                    }
+                }
             }
             other => Err(serde::de::Error::custom(format!(
                 "approval policy must be a string or a granular object, got {other}"
@@ -683,8 +696,8 @@ openai_rs_types::open_string_enum! {
     }
 }
 
-/// Sandbox policy override for a turn, typed as the pinned four-branch
-/// `v2/SandboxPolicy` tagged union.
+/// Sandbox policy, typed as the pinned four-branch `v2/SandboxPolicy` tagged
+/// union with a lossless escape for branches the pin has not named yet.
 ///
 /// Every branch is discriminated by its camelCase `type` tag. Sub-settings
 /// the pin defaults server-side (`readOnly`/`workspaceWrite` default
@@ -693,36 +706,147 @@ openai_rs_types::open_string_enum! {
 /// `exclude*` flags to `false`) are [`Option`] fields left unset to send no
 /// key, which lets app-server apply its own defaults; setting them sends the
 /// key explicitly.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
+///
+/// Decode follows the D0237 fallback (13-O-1): a missing/non-string tag, an
+/// unrecognized tag — a fifth branch a later app-server adds — or a known
+/// tag whose sub-settings no longer match the pinned shape stays verbatim in
+/// [`SandboxPolicy::Unknown`] instead of failing the surrounding response.
+/// The union therefore needs hand-written serde impls; the four branch bodies
+/// are buffered through the same [`serialize_tagged_branch`] /
+/// [`decode_tagged_branch`] helpers the thread-item union uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SandboxPolicy {
     /// Full access, no sandboxing; carries no sub-settings.
     DangerFullAccess,
     /// Read-only filesystem view of the host.
-    ReadOnly {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        network_access: Option<bool>,
-    },
+    ReadOnly { network_access: Option<bool> },
     /// Sandbox enforcement delegated to an external sandbox implementation.
     ExternalSandbox {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         network_access: Option<NetworkAccess>,
     },
     /// Writable workspace plus explicit writable roots.
     WorkspaceWrite {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         writable_roots: Option<Vec<PathBuf>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         network_access: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         exclude_slash_tmp: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         exclude_tmpdir_env_var: Option<bool>,
     },
+    /// A branch this crate has not modelled; the payload stays verbatim.
+    Unknown(Value),
+}
+
+/// Branch body of the pinned `readOnly` sandbox policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadOnlySandboxPolicyBranch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    network_access: Option<bool>,
+}
+
+/// Branch body of the pinned `externalSandbox` sandbox policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalSandboxSandboxPolicyBranch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    network_access: Option<NetworkAccess>,
+}
+
+/// Branch body of the pinned `workspaceWrite` sandbox policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceWriteSandboxPolicyBranch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    writable_roots: Option<Vec<PathBuf>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    network_access: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exclude_slash_tmp: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exclude_tmpdir_env_var: Option<bool>,
+}
+
+impl Serialize for SandboxPolicy {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            // `dangerFullAccess` carries no sub-settings, so the branch body
+            // is an empty object that only collects the tag.
+            Self::DangerFullAccess => {
+                serialize_tagged_branch("dangerFullAccess", &serde_json::Map::new(), serializer)
+            }
+            Self::ReadOnly { network_access } => serialize_tagged_branch(
+                "readOnly",
+                &ReadOnlySandboxPolicyBranch {
+                    network_access: *network_access,
+                },
+                serializer,
+            ),
+            Self::ExternalSandbox { network_access } => serialize_tagged_branch(
+                "externalSandbox",
+                &ExternalSandboxSandboxPolicyBranch {
+                    network_access: network_access.clone(),
+                },
+                serializer,
+            ),
+            Self::WorkspaceWrite {
+                writable_roots,
+                network_access,
+                exclude_slash_tmp,
+                exclude_tmpdir_env_var,
+            } => serialize_tagged_branch(
+                "workspaceWrite",
+                &WorkspaceWriteSandboxPolicyBranch {
+                    writable_roots: writable_roots.clone(),
+                    network_access: *network_access,
+                    exclude_slash_tmp: *exclude_slash_tmp,
+                    exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                },
+                serializer,
+            ),
+            Self::Unknown(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SandboxPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        // A payload without a string `type` tag is not an error here: like an
+        // unrecognized tag it stays verbatim in the Unknown variant.
+        let tag = value.get("type").and_then(Value::as_str).map(str::to_owned);
+        let decoded = match tag.as_deref() {
+            Some("dangerFullAccess") => Ok(Self::DangerFullAccess),
+            Some("readOnly") => decode_tagged_branch::<ReadOnlySandboxPolicyBranch>(value.clone())
+                .map(|branch| Self::ReadOnly {
+                    network_access: branch.network_access,
+                }),
+            Some("externalSandbox") => decode_tagged_branch::<ExternalSandboxSandboxPolicyBranch>(
+                value.clone(),
+            )
+            .map(|branch| Self::ExternalSandbox {
+                network_access: branch.network_access,
+            }),
+            Some("workspaceWrite") => decode_tagged_branch::<WorkspaceWriteSandboxPolicyBranch>(
+                value.clone(),
+            )
+            .map(|branch| Self::WorkspaceWrite {
+                writable_roots: branch.writable_roots,
+                network_access: branch.network_access,
+                exclude_slash_tmp: branch.exclude_slash_tmp,
+                exclude_tmpdir_env_var: branch.exclude_tmpdir_env_var,
+            }),
+            _ => return Ok(Self::Unknown(value)),
+        };
+        // A known tag whose sub-settings no longer match the pinned shape
+        // degrades to the same lossless Unknown instead of failing the
+        // surrounding response decode.
+        Ok(decoded.unwrap_or_else(|_| Self::Unknown(value)))
+    }
 }
 
 /// Core, stable subset of `thread/start` parameters.
@@ -829,6 +953,350 @@ impl ThreadStartParams {
     }
 }
 
+openai_rs_types::open_string_enum! {
+    /// Flag a running thread raises while it waits.
+    ///
+    /// The pinned `#/definitions/v2/ThreadActiveFlag` enumerates exactly
+    /// `waitingOnApproval` and `waitingOnUserInput`; flags introduced later
+    /// decode losslessly as [`ThreadActiveFlag::Unknown`].
+    pub enum ThreadActiveFlag {
+        WaitingOnApproval = "waitingOnApproval",
+        WaitingOnUserInput = "waitingOnUserInput"
+    }
+}
+
+/// Branch body of the pinned `active` thread status.
+///
+/// Wire shape of `ActiveThreadStatus` in `#/definitions/v2/ThreadStatus`: the
+/// `activeFlags` array is required and properties a newer app-server adds are
+/// retained losslessly in [`ActiveThreadStatus::extra`].
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveThreadStatus {
+    pub active_flags: Vec<ThreadActiveFlag>,
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+redacted_extra_debug!(ActiveThreadStatus { active_flags });
+
+/// Runtime status of a thread, typed as the pinned four-branch
+/// `#/definitions/v2/ThreadStatus` tagged union with a lossless escape for
+/// branches the pin has not named yet.
+///
+/// Decode follows the D0237 fallback (13-O-2): a missing/non-string tag, an
+/// unrecognized tag, or an `active` body that no longer matches the pinned
+/// shape stays verbatim in [`ThreadStatus::Unknown`] instead of failing the
+/// surrounding response.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ThreadStatus {
+    /// The thread exists on disk but has not been loaded into memory.
+    NotLoaded,
+    /// The thread is loaded and no turn is running.
+    Idle,
+    /// The thread is loaded but its last state cannot be recovered.
+    SystemError,
+    /// A turn is running; [`ActiveThreadStatus::active_flags`] says what it
+    /// waits on.
+    Active(ActiveThreadStatus),
+    /// A status branch this crate has not modelled; the payload stays
+    /// verbatim.
+    Unknown(Value),
+}
+
+impl Serialize for ThreadStatus {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::NotLoaded => {
+                serialize_tagged_branch("notLoaded", &serde_json::Map::new(), serializer)
+            }
+            Self::Idle => serialize_tagged_branch("idle", &serde_json::Map::new(), serializer),
+            Self::SystemError => {
+                serialize_tagged_branch("systemError", &serde_json::Map::new(), serializer)
+            }
+            Self::Active(active) => serialize_tagged_branch("active", active, serializer),
+            Self::Unknown(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ThreadStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        // A payload without a string `type` tag is not an error here: like an
+        // unrecognized tag it stays verbatim in the Unknown variant.
+        let tag = value.get("type").and_then(Value::as_str).map(str::to_owned);
+        let decoded = match tag.as_deref() {
+            Some("notLoaded") => Ok(Self::NotLoaded),
+            Some("idle") => Ok(Self::Idle),
+            Some("systemError") => Ok(Self::SystemError),
+            Some("active") => {
+                decode_tagged_branch::<ActiveThreadStatus>(value.clone()).map(Self::Active)
+            }
+            _ => return Ok(Self::Unknown(value)),
+        };
+        // An `active` body that no longer matches the pinned shape degrades to
+        // the same lossless Unknown instead of failing the surrounding
+        // response decode.
+        Ok(decoded.unwrap_or_else(|_| Self::Unknown(value)))
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// String branch of the pinned `#/definitions/v2/SessionSource`.
+    ///
+    /// Enumerates exactly `cli`, `vscode`, `exec`, `appServer`, and `unknown`.
+    /// The pin's literal `"unknown"` origin maps to
+    /// [`SessionSourceMode::UnknownOrigin`] because the open-enum fallback
+    /// variant generated for unseen values is already named `Unknown`;
+    /// origins introduced later decode losslessly as
+    /// [`SessionSourceMode::Unknown`].
+    pub enum SessionSourceMode {
+        Cli = "cli",
+        Vscode = "vscode",
+        Exec = "exec",
+        AppServer = "appServer",
+        UnknownOrigin = "unknown"
+    }
+}
+
+/// Branch body of the `thread_spawn` sub-agent source.
+///
+/// Wire shape of `ThreadSpawnSubAgentSource` in
+/// `#/definitions/v2/SubAgentSource`: `depth` and `parent_thread_id` are
+/// required while `agent_nickname`/`agent_path`/`agent_role` default to
+/// `null` server-side, so they are [`Option`] fields that send no key when
+/// unset. The keys stay snake_case exactly as pinned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ThreadSpawnSubAgentSource {
+    pub depth: i32,
+    pub parent_thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_nickname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_role: Option<String>,
+}
+
+openai_rs_types::open_string_enum! {
+    /// String branch of the pinned `#/definitions/v2/SubAgentSource`.
+    ///
+    /// Enumerates exactly `review`, `compact`, and `memory_consolidation`;
+    /// sources introduced later decode losslessly as
+    /// [`SubAgentSourceKind::Unknown`].
+    pub enum SubAgentSourceKind {
+        Review = "review",
+        Compact = "compact",
+        MemoryConsolidation = "memory_consolidation"
+    }
+}
+
+/// Which sub-agent spawned a thread, typed as the pinned three-branch
+/// `#/definitions/v2/SubAgentSource` union with a lossless escape for
+/// branches the pin has not named yet.
+///
+/// The string branch is typed by the open enum [`SubAgentSourceKind`], the
+/// `thread_spawn` branch carries the pinned spawn metadata, and `other`
+/// carries the free-form discriminator. Any other shape — including a
+/// multi-key object, which the pin's `additionalProperties: false` forbids —
+/// stays verbatim in [`SubAgentSource::Unknown`] (D0237 fallback, 13-O-2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum SubAgentSource {
+    /// A named sub-agent purpose.
+    Kind(SubAgentSourceKind),
+    /// A sub-agent spawned as its own thread.
+    ThreadSpawn(ThreadSpawnSubAgentSource),
+    /// An unmodelled purpose name reported verbatim.
+    Other(String),
+    /// A shape this crate has not modelled; the payload stays verbatim.
+    Unknown(Value),
+}
+
+impl Serialize for SubAgentSource {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Kind(kind) => kind.serialize(serializer),
+            Self::ThreadSpawn(spawn) => {
+                #[derive(Serialize)]
+                struct Wrapper<'a> {
+                    thread_spawn: &'a ThreadSpawnSubAgentSource,
+                }
+                Wrapper {
+                    thread_spawn: spawn,
+                }
+                .serialize(serializer)
+            }
+            Self::Other(other) => {
+                #[derive(Serialize)]
+                struct Wrapper<'a> {
+                    other: &'a str,
+                }
+                Wrapper { other }.serialize(serializer)
+            }
+            Self::Unknown(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SubAgentSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        Ok(match value {
+            // The open enum keeps every string, named or not.
+            Value::String(_) => Self::Kind(
+                SubAgentSourceKind::deserialize(value).map_err(serde::de::Error::custom)?,
+            ),
+            // The pin gives each object branch `additionalProperties: false`
+            // and a single required key, so only a one-key object names a
+            // branch; anything else stays verbatim in Unknown.
+            Value::Object(object) if object.len() == 1 => {
+                let (key, branch) = object
+                    .into_iter()
+                    .next()
+                    .expect("a one-key object yields exactly one entry");
+                let mut wrapper = serde_json::Map::new();
+                wrapper.insert(key.clone(), branch.clone());
+                let wrapper = Value::Object(wrapper);
+                match (key.as_str(), branch) {
+                    // A known branch body that no longer matches the pinned
+                    // shape degrades to the same lossless Unknown (D0237
+                    // fallback).
+                    ("thread_spawn", branch) => ThreadSpawnSubAgentSource::deserialize(branch)
+                        .map(Self::ThreadSpawn)
+                        .unwrap_or_else(|_| Self::Unknown(wrapper)),
+                    ("other", Value::String(other)) => Self::Other(other),
+                    _ => Self::Unknown(wrapper),
+                }
+            }
+            other => Self::Unknown(other),
+        })
+    }
+}
+
+/// Where a thread's session started, typed as the pinned three-branch
+/// `#/definitions/v2/SessionSource` union with a lossless escape for branches
+/// the pin has not named yet.
+///
+/// `#/definitions/v2/Thread` requires `source`. The string branch is typed by
+/// the open enum [`SessionSourceMode`]; `custom` carries the free-form
+/// client-supplied origin and `subAgent` the nested [`SubAgentSource`]. Any
+/// other shape — including a multi-key object, which the pin's
+/// `additionalProperties: false` forbids — stays verbatim in
+/// [`SessionSource::Unknown`] (D0237 fallback, 13-O-2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionSource {
+    /// A named app-server entry point.
+    Mode(SessionSourceMode),
+    /// A client-supplied free-form origin.
+    Custom(String),
+    /// A thread spawned as another thread's sub-agent.
+    SubAgent(SubAgentSource),
+    /// A shape this crate has not modelled; the payload stays verbatim.
+    Unknown(Value),
+}
+
+impl Serialize for SessionSource {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Mode(mode) => mode.serialize(serializer),
+            Self::Custom(custom) => {
+                #[derive(Serialize)]
+                struct Wrapper<'a> {
+                    custom: &'a str,
+                }
+                Wrapper { custom }.serialize(serializer)
+            }
+            Self::SubAgent(sub_agent) => {
+                #[derive(Serialize)]
+                struct Wrapper<'a> {
+                    #[serde(rename = "subAgent")]
+                    sub_agent: &'a SubAgentSource,
+                }
+                Wrapper { sub_agent }.serialize(serializer)
+            }
+            Self::Unknown(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        Ok(match value {
+            // The open enum keeps every string, named or not.
+            Value::String(_) => {
+                Self::Mode(SessionSourceMode::deserialize(value).map_err(serde::de::Error::custom)?)
+            }
+            // The pin gives each object branch `additionalProperties: false`
+            // and a single required key, so only a one-key object names a
+            // branch; anything else stays verbatim in Unknown.
+            Value::Object(object) if object.len() == 1 => {
+                let (key, branch) = object
+                    .into_iter()
+                    .next()
+                    .expect("a one-key object yields exactly one entry");
+                let mut wrapper = serde_json::Map::new();
+                wrapper.insert(key.clone(), branch.clone());
+                let wrapper = Value::Object(wrapper);
+                match (key.as_str(), branch) {
+                    ("custom", Value::String(custom)) => Self::Custom(custom),
+                    // A known branch body that no longer matches the pinned
+                    // shape degrades to the same lossless Unknown (D0237
+                    // fallback).
+                    ("subAgent", branch) => SubAgentSource::deserialize(branch)
+                        .map(Self::SubAgent)
+                        .unwrap_or_else(|_| Self::Unknown(wrapper)),
+                    _ => Self::Unknown(wrapper),
+                }
+            }
+            other => Self::Unknown(other),
+        })
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// Analytics classification carried by a thread's `threadSource`.
+    ///
+    /// `#/definitions/v2/Thread` types `threadSource` as the plain string
+    /// `#/definitions/v2/ThreadSource` (no enumerated values), while the pin's
+    /// `#/definitions/v2/ThreadSourceKind` enumerates the ten classifications
+    /// its `thread/list` `sources` filter accepts. The receive side types the
+    /// known ten and keeps every other string verbatim in
+    /// [`ThreadSourceKind::Unknown`], which satisfies both definitions.
+    pub enum ThreadSourceKind {
+        Cli = "cli",
+        Vscode = "vscode",
+        Exec = "exec",
+        AppServer = "appServer",
+        SubAgent = "subAgent",
+        SubAgentReview = "subAgentReview",
+        SubAgentCompact = "subAgentCompact",
+        SubAgentThreadSpawn = "subAgentThreadSpawn",
+        SubAgentOther = "subAgentOther",
+        UnknownKind = "unknown"
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
@@ -851,6 +1319,21 @@ pub struct Thread {
     pub name: Option<String>,
     #[serde(default)]
     pub turns: Option<Vec<Turn>>,
+    /// Current runtime status. `#/definitions/v2/Thread` requires `status` as
+    /// the pinned `v2/ThreadStatus` union; a branch this crate has not
+    /// modelled degrades losslessly to [`ThreadStatus::Unknown`] (13-O-2).
+    #[serde(default)]
+    pub status: Option<ThreadStatus>,
+    /// Origin of the thread. `#/definitions/v2/Thread` requires `source` as
+    /// the pinned `v2/SessionSource` union; a branch this crate has not
+    /// modelled degrades losslessly to [`SessionSource::Unknown`] (13-O-2).
+    #[serde(default)]
+    pub source: Option<SessionSource>,
+    /// Optional analytics source classification. `#/definitions/v2/Thread`
+    /// leaves `threadSource` optional (nullable plain string); unknown
+    /// classifications stay verbatim inside [`ThreadSourceKind::Unknown`].
+    #[serde(default)]
+    pub thread_source: Option<ThreadSourceKind>,
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -865,9 +1348,20 @@ redacted_extra_debug!(Thread {
     updated_at,
     cwd,
     name,
-    turns
+    turns,
+    status,
+    source,
+    thread_source
 });
 
+/// Response payload of `thread/start`.
+///
+/// `#/definitions/v2/ThreadStartResponse` requires `thread`, `model`,
+/// `modelProvider`, `cwd`, `approvalPolicy`, `approvalsReviewer`, and
+/// `sandbox`; like the rest of this DTO the negotiated fields are
+/// [`Option`]-wrapped so a payload from an older app-server (or a test fake)
+/// that omits one still decodes, with the pin-required keys readable as
+/// `Some` (13-O-1).
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartResponse {
@@ -882,6 +1376,26 @@ pub struct ThreadStartResponse {
     pub cwd: Option<PathBuf>,
     #[serde(default)]
     pub instruction_sources: Vec<PathBuf>,
+    /// Approval policy negotiated for the thread, typed as the pinned
+    /// `v2/AskForApproval` union; a future policy shape degrades losslessly to
+    /// [`AskForApproval::Unknown`] instead of failing the response (13-O-1).
+    #[serde(default)]
+    pub approval_policy: Option<AskForApproval>,
+    /// Reviewer the app-server routes this thread's approval requests to,
+    /// typed as the open `v2/ApprovalsReviewer` enum.
+    #[serde(default)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Sandbox policy negotiated for the thread. The pin marks this legacy
+    /// field as "retained for compatibility" and points experimental clients
+    /// at `activePermissionProfile` instead; a fifth branch degrades
+    /// losslessly to [`SandboxPolicy::Unknown`] (13-O-1).
+    #[serde(default)]
+    pub sandbox: Option<SandboxPolicy>,
+    /// Plain string: the pinned `v2/ReasoningEffort` is a `minLength 1`
+    /// string with no enumerated values, and the response key is optional
+    /// (nullable).
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -892,7 +1406,11 @@ redacted_extra_debug!(ThreadStartResponse {
     model_provider,
     service_tier,
     cwd,
-    instruction_sources
+    instruction_sources,
+    approval_policy,
+    approvals_reviewer,
+    sandbox,
+    reasoning_effort
 });
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1103,6 +1621,28 @@ openai_rs_types::open_string_enum! {
         Interrupted = "interrupted",
         Failed = "failed",
         InProgress = "inProgress"
+    }
+}
+
+openai_rs_types::open_string_enum! {
+    /// How much of a turn's `items` the payload carries.
+    ///
+    /// The pinned `v2/TurnItemsView` enumerates exactly `notLoaded` (`items`
+    /// intentionally empty), `summary` (display summary only), and `full`
+    /// (every persisted item); views introduced later decode losslessly as
+    /// [`TurnItemsView::Unknown`].
+    pub enum TurnItemsView {
+        NotLoaded = "notLoaded",
+        Summary = "summary",
+        Full = "full"
+    }
+}
+
+impl Default for TurnItemsView {
+    /// `#/definitions/v2/Turn` defaults `itemsView` to `full`, so a turn that
+    /// omits the key is treated as carrying every persisted item.
+    fn default() -> Self {
+        Self::Full
     }
 }
 
@@ -2085,10 +2625,11 @@ pub enum ThreadItem {
 
 /// Serialize one typed branch under its pinned `type` tag.
 ///
-/// The branch struct is buffered through [`Value`] and the tag is inserted
-/// afterwards, mirroring how the decode side separates the tag from the
-/// branch body (and keeping the tag out of the branch's `extra` map).
-fn serialize_thread_item_branch<S, T>(
+/// Shared by the open tagged unions ([`ThreadItem`], [`ThreadStatus`],
+/// [`SandboxPolicy`]). The branch struct is buffered through [`Value`] and the
+/// tag is inserted afterwards, mirroring how the decode side separates the tag
+/// from the branch body (and keeping the tag out of the branch's `extra` map).
+fn serialize_tagged_branch<S, T>(
     tag: &'static str,
     item: &T,
     serializer: S,
@@ -2100,7 +2641,7 @@ where
     let mut value = serde_json::to_value(item).map_err(serde::ser::Error::custom)?;
     let Some(object) = value.as_object_mut() else {
         return Err(serde::ser::Error::custom(
-            "thread item branch must serialize to a JSON object",
+            "tagged union branch must serialize to a JSON object",
         ));
     };
     object.insert("type".to_owned(), Value::String(tag.to_owned()));
@@ -2112,7 +2653,7 @@ where
 /// The tag is removed before decoding so it cannot leak into the branch's
 /// `extra` map — the same separation serde applies to internally tagged
 /// enums.
-fn decode_thread_item_branch<T: serde::de::DeserializeOwned>(
+fn decode_tagged_branch<T: serde::de::DeserializeOwned>(
     mut value: Value,
 ) -> Result<T, serde_json::Error> {
     if let Some(object) = value.as_object_mut() {
@@ -2127,45 +2668,39 @@ impl Serialize for ThreadItem {
         S: serde::Serializer,
     {
         match self {
-            Self::UserMessage(item) => {
-                serialize_thread_item_branch("userMessage", item, serializer)
-            }
-            Self::HookPrompt(item) => serialize_thread_item_branch("hookPrompt", item, serializer),
-            Self::AgentMessage(item) => {
-                serialize_thread_item_branch("agentMessage", item, serializer)
-            }
-            Self::Plan(item) => serialize_thread_item_branch("plan", item, serializer),
-            Self::Reasoning(item) => serialize_thread_item_branch("reasoning", item, serializer),
+            Self::UserMessage(item) => serialize_tagged_branch("userMessage", item, serializer),
+            Self::HookPrompt(item) => serialize_tagged_branch("hookPrompt", item, serializer),
+            Self::AgentMessage(item) => serialize_tagged_branch("agentMessage", item, serializer),
+            Self::Plan(item) => serialize_tagged_branch("plan", item, serializer),
+            Self::Reasoning(item) => serialize_tagged_branch("reasoning", item, serializer),
             Self::CommandExecution(item) => {
-                serialize_thread_item_branch("commandExecution", item, serializer)
+                serialize_tagged_branch("commandExecution", item, serializer)
             }
-            Self::FileChange(item) => serialize_thread_item_branch("fileChange", item, serializer),
-            Self::McpToolCall(item) => {
-                serialize_thread_item_branch("mcpToolCall", item, serializer)
-            }
+            Self::FileChange(item) => serialize_tagged_branch("fileChange", item, serializer),
+            Self::McpToolCall(item) => serialize_tagged_branch("mcpToolCall", item, serializer),
             Self::DynamicToolCall(item) => {
-                serialize_thread_item_branch("dynamicToolCall", item, serializer)
+                serialize_tagged_branch("dynamicToolCall", item, serializer)
             }
             Self::CollabAgentToolCall(item) => {
-                serialize_thread_item_branch("collabAgentToolCall", item, serializer)
+                serialize_tagged_branch("collabAgentToolCall", item, serializer)
             }
             Self::SubAgentActivity(item) => {
-                serialize_thread_item_branch("subAgentActivity", item, serializer)
+                serialize_tagged_branch("subAgentActivity", item, serializer)
             }
-            Self::WebSearch(item) => serialize_thread_item_branch("webSearch", item, serializer),
-            Self::ImageView(item) => serialize_thread_item_branch("imageView", item, serializer),
-            Self::Sleep(item) => serialize_thread_item_branch("sleep", item, serializer),
+            Self::WebSearch(item) => serialize_tagged_branch("webSearch", item, serializer),
+            Self::ImageView(item) => serialize_tagged_branch("imageView", item, serializer),
+            Self::Sleep(item) => serialize_tagged_branch("sleep", item, serializer),
             Self::ImageGeneration(item) => {
-                serialize_thread_item_branch("imageGeneration", item, serializer)
+                serialize_tagged_branch("imageGeneration", item, serializer)
             }
             Self::EnteredReviewMode(item) => {
-                serialize_thread_item_branch("enteredReviewMode", item, serializer)
+                serialize_tagged_branch("enteredReviewMode", item, serializer)
             }
             Self::ExitedReviewMode(item) => {
-                serialize_thread_item_branch("exitedReviewMode", item, serializer)
+                serialize_tagged_branch("exitedReviewMode", item, serializer)
             }
             Self::ContextCompaction(item) => {
-                serialize_thread_item_branch("contextCompaction", item, serializer)
+                serialize_tagged_branch("contextCompaction", item, serializer)
             }
             Self::Unknown(value) => value.serialize(serializer),
         }
@@ -2183,79 +2718,73 @@ impl<'de> Deserialize<'de> for ThreadItem {
         // in the Unknown variant, exactly like an unrecognized tag.
         let tag = value.get("type").and_then(Value::as_str).map(str::to_owned);
         let decoded = match tag.as_deref() {
-            Some("userMessage") => {
-                decode_thread_item_branch::<UserMessageThreadItem>(value.clone())
-                    .map(Box::new)
-                    .map(Self::UserMessage)
-            }
-            Some("hookPrompt") => decode_thread_item_branch::<HookPromptThreadItem>(value.clone())
+            Some("userMessage") => decode_tagged_branch::<UserMessageThreadItem>(value.clone())
+                .map(Box::new)
+                .map(Self::UserMessage),
+            Some("hookPrompt") => decode_tagged_branch::<HookPromptThreadItem>(value.clone())
                 .map(Box::new)
                 .map(Self::HookPrompt),
-            Some("agentMessage") => {
-                decode_thread_item_branch::<AgentMessageThreadItem>(value.clone())
-                    .map(Box::new)
-                    .map(Self::AgentMessage)
-            }
-            Some("plan") => decode_thread_item_branch::<PlanThreadItem>(value.clone())
+            Some("agentMessage") => decode_tagged_branch::<AgentMessageThreadItem>(value.clone())
+                .map(Box::new)
+                .map(Self::AgentMessage),
+            Some("plan") => decode_tagged_branch::<PlanThreadItem>(value.clone())
                 .map(Box::new)
                 .map(Self::Plan),
-            Some("reasoning") => decode_thread_item_branch::<ReasoningThreadItem>(value.clone())
+            Some("reasoning") => decode_tagged_branch::<ReasoningThreadItem>(value.clone())
                 .map(Box::new)
                 .map(Self::Reasoning),
             Some("commandExecution") => {
-                decode_thread_item_branch::<CommandExecutionThreadItem>(value.clone())
+                decode_tagged_branch::<CommandExecutionThreadItem>(value.clone())
                     .map(Box::new)
                     .map(Self::CommandExecution)
             }
-            Some("fileChange") => decode_thread_item_branch::<FileChangeThreadItem>(value.clone())
+            Some("fileChange") => decode_tagged_branch::<FileChangeThreadItem>(value.clone())
                 .map(Box::new)
                 .map(Self::FileChange),
-            Some("mcpToolCall") => {
-                decode_thread_item_branch::<McpToolCallThreadItem>(value.clone())
-                    .map(Box::new)
-                    .map(Self::McpToolCall)
-            }
+            Some("mcpToolCall") => decode_tagged_branch::<McpToolCallThreadItem>(value.clone())
+                .map(Box::new)
+                .map(Self::McpToolCall),
             Some("dynamicToolCall") => {
-                decode_thread_item_branch::<DynamicToolCallThreadItem>(value.clone())
+                decode_tagged_branch::<DynamicToolCallThreadItem>(value.clone())
                     .map(Box::new)
                     .map(Self::DynamicToolCall)
             }
             Some("collabAgentToolCall") => {
-                decode_thread_item_branch::<CollabAgentToolCallThreadItem>(value.clone())
+                decode_tagged_branch::<CollabAgentToolCallThreadItem>(value.clone())
                     .map(Box::new)
                     .map(Self::CollabAgentToolCall)
             }
             Some("subAgentActivity") => {
-                decode_thread_item_branch::<SubAgentActivityThreadItem>(value.clone())
+                decode_tagged_branch::<SubAgentActivityThreadItem>(value.clone())
                     .map(Box::new)
                     .map(Self::SubAgentActivity)
             }
-            Some("webSearch") => decode_thread_item_branch::<WebSearchThreadItem>(value.clone())
+            Some("webSearch") => decode_tagged_branch::<WebSearchThreadItem>(value.clone())
                 .map(Box::new)
                 .map(Self::WebSearch),
-            Some("imageView") => decode_thread_item_branch::<ImageViewThreadItem>(value.clone())
+            Some("imageView") => decode_tagged_branch::<ImageViewThreadItem>(value.clone())
                 .map(Box::new)
                 .map(Self::ImageView),
-            Some("sleep") => decode_thread_item_branch::<SleepThreadItem>(value.clone())
+            Some("sleep") => decode_tagged_branch::<SleepThreadItem>(value.clone())
                 .map(Box::new)
                 .map(Self::Sleep),
             Some("imageGeneration") => {
-                decode_thread_item_branch::<ImageGenerationThreadItem>(value.clone())
+                decode_tagged_branch::<ImageGenerationThreadItem>(value.clone())
                     .map(Box::new)
                     .map(Self::ImageGeneration)
             }
             Some("enteredReviewMode") => {
-                decode_thread_item_branch::<EnteredReviewModeThreadItem>(value.clone())
+                decode_tagged_branch::<EnteredReviewModeThreadItem>(value.clone())
                     .map(Box::new)
                     .map(Self::EnteredReviewMode)
             }
             Some("exitedReviewMode") => {
-                decode_thread_item_branch::<ExitedReviewModeThreadItem>(value.clone())
+                decode_tagged_branch::<ExitedReviewModeThreadItem>(value.clone())
                     .map(Box::new)
                     .map(Self::ExitedReviewMode)
             }
             Some("contextCompaction") => {
-                decode_thread_item_branch::<ContextCompactionThreadItem>(value.clone())
+                decode_tagged_branch::<ContextCompactionThreadItem>(value.clone())
                     .map(Box::new)
                     .map(Self::ContextCompaction)
             }
@@ -2279,6 +2808,11 @@ pub struct Turn {
     #[serde(default)]
     pub items: Vec<ThreadItem>,
     pub status: TurnStatus,
+    /// How much of [`Turn::items`] this payload carries. `#/definitions/v2/Turn`
+    /// leaves `itemsView` optional with a pinned default of `full`, so `None`
+    /// means the default — see [`Turn::items_view`] (13-O-3).
+    #[serde(default)]
+    pub items_view: Option<TurnItemsView>,
     /// Populated when [`Turn::status`] is `failed`; typed as the pinned
     /// `v2/TurnError` payload with unknown properties retained losslessly.
     #[serde(default)]
@@ -2293,10 +2827,20 @@ pub struct Turn {
     pub extra: serde_json::Map<String, Value>,
 }
 
+impl Turn {
+    /// Effective items view, applying the pinned `full` default when the
+    /// app-server omits `itemsView` (`#/definitions/v2/Turn`, 13-O-3).
+    #[must_use]
+    pub fn items_view(&self) -> TurnItemsView {
+        self.items_view.clone().unwrap_or_default()
+    }
+}
+
 redacted_extra_debug!(Turn {
     id,
     items,
     status,
+    items_view,
     error,
     started_at,
     completed_at,
@@ -2586,7 +3130,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AccountLoginCompletedNotification, AccountUpdatedNotification,
+        AccountLoginCompletedNotification, AccountUpdatedNotification, ActiveThreadStatus,
         ActiveTurnNotSteerableDetails, AgentMessageDeltaNotification, AgentMessageThreadItem,
         ApprovalsReviewer, AskForApproval, AskForApprovalMode, AuthMode, ByteRange,
         CancelLoginResponse, CancelLoginStatus, ClientInfo, CodexErrorCode, CodexErrorInfo,
@@ -2602,11 +3146,13 @@ mod tests {
         McpToolCallThreadItem, MemoryCitation, MemoryCitationEntry, MessagePhase, NetworkAccess,
         NonSteerableTurnKind, Notification, Nullable, Omittable, PatchApplyStatus, PatchChangeKind,
         Personality, PlanThreadItem, PlanType, RateLimitReachedType, RateLimitSnapshot,
-        ReasoningSummary, ReasoningThreadItem, SandboxMode, SandboxPolicy, SessionStartSource,
-        SleepThreadItem, SubAgentActivityKind, SubAgentActivityThreadItem, TextElement, Thread,
-        ThreadItem, ThreadStartParams, ThreadStartedNotification, Turn, TurnError, TurnStartParams,
-        TurnStatus, UserInput, UserMessageThreadItem, W3cTraceContext, WebSearchAction,
-        WebSearchThreadItem, decode_notification,
+        ReasoningSummary, ReasoningThreadItem, SandboxMode, SandboxPolicy, SessionSource,
+        SessionSourceMode, SessionStartSource, SleepThreadItem, SubAgentActivityKind,
+        SubAgentActivityThreadItem, SubAgentSource, SubAgentSourceKind, TextElement, Thread,
+        ThreadActiveFlag, ThreadItem, ThreadSourceKind, ThreadSpawnSubAgentSource,
+        ThreadStartParams, ThreadStartResponse, ThreadStartedNotification, ThreadStatus, Turn,
+        TurnError, TurnItemsView, TurnStartParams, TurnStatus, UserInput, UserMessageThreadItem,
+        W3cTraceContext, WebSearchAction, WebSearchThreadItem, decode_notification,
     };
 
     #[test]
@@ -3700,7 +4246,8 @@ mod tests {
     #[test]
     fn thread_started_notification_decodes_and_round_trips() -> Result<(), serde_json::Error> {
         // The DTO keeps the pinned null-carrying optional keys on the wire, so
-        // the round-trip emits them explicitly.
+        // the round-trip emits them explicitly. `status`/`source`/
+        // `threadSource` ride along typed (13-O-2).
         let params = json!({
             "thread": {
                 "id": "thr_123",
@@ -3713,6 +4260,9 @@ mod tests {
                 "cwd": null,
                 "name": null,
                 "turns": null,
+                "status": {"type": "active", "activeFlags": ["waitingOnApproval", "waitingOnUserInput"]},
+                "source": "cli",
+                "threadSource": "subAgentThreadSpawn",
                 "futureThreadField": true
             }
         });
@@ -3738,6 +4288,15 @@ mod tests {
                     cwd: None,
                     name: None,
                     turns: None,
+                    status: Some(ThreadStatus::Active(ActiveThreadStatus {
+                        active_flags: vec![
+                            ThreadActiveFlag::WaitingOnApproval,
+                            ThreadActiveFlag::WaitingOnUserInput
+                        ],
+                        extra: serde_json::Map::new(),
+                    })),
+                    source: Some(SessionSource::Mode(SessionSourceMode::Cli)),
+                    thread_source: Some(ThreadSourceKind::SubAgentThreadSpawn),
                     extra: json!({"futureThreadField": true})
                         .as_object()
                         .cloned()
@@ -3750,18 +4309,352 @@ mod tests {
         Ok(())
     }
 
+    /// 13-O-1: a `thread/start` response exposes the negotiated approval
+    /// policy, approval reviewer, sandbox policy, and reasoning effort under
+    /// their pinned wire keys, and re-encodes the payload losslessly.
+    #[test]
+    fn thread_start_response_decodes_the_negotiated_approval_and_sandbox_fields()
+    -> Result<(), serde_json::Error> {
+        let params = json!({
+            "thread": {
+                "id": "thr_123",
+                "sessionId": null,
+                "preview": null,
+                "ephemeral": null,
+                "modelProvider": null,
+                "createdAt": null,
+                "updatedAt": null,
+                "cwd": null,
+                "name": null,
+                "turns": null,
+                "status": null,
+                "source": null,
+                "threadSource": null
+            },
+            "model": "gpt-5-codex",
+            "modelProvider": "openai",
+            "cwd": "/tmp",
+            "instructionSources": [],
+            "serviceTier": "flex",
+            "approvalPolicy": {
+                "granular": {
+                    "mcp_elicitations": false,
+                    "rules": true,
+                    "sandbox_approval": true
+                }
+            },
+            "approvalsReviewer": "auto_review",
+            "sandbox": {
+                "type": "workspaceWrite",
+                "writableRoots": ["/w"],
+                "networkAccess": false
+            },
+            "reasoningEffort": "medium"
+        });
+        let response: ThreadStartResponse = serde_json::from_value(params.clone())?;
+        assert_eq!(
+            response.approval_policy,
+            Some(AskForApproval::Granular(GranularAskForApproval::new(
+                false, true, true
+            )))
+        );
+        assert_eq!(
+            response.approvals_reviewer,
+            Some(ApprovalsReviewer::AutoReview)
+        );
+        assert_eq!(
+            response.sandbox,
+            Some(SandboxPolicy::WorkspaceWrite {
+                writable_roots: Some(vec![PathBuf::from("/w")]),
+                network_access: Some(false),
+                exclude_slash_tmp: None,
+                exclude_tmpdir_env_var: None,
+            })
+        );
+        assert_eq!(response.reasoning_effort.as_deref(), Some("medium"));
+        assert_eq!(serde_json::to_value(&response)?, params);
+        Ok(())
+    }
+
+    /// 13-O-1: a sandbox branch or approval-policy shape the pin has not
+    /// named degrades to the lossless Unknown variants instead of failing the
+    /// `thread/start` response decode.
+    #[test]
+    fn thread_start_response_degrades_unknown_approval_and_sandbox_shapes()
+    -> Result<(), serde_json::Error> {
+        let params = json!({
+            "thread": {"id": "thr_123"},
+            "model": "gpt-5-codex",
+            "modelProvider": "openai",
+            "cwd": "/tmp",
+            "approvalPolicy": {"policy": {"mode": "future"}},
+            "approvalsReviewer": "future_reviewer",
+            "sandbox": {"type": "gpuSandbox", "isolation": "m1"}
+        });
+        let response: ThreadStartResponse = serde_json::from_value(params.clone())?;
+        assert_eq!(
+            response.approval_policy,
+            Some(AskForApproval::Unknown(
+                json!({"policy": {"mode": "future"}})
+            ))
+        );
+        assert_eq!(
+            response.approvals_reviewer,
+            Some(ApprovalsReviewer::Unknown("future_reviewer".into()))
+        );
+        assert_eq!(
+            response.sandbox,
+            Some(SandboxPolicy::Unknown(
+                json!({"type": "gpuSandbox", "isolation": "m1"})
+            ))
+        );
+        // The unknown payloads re-encode byte-for-byte, so a client that
+        // echoes the negotiated posture back stays conforming.
+        let encoded = serde_json::to_value(&response)?;
+        assert_eq!(
+            encoded["approvalPolicy"],
+            json!({"policy": {"mode": "future"}})
+        );
+        assert_eq!(encoded["approvalsReviewer"], json!("future_reviewer"));
+        assert_eq!(
+            encoded["sandbox"],
+            json!({"type": "gpuSandbox", "isolation": "m1"})
+        );
+        Ok(())
+    }
+
+    /// 13-O-2: [`ThreadStatus`] types every branch of the pinned
+    /// `v2/ThreadStatus` union, keeps the `activeFlags` array (including
+    /// flags this crate has not named and future branch properties), and
+    /// degrades unknown branches losslessly.
+    #[test]
+    fn thread_status_types_every_pinned_branch_and_stays_lossless() -> Result<(), serde_json::Error>
+    {
+        let cases = [
+            (json!({"type": "notLoaded"}), ThreadStatus::NotLoaded),
+            (json!({"type": "idle"}), ThreadStatus::Idle),
+            (json!({"type": "systemError"}), ThreadStatus::SystemError),
+            (
+                json!({"type": "active", "activeFlags": ["waitingOnApproval"]}),
+                ThreadStatus::Active(ActiveThreadStatus {
+                    active_flags: vec![ThreadActiveFlag::WaitingOnApproval],
+                    extra: serde_json::Map::new(),
+                }),
+            ),
+            (
+                json!({
+                    "type": "active",
+                    "activeFlags": ["waitingOnUserInput", "futureFlag"],
+                    "futureActiveField": true
+                }),
+                ThreadStatus::Active(ActiveThreadStatus {
+                    active_flags: vec![
+                        ThreadActiveFlag::WaitingOnUserInput,
+                        ThreadActiveFlag::Unknown("futureFlag".into()),
+                    ],
+                    extra: json!({"futureActiveField": true})
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                }),
+            ),
+        ];
+        for (wire, expected) in cases {
+            assert_eq!(
+                serde_json::from_value::<ThreadStatus>(wire.clone())?,
+                expected
+            );
+            assert_eq!(serde_json::to_value(&expected)?, wire);
+        }
+
+        // A status branch the pin has not named, and a payload without a
+        // usable `type` tag, both stay verbatim instead of failing the
+        // surrounding response.
+        for unmodelled in [
+            json!({"type": "waitingOnModel", "detail": "soon"}),
+            json!("idle"),
+            json!({"activeFlags": []}),
+            json!({"type": 7}),
+        ] {
+            let decoded = serde_json::from_value::<ThreadStatus>(unmodelled.clone())
+                .expect("an unmodelled thread status decodes losslessly");
+            assert_eq!(decoded, ThreadStatus::Unknown(unmodelled.clone()));
+            assert_eq!(serde_json::to_value(&decoded)?, unmodelled);
+        }
+        Ok(())
+    }
+
+    /// 13-O-2: [`SessionSource`] types all three pinned branches — the string
+    /// enum, `custom`, and the nested `subAgent` union — and keeps unknown
+    /// shapes lossless, including objects the pin's
+    /// `additionalProperties: false` forbids.
+    #[test]
+    fn thread_source_types_every_pinned_branch_and_stays_lossless() -> Result<(), serde_json::Error>
+    {
+        let cases = [
+            (json!("cli"), SessionSource::Mode(SessionSourceMode::Cli)),
+            (
+                json!("vscode"),
+                SessionSource::Mode(SessionSourceMode::Vscode),
+            ),
+            (json!("exec"), SessionSource::Mode(SessionSourceMode::Exec)),
+            (
+                json!("appServer"),
+                SessionSource::Mode(SessionSourceMode::AppServer),
+            ),
+            (
+                json!("unknown"),
+                SessionSource::Mode(SessionSourceMode::UnknownOrigin),
+            ),
+            (
+                json!("future-origin"),
+                SessionSource::Mode(SessionSourceMode::Unknown("future-origin".into())),
+            ),
+            (
+                json!({"custom": "neovim"}),
+                SessionSource::Custom("neovim".to_owned()),
+            ),
+            (
+                json!({"subAgent": "review"}),
+                SessionSource::SubAgent(SubAgentSource::Kind(SubAgentSourceKind::Review)),
+            ),
+            (
+                json!({"subAgent": "memory_consolidation"}),
+                SessionSource::SubAgent(SubAgentSource::Kind(
+                    SubAgentSourceKind::MemoryConsolidation,
+                )),
+            ),
+            (
+                json!({"subAgent": {"other": "custom agent"}}),
+                SessionSource::SubAgent(SubAgentSource::Other("custom agent".to_owned())),
+            ),
+            (
+                json!({"subAgent": {"thread_spawn": {
+                    "depth": 2,
+                    "parent_thread_id": "thr_parent",
+                    "agent_nickname": "scout",
+                    "agent_path": "/agents/scout.toml",
+                    "agent_role": "explorer"
+                }}}),
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn(ThreadSpawnSubAgentSource {
+                    depth: 2,
+                    parent_thread_id: "thr_parent".to_owned(),
+                    agent_nickname: Some("scout".to_owned()),
+                    agent_path: Some("/agents/scout.toml".to_owned()),
+                    agent_role: Some("explorer".to_owned()),
+                })),
+            ),
+        ];
+        for (wire, expected) in cases {
+            assert_eq!(
+                serde_json::from_value::<SessionSource>(wire.clone())?,
+                expected
+            );
+            assert_eq!(serde_json::to_value(&expected)?, wire);
+        }
+
+        // An unnamed single-key branch, a multi-key object the pin forbids,
+        // and a non-object payload all stay verbatim in Unknown.
+        for unmodelled in [
+            json!({"futureBranch": 1}),
+            json!({"custom": "neovim", "subAgent": "cli"}),
+            json!(7),
+        ] {
+            let decoded = serde_json::from_value::<SessionSource>(unmodelled.clone())
+                .expect("an unmodelled session source decodes losslessly");
+            assert_eq!(decoded, SessionSource::Unknown(unmodelled.clone()));
+            assert_eq!(serde_json::to_value(&decoded)?, unmodelled);
+        }
+
+        // A `thread_spawn` body that no longer matches the pinned shape
+        // degrades the same way instead of failing the thread decode.
+        let malformed = json!({"subAgent": {"thread_spawn": {"depth": "two"}}});
+        let decoded = serde_json::from_value::<SessionSource>(malformed.clone())
+            .expect("a malformed thread_spawn branch degrades losslessly");
+        assert_eq!(
+            decoded,
+            SessionSource::SubAgent(SubAgentSource::Unknown(
+                json!({"thread_spawn": {"depth": "two"}})
+            ))
+        );
+        assert_eq!(serde_json::to_value(&decoded)?, malformed);
+        Ok(())
+    }
+
+    /// 13-O-2: `threadSource` types the ten classifications the pin's
+    /// `v2/ThreadSourceKind` enumerates and keeps any other string verbatim.
+    #[test]
+    fn thread_source_kind_types_the_pinned_classifications() {
+        for (wire, expected) in [
+            ("cli", ThreadSourceKind::Cli),
+            ("vscode", ThreadSourceKind::Vscode),
+            ("exec", ThreadSourceKind::Exec),
+            ("appServer", ThreadSourceKind::AppServer),
+            ("subAgent", ThreadSourceKind::SubAgent),
+            ("subAgentReview", ThreadSourceKind::SubAgentReview),
+            ("subAgentCompact", ThreadSourceKind::SubAgentCompact),
+            ("subAgentThreadSpawn", ThreadSourceKind::SubAgentThreadSpawn),
+            ("subAgentOther", ThreadSourceKind::SubAgentOther),
+            ("unknown", ThreadSourceKind::UnknownKind),
+        ] {
+            assert_eq!(ThreadSourceKind::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        let future = ThreadSourceKind::from_raw("futureKind");
+        assert_eq!(future.as_str(), "futureKind");
+        assert_eq!(future.unknown_value(), Some("futureKind"));
+    }
+
+    /// 13-O-3: `itemsView` decodes each pinned value, keeps unknown values
+    /// lossless, and treats an absent key as the pinned `full` default.
+    #[test]
+    fn turn_items_view_decodes_known_values_and_defaults_to_full() -> Result<(), serde_json::Error>
+    {
+        for (wire, expected) in [
+            ("notLoaded", TurnItemsView::NotLoaded),
+            ("summary", TurnItemsView::Summary),
+            ("full", TurnItemsView::Full),
+        ] {
+            assert_eq!(TurnItemsView::from_raw(wire), expected);
+            assert_eq!(expected.as_str(), wire);
+        }
+        assert_eq!(TurnItemsView::from_raw("futureView").as_str(), "futureView");
+
+        let summarized: Turn = serde_json::from_value(json!({
+            "id": "turn_1",
+            "items": [],
+            "status": "inProgress",
+            "itemsView": "summary"
+        }))?;
+        assert_eq!(summarized.items_view, Some(TurnItemsView::Summary));
+        assert_eq!(
+            serde_json::to_value(&summarized)?["itemsView"],
+            json!("summary")
+        );
+
+        // Absent stays default-tolerant: the key is not required and reads
+        // back as the pinned `full` default.
+        let bare: Turn =
+            serde_json::from_value(json!({"id": "turn_2", "items": [], "status": "completed"}))?;
+        assert_eq!(bare.items_view, None);
+        assert_eq!(bare.items_view(), TurnItemsView::Full);
+        Ok(())
+    }
+
     /// 8-12: the `turn/started` branch decodes the typed [`Turn`] and
     /// re-encodes the pinned envelope losslessly.
     #[test]
     fn turn_started_notification_decodes_and_round_trips() -> Result<(), serde_json::Error> {
         // The DTO keeps the pinned null-carrying optional keys on the wire, so
-        // the round-trip emits them explicitly.
+        // the round-trip emits them explicitly; `itemsView` rides along typed
+        // (13-O-3).
         let params = json!({
             "threadId": "thr_123",
             "turn": {
                 "id": "turn_456",
                 "items": [],
                 "status": "inProgress",
+                "itemsView": "summary",
                 "error": null,
                 "startedAt": null,
                 "completedAt": null,
@@ -3780,6 +4673,8 @@ mod tests {
         assert_eq!(started.thread_id, "thr_123");
         assert_eq!(started.turn.id, "turn_456");
         assert_eq!(started.turn.status, TurnStatus::InProgress);
+        assert_eq!(started.turn.items_view, Some(TurnItemsView::Summary));
+        assert_eq!(started.turn.items_view(), TurnItemsView::Summary);
         assert_eq!(started.turn.extra["futureTurnField"], json!(7));
         assert_eq!(serde_json::to_value(&*started)?, params);
         Ok(())
@@ -4008,11 +4903,14 @@ mod tests {
             params
         );
 
-        // The object branch is pinned to a single required `granular` key.
-        assert!(
-            serde_json::from_value::<AskForApproval>(json!({"other": true})).is_err(),
-            "object without a `granular` key must not decode"
-        );
+        // 13-O-1: an object without the pinned `granular` key is a future
+        // policy shape, so it stays verbatim in the Unknown variant instead
+        // of failing the surrounding response decode.
+        let future = json!({"policy": {"mode": "future"}});
+        let decoded = serde_json::from_value::<AskForApproval>(future.clone())
+            .expect("an unmodelled approval policy decodes losslessly");
+        assert_eq!(decoded, AskForApproval::Unknown(future.clone()));
+        assert_eq!(serde_json::to_value(&decoded)?, future);
         Ok(())
     }
 
@@ -4414,6 +5312,10 @@ mod tests {
         let clean: Turn =
             serde_json::from_value(json!({"id": "turn_1", "items": [], "status": "completed"}))?;
         assert_eq!(clean.error, None);
+        // An absent `itemsView` decodes as `None` and reads back as the pinned
+        // `full` default (13-O-3).
+        assert_eq!(clean.items_view, None);
+        assert_eq!(clean.items_view(), TurnItemsView::Full);
         // `Turn` keeps the pinned null-carrying optional keys on the wire.
         assert_eq!(
             serde_json::to_value(&clean)?,
@@ -4421,6 +5323,7 @@ mod tests {
                 "id": "turn_1",
                 "items": [],
                 "status": "completed",
+                "itemsView": null,
                 "error": null,
                 "startedAt": null,
                 "completedAt": null,
@@ -4604,15 +5507,30 @@ mod tests {
             assert_eq!(serde_json::to_value(&expected)?, wire);
         }
 
-        // An unknown branch tag is rejected instead of being guessed at.
-        assert!(
-            serde_json::from_value::<SandboxPolicy>(json!({"type": "futureMode"})).is_err(),
-            "an unknown sandbox policy tag must not decode"
-        );
-        assert!(
-            serde_json::from_value::<SandboxPolicy>(json!("readOnly")).is_err(),
-            "the tagged union requires an object"
-        );
+        // 13-O-1: an unknown branch tag — a fifth branch a later app-server
+        // adds — and a payload without a usable `type` tag stay verbatim in
+        // the Unknown variant instead of failing the surrounding response
+        // decode, and re-encode byte-for-byte.
+        for unmodelled in [
+            json!({"type": "futureMode", "futureSetting": true}),
+            json!("readOnly"),
+        ] {
+            let decoded = serde_json::from_value::<SandboxPolicy>(unmodelled.clone())
+                .expect("an unmodelled sandbox policy decodes losslessly");
+            assert_eq!(
+                decoded,
+                SandboxPolicy::Unknown(unmodelled.clone()),
+                "the payload must stay verbatim"
+            );
+            assert_eq!(serde_json::to_value(&decoded)?, unmodelled);
+        }
+
+        // A known tag whose sub-settings no longer match the pinned shape
+        // degrades to the same lossless Unknown.
+        let malformed = json!({"type": "readOnly", "networkAccess": "fast"});
+        let decoded =
+            serde_json::from_value::<SandboxPolicy>(malformed.clone()).expect("malformed degrades");
+        assert_eq!(decoded, SandboxPolicy::Unknown(malformed));
 
         // Nested inside `turn/start` the policy sits under its pinned key.
         let params = TurnStartParams {

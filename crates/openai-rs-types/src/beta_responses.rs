@@ -1591,6 +1591,67 @@ impl BetaMultiAgentOutputText {
     }
 }
 
+/// One text block supplied when answering a multi-agent call, request shape.
+///
+/// Mirrors the pinned `BetaOutputTextContentParam`
+/// (spec/upstream/openapi-2026-08-29.json): `type` and `text` are required,
+/// `annotations` is optional and omitted when empty, and the request face has
+/// no `logprobs` property — python (`beta_response_input_item_param.py`)
+/// and node (`responses.ts`) never emit it. Decoding stays tolerant, so an
+/// echoed resource block containing `logprobs` still decodes while the key is
+/// never re-emitted (13-F-1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaMultiAgentOutputTextParam {
+    text: String,
+    #[serde(rename = "type")]
+    kind: OutputTextTag,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    annotations: Vec<BetaMultiAgentAnnotation>,
+}
+
+impl BetaMultiAgentOutputTextParam {
+    /// Creates a plain output-text request block.
+    #[must_use]
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            kind: OutputTextTag::OutputText,
+            annotations: Vec::new(),
+        }
+    }
+
+    /// Adds a typed citation.
+    #[must_use]
+    pub fn annotation(mut self, annotation: BetaMultiAgentAnnotation) -> Self {
+        self.annotations.push(annotation);
+        self
+    }
+
+    /// Returns the output text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Returns annotations in service order.
+    #[must_use]
+    pub fn annotations(&self) -> &[BetaMultiAgentAnnotation] {
+        &self.annotations
+    }
+}
+
+impl From<BetaMultiAgentOutputText> for BetaMultiAgentOutputTextParam {
+    fn from(value: BetaMultiAgentOutputText) -> Self {
+        // The pinned param schema has no `logprobs` property, so replaying a
+        // returned block drops the resource-only field instead of emitting it.
+        Self {
+            text: value.text,
+            kind: value.kind,
+            annotations: value.annotations,
+        }
+    }
+}
+
 literal_tag!(
     MultiAgentCallOutputTag,
     MultiAgentCallOutput,
@@ -1607,7 +1668,7 @@ literal_tag!(
 pub struct BetaMultiAgentCallOutputParam {
     action: BetaMultiAgentAction,
     call_id: String,
-    output: Vec<BetaMultiAgentOutputText>,
+    output: Vec<BetaMultiAgentOutputTextParam>,
     #[serde(rename = "type")]
     kind: MultiAgentCallOutputTag,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -1622,7 +1683,7 @@ impl BetaMultiAgentCallOutputParam {
     pub fn new(
         action: BetaMultiAgentAction,
         call_id: impl Into<String>,
-        output: impl IntoIterator<Item = BetaMultiAgentOutputText>,
+        output: impl IntoIterator<Item = BetaMultiAgentOutputTextParam>,
     ) -> Self {
         Self {
             action,
@@ -1640,9 +1701,9 @@ impl BetaMultiAgentCallOutputParam {
         &self.call_id
     }
 
-    /// Returns the ordered output blocks.
+    /// Returns the ordered request-shaped output blocks.
     #[must_use]
-    pub fn output(&self) -> &[BetaMultiAgentOutputText] {
+    pub fn output(&self) -> &[BetaMultiAgentOutputTextParam] {
         &self.output
     }
 
@@ -1786,7 +1847,13 @@ impl From<BetaMultiAgentCallOutput> for BetaMultiAgentCallOutputParam {
         Self {
             action: value.action,
             call_id: value.call_id,
-            output: value.output,
+            // Each block narrows to the param face, dropping the
+            // resource-only `logprobs` array (13-F-1).
+            output: value
+                .output
+                .into_iter()
+                .map(BetaMultiAgentOutputTextParam::from)
+                .collect(),
             kind: value.kind,
             id: Omittable::Value(Nullable::Value(value.id)),
             agent: match value.agent {
@@ -3054,21 +3121,130 @@ impl<'de> Deserialize<'de> for BetaCreateStreamingResponseRequest {
     }
 }
 
-/// Moderation result returned by the beta response resource.
+literal_tag!(
+    BetaModerationResultTag,
+    ModerationResult,
+    "moderation_result"
+);
+literal_tag!(BetaModerationErrorTag, Error, "error");
+
+/// One successful classification for a beta response moderation direction.
+///
+/// Same wire shape as the GA face's `ResponseModerationResult`; unknown
+/// sibling keys survive decode and re-encoding (13-L-1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-#[non_exhaustive]
-pub enum BetaModerationOutcome {
-    #[serde(rename = "moderation_result")]
-    Result {
+pub struct BetaModerationClassification {
+    #[serde(rename = "type")]
+    kind: BetaModerationResultTag,
+    /// Category name to flagged boolean.
+    pub categories: BTreeMap<String, bool>,
+    /// Category name to the input modalities that contributed to the score.
+    pub category_applied_input_types: BTreeMap<String, Vec<BetaModerationInputType>>,
+    /// Category name to raw score.
+    pub category_scores: BTreeMap<String, f64>,
+    /// Whether any category flagged the content.
+    pub flagged: bool,
+    /// Moderation model that produced the result.
+    pub model: String,
+    /// Future fields retained while decoding.
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl BetaModerationClassification {
+    /// Creates a successful beta moderation classification.
+    #[must_use]
+    pub fn new(
         categories: BTreeMap<String, bool>,
         category_applied_input_types: BTreeMap<String, Vec<BetaModerationInputType>>,
         category_scores: BTreeMap<String, f64>,
         flagged: bool,
-        model: String,
-    },
-    #[serde(rename = "error")]
-    Error { code: String, message: String },
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: BetaModerationResultTag::ModerationResult,
+            categories,
+            category_applied_input_types,
+            category_scores,
+            flagged,
+            model: model.into(),
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Failure while moderating one beta response direction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BetaModerationError {
+    #[serde(rename = "type")]
+    kind: BetaModerationErrorTag,
+    /// Service error code.
+    pub code: String,
+    /// Human-readable error message.
+    pub message: String,
+    /// Future fields retained while decoding.
+    #[serde(flatten)]
+    extra: ExtraFields,
+}
+
+impl BetaModerationError {
+    /// Creates a failed beta moderation outcome.
+    #[must_use]
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            kind: BetaModerationErrorTag::Error,
+            code: code.into(),
+            message: message.into(),
+            extra: ExtraFields::new(),
+        }
+    }
+
+    /// Returns future fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
+}
+
+/// Moderation result returned by the beta response resource.
+///
+/// 13-L-1: the outcome union retains any future `type` tag verbatim instead
+/// of failing the whole beta response decode, mirroring the GA face's
+/// `ResponseModerationOutcome`.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum BetaModerationOutcome {
+    /// Successful classification for one direction.
+    Result(BetaModerationClassification),
+    /// Failure while moderating one direction.
+    Error(BetaModerationError),
+    /// A future outcome tag retained losslessly.
+    Unknown(UnknownTaggedObject),
+}
+
+impl_tagged_content! {
+    BetaModerationOutcome {
+        Result(BetaModerationClassification) => "moderation_result",
+        Error(BetaModerationError) => "error",
+    }
+}
+
+impl From<BetaModerationClassification> for BetaModerationOutcome {
+    fn from(value: BetaModerationClassification) -> Self {
+        Self::Result(value)
+    }
+}
+
+impl From<BetaModerationError> for BetaModerationOutcome {
+    fn from(value: BetaModerationError) -> Self {
+        Self::Error(value)
+    }
 }
 
 crate::open_string_enum! {
@@ -5136,16 +5312,16 @@ mod tests {
         let response: BetaResponse =
             serde_json::from_value(fixture.clone()).expect("decode beta moderation resource");
         let moderation = response.moderation().expect("moderation must be readable");
-        let BetaModerationOutcome::Result { flagged, model, .. } = moderation.input() else {
+        let BetaModerationOutcome::Result(input) = moderation.input() else {
             panic!("input moderation must decode as a moderation_result");
         };
-        assert!(!*flagged);
-        assert_eq!(*model, "omni-moderation-latest");
-        let BetaModerationOutcome::Error { code, message } = moderation.output() else {
+        assert!(!input.flagged);
+        assert_eq!(input.model, "omni-moderation-latest");
+        let BetaModerationOutcome::Error(output) = moderation.output() else {
             panic!("output moderation must decode as an error outcome");
         };
-        assert_eq!(code, "moderation_failed");
-        assert_eq!(message, "classifier unavailable");
+        assert_eq!(output.code, "moderation_failed");
+        assert_eq!(output.message, "classifier unavailable");
         assert_eq!(
             serde_json::to_value(&response).expect("round-trip beta moderation"),
             fixture
@@ -5162,6 +5338,74 @@ mod tests {
             serde_json::to_value(&response).expect("round-trip null moderation"),
             null_fixture
         );
+    }
+
+    #[test]
+    fn beta_moderation_outcome_retains_future_tags_and_extra_fields() {
+        // 13-L-1: the beta outcome union used to be a closed `tag = "type"`
+        // enum, so a future tag would have failed the whole beta response
+        // decode. Unknown tags must now stay lossless and known tags must
+        // keep unknown sibling keys, mirroring the GA face's
+        // ResponseModerationOutcome fix.
+        let unknown_wire = json!({
+            "type": "deferred_moderation",
+            "until": 12,
+            "detail": "retry later"
+        });
+        let outcome: BetaModerationOutcome =
+            serde_json::from_value(unknown_wire.clone()).expect("future beta outcome tag");
+        let BetaModerationOutcome::Unknown(unknown) = &outcome else {
+            panic!("future beta outcome tag must stay unknown");
+        };
+        assert_eq!(unknown.discriminator(), "deferred_moderation");
+        assert_eq!(unknown.raw().get("until"), Some(&json!(12)));
+        assert_eq!(
+            serde_json::to_value(&outcome).expect("re-encode beta outcome"),
+            unknown_wire
+        );
+
+        let result_wire = json!({
+            "type": "moderation_result",
+            "categories": {"harassment": false},
+            "category_applied_input_types": {"harassment": ["text"]},
+            "category_scores": {"harassment": 0.0001},
+            "flagged": false,
+            "model": "omni-moderation-latest",
+            "result_note": "kept"
+        });
+        let outcome: BetaModerationOutcome =
+            serde_json::from_value(result_wire.clone()).expect("decode beta moderation result");
+        let BetaModerationOutcome::Result(result) = &outcome else {
+            panic!("beta moderation_result must decode typed");
+        };
+        assert_eq!(
+            result.extra_fields().get("result_note"),
+            Some(&json!("kept"))
+        );
+        assert!(
+            !result.extra_fields().contains_key("type"),
+            "tag never leaks into extra"
+        );
+        assert_eq!(
+            serde_json::to_value(&outcome).expect("re-encode beta result"),
+            result_wire
+        );
+
+        // The whole response keeps decoding when a direction carries the
+        // future tag, and the moderation block round-trips unchanged.
+        let mut fixture = response_fixture(json!([]));
+        fixture["moderation"] = json!({ "input": unknown_wire, "output": unknown_wire });
+        let response: BetaResponse =
+            serde_json::from_value(fixture.clone()).expect("decode future beta moderation");
+        assert!(matches!(
+            response
+                .moderation()
+                .expect("typed beta moderation")
+                .input(),
+            BetaModerationOutcome::Unknown(_)
+        ));
+        let encoded = serde_json::to_value(&response).expect("re-encode beta response");
+        assert_eq!(encoded["moderation"], fixture["moderation"]);
     }
 
     #[test]
@@ -5376,7 +5620,7 @@ mod tests {
                 BetaMultiAgentCallOutputParam::new(
                     BetaMultiAgentAction::WaitAgent,
                     "call_3",
-                    [BetaMultiAgentOutputText::new("done")],
+                    [BetaMultiAgentOutputTextParam::new("done")],
                 ),
             )],
         ));
@@ -5813,7 +6057,7 @@ mod tests {
             BetaMultiAgentCallOutputParam::new(
                 BetaMultiAgentAction::WaitAgent,
                 call_id,
-                [BetaMultiAgentOutputText::new("done")],
+                [BetaMultiAgentOutputTextParam::new("done")],
             )
             .validate()
             .unwrap_or_else(|error| panic!("in-range output call_id must pass: {error}"));
@@ -5837,7 +6081,7 @@ mod tests {
                 BetaMultiAgentCallOutputParam::new(
                     BetaMultiAgentAction::WaitAgent,
                     call_id,
-                    [BetaMultiAgentOutputText::new("done")],
+                    [BetaMultiAgentOutputTextParam::new("done")],
                 )
                 .validate(),
                 Err(CreateResponseConstraintError::CallId { actual: observed, .. })
@@ -6183,7 +6427,7 @@ mod tests {
                 BetaMultiAgentCallOutputParam::new(
                     BetaMultiAgentAction::WaitAgent,
                     "call_1",
-                    [BetaMultiAgentOutputText::new("done")],
+                    [BetaMultiAgentOutputTextParam::new("done")],
                 )
                 .id_null()
                 .agent_null()
@@ -6337,6 +6581,86 @@ mod tests {
         let encoded = serde_json::to_value(&tolerant).expect("re-encode fills required keys");
         assert_eq!(encoded["annotations"], json!([]));
         assert_eq!(encoded["logprobs"], json!([]));
+    }
+
+    #[test]
+    fn multi_agent_call_output_param_omits_logprobs_and_empty_annotations() {
+        // 13-F-1: the request face pinned `BetaOutputTextContentParam`
+        // defines only type/text(+optional annotations) — no logprobs; python
+        // (beta_response_input_item_param.py:397-405) and node
+        // (responses.ts:5345-5357) omit it. The resource
+        // `BetaOutputTextContent` legitimately keeps both required arrays.
+        let param = BetaMultiAgentCallOutputParam::new(
+            BetaMultiAgentAction::WaitAgent,
+            "call_1",
+            [BetaMultiAgentOutputTextParam::new("done")],
+        );
+        let value = serde_json::to_value(&param).expect("serialize request output");
+        let part = &value["output"][0];
+        assert_eq!(part["type"], "output_text");
+        assert_eq!(part["text"], "done");
+        assert!(
+            part.get("annotations").is_none(),
+            "empty annotations omitted"
+        );
+        assert!(
+            part.get("logprobs").is_none(),
+            "request face never sends logprobs"
+        );
+
+        let citation: BetaMultiAgentAnnotation = serde_json::from_value(json!({
+            "type": "url_citation",
+            "url": "https://example.com",
+            "title": "Example",
+            "start_index": 0,
+            "end_index": 4
+        }))
+        .expect("decode url citation");
+        let annotated = BetaMultiAgentCallOutputParam::new(
+            BetaMultiAgentAction::WaitAgent,
+            "call_1",
+            [BetaMultiAgentOutputTextParam::new("see").annotation(citation)],
+        );
+        let value = serde_json::to_value(&annotated).expect("serialize annotated output");
+        assert_eq!(value["output"][0]["annotations"][0]["type"], "url_citation");
+        assert!(value["output"][0].get("logprobs").is_none());
+
+        // Decoding tolerates an echoed resource block that carries logprobs
+        // and re-encoding still never emits the key.
+        let echoed: BetaMultiAgentOutputTextParam = serde_json::from_value(json!({
+            "type": "output_text",
+            "text": "done",
+            "annotations": [],
+            "logprobs": []
+        }))
+        .expect("decode echoed resource block");
+        assert_eq!(echoed.text(), "done");
+        assert!(echoed.annotations().is_empty());
+        let encoded = serde_json::to_value(&echoed).expect("re-encode request block");
+        assert!(encoded.get("logprobs").is_none());
+        assert!(encoded.get("annotations").is_none());
+
+        // The resource codec is unchanged: both arrays stay required-emitted,
+        // and replaying a resource block into the request face drops logprobs.
+        let resource: BetaMultiAgentOutputText = serde_json::from_value(json!({
+            "type": "output_text",
+            "text": "done",
+            "logprobs": [{
+                "token": "done",
+                "logprob": -0.1,
+                "bytes": [],
+                "top_logprobs": []
+            }]
+        }))
+        .expect("decode resource block with logprobs");
+        let resource_value = serde_json::to_value(&resource).expect("serialize resource block");
+        assert_eq!(resource_value["annotations"], json!([]));
+        assert_eq!(resource_value["logprobs"].as_array().map(Vec::len), Some(1));
+
+        let replayed: BetaMultiAgentOutputTextParam = resource.into();
+        let replayed_value = serde_json::to_value(&replayed).expect("serialize replayed block");
+        assert!(replayed_value.get("logprobs").is_none());
+        assert!(replayed_value.get("annotations").is_none());
     }
 
     #[test]

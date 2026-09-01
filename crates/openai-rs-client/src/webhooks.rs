@@ -11,8 +11,11 @@
 //! preserved as [`VerifiedWebhook::webhook_id`] on the verification
 //! result — as the idempotency key and skip deliveries already processed.
 //! Respond with 2xx as quickly as possible and process the event in the
-//! background, mirroring the official webhook guidance in openai-node's
-//! `docs/webhooks.md`.
+//! background. This delivery contract is stated by the official platform
+//! webhook guide
+//! (`https://platform.openai.com/docs/guides/webhooks`), which
+//! openai-node's `docs/webhooks.md` only links (its line 116) without
+//! restating any of it (D0250).
 
 use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

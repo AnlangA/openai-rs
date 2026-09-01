@@ -955,17 +955,26 @@ pub struct ConversationMessage {
 
 impl ConversationMessage {
     /// Creates a persisted message representation.
+    ///
+    /// The status domain is the pinned three-value message trio
+    /// `in_progress|completed|incomplete` (openai-python `message.py`; node
+    /// `conversations.ts:198`), so the constructor takes the per-host
+    /// [`responses::MessageStatus`]. Superset values such as
+    /// [`responses::ResponseItemStatus::Searching`] no longer compile here and
+    /// cannot produce a Responses input item the pinned `MessageStatus`
+    /// schema would reject (D0169, 13-J-1); decoding keeps the shared
+    /// eight-value superset field.
     #[must_use]
     pub fn new(
         id: impl Into<ConversationItemId>,
-        status: responses::ResponseItemStatus,
+        status: responses::MessageStatus,
         role: ConversationMessageRole,
         content: impl IntoIterator<Item = impl Into<ConversationMessageContent>>,
     ) -> Self {
         Self {
             kind: ConversationMessageTag::Message,
             id: id.into(),
-            status,
+            status: status.into(),
             role,
             content: content.into_iter().map(Into::into).collect(),
             phase: Omittable::Omitted,
@@ -1134,13 +1143,23 @@ pub struct ConversationFunctionCall {
 
 impl ConversationFunctionCall {
     /// Creates a persisted function call resource.
+    ///
+    /// The status domain is the pinned three-value trio
+    /// `in_progress|completed|incomplete` (openai-python
+    /// `response_function_tool_call_item.py:21`; node `conversations.ts:198`),
+    /// so the constructor takes the per-host
+    /// [`responses::FunctionCallItemStatus`]. Superset values such as
+    /// [`responses::ResponseItemStatus::Searching`] no longer compile here and
+    /// cannot produce a Responses input item the pinned
+    /// `FunctionCallItemStatus` schema would reject (D0169, 13-J-1); decoding
+    /// keeps the shared eight-value superset field.
     #[must_use]
     pub fn new(
         id: impl Into<ConversationItemId>,
         call_id: impl Into<String>,
         name: impl Into<String>,
         arguments: JsonText,
-        status: responses::ResponseItemStatus,
+        status: responses::FunctionCallItemStatus,
     ) -> Self {
         Self {
             kind: ConversationFunctionCallTag::FunctionCall,
@@ -1150,7 +1169,7 @@ impl ConversationFunctionCall {
             arguments,
             namespace: Omittable::Omitted,
             caller: Omittable::Omitted,
-            status,
+            status: status.into(),
             created_by: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
@@ -2015,7 +2034,7 @@ mod tests {
 
         let phased = ConversationMessage::new(
             "msg_1",
-            responses::ResponseItemStatus::Completed,
+            responses::MessageStatus::Completed,
             ConversationMessageRole::Assistant,
             [responses::OutputText::new("done")],
         )
@@ -2032,7 +2051,7 @@ mod tests {
             serde_json::to_value(
                 ConversationMessage::new(
                     "msg_2",
-                    responses::ResponseItemStatus::Completed,
+                    responses::MessageStatus::Completed,
                     ConversationMessageRole::Assistant,
                     [responses::OutputText::new("done")],
                 )
@@ -2273,7 +2292,7 @@ mod tests {
             "call_4",
             "lookup",
             JsonText::from("{}"),
-            responses::ResponseItemStatus::Completed,
+            responses::FunctionCallItemStatus::Completed,
         );
         assert_eq!(typed.namespace(), None);
         assert!(typed.caller_ref().is_none());
@@ -2441,7 +2460,7 @@ mod tests {
     fn incompatible_content_role_is_a_typed_conversion_error() {
         let message = ConversationMessage::new(
             "msg_bad",
-            responses::ResponseItemStatus::Completed,
+            responses::MessageStatus::Completed,
             ConversationMessageRole::Assistant,
             [ConversationMessageContent::InputText(
                 responses::InputText::new("not assistant output"),
@@ -2451,6 +2470,70 @@ mod tests {
             message.to_response_input_item(),
             Err(ConversationItemConversionError::ContentRoleMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn resource_constructors_take_per_host_status_domains() {
+        // 13-J-1: ConversationMessage::new and ConversationFunctionCall::new
+        // accept only the pinned three-value per-host enums (openai-python
+        // message.py and response_function_tool_call_item.py:21; node
+        // conversations.ts:198). Superset statuses such as
+        // ResponseItemStatus::Searching no longer compile at these
+        // constructors, so the conversions below can no longer emit a
+        // Responses input item whose pinned MessageStatus or
+        // FunctionCallItemStatus schema would reject the status.
+        for status in [
+            responses::MessageStatus::InProgress,
+            responses::MessageStatus::Completed,
+            responses::MessageStatus::Incomplete,
+        ] {
+            let message = ConversationMessage::new(
+                "msg_status",
+                status.clone(),
+                ConversationMessageRole::User,
+                [responses::InputText::new("hi")],
+            );
+            assert_eq!(message.status().as_str(), status.as_str());
+            let input = message
+                .to_response_input_item()
+                .expect("per-host statuses convert to Responses input");
+            assert_eq!(
+                serde_json::to_value(&input).expect("encode input")["status"],
+                status.as_str()
+            );
+        }
+        for status in [
+            responses::FunctionCallItemStatus::InProgress,
+            responses::FunctionCallItemStatus::Completed,
+            responses::FunctionCallItemStatus::Incomplete,
+        ] {
+            let call = ConversationFunctionCall::new(
+                "fc_status",
+                "call_status",
+                "lookup",
+                JsonText::from("{}"),
+                status.clone(),
+            );
+            let input = ConversationItem::FunctionCall(call)
+                .to_response_input_item()
+                .expect("per-host statuses convert to Responses input");
+            assert_eq!(
+                serde_json::to_value(&input).expect("encode input")["status"],
+                status.as_str()
+            );
+        }
+
+        // Decoding keeps the shared eight-value superset field (D0169), so
+        // statuses that are legal on other item kinds still decode verbatim.
+        let persisted: ConversationMessage = serde_json::from_value(json!({
+            "type": "message",
+            "id": "msg_search",
+            "status": "searching",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hi"}]
+        }))
+        .expect("decode keeps the shared superset status");
+        assert_eq!(persisted.status().as_str(), "searching");
     }
 
     #[test]

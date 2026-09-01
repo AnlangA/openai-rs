@@ -563,10 +563,23 @@ impl<'de> Deserialize<'de> for VectorStoreFileAttributes {
 }
 
 /// Validated vector-store expiration policy.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+///
+/// The shared pinned `VectorStoreExpirationAfter` schema lists `anchor` and
+/// `days` as required but sets no `additionalProperties: false`
+/// (spec/upstream/openapi-2026-08-29.json), and openai-python's `ExpiresAfter`
+/// uses `extra="allow"`. Members added by the service inside `expires_after`
+/// are therefore tolerated and retained like
+/// [`crate::containers::ContainerExpiration`], so they cannot fail the whole
+/// [`VectorStore`] decode and survive re-encoding losslessly (13-I-1). Unlike
+/// the container sibling, whose response schema leaves `anchor`/`minutes`
+/// optional, the pinned members here stay required and keep the schema-backed
+/// `1..=365` days bound on decode.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct VectorStoreExpirationAfter {
     anchor: VectorStoreExpirationAnchor,
     days: u16,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl VectorStoreExpirationAfter {
@@ -580,10 +593,21 @@ impl VectorStoreExpirationAfter {
         anchor: VectorStoreExpirationAnchor,
         days: u16,
     ) -> Result<Self, VectorStoreValidationError> {
+        Self::check_days(days)?;
+        Ok(Self {
+            anchor,
+            days,
+            extra: ExtraFields::new(),
+        })
+    }
+
+    /// Enforces the pinned `1..=365` range of `days` on construction and
+    /// decode.
+    fn check_days(days: u16) -> Result<(), VectorStoreValidationError> {
         if !(MIN_VECTOR_STORE_EXPIRATION_DAYS..=MAX_VECTOR_STORE_EXPIRATION_DAYS).contains(&days) {
             return Err(VectorStoreValidationError::InvalidExpirationDays { days });
         }
-        Ok(Self { anchor, days })
+        Ok(())
     }
 
     /// Returns the anchor.
@@ -597,13 +621,20 @@ impl VectorStoreExpirationAfter {
     pub const fn days(&self) -> u16 {
         self.days
     }
+
+    /// Future members retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
+    }
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct VectorStoreExpirationAfterWire {
     anchor: VectorStoreExpirationAnchor,
     days: u16,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl<'de> Deserialize<'de> for VectorStoreExpirationAfter {
@@ -612,7 +643,12 @@ impl<'de> Deserialize<'de> for VectorStoreExpirationAfter {
         D: Deserializer<'de>,
     {
         let wire = VectorStoreExpirationAfterWire::deserialize(deserializer)?;
-        Self::from_raw_anchor(wire.anchor, wire.days).map_err(serde::de::Error::custom)
+        Self::check_days(wire.days).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            anchor: wire.anchor,
+            days: wire.days,
+            extra: wire.extra,
+        })
     }
 }
 
@@ -2876,6 +2912,59 @@ mod tests {
             .expect("object")
             .remove("last_active_at");
         assert!(serde_json::from_value::<VectorStore>(missing).is_err());
+    }
+
+    #[test]
+    fn store_expiration_policy_retains_future_members() {
+        // The pinned VectorStoreExpirationAfter schema sets no
+        // `additionalProperties: false` (spec/upstream/openapi-2026-08-29.json)
+        // and openai-python's ExpiresAfter uses extra="allow", so a member the
+        // service adds inside expires_after must not fail the whole
+        // VectorStore decode (13-I-1).
+        let mut value = minimal_store();
+        value["expires_after"] = json!({
+            "anchor": "last_active_at",
+            "days": 7,
+            "expiration_future": {"grace_period": 1}
+        });
+        let store: VectorStore = serde_json::from_value(value.clone()).expect("decode store");
+        match store.expires_after() {
+            Omittable::Value(expiration) => {
+                assert_eq!(expiration.anchor().as_str(), "last_active_at");
+                assert_eq!(expiration.days(), 7);
+                assert!(expiration.extra_fields().contains_key("expiration_future"));
+            }
+            Omittable::Omitted => panic!("fixture must contain expiration"),
+        }
+        assert_eq!(
+            serde_json::to_value(&store).expect("re-encode store"),
+            value,
+            "future expiration members must round-trip losslessly"
+        );
+
+        // The pinned required members and the schema-backed 1..=365 days bound
+        // stay enforced on decode.
+        let mut missing_members = minimal_store();
+        missing_members["expires_after"] = json!({"days": 7});
+        assert!(serde_json::from_value::<VectorStore>(missing_members).is_err());
+
+        let mut out_of_range = minimal_store();
+        out_of_range["expires_after"] = json!({"anchor": "last_active_at", "days": 0});
+        assert!(serde_json::from_value::<VectorStore>(out_of_range).is_err());
+
+        // The update-patch and create-request payloads reuse the same type, so
+        // a decoded policy keeps its future members when patched forward.
+        let patch = serde_json::to_value(
+            UpdateVectorStoreRequest::new().with_expiration(
+                serde_json::from_value::<VectorStoreExpirationAfter>(
+                    json!({"anchor": "last_active_at", "days": 3, "patch_future": true}),
+                )
+                .expect("decode policy with future member"),
+            ),
+        )
+        .expect("encode patch");
+        assert_eq!(patch["expires_after"]["patch_future"], true);
+        assert_eq!(patch["expires_after"]["days"], 3);
     }
 
     #[test]

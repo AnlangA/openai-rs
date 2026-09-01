@@ -4687,3 +4687,157 @@ until a decision is recorded here and its fixtures pass.
 - Impact: ledger only.
 - Overrides: none
 - Tests: existing suites.
+
+## D0256 — `item_reference` gains a tagged decode arm and explicit-null `type` routes like absence
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `ResponseInputItem` custom Deserialize, `STABLE_RESPONSE_INPUT_DISCRIMINATORS`
+- Sources: round-13 items 13-A-1/13-A-2 (问题13.md) — the pin's `InputItem.oneOf` includes `ItemReferenceParam` whose `type` is `anyOf [enum ["item_reference"], null]` (python `response_input_item_param.py:670-678`; node `responses.ts:4988-4997`), yet the Rust decode table had no `"item_reference"` arm (the tagged form fell to Unknown, typed variant unreachable) and `Some(Value::Null)` for `type` hard-errored the whole item list while both SDKs accept explicit null.
+- Decision: `Some("item_reference")` maps to the existing `ItemReference` variant (its flatten retains the `type` key so re-encode is byte-equivalent), and `Some(Value::Null)` is stripped and routed exactly like an absent discriminator (role/id presence). The synthetic `"<absent:id>"` marker in the stable-discriminator inventory is replaced by `"item_reference"` (grep-verified the marker had no encode consumers; 32/32 positional alignment with the schema inventory preserved). Non-string non-null `type` (e.g. numbers) still hard-errors.
+- Impact: `openai-rs-types` Responses input decode (typed reachability for a pin member + pin-legal null acceptance); affects `CountInputTokensRequest.input` and item-list replay.
+- Overrides: none
+- Tests: `input_item_reference_tag_decodes_and_round_trips`, `input_item_explicit_null_type_routes_like_an_absent_type`.
+
+## D0257 — Closed request filter structs retain unknown members
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `McpToolFilter`, `McpApprovalFilter`, `WebSearchFilters`, `ModerationDirection`, `PromptCacheBreakpoint`
+- Sources: round-13 item 13-A-3 — these closed filter structs dropped unknown keys on decode while sibling request DTOs carry `ExtraFields`; a future filter field would be silently lost (python's models use extra="allow").
+- Decision: each gains `#[serde(default, flatten)] extra: ExtraFields` + `extra_fields()`; encode of known keys unchanged. Knock-ons accepted: `PromptCacheBreakpoint` drops `Eq` (JSON values) and two constructors drop `const` (`ExtraFields::new` is not const); `McpRequireApproval` takes the crate-standard `large_enum_variant` allow with rationale. `McpAllowedTools` deliberately keeps no Unknown branch (minimal scope).
+- Impact: `openai-rs-types` request decode forward-compat; additive.
+- Overrides: none
+- Tests: `closed_filter_structs_retain_unknown_fields`.
+
+## D0258 — The four moderation outcome unions adopt Unknown retention and variant ExtraFields
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `ChatModerationClassification`/`ChatCompletionModerationOutcome` (chat.rs), `ResponseModerationOutcome` (responses.rs), `BetaModerationOutcome` (beta_responses.rs)
+- Sources: round-13 item 13-L-1 (with 13-B-1) — all four were closed `#[serde(tag="type")]` enums with no Unknown catch-all and no variant ExtraFields, so a future outcome tag would fail the whole Response/ChatCompletion/BetaResponse decode while every sibling union degrades to Unknown; python's variant models are extra="allow" (pin/pynode equally closed today, so this was convention-consistency and forward-robustness, not wire divergence).
+- Decision: all four rework onto the crate's tagged-union idiom — payload structs with public fields plus `#[serde(default, flatten)] extra` and `extra_fields()`, and an `Unknown` catch-all that retains the raw tagged object. Payload names: `ChatModerationResult`(s/Error), `ResponseModerationResult`/`ResponseModerationError`, `BetaModerationClassification`/`BetaModerationError` (the `BetaModerationResult` name is the beta container, mirroring GA's `ResponseModeration`). GA and chat faces converged on the same shape independently.
+- Impact: `openai-rs-types` moderation surfaces (decode-widening + additive read accessors; known-tag behavior unchanged).
+- Overrides: none
+- Tests: `moderation_outcome_keeps_unknown_tags_and_future_fields`, `chat_moderation_unions_retain_future_tags_losslessly`, `chat_moderation_known_outcomes_retain_extra_fields`, `beta_moderation_outcome_retains_future_tags_and_extra_fields`.
+
+## D0259 — Stream-event DTOs expose their retained extras and MCP argument indices
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `output_item_event!`, `content_part_event!`, `tool_status_event!` macros and the 8 hand-written delta/done events; `McpCallArgumentsDeltaEvent`/`McpCallArgumentsDoneEvent`
+- Sources: round-13 item 13-C-1 — 30 of 58 Responses event DTOs carried `#[serde(flatten)] extra` with no `extra_fields()` reader while the 21 `required_stream_event!` DTOs expose one, and the two MCP arguments events lacked `item_id()`/`output_index()`/`sequence_number()` accessors every sibling delta event has (D0190/D0192 asymmetric-readability family).
+- Decision: the three macros and 8 hand-written impls gain `extra_fields()` (field already present; purely additive); the two MCP arguments events gain the three index/sequence accessors mirroring `FunctionCallArgumentsDeltaEvent`.
+- Impact: `openai-rs-types` Responses stream read surface; additive.
+- Overrides: none
+- Tests: `stream_event_dtos_expose_retained_extra_fields_and_mcp_argument_indices`.
+
+## D0260 — Realtime nested closed unions retain unknown discriminators
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `RealtimeTranscriptionUsage`, `RealtimeTruncation`, `RealtimeConversationItem` role routing
+- Sources: round-13 item 13-E-1 — the three positions hard-errored on unknown discriminators (future usage kind inside a completed event; future truncation policy object inside session payloads; unknown role on a message item), contradicting the module's "unknown future tags retain the complete semantic JSON object" promise that every sibling union honors; python/node are equally fail-closed, so this is decode-widening for robustness, not parity.
+- Decision: all three fall-through arms route to the module's `UnknownRealtimeObject` retention (`#[non_exhaustive]` + `Unknown` variants), mirroring `RealtimeAudioFormat`/`RealtimeTurnDetection`; known-variant encode unchanged; `RealtimeSessionCreateRequest::validate` still only inspects `RetentionRatio` so the pinned 0..=1 constraint stays opt-in. One pre-existing test that pinned the fail-closed role behavior now asserts Unknown-arm decode + round-trip. Incidental: `RealtimeTool` takes the crate-standard `large_enum_variant` allow (concurrent `McpTool` growth).
+- Impact: `openai-rs-types` Realtime event decode (forward-robustness; socket stays open and events stay observable).
+- Overrides: none
+- Tests: `realtime_nested_unions_retain_unknown_discriminators_losslessly`.
+
+## D0261 — Beta multi-agent call-output request parts stop emitting `logprobs`
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `BetaMultiAgentOutputTextParam` (new), `BetaMultiAgentCallOutputParam.output`
+- Sources: round-13 item 13-F-1 — the request side reused the resource type `BetaMultiAgentOutputText`, whose required arrays made every request output part emit `logprobs: []` (and `annotations: []`), while the pin's request schema `BetaOutputTextContentParam` defines only type/text(+optional annotations) and python (`beta_response_input_item_param.py:397-405`) and node (`responses.ts:5345-5357`) omit logprobs entirely.
+- Decision: a param-shaped type is used only by `BetaMultiAgentCallOutputParam.output` — `annotations` with `skip_serializing_if = "Vec::is_empty"`, no `logprobs` field; decode of an echoed resource block stays tolerant but never re-emits logprobs; `From<BetaMultiAgentOutputText>` drops the resource-only array. The resource type and its pinned both-arrays round-trip test are unchanged.
+- Impact: `openai-rs-types` beta request wire (no unpinned keys on `multi_agent_call_output` input items).
+- Overrides: none
+- Tests: `multi_agent_call_output_param_omits_logprobs_and_empty_annotations`.
+
+## D0262 — `VectorStoreExpirationAfter` tolerates and retains future members
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `VectorStoreExpirationAfter(Wire)`, its three consumers (create request, `VectorStore` response, update patch)
+- Sources: round-13 item 13-I-1 — the wire struct carried `deny_unknown_fields` with no pin backing (the pin schema has `required [anchor, days]` and no `additionalProperties: false`, unlike sibling closed maps), yet the type doubles as the response DTO, so a future service-added member inside `expires_after` would fail the whole VectorStore decode; python's `ExpiresAfter` is extra="allow"; the in-crate correct pattern is `ContainerExpiration` (containers.rs:264-281) with its lossless future-field test.
+- Decision: `deny_unknown_fields` dropped; `#[serde(default, flatten)] extra: ExtraFields` + `extra_fields()` added to both public and wire structs; `anchor`/`days` stay decode-required per the pin (documented difference from the container sibling whose response schema leaves them optional); the schema-backed `1..=365` day bound still applies on construction and decode via a shared `check_days` helper (not weakened). `Eq` dropped (ExtraFields is PartialEq only); all consumers in-file.
+- Impact: `openai-rs-types` vector-store decode forward-compat.
+- Overrides: none
+- Tests: `store_expiration_policy_retains_future_members`.
+
+## D0263 — Conversation resource constructors take per-host status domains
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `ConversationMessage::new`, `ConversationFunctionCall::new`
+- Sources: round-13 item 13-J-1 — both constructors took the shared 8-value `ResponseItemStatus` although the pin defines 3-value per-host enums (`MessageStatus`/`FunctionCallStatus` = in_progress|completed|incomplete; python `message.py`, `response_function_tool_call_item.py:21`; node `conversations.ts:198`); D0169 narrowed request-side constructors but missed these two, so `Searching` could flow through `to_response_input_item()` into a pinned 3-value position.
+- Decision: the constructors take `responses::MessageStatus`/`responses::FunctionCallItemStatus` and store via the existing `From` conversions into the decode superset (the D0169 `FunctionCall::new`/`with_status` pattern); decode fields stay on the 8-value superset exactly as D0169 prescribes. The four in-file test callers updated.
+- Impact: `openai-rs-types` conversations construction surface (breaking for callers passing off-host statuses — intended).
+- Overrides: completes D0169's constructor narrowing
+- Tests: `resource_constructors_take_per_host_status_domains`.
+
+## D0264 — Retry fallback covers every status ≥ 500
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `should_retry_response`, the retry truth-table test
+- Sources: round-13 item 13-M-1 — the fallback used `StatusCode::is_server_error()` (exactly 500..=599) so a representable non-standard 6xx was terminal; openai-python `should_retry` (`_base_client.py:851-853`, `if response.status_code >= 500: return True`) and openai-node `shouldRetry` (`client.ts:1606-1607`, `if (response.status >= 500) return true;`) both compare numerically.
+- Decision: the fallback becomes `status.as_u16() >= 500` (both SDKs cited); `x-should-retry` precedence and all other edges unchanged. The truth table gains 499 (terminal boundary), 600 and 999 (retryable 6xx cells), and 600 in both header-override loops.
+- Impact: `openai-rs-client` retry behavior on non-standard gateway statuses (fail-closed → SDK-parity).
+- Overrides: none
+- Tests: extended `should_retry_response_truth_table`.
+
+## D0265 — `ApiError` mirrors StreamError's flat-then-nested body precedence
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `ApiError::from_body`, `ApiErrorEnvelope`
+- Sources: round-13 item 13-M-2 — the HTTP-status path required the nested `{"error":{…}}` envelope so a gateway's flat `{"message":…,"type":…,"code":…}` body lost every field to the generic fallback; openai-python unwraps with `body.get("error", body)` (`_client.py:835`, field reads `_exceptions.py:71-79`); node is nested-only; the crate's own `StreamError` already does flat-then-nested (D0195/D0196), an internal asymmetry.
+- Decision: `from_body` mirrors `StreamError`'s precedence exactly — the top-level object parses as a flat `ApiErrorBody` and the nested envelope only fills fields the flat form didn't carry. The standard nested envelope behaves identically to before (its flat parse yields all-absent fields); `{"error":"gone"}` still falls to the generic message.
+- Impact: `openai-rs-client` error typing for intermediary responses (message/type/code/param now surface from flat bodies).
+- Overrides: none
+- Tests: `api_error_flat_body_surfaces_every_field`, `api_error_flat_fields_win_and_nested_fills_the_gaps`.
+
+## D0266 — The webhooks delivery-semantics provenance finally cites the platform guide
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: webhooks module doc
+- Sources: round-13 item 13-N-1 — D0250 recorded that the module doc's delivery-semantics sentences (72-hour exponential-backoff retry, 3xx-counts-as-failure, duplicate-delivery/idempotency-key, respond-2xx-quickly) would be re-anchored to the official platform guide, but the change never landed (`git log -S "platform guide"` empty); node's `docs/webhooks.md` contains none of those statements and only links the guide (its line 116). The two method-doc citations that ARE supported by node's docs (clock-sync; raw-body requirement) stay.
+- Decision: the module-doc closing sentence now anchors the delivery contract to the official platform webhook guide, with the node-docs limitation noted; no behavior change.
+- Impact: documentation only.
+- Overrides: enacts D0250's webhooks-docs decision
+- Tests: existing suites.
+
+## D0267 — Codex thread/turn receive DTOs surface the pinned negotiation and lifecycle fields
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `ThreadStartResponse`, `Thread`, `Turn`, `ThreadStatus`/`ThreadActiveFlag`/`SessionSource`/`ThreadSourceKind`/`TurnItemsView`, `AskForApproval`/`SandboxPolicy` Unknown arms
+- Sources: round-13 items 13-O-1/13-O-2/13-O-3 — the pin's `v2/ThreadStartResponse` requires approvalPolicy/approvalsReviewer/sandbox (plus optional reasoningEffort) and `v2/Thread` requires status (4-branch `v2/ThreadStatus` with `activeFlags` ∈ {waitingOnApproval, waitingOnUserInput}) and source (3-branch `v2/SessionSource`), all previously landing in the redacted `extra` map; `v2/Turn.itemsView` (notLoaded|summary|full, default full) likewise untyped.
+- Decision: `ThreadStartResponse` gains the four fields (Option-wrapped to match the DTO family's decode tolerance and the existing shell fixtures); `Thread` gains `status`/`source`/`thread_source` (source pin-required, threadSource optional per pin — typed as the open 10-arm `ThreadSourceKind` whose pin definition is plain string, documented); `Turn.items_view` gains an open enum with the pinned default surfaced through a `items_view()` accessor. `AskForApproval` and `SandboxPolicy` gain lossless `Unknown(Value)` arms (SandboxPolicy converted to hand-written serde impls) so a future branch degrades verbatim instead of failing the response decode; the generic tag-buffering helpers are shared with ThreadItem. Two old "unknown tag must not decode" assertions are inverted to D0237-style lossless-retention assertions.
+- Impact: `openai-rs-codex` receive surface (the negotiated approval/sandbox posture and thread lifecycle states are typed; forward-robust unions).
+- Overrides: extends D0237's lossless stance to the response unions
+- Tests: `thread_start_response_decodes_the_negotiated_approval_and_sandbox_fields`, `thread_start_response_degrades_unknown_approval_and_sandbox_shapes`, `thread_status_types_every_pinned_branch_and_stays_lossless`, `thread_source_types_every_pinned_branch_and_stays_lossless`, `thread_source_kind_types_the_pinned_classifications`, `turn_items_view_decodes_known_values_and_defaults_to_full`.
+
+## D0268 — The rmcp crate re-exports the locked `rmcp` dependency
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: `openai-rs-rmcp` lib re-exports and mitigation docs
+- Sources: round-13 item 13-P-1 — the crate re-exported only four model types, so a facade consumer could not name `rmcp::service::ServerSink` (the `RmcpExecutor::new` parameter) or any transport type, while the documented proxy mitigation names `StreamableHttpClientTransport::with_client` — both unreachable through `openai_rs::rmcp`, forcing a manual-lockstep direct dependency (the codex analogue is D0243).
+- Decision: `pub use rmcp;` makes the whole locked crate nameable (the D0231 `pub use reqwest` precedent); the four model re-exports stay as the convenience path; the mitigation text now names the verified paths (`rmcp::transport::StreamableHttpClientTransport`, `...streamable_http_client::StreamableHttpClientTransportConfig`, `rmcp::service::ServerSink` — checked against the locked 3.1.4 source) and stays honest that the reqwest client still comes from the caller.
+- Impact: `openai-rs-rmcp` API surface (additive); removes the dual-dependency hazard from the documented workflow.
+- Overrides: none
+- Tests: `rmcp_service_types_are_nameable_through_the_crate`, `rmcp_transport_types_are_nameable_through_the_crate`.
+
+## D0269 — Round-13 recorded positions
+
+- Status: accepted
+- Reviewed: 2026-09-01
+- Scope: ChatToolKind::Custom on chunks; shared role/object/completion-object enums; GA Response status_details absence; moderation per-category const narrowing; ImagesResponse request-side superset decode; speech voice/model openness (pcm not pcm16; the pinned speech-model set has no gpt-5-mini-tts); ConversationItemInclude dual maintenance; EvalRunStatus/OutputItemStatus invented vocabularies; batch output-line sibling-requiredness; Batch.endpoint/Upload.purpose superset enums; realtime transcription-usage closed stance superseded by D0260; [DONE] exact-match; User-Agent composition; webhook Unknown accessors returning None; python's own safety_identifier.blocked unwrap gap; moderation text/image triple duplication; ModelObject/EmbeddingObject const merging; batch JSONL envelope positions; codex CodexErrorInfo degradation granularity + raw-only server-request face; rmcp wildcard-arm wording/resultType doc; TranscriptionStreamLogprob.bytes numeric typing (deferred to the numeric lens).
+- Sources: round-13 informational findings (问题13.md 信息组, domains B/C/D/F/G/H/J/L/M/N/O/P).
+- Decision: ChatToolKind::Custom on stream chunks stays (node `completions.ts:976-1004` already streams a `custom` payload; the untyped payload rides ExtraFields today and can be promoted when the pin catches up); the shared open role/object enums stay (decode-lenient supersets, several pinned by official examples that narrower typing would reject); GA `Response.status_details` stays absent (no baseline defines it); moderation per-category const narrowing stays unmodeled (open map is D0089); ImagesResponse keeps shared-enum decode (Unknown keeps it lossless); speech voice stays a fully open string and model fields stay `ModelId` (pin anyOf-string); `ConversationItemInclude` stays a separate enum (values equal today; flagged for a pin-derived parity test if they drift); eval run/output statuses stay invented-but-open vocabularies; batch output lines keep requiring both `response`/`error` keys (every documented example carries both; no official parser exists to arbitrate); `Batch.endpoint`/`Upload.purpose` stay superset open enums; `[DONE]` stays exact-match (Rust+node; python's prefix match is the outlier); the `openai-rs/{version}` User-Agent stays (third-party token; D0223 telemetry stance); webhook `Unknown` accessors stay `None`-returning; codex `CodexErrorInfo` keeps notification-granularity degradation and the raw-only server-request face (D0246); rmcp wildcard-arm `Protocol` mapping and the envelope's verbatim `resultType` doc stay; `TranscriptionStreamLogprob.bytes` (`Vec<u8>` vs pin integer) is recorded as the numeric-lens candidate for the next cycle.
+- Impact: ledger only.
+- Overrides: none
+- Tests: existing suites.
