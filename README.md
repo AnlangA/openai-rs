@@ -6,8 +6,11 @@ Responses API.
 > [!IMPORTANT]
 > This repository is pre-release and under active staged development. It is not
 > a complete OpenAI API implementation, has not made a stable API promise, and
-> should not yet be used as a drop-in replacement for an official SDK. No
-> crates.io release is documented or supported yet.
+> should not yet be used as a drop-in replacement for an official SDK. The
+> initial crates.io packages are published as `0.1.0` under the crate name
+> [`openai-rs-sdk`](https://crates.io/crates/openai-rs-sdk) (import as
+> `openai_rs`); treat them as pre-release until a supported stable version is
+> documented.
 
 ## Current status
 
