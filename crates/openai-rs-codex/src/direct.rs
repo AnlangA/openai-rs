@@ -25,6 +25,13 @@ pub use transport::{DirectCodexResponsesClient, DirectResponseStream};
 /// The only model endpoint reachable by the direct backend.
 pub const CODEX_RESPONSES_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
 
+/// OAuth `originator` query param and Codex Responses `originator` header.
+///
+/// The public Codex client id is bound to server-side request metadata and
+/// redirect-URI allowlists. This backend identifies itself with the same
+/// originator as the official Rust CLI.
+pub(crate) const CODEX_ORIGINATOR: &str = "codex_cli_rs";
+
 /// Errors from the private experimental direct backend.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]

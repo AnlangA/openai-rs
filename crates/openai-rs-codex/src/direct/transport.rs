@@ -314,7 +314,7 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
             let response = request
                 .header(reqwest::header::AUTHORIZATION, authorization)
                 .header("ChatGPT-Account-Id", account_id)
-                .header("originator", "openai-rs")
+                .header("originator", super::CODEX_ORIGINATOR)
                 .header("session_id", session_id)
                 .header(reqwest::header::ACCEPT, accept)
                 .json(body)
@@ -642,7 +642,7 @@ mod tests {
         let lower = captured.to_ascii_lowercase();
         assert!(lower.contains("authorization: bearer access-secret"));
         assert!(lower.contains("chatgpt-account-id: acct-123"));
-        assert!(lower.contains("originator: openai-rs"));
+        assert!(lower.contains(&format!("originator: {}", super::super::CODEX_ORIGINATOR)));
         assert!(!captured.contains("refresh-secret"));
         Ok(())
     }

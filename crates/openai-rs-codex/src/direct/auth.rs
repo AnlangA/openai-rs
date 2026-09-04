@@ -26,6 +26,8 @@ const ISSUER: &str = "https://auth.openai.com";
 const AUTHORIZE_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
 const TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 const JWKS_ENDPOINT: &str = "https://auth.openai.com/.well-known/jwks.json";
+const AUTHORIZE_SCOPE: &str =
+    "openid profile email offline_access api.connectors.read api.connectors.invoke";
 #[cfg(feature = "experimental-direct-device")]
 const DEVICE_CODE_ENDPOINT: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
 #[cfg(feature = "experimental-direct-device")]
@@ -36,6 +38,8 @@ const DEVICE_VERIFICATION_URL: &str = "https://auth.openai.com/codex/device";
 const DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
 
 const CALLBACK_PATH: &str = "/auth/callback";
+const DEFAULT_CALLBACK_PORT: u16 = 1455;
+const FALLBACK_CALLBACK_PORT: u16 = 1457;
 const MAX_CALLBACK_BYTES: usize = 8 * 1024;
 const MAX_AUTH_BODY_BYTES: usize = 256 * 1024;
 const DEFAULT_EXPIRES_IN: u64 = 3_600;
@@ -246,16 +250,14 @@ impl DirectAuthClient {
         Ok(client)
     }
 
-    /// Bind an ephemeral IPv4 loopback port and build a PKCE+state+nonce URL.
+    /// Bind a registered IPv4 loopback port and build a PKCE+state+nonce URL.
     pub async fn begin_browser_login(&self) -> Result<BrowserLogin, DirectError> {
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-            .await
-            .map_err(|error| DirectError::OAuth(format!("loopback bind failed: {error}")))?;
+        let listener = bind_callback_listener().await?;
         let port = listener
             .local_addr()
             .map_err(|error| DirectError::OAuth(format!("loopback address failed: {error}")))?
             .port();
-        let redirect_uri = Url::parse(&format!("http://127.0.0.1:{port}{CALLBACK_PATH}"))
+        let redirect_uri = Url::parse(&format!("http://localhost:{port}{CALLBACK_PATH}"))
             .map_err(|error| DirectError::Configuration(error.to_string()))?;
         let verifier = random_base64url(32)?;
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
@@ -267,14 +269,14 @@ impl DirectAuthClient {
             .append_pair("response_type", "code")
             .append_pair("client_id", CLIENT_ID)
             .append_pair("redirect_uri", redirect_uri.as_str())
-            .append_pair("scope", "openid profile email offline_access")
+            .append_pair("scope", AUTHORIZE_SCOPE)
             .append_pair("code_challenge", &challenge)
             .append_pair("code_challenge_method", "S256")
             .append_pair("state", &state)
             .append_pair("nonce", &nonce)
             .append_pair("id_token_add_organizations", "true")
             .append_pair("codex_cli_simplified_flow", "true")
-            .append_pair("originator", "openai-rs");
+            .append_pair("originator", super::CODEX_ORIGINATOR);
         Ok(BrowserLogin {
             authorize_url,
             redirect_uri,
@@ -372,6 +374,24 @@ impl DirectAuthClient {
             interval: Duration::from_secs(interval),
             auth: self.clone(),
         })
+    }
+}
+
+async fn bind_callback_listener() -> Result<TcpListener, DirectError> {
+    match TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, DEFAULT_CALLBACK_PORT)).await {
+        Ok(listener) => Ok(listener),
+        Err(primary) if primary.kind() == std::io::ErrorKind::AddrInUse => {
+            TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, FALLBACK_CALLBACK_PORT))
+                .await
+                .map_err(|fallback| {
+                    DirectError::OAuth(format!(
+                        "registered loopback ports {DEFAULT_CALLBACK_PORT} and {FALLBACK_CALLBACK_PORT} are unavailable: {primary}; {fallback}"
+                    ))
+                })
+        }
+        Err(error) => Err(DirectError::OAuth(format!(
+            "loopback bind on registered port {DEFAULT_CALLBACK_PORT} failed: {error}"
+        ))),
     }
 }
 
@@ -989,14 +1009,24 @@ mod tests {
 
     assert_not_impl_any!(StoredCodexSession: serde::Serialize, std::fmt::Display);
 
+    static BROWSER_LOGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
-    async fn browser_url_uses_ephemeral_ipv4_loopback_and_security_parameters()
+    async fn browser_url_uses_registered_localhost_callback_and_security_parameters()
     -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = BROWSER_LOGIN_TEST_LOCK.lock().await;
         let login = DirectAuthClient::new()?.begin_browser_login().await?;
-        assert_eq!(login.redirect_uri.host_str(), Some("127.0.0.1"));
-        assert_ne!(login.redirect_uri.port(), Some(1455));
+        assert_eq!(login.redirect_uri.host_str(), Some("localhost"));
+        assert!(matches!(
+            login.redirect_uri.port(),
+            Some(super::DEFAULT_CALLBACK_PORT | super::FALLBACK_CALLBACK_PORT)
+        ));
         let params: std::collections::HashMap<_, _> =
             login.authorize_url.query_pairs().into_owned().collect();
+        assert_eq!(
+            params.get("scope").map(String::as_str),
+            Some(super::AUTHORIZE_SCOPE)
+        );
         assert_eq!(
             params.get("code_challenge_method").map(String::as_str),
             Some("S256")
@@ -1005,7 +1035,7 @@ mod tests {
         assert!(params.get("nonce").is_some_and(|value| !value.is_empty()));
         assert_eq!(
             params.get("originator").map(String::as_str),
-            Some("openai-rs")
+            Some(super::super::CODEX_ORIGINATOR)
         );
         let state = params.get("state").ok_or("missing state")?;
         let nonce = params.get("nonce").ok_or("missing nonce")?;
@@ -1019,6 +1049,7 @@ mod tests {
     #[tokio::test]
     async fn browser_callback_has_deadline_and_cancellation()
     -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = BROWSER_LOGIN_TEST_LOCK.lock().await;
         let mut auth = DirectAuthClient::new()?;
         auth.callback_timeout = Duration::from_millis(20);
         let store = EphemeralStore::default();
@@ -1272,7 +1303,7 @@ mod tests {
         query: &str,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
         let request = format!(
-            "GET /auth/callback?{query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+            "GET /auth/callback?{query} HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n"
         );
         let mut stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).await?;
         stream.write_all(request.as_bytes()).await?;
@@ -1290,6 +1321,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use sha2::Digest;
 
+        let _guard = BROWSER_LOGIN_TEST_LOCK.lock().await;
         let fixture = crate::direct::jwt::test_support::rsa_fixture()?;
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let address = listener.local_addr()?;
@@ -1402,6 +1434,7 @@ mod tests {
     #[tokio::test]
     async fn browser_login_rejects_state_mismatch_and_error_callbacks()
     -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let _guard = BROWSER_LOGIN_TEST_LOCK.lock().await;
         let mut auth = DirectAuthClient::new()?;
         auth.callback_timeout = Duration::from_secs(5);
 
