@@ -8,10 +8,10 @@ license.workspace = true
 publish = false
 
 [dependencies]
-openai-rs-client = { path = "../openai-rs-client", version = "=0.1.0", features = ["admin", "rustls-tls", "x509"] }
-openai-rs-codex = { path = "../openai-rs-codex", version = "=0.1.0" }
-openai-rs-rmcp = { path = "../openai-rs-rmcp", version = "=0.1.0" }
-openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0" }
+openai-rs-client = { path = "../openai-rs-client", version = "=0.1.1", features = ["admin", "rustls-tls", "x509"] }
+openai-rs-codex = { path = "../openai-rs-codex", version = "=0.1.1" }
+openai-rs-rmcp = { path = "../openai-rs-rmcp", version = "=0.1.1" }
+openai-rs-types = { path = "../openai-rs-types", version = "=0.1.1" }
 bytes.workspace = true
 futures-util.workspace = true
 http-body-util.workspace = true

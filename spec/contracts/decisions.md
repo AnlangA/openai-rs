@@ -5028,3 +5028,15 @@ until a decision is recorded here and its fixtures pass.
 - Impact: ledger and one documentation cell only.
 - Overrides: none
 - Tests: existing suites (1252/0).
+
+## D0287 — Direct Codex accepts headerless SSE responses
+
+- Status: accepted
+- Reviewed: 2026-09-04
+- Scope: `DirectCodexResponsesClient::stream` SSE handshake and EOF validation
+- Sources: a live ChatGPT Codex response returned HTTP 200 with no `Content-Type` under both HTTP/2 and HTTP/1.1 while its body contained valid `event:`/`data:` SSE frames; the official Codex 0.144.5 transport checks the success status and passes the byte stream directly to its event-source decoder; the public Responses transport continues to receive and require the documented SSE media type.
+- Decision: the sealed direct lane accepts a missing `Content-Type` and defers to its bounded SSE decoder, while every explicitly supplied value must remain a case-insensitive `text/event-stream` media type; conflicting duplicate values and non-ASCII values fail the handshake. A headerless body must produce at least one decoded SSE item or the stream emits a terminal `DirectError::Sse`. The public Responses lane retains its strict content-type gate.
+- Reason: treating the absent response header as an empty, incompatible media type rejected a valid production stream before any body bytes were decoded; limiting the exception to the fixed-host direct lane restores compatibility without allowing an explicitly mislabeled response through.
+- Impact: experimental direct Codex streaming compatibility and diagnostics only.
+- Overrides: a direct-lane-only exception to D0187's content-type gate.
+- Tests: `typed_stream_decodes_sse_without_content_type`, `headerless_non_sse_body_fails_in_stream`, `typed_stream_rejects_explicit_non_sse_content_type`, and the mixed-case/parameter assertion in `typed_stream_decodes_sse`.

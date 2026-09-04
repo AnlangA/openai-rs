@@ -214,19 +214,32 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
         if !response.status().is_success() {
             return Err(status_error(response).await);
         }
-        let content_type = response
+        // The sealed ChatGPT Codex endpoint can omit Content-Type on a valid
+        // SSE response. When it is absent, defer validation to the bounded,
+        // fail-stop decoder; an explicitly incompatible type still fails the
+        // handshake.
+        let content_type_missing = !response
             .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default();
-        if content_type
-            .split(';')
-            .next()
-            .is_none_or(|value| value.trim() != "text/event-stream")
+            .contains_key(reqwest::header::CONTENT_TYPE);
+        for value in response
+            .headers()
+            .get_all(reqwest::header::CONTENT_TYPE)
+            .iter()
         {
-            return Err(DirectError::Sse(
-                "response content type was not text/event-stream".to_owned(),
-            ));
+            let content_type = value.to_str().map_err(|_| {
+                DirectError::Sse("response content type was not valid ASCII".to_owned())
+            })?;
+            let is_event_stream = content_type
+                .split(';')
+                .next()
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"));
+            if !is_event_stream {
+                let actual =
+                    sanitize_error_message(content_type).unwrap_or_else(|| "<empty>".to_owned());
+                return Err(DirectError::Sse(format!(
+                    "response content type was {actual:?}, expected text/event-stream"
+                )));
+            }
         }
 
         let max_sse_line_bytes = self.max_sse_line_bytes;
@@ -236,6 +249,7 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
             async move {
                 let mut body = response.bytes_stream();
                 let mut decoder = SseDecoder::new(max_sse_line_bytes, max_sse_event_bytes);
+                let mut saw_sse_item = false;
                 while let Some(chunk) = body.next().await {
                     let items = match chunk {
                         Ok(chunk) => decoder.feed(&chunk),
@@ -248,13 +262,24 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
                             return;
                         }
                     };
+                    saw_sse_item |= !items.is_empty();
                     if dispatch_sse_items(&sender, items).await {
                         return;
                     }
                 }
                 match decoder.finish() {
                     Ok(items) => {
-                        let _ = dispatch_sse_items(&sender, items).await;
+                        saw_sse_item |= !items.is_empty();
+                        if dispatch_sse_items(&sender, items).await {
+                            return;
+                        }
+                        if content_type_missing && !saw_sse_item {
+                            let _ = sender
+                                .send(Err(DirectError::Sse(
+                                    "response body did not contain SSE events".to_owned(),
+                                )))
+                                .await;
+                        }
                     }
                     Err(error) => {
                         let _ = sender.send(Err(error)).await;
@@ -494,10 +519,10 @@ async fn status_error(response: reqwest::Response) -> DirectError {
         }
     }
     // Prefer the machine-readable `error.code`; when it is absent or not an
-    // inert token, fall back to the sanitized `error.message` instead of
-    // dropping the server's explanation entirely.
-    let message = serde_json::from_slice::<Value>(&body)
-        .ok()
+    // inert token, fall back to the sanitized `error.message`. The ChatGPT
+    // Codex backend often returns FastAPI-style `{"detail":"..."}` instead.
+    let parsed = serde_json::from_slice::<Value>(&body).ok();
+    let from_error = parsed
         .as_ref()
         .and_then(|value| value.get("error"))
         .and_then(|error| {
@@ -511,7 +536,18 @@ async fn status_error(response: reqwest::Response) -> DirectError {
                         .and_then(Value::as_str)
                         .and_then(sanitize_error_message)
                 })
-        })
+        });
+    let from_detail = parsed.as_ref().and_then(|value| match value.get("detail") {
+        Some(Value::String(detail)) => sanitize_error_message(detail),
+        Some(Value::Array(items)) => items.iter().find_map(|item| {
+            item.as_str()
+                .or_else(|| item.get("msg").and_then(Value::as_str))
+                .and_then(sanitize_error_message)
+        }),
+        _ => None,
+    });
+    let message = from_error
+        .or(from_detail)
         .unwrap_or_else(|| "request failed".to_owned());
     DirectError::HttpStatus { status, message }
 }
@@ -602,6 +638,13 @@ mod tests {
             DirectError::HttpStatus { status, message } => {
                 assert_eq!(status, 403);
                 assert_eq!(message, "request failed");
+            }
+            other => return Err(format!("unexpected error: {other:?}").into()),
+        }
+        match status_error_round(400, r#"{"detail":"Instructions are not valid"}"#).await? {
+            DirectError::HttpStatus { status, message } => {
+                assert_eq!(status, 400);
+                assert_eq!(message, "Instructions are not valid");
             }
             other => return Err(format!("unexpected error: {other:?}").into()),
         }
@@ -884,7 +927,7 @@ mod tests {
             let _ = stream.read(&mut request).await?;
             let body = b"data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hi\",\"sequence_number\":1,\"logprobs\":[]}\n\ndata: {\"type\":\"response.completed\",\"sequence_number\":2,\"response\":{\"id\":\"resp_stream\",\"created_at\":1,\"error\":null,\"incomplete_details\":null,\"instructions\":null,\"metadata\":null,\"model\":\"gpt-test\",\"object\":\"response\",\"output\":[],\"parallel_tool_calls\":true,\"temperature\":null,\"tool_choice\":\"auto\",\"tools\":[],\"top_p\":null}}\n\ndata: [DONE]\n\n";
             let headers = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Type: Text/Event-Stream; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             );
             stream.write_all(headers.as_bytes()).await?;
@@ -915,6 +958,107 @@ mod tests {
             other => return Err(format!("unexpected terminal event: {other:?}").into()),
         }
         assert!(stream.next_event().await.is_none());
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn typed_stream_decodes_sse_without_content_type()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = vec![0_u8; 16 * 1024];
+            let _ = stream.read(&mut request).await?;
+            let body = b"data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hi\",\"sequence_number\":1,\"logprobs\":[]}\n\ndata: [DONE]\n\n";
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(headers.as_bytes()).await?;
+            stream.write_all(body).await?;
+            Ok::<_, std::io::Error>(())
+        });
+        let endpoint = url::Url::parse(&format!("http://{address}/backend-api/codex/responses"))?;
+        let client = test_client(endpoint).await?;
+        let request = CreateResponseRequest::new("gpt-test", ResponseInput::Text("hello".into()))
+            .into_streaming();
+        let mut stream = client.stream(&request).await?;
+        let event = stream.next_event().await.ok_or("missing SSE event")??;
+        match event {
+            ResponseStreamEvent::OutputTextDelta(delta) => assert_eq!(delta.delta(), "Hi"),
+            other => return Err(format!("unexpected SSE event: {other:?}").into()),
+        }
+        assert!(stream.next_event().await.is_none());
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn headerless_non_sse_body_fails_in_stream() -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = vec![0_u8; 16 * 1024];
+            let _ = stream.read(&mut request).await?;
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await?;
+            Ok::<_, std::io::Error>(())
+        });
+        let endpoint = url::Url::parse(&format!("http://{address}/backend-api/codex/responses"))?;
+        let client = test_client(endpoint).await?;
+        let request = CreateResponseRequest::new("gpt-test", ResponseInput::Text("hello".into()))
+            .into_streaming();
+        let mut stream = client.stream(&request).await?;
+        let error = stream
+            .next_event()
+            .await
+            .ok_or("missing stream error")?
+            .err()
+            .ok_or("expected an SSE error")?;
+        assert!(matches!(
+            error,
+            DirectError::Sse(message) if message.contains("did not contain SSE events")
+        ));
+        assert!(stream.next_event().await.is_none());
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn typed_stream_rejects_explicit_non_sse_content_type()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = vec![0_u8; 16 * 1024];
+            let _ = stream.read(&mut request).await?;
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .await?;
+            Ok::<_, std::io::Error>(())
+        });
+        let endpoint = url::Url::parse(&format!("http://{address}/backend-api/codex/responses"))?;
+        let client = test_client(endpoint).await?;
+        let request = CreateResponseRequest::new("gpt-test", ResponseInput::Text("hello".into()))
+            .into_streaming();
+        let error = client
+            .stream(&request)
+            .await
+            .err()
+            .ok_or("expected a content type error")?;
+        assert!(matches!(
+            error,
+            DirectError::Sse(message)
+                if message.contains("application/json")
+                    && message.contains("text/event-stream")
+        ));
         server.await??;
         Ok(())
     }

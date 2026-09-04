@@ -22,7 +22,7 @@ auth = ["rmcp/auth"]
 
 [dependencies]
 async-trait.workspace = true
-openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0", default-features = false, features = ["structured-output"] }
+openai-rs-types = { path = "../openai-rs-types", version = "=0.1.1", default-features = false, features = ["structured-output"] }
 rmcp.workspace = true
 serde.workspace = true
 serde_json.workspace = true

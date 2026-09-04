@@ -47,10 +47,10 @@ rmcp-auth = ["dep:openai-rs-rmcp", "openai-rs-rmcp/auth"]
 full = ["client", "rustls-tls", "structured-output", "realtime", "webhook-verification", "rmcp", "rmcp-http-rustls"]
 
 [dependencies]
-openai-rs-client = { path = "../openai-rs-client", version = "=0.1.0", default-features = false, optional = true }
-openai-rs-codex = { path = "../openai-rs-codex", version = "=0.1.0", default-features = false, optional = true }
-openai-rs-rmcp = { path = "../openai-rs-rmcp", version = "=0.1.0", default-features = false, optional = true }
-openai-rs-types = { path = "../openai-rs-types", version = "=0.1.0", default-features = false }
+openai-rs-client = { path = "../openai-rs-client", version = "=0.1.1", default-features = false, optional = true }
+openai-rs-codex = { path = "../openai-rs-codex", version = "=0.1.1", default-features = false, optional = true }
+openai-rs-rmcp = { path = "../openai-rs-rmcp", version = "=0.1.1", default-features = false, optional = true }
+openai-rs-types = { path = "../openai-rs-types", version = "=0.1.1", default-features = false }
 
 [dev-dependencies]
 schemars.workspace = true
