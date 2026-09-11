@@ -38,6 +38,11 @@ impl Conversations {
     }
 
     /// Creates a conversation, optionally with metadata and initial items.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: CreateConversationRequest,
@@ -50,6 +55,11 @@ impl Conversations {
     }
 
     /// Retrieves one conversation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         conversation_id: &ConversationId,
@@ -62,6 +72,11 @@ impl Conversations {
     }
 
     /// Replaces or clears one conversation's metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn update(
         &self,
         conversation_id: &ConversationId,
@@ -75,6 +90,11 @@ impl Conversations {
     }
 
     /// Deletes a conversation without deleting its individual items.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         conversation_id: &ConversationId,
@@ -105,6 +125,11 @@ impl ConversationItems {
     }
 
     /// Adds up to twenty typed input items to a conversation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         conversation_id: &ConversationId,
@@ -119,6 +144,11 @@ impl ConversationItems {
     }
 
     /// Retrieves one persisted item, including any explicitly requested data.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         conversation_id: &ConversationId,
@@ -133,6 +163,11 @@ impl ConversationItems {
     }
 
     /// Deletes one persisted item and returns the updated conversation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         conversation_id: &ConversationId,
@@ -146,6 +181,11 @@ impl ConversationItems {
     }
 
     /// Lists persisted items using typed cursor and include parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         conversation_id: &ConversationId,

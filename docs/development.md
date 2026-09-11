@@ -41,6 +41,47 @@ test; it does not change the stability level of experimental features.
 These are local maintainer and pre-release gates. This repository intentionally
 does not define GitHub CI/CD workflows.
 
+## Documentation
+
+Project-owned source text, comments, examples, and documentation use English.
+Tests that exercise UTF-8 must retain non-ASCII coverage; use English text with
+accented characters or symbols rather than replacing every fixture with ASCII.
+
+Use `//!` for crate and module overviews and `///` for public items. Start with
+a short description of behavior, then explain constraints, units, defaults,
+ownership, and omitted-versus-null semantics where they affect callers. Use
+intra-doc links for related APIs and backticks for code identifiers and wire
+field names. `clippy.toml` permits established product names in ordinary prose.
+When an unconditional page mentions a feature-gated API, state the required
+feature and avoid a link that becomes unresolved when that feature is disabled.
+
+Fallible functions and trait methods document their failure conditions under
+`# Errors`. Document reachable panic conditions under `# Panics`; unsafe APIs,
+if ever allowed, would also require a `# Safety` contract. Explain which work
+may already have happened before returning an error when partial effects matter.
+
+Use `# Examples` for runnable examples. Prefer `?` over `unwrap()` in examples.
+Use `no_run` for examples requiring a live service or subprocess, and use hidden
+setup lines to keep examples readable while still compiling them. Only use
+`compile_fail` when rejection is the behavior being demonstrated. Avoid `ignore`
+when an example can be made executable.
+
+Public-item documentation, code formatting in comments, and error/panic sections
+are enforced by the workspace lints. Validate rendered documentation and all
+documentation examples as well:
+
+```powershell
+$env:RUSTDOCFLAGS = "-D warnings"
+cargo doc --workspace --all-features --no-deps --locked
+cargo doc --workspace --no-default-features --no-deps --locked
+cargo test --workspace --all-features --doc --locked
+cargo test --workspace --no-default-features --doc --locked
+Remove-Item Env:RUSTDOCFLAGS
+```
+
+These conventions follow the [Rustdoc book](https://doc.rust-lang.org/rustdoc/how-to-write-documentation.html)
+and [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/documentation.html).
+
 ## `xtask check`
 
 `cargo run -p xtask -- check` is the repository consistency entry point. It

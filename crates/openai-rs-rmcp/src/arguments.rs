@@ -12,6 +12,10 @@ use crate::BridgeError;
 /// included in the returned diagnostic. Streaming code should call this only
 /// after receiving the completed arguments event; a partial delta is not
 /// required to be valid JSON.
+///
+/// # Errors
+///
+/// Returns an error if the arguments are not valid JSON or the top-level value is not an object.
 pub fn parse_function_arguments(arguments: &str) -> Result<JsonObject, BridgeError> {
     if arguments.trim().is_empty() {
         return Ok(JsonObject::new());
@@ -32,10 +36,10 @@ mod tests {
 
     #[test]
     fn arguments_must_be_a_complete_json_object() {
-        let parsed = parse_function_arguments(r#"{"city":"杭州","units":"c"}"#);
+        let parsed = parse_function_arguments(r#"{"city":"Montréal","units":"c"}"#);
         assert!(matches!(
             parsed,
-            Ok(ref object) if object.get("city") == Some(&Value::String("杭州".to_owned()))
+            Ok(ref object) if object.get("city") == Some(&Value::String("Montréal".to_owned()))
         ));
 
         assert!(matches!(

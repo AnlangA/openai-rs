@@ -87,6 +87,11 @@ impl<S: CredentialStore> std::fmt::Debug for DirectCodexResponsesClient<S> {
 }
 
 impl<S: CredentialStore> DirectCodexResponsesClient<S> {
+    /// Creates the experimental direct Responses client using the supplied token manager.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client or fixed endpoint configuration cannot be initialized.
     pub fn new(tokens: Arc<TokenManager<S>>) -> Result<Self, DirectError> {
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -127,6 +132,11 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
     /// the joined `data:` value of one event; both must be non-zero and both
     /// fail a stream only when a completed length strictly exceeds the limit.
     /// Defaults are 32 MiB / 32 MiB, matching the platform decoder (D0144).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the supplied configuration violates the limits or invariants described
+    /// by this type.
     pub fn with_sse_limits(
         mut self,
         max_line_bytes: usize,
@@ -172,6 +182,12 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
     /// 401 and is retried once with a refreshed token, the retry gets its own
     /// budget, so the worst-case wall time is up to ~2× the configured budget
     /// plus one token-refresh round trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request is invalid, authentication or transport fails, the direct
+    /// endpoint rejects the request, or the response stream cannot produce a complete typed
+    /// response.
     pub async fn create(&self, request: &CreateResponseRequest) -> Result<Response, DirectError> {
         let body = serde_json::to_value(request)?;
         validate_body(&body, false)?;
@@ -194,6 +210,11 @@ impl<S: CredentialStore> DirectCodexResponsesClient<S> {
     /// terminal, on EOF, on a decoder or decoding error (fail-stop), or when
     /// the caller drops the returned stream. Resource bounds are spatial, not
     /// temporal: see [`with_sse_limits`](Self::with_sse_limits).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request is invalid, authentication or transport fails, or the direct
+    /// endpoint rejects the streaming handshake. Later failures are yielded by the stream.
     pub async fn stream(
         &self,
         request: &CreateStreamingResponseRequest,
@@ -378,6 +399,12 @@ pub struct DirectResponseStream {
 }
 
 impl DirectResponseStream {
+    /// Reads the next decoded SSE event, or returns `None` after stream termination.
+    ///
+    /// # Errors
+    ///
+    /// The returned item is an error if transport, framing, size validation, or event decoding
+    /// fails.
     pub async fn next_event(&mut self) -> Option<Result<ResponseStreamEvent, DirectError>> {
         self.receiver.recv().await
     }

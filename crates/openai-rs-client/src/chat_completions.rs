@@ -45,6 +45,11 @@ impl ChatCompletions {
     }
 
     /// Creates a non-streaming Chat completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: ChatCompletionRequest,
@@ -61,6 +66,12 @@ impl ChatCompletions {
 
     /// Creates a Chat completion and decodes chunks until the required
     /// transport-level `[DONE]` sentinel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn create_stream(
         &self,
         request: ChatCompletionStreamRequest,
@@ -78,6 +89,11 @@ impl ChatCompletions {
     }
 
     /// Lists stored Chat completions using opaque cursor pagination.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         params: ChatCompletionListParams,
@@ -97,6 +113,11 @@ impl ChatCompletions {
     /// wins, an empty one falls back to the page's final completion id, and
     /// neither being available stops instead of refetching the first page
     /// with an empty `after`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn next_page(
         &self,
         mut params: ChatCompletionListParams,
@@ -138,6 +159,11 @@ impl ChatCompletions {
     }
 
     /// Retrieves one stored Chat completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         completion_id: &str,
@@ -150,6 +176,11 @@ impl ChatCompletions {
     }
 
     /// Replaces or clears metadata on one stored Chat completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn update(
         &self,
         completion_id: &str,
@@ -163,6 +194,11 @@ impl ChatCompletions {
     }
 
     /// Deletes one stored Chat completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         completion_id: &str,
@@ -190,6 +226,12 @@ pub struct ChatCompletionMessages {
 }
 
 impl ChatCompletionMessages {
+    /// Lists messages stored for the specified chat completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or typed response decoding fails.
     pub async fn list(
         &self,
         completion_id: &str,
@@ -214,6 +256,11 @@ impl ChatCompletionMessages {
     /// wins, an empty one falls back to the page's final message id, and
     /// neither being available stops instead of refetching the first page
     /// with an empty `after`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn next_page(
         &self,
         completion_id: &str,

@@ -51,7 +51,10 @@ macro_rules! strict_tagged_union {
         #[derive(Clone, Debug, PartialEq)]
         #[non_exhaustive]
         pub enum $name {
-            $($variant($ty),)+
+            $(
+                #[doc = concat!("The `", $wire, "` object, decoded as `", stringify!($ty), "`.")]
+                $variant($ty),
+            )+
             /// Future variant retained as a semantic JSON object.
             Unknown(AdminUnknownObject),
         }
@@ -206,14 +209,17 @@ crate::open_string_enum! {
 /// service, not this bag, rejects it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AdminListParams {
+    /// Cursor identifying the item after which the next page should begin.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub after: Omittable<Nullable<String>>,
+    /// Cursor identifying the item before which the previous page should end.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub before: Omittable<String>,
     /// Page size. Unvalidated shared-bag value; see the `limit` value domains
     /// table in the type documentation for the per-route bounds and defaults.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<u64>,
+    /// Sort direction used when retrieving the page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub order: Omittable<AdminListOrder>,
     /// Official `list-users` filter.
@@ -230,11 +236,16 @@ pub struct AdminListParams {
 /// Common `first_id`/`last_id` cursor page.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdminCursorPage<T> {
+    /// Wire discriminator identifying the resource or list type.
     pub object: AdminListObject,
+    /// Entries returned in this response page.
     pub data: Vec<T>,
+    /// Whether the server reports additional pages after this one.
     pub has_more: bool,
+    /// Identifier of the first item in this page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub first_id: Omittable<Nullable<String>>,
+    /// Identifier of the last item in this page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub last_id: Omittable<Nullable<String>>,
     #[serde(default, flatten)]
@@ -291,10 +302,15 @@ impl<T> AdminCursorPage<T> {
 /// Cursor page whose frozen schema requires first/last IDs that may be null.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdminRequiredCursorPage<T> {
+    /// Wire discriminator identifying the resource or list type.
     pub object: AdminListObject,
+    /// Entries returned in this response page.
     pub data: Vec<T>,
+    /// Identifier of the first item in this page.
     pub first_id: Nullable<String>,
+    /// Identifier of the last item in this page.
     pub last_id: Nullable<String>,
+    /// Whether the server reports additional pages after this one.
     pub has_more: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -330,6 +346,7 @@ impl<T> AdminRequiredCursorPage<T> {
             .or_else(|| last_item_id.filter(|id| !id.is_empty()))
     }
 
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -339,9 +356,13 @@ impl<T> AdminRequiredCursorPage<T> {
 /// Common `next` cursor page used by groups and roles.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdminNextPage<T> {
+    /// Wire discriminator identifying the resource or list type.
     pub object: AdminListObject,
+    /// Entries returned in this response page.
     pub data: Vec<T>,
+    /// Whether the server reports additional pages after this one.
     pub has_more: bool,
+    /// Server-provided cursor for requesting the next page.
     pub next: Nullable<String>,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -381,20 +402,26 @@ crate::open_string_enum! {
 /// Owner summary on an Admin API key.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AdminApiKeyOwner {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(
         default,
         rename = "type",
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub kind: Omittable<String>,
+    /// Wire discriminator identifying the resource or list type.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub object: Omittable<String>,
+    /// Identifier used to reference this resource or protocol item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
+    /// Name assigned to this resource or operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<String>,
+    /// Creation time as a Unix timestamp in seconds.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub created_at: Omittable<u64>,
+    /// Role granted to the user or principal within this scope.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub role: Omittable<String>,
     #[serde(default, flatten)]
@@ -404,14 +431,22 @@ pub struct AdminApiKeyOwner {
 /// Redacted Admin API key metadata.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdminApiKey {
+    /// The object type, which is always `organization.admin_api_key`.
     pub object: AdminApiKeyObject,
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// The redacted value of the API key.
     pub redacted_value: String,
+    /// The Unix timestamp (in seconds) of when the API key was created.
     pub created_at: u64,
+    /// The Unix timestamp (in seconds) of when the API key expires.
     pub expires_at: Nullable<u64>,
+    /// User or service account that owns this resource.
     pub owner: AdminApiKeyOwner,
+    /// The name of the API key.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<Nullable<String>>,
+    /// The Unix timestamp (in seconds) of when the API key was last used.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub last_used_at: Omittable<Nullable<u64>>,
     #[serde(default, flatten)]
@@ -429,7 +464,9 @@ impl AdminApiKey {
 /// Request to create an Admin API key.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdminApiKeyCreateRequest {
+    /// Name assigned to this resource or operation.
     pub name: String,
+    /// Requested lifetime in seconds before the resource expires.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub expires_in_seconds: Omittable<u64>,
 }
@@ -445,6 +482,12 @@ impl AdminApiKeyCreateRequest {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), AdminConstraintError> {
         if let Omittable::Value(actual) = self.expires_in_seconds
             && !(MIN_ADMIN_API_KEY_EXPIRES_IN_SECONDS..=MAX_ADMIN_API_KEY_EXPIRES_IN_SECONDS)
@@ -507,15 +550,24 @@ pub enum AdminConstraintError {
 /// Admin API key returned once with its unredacted value.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AdminApiKeyCreateResponse {
+    /// The object type, which is always `organization.admin_api_key`.
     pub object: AdminApiKeyObject,
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// The redacted value of the API key.
     pub redacted_value: String,
+    /// The Unix timestamp (in seconds) of when the API key was created.
     pub created_at: u64,
+    /// The Unix timestamp (in seconds) of when the API key expires.
     pub expires_at: Nullable<u64>,
+    /// User or service account that owns this resource.
     pub owner: AdminApiKeyOwner,
+    /// The value of the API key. Only shown on create.
     pub value: WireSecret,
+    /// The name of the API key.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<Nullable<String>>,
+    /// The Unix timestamp (in seconds) of when the API key was last used.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub last_used_at: Omittable<Nullable<u64>>,
     #[serde(default, flatten)]
@@ -543,20 +595,25 @@ crate::open_string_enum! {
 /// JSON confirmation returned by `admin-api-keys-delete`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdminApiKeyDeleteResponse {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Wire discriminator identifying the resource or list type.
     pub object: AdminApiKeyDeleteObject,
+    /// Whether the service reports that the resource was deleted.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl AdminApiKeyDeleteResponse {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
     }
 }
 
+/// Paginated Administration response containing `AdminApiKey` entries.
 pub type ApiKeyList = AdminCursorPage<AdminApiKey>;
 
 mod admin_audit;
@@ -734,8 +791,10 @@ crate::open_string_enum! {
 /// User summary within an audit actor.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditActorUser {
+    /// Identifier used to reference this resource or protocol item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
+    /// Email address associated with this user or actor.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub email: Omittable<String>,
     #[serde(default, flatten)]
@@ -743,6 +802,7 @@ pub struct AuditActorUser {
 }
 
 impl AuditActorUser {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -752,8 +812,10 @@ impl AuditActorUser {
 /// Browser/session audit actor.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditActorSession {
+    /// IP address associated with the actor's session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub ip_address: Omittable<String>,
+    /// User associated with this resource, session, or assignment.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub user: Omittable<AuditActorUser>,
     #[serde(default, flatten)]
@@ -761,6 +823,7 @@ pub struct AuditActorSession {
 }
 
 impl AuditActorSession {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -770,6 +833,7 @@ impl AuditActorSession {
 /// Official `AuditLogActorServiceAccount`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditActorServiceAccount {
+    /// Identifier used to reference this resource or protocol item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
     #[serde(default, flatten)]
@@ -777,6 +841,7 @@ pub struct AuditActorServiceAccount {
 }
 
 impl AuditActorServiceAccount {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -786,16 +851,20 @@ impl AuditActorServiceAccount {
 /// API key audit actor.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditActorApiKey {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(
         default,
         rename = "type",
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub kind: Omittable<AuditActorApiKeyType>,
+    /// Identifier used to reference this resource or protocol item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
+    /// User associated with this resource, session, or assignment.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub user: Omittable<AuditActorUser>,
+    /// Service account associated with this resource or key owner.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub service_account: Omittable<AuditActorServiceAccount>,
     #[serde(default, flatten)]
@@ -803,6 +872,7 @@ pub struct AuditActorApiKey {
 }
 
 impl AuditActorApiKey {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -812,14 +882,17 @@ impl AuditActorApiKey {
 /// Actor that caused an audit event.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditLogActor {
+    /// The type of actor. Is either `session` or `api_key`.
     #[serde(
         default,
         rename = "type",
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub kind: Omittable<AuditActorType>,
+    /// The session in which the audit logged action was performed.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub session: Omittable<AuditActorSession>,
+    /// The API Key used to perform the audit logged action.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub api_key: Omittable<AuditActorApiKey>,
     #[serde(default, flatten)]
@@ -827,6 +900,7 @@ pub struct AuditLogActor {
 }
 
 impl AuditLogActor {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -836,8 +910,10 @@ impl AuditLogActor {
 /// Project summary on an audit event.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditProject {
+    /// Identifier used to reference this resource or protocol item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
+    /// Name assigned to this resource or operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<String>,
     #[serde(default, flatten)]
@@ -845,6 +921,7 @@ pub struct AuditProject {
 }
 
 impl AuditProject {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -857,278 +934,329 @@ impl AuditProject {
 /// events and future keys remain in `extra`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AuditLog {
+    /// The ID of this log.
     pub id: String,
+    /// The event type.
     #[serde(rename = "type")]
     pub kind: AuditEventType,
+    /// The Unix timestamp (in seconds) of the event.
     pub effective_at: u64,
+    /// The project that the action was scoped to. Absent for actions not scoped to projects. Note
+    /// that any admin actions taken via Admin API keys are associated with the default project.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub project: Omittable<AuditProject>,
+    /// The actor who performed the audit logged action.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub actor: Omittable<Nullable<AuditLogActor>>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "api_key.created",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub api_key_created: Omittable<AuditPayloadApiKeyCreated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "api_key.updated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub api_key_updated: Omittable<AuditPayloadApiKeyUpdated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "api_key.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub api_key_deleted: Omittable<AuditPayloadApiKeyDeleted>,
+    /// The project and fine-tuned model checkpoint that the checkpoint permission was created for.
     #[serde(
         rename = "checkpoint.permission.created",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub checkpoint_permission_created: Omittable<AuditPayloadCheckpointPermissionCreated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "checkpoint.permission.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub checkpoint_permission_deleted: Omittable<AuditPayloadCheckpointPermissionDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "external_key.registered",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub external_key_registered: Omittable<AuditPayloadExternalKeyRegistered>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "external_key.removed",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub external_key_removed: Omittable<AuditPayloadExternalKeyRemoved>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "group.created",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub group_created: Omittable<AuditPayloadGroupCreated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "group.updated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub group_updated: Omittable<AuditPayloadGroupUpdated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "group.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub group_deleted: Omittable<AuditPayloadGroupDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "scim.enabled",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub scim_enabled: Omittable<AuditPayloadScimEnabled>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "scim.disabled",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub scim_disabled: Omittable<AuditPayloadScimDisabled>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "invite.sent",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub invite_sent: Omittable<AuditPayloadInviteSent>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "invite.accepted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub invite_accepted: Omittable<AuditPayloadInviteAccepted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "invite.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub invite_deleted: Omittable<AuditPayloadInviteDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "ip_allowlist.created",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub ip_allowlist_created: Omittable<AuditPayloadIpAllowlistCreated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "ip_allowlist.updated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub ip_allowlist_updated: Omittable<AuditPayloadIpAllowlistUpdated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "ip_allowlist.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub ip_allowlist_deleted: Omittable<AuditPayloadIpAllowlistDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "ip_allowlist.config.activated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub ip_allowlist_config_activated: Omittable<AuditPayloadIpAllowlistConfigActivated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "ip_allowlist.config.deactivated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub ip_allowlist_config_deactivated: Omittable<AuditPayloadIpAllowlistConfigDeactivated>,
+    /// This event has no additional fields beyond the standard audit log attributes.
     #[serde(
         rename = "login.succeeded",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub login_succeeded: Omittable<AdminJsonObject>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "login.failed",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub login_failed: Omittable<AuditPayloadLoginFailed>,
+    /// This event has no additional fields beyond the standard audit log attributes.
     #[serde(
         rename = "logout.succeeded",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub logout_succeeded: Omittable<AdminJsonObject>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "logout.failed",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub logout_failed: Omittable<AuditPayloadLogoutFailed>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "organization.updated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub organization_updated: Omittable<AuditPayloadOrganizationUpdated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "project.created",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub project_created: Omittable<AuditPayloadProjectCreated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "project.updated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub project_updated: Omittable<AuditPayloadProjectUpdated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "project.archived",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub project_archived: Omittable<AuditPayloadProjectArchived>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "project.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub project_deleted: Omittable<AuditPayloadProjectDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "rate_limit.updated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub rate_limit_updated: Omittable<AuditPayloadRateLimitUpdated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "rate_limit.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub rate_limit_deleted: Omittable<AuditPayloadRateLimitDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "role.created",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub role_created: Omittable<AuditPayloadRoleCreated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "role.updated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub role_updated: Omittable<AuditPayloadRoleUpdated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "role.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub role_deleted: Omittable<AuditPayloadRoleDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "role.assignment.created",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub role_assignment_created: Omittable<AuditPayloadRoleAssignmentCreated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "role.assignment.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub role_assignment_deleted: Omittable<AuditPayloadRoleAssignmentDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "role.bound_to_resource",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub role_bound_to_resource: Omittable<AuditPayloadRoleBoundToResource>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "role.unbound_from_resource",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub role_unbound_from_resource: Omittable<AuditPayloadRoleUnboundFromResource>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "service_account.created",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub service_account_created: Omittable<AuditPayloadServiceAccountCreated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "service_account.updated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub service_account_updated: Omittable<AuditPayloadServiceAccountUpdated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "service_account.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub service_account_deleted: Omittable<AuditPayloadServiceAccountDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "workload_identity_provider.created",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub workload_identity_provider_created: Omittable<AuditPayloadWorkloadIdentityProviderCreated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "workload_identity_provider.updated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub workload_identity_provider_updated: Omittable<AuditPayloadWorkloadIdentityProviderUpdated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "workload_identity_provider.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub workload_identity_provider_deleted: Omittable<AuditPayloadWorkloadIdentityProviderDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "workload_identity_provider_mapping.created",
         default,
@@ -1136,6 +1264,7 @@ pub struct AuditLog {
     )]
     pub workload_identity_provider_mapping_created:
         Omittable<AuditPayloadWorkloadIdentityProviderMappingCreated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "workload_identity_provider_mapping.updated",
         default,
@@ -1143,6 +1272,7 @@ pub struct AuditLog {
     )]
     pub workload_identity_provider_mapping_updated:
         Omittable<AuditPayloadWorkloadIdentityProviderMappingUpdated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "workload_identity_provider_mapping.deleted",
         default,
@@ -1150,48 +1280,56 @@ pub struct AuditLog {
     )]
     pub workload_identity_provider_mapping_deleted:
         Omittable<AuditPayloadWorkloadIdentityProviderMappingDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "user.added",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub user_added: Omittable<AuditPayloadUserAdded>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "user.updated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub user_updated: Omittable<AuditPayloadUserUpdated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "user.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub user_deleted: Omittable<AuditPayloadUserDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "certificate.created",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub certificate_created: Omittable<AuditPayloadCertificateCreated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "certificate.updated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub certificate_updated: Omittable<AuditPayloadCertificateUpdated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "certificate.deleted",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub certificate_deleted: Omittable<AuditPayloadCertificateDeleted>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "certificates.activated",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub certificates_activated: Omittable<AuditPayloadCertificatesActivated>,
+    /// The details for events with this `type`.
     #[serde(
         rename = "certificates.deactivated",
         default,
@@ -1210,6 +1348,7 @@ impl AuditLog {
     }
 }
 
+/// Paginated Administration response containing `AuditLog` entries.
 pub type ListAuditLogsResponse = AdminCursorPage<AuditLog>;
 
 /// `effective_at` bounds for `GET /organization/audit_logs`.
@@ -1280,20 +1419,28 @@ impl AuditEffectiveAt {
 /// [`AdminListParams`] (see 5-K4).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AuditLogListParams {
+    /// Time when the retention or policy change takes effect.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub effective_at: Omittable<AuditEffectiveAt>,
+    /// Restricts results to the specified project identifiers.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub project_ids: Omittable<Vec<String>>,
+    /// Restricts audit results to the specified event types.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub event_types: Omittable<Vec<AuditEventType>>,
+    /// Restricts results to the specified actor identifiers.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub actor_ids: Omittable<Vec<String>>,
+    /// Restricts results to actors with one of these email addresses.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub actor_emails: Omittable<Vec<String>>,
+    /// Restricts audit results to the specified resource identifiers.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub resource_ids: Omittable<Vec<String>>,
+    /// Whether access is restricted to principals within the tenant.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tenant_only: Omittable<bool>,
+    /// Cursor identifying the requested page.
     #[serde(flatten)]
     pub page: AdminListParams,
 }
@@ -1310,10 +1457,13 @@ crate::open_string_enum! {
 /// Certificate details; PEM content uses explicit wire-secret redaction.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CertificateDetails {
+    /// Time at which the certificate or policy is considered valid.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub valid_at: Omittable<u64>,
+    /// Expiration time as a Unix timestamp in seconds.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub expires_at: Omittable<u64>,
+    /// Content carried by this message or result.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub content: Omittable<WireSecret>,
     #[serde(default, flatten)]
@@ -1334,11 +1484,18 @@ impl fmt::Debug for CertificateDetails {
 /// Uploaded certificate resource.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Certificate {
+    /// The object type.
     pub object: CertificateObject,
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// The name of the certificate.
     pub name: Nullable<String>,
+    /// The Unix timestamp (in seconds) of when the certificate was uploaded.
     pub created_at: u64,
+    /// Parsed details describing the certificate.
     pub certificate_details: CertificateDetails,
+    /// Whether the certificate is currently active at the specified scope. Not returned when
+    /// getting details for a specific certificate.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub active: Omittable<bool>,
     #[serde(default, flatten)]
@@ -1363,6 +1520,7 @@ crate::open_string_enum! {
 /// Official `getCertificate` query parameters.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CertificateGetParams {
+    /// Additional response fields requested from the service.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub include: Omittable<Vec<CertificateInclude>>,
 }
@@ -1370,7 +1528,9 @@ pub struct CertificateGetParams {
 /// Certificate upload request. Debug output never prints PEM content.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct UploadCertificateRequest {
+    /// The certificate content in PEM format.
     pub certificate: WireSecret,
+    /// An optional name for the certificate.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<String>,
 }
@@ -1385,19 +1545,29 @@ impl fmt::Debug for UploadCertificateRequest {
     }
 }
 
+/// Parameters used to update a certificate's display name.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModifyCertificateRequest {
+    /// The updated name for the certificate.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<String>,
 }
 
+/// Certificate identifiers to activate or deactivate in an organization or project.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToggleCertificatesRequest {
+    /// Identifiers of the certificates selected by this request.
     pub certificate_ids: Vec<String>,
 }
 
 impl ToggleCertificatesRequest {
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), AdminConstraintError> {
         let actual = self.certificate_ids.len();
         if !(MIN_TOGGLE_CERTIFICATE_IDS..=MAX_TOGGLE_CERTIFICATE_IDS).contains(&actual) {
@@ -1421,19 +1591,32 @@ crate::open_string_enum! {
     }
 }
 
+/// Certificates returned after changing their activation scope.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CertificateScopeResponse {
+    /// Wire discriminator identifying the resource or list type.
     pub object: CertificateScopeObject,
+    /// Entries returned in this response page.
     pub data: Vec<Certificate>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Paginated Administration response containing `Certificate` entries.
 pub type ListCertificatesResponse = AdminRequiredCursorPage<Certificate>;
+/// Paginated Administration response containing `Certificate` entries.
 pub type ListProjectCertificatesResponse = AdminRequiredCursorPage<Certificate>;
+/// Organization-scoped certificate activation or deactivation result, using the shared
+/// `CertificateScopeResponse` wire shape.
 pub type OrganizationCertificateActivationResponse = CertificateScopeResponse;
+/// Organization-scoped certificate activation or deactivation result, using the shared
+/// `CertificateScopeResponse` wire shape.
 pub type OrganizationCertificateDeactivationResponse = CertificateScopeResponse;
+/// Organization-scoped certificate activation or deactivation result, using the shared
+/// `CertificateScopeResponse` wire shape.
 pub type OrganizationProjectCertificateActivationResponse = CertificateScopeResponse;
+/// Organization-scoped certificate activation or deactivation result, using the shared
+/// `CertificateScopeResponse` wire shape.
 pub type OrganizationProjectCertificateDeactivationResponse = CertificateScopeResponse;
 
 crate::open_string_enum! {
@@ -1443,9 +1626,12 @@ crate::open_string_enum! {
     }
 }
 
+/// Confirmation that a certificate resource was deleted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeleteCertificateResponse {
+    /// The object type, must be `certificate.deleted`.
     pub object: DeleteCertificateObject,
+    /// The ID of the certificate that was deleted.
     pub id: String,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -1491,20 +1677,27 @@ crate::open_string_enum! {
     }
 }
 
+/// Effective data-retention policy for an organization or project.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DataRetentionResource {
+    /// Wire discriminator identifying the resource or list type.
     pub object: DataRetentionObject,
+    /// Data-retention policy selected for the organization or project.
     #[serde(rename = "type")]
     pub retention_type: DataRetentionType,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Organization-scoped data-retention policy, using the shared `DataRetentionResource` wire shape.
 pub type OrganizationDataRetention = DataRetentionResource;
+/// Project-scoped data-retention policy, using the shared `DataRetentionResource` wire shape.
 pub type ProjectDataRetention = DataRetentionResource;
 
+/// Parameters used to change organization data retention.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UpdateOrganizationDataRetentionBody {
+    /// The desired organization data retention type.
     pub retention_type: OrganizationDataRetentionType,
 }
 
@@ -1513,6 +1706,7 @@ pub struct UpdateOrganizationDataRetentionBody {
 /// additionally allows `organization_default` and `none`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UpdateProjectDataRetentionBody {
+    /// The desired project data retention type.
     pub retention_type: DataRetentionType,
 }
 
@@ -1532,18 +1726,25 @@ crate::open_string_enum! {
     }
 }
 
+/// Organization group metadata returned by the Administration API.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupResponse {
+    /// Identifier for the group.
     pub id: String,
+    /// Display name of the group.
     pub name: String,
+    /// Unix timestamp (in seconds) when the group was created.
     pub created_at: u64,
+    /// Whether the group is managed through SCIM and controlled by your identity provider.
     pub is_scim_managed: bool,
+    /// The type of the group.
     pub group_type: GroupType,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl GroupResponse {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -1553,27 +1754,39 @@ impl GroupResponse {
 /// Group response returned by update omits `group_type` in the frozen schema.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupResourceWithSuccess {
+    /// Identifier for the group.
     pub id: String,
+    /// Updated display name for the group.
     pub name: String,
+    /// Unix timestamp (in seconds) when the group was created.
     pub created_at: u64,
+    /// Whether the group is managed through SCIM and controlled by your identity provider.
     pub is_scim_managed: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// User identity and membership information for a group member.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupMemberUser {
+    /// Identifier for the user.
     pub id: String,
+    /// Display name of the user.
     pub name: String,
+    /// Email address of the user, or `null` for users without an email.
     pub email: Nullable<String>,
+    /// URL of the user's profile picture, if available.
     pub picture: Nullable<String>,
+    /// Whether the user is a service account.
     pub is_service_account: Nullable<bool>,
+    /// The type of user.
     pub user_type: GroupUserType,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl GroupMemberUser {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -1583,27 +1796,39 @@ impl GroupMemberUser {
 /// Official `UserListResource` item (`list-group-users`). Retrieve uses [`GroupMemberUser`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupUser {
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// The name of the user.
     pub name: String,
+    /// The email address of the user.
     pub email: Nullable<String>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl GroupUser {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
     }
 }
 
+/// Name and configuration used to create an organization group.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateGroupBody {
+    /// Human readable name for the group.
     pub name: String,
 }
 
 impl CreateGroupBody {
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), AdminConstraintError> {
         let actual = self.name.chars().count();
         if !(MIN_ADMIN_GROUP_NAME_CHARS..=MAX_ADMIN_GROUP_NAME_CHARS).contains(&actual) {
@@ -1617,10 +1842,13 @@ impl CreateGroupBody {
     }
 }
 
+/// Parameters used to rename or update an organization group.
 pub type UpdateGroupBody = CreateGroupBody;
 
+/// User identifier used to add a member to a group.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateGroupUserBody {
+    /// Identifier of the user to add to the group.
     pub user_id: String,
 }
 
@@ -1651,44 +1879,62 @@ crate::open_string_enum! {
 /// Official `Group` summary embedded in role-assignment responses.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupSummary {
+    /// Wire discriminator identifying the resource or list type.
     pub object: GroupObject,
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Name assigned to this resource or operation.
     pub name: String,
+    /// Creation time as a Unix timestamp in seconds.
     pub created_at: u64,
+    /// Whether the resource is managed through SCIM provisioning.
     pub scim_managed: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl GroupSummary {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
     }
 }
 
+/// Assignment linking a user to an organization group.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupUserAssignment {
+    /// Always `group.user`.
     pub object: AssignmentObject,
+    /// Identifier of the user that was added.
     pub user_id: String,
+    /// Identifier of the group the user was added to.
     pub group_id: String,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Assignment linking a role to an organization group.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupRoleAssignment {
+    /// Always `group.role`.
     pub object: AssignmentObject,
+    /// Summary information about a group returned in role assignment responses.
     pub group: GroupSummary,
+    /// Details about a role that can be assigned through the public Roles API.
     pub role: Role,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Assignment linking a role to an organization user.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UserRoleAssignment {
+    /// Always `user.role`.
     pub object: AssignmentObject,
+    /// Represents an individual `user` within an organization.
     pub user: User,
+    /// Details about a role that can be assigned through the public Roles API.
     pub role: Role,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -1701,24 +1947,33 @@ crate::open_string_enum! {
     }
 }
 
+/// Confirmation that an organization group was deleted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupDeletedResource {
+    /// Always `group.deleted`.
     pub object: GroupDeletedObject,
+    /// Identifier of the deleted group.
     pub id: String,
+    /// Whether the group was deleted.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Confirmation that a user was removed from a group.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupUserDeletedResource {
+    /// Always `group.user.deleted`.
     pub object: AssignmentObject,
+    /// Whether the group membership was removed.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Paginated Administration response containing `GroupResponse` entries.
 pub type GroupListResource = AdminNextPage<GroupResponse>;
+/// Paginated Administration response containing `GroupUser` entries.
 pub type UserListResource = AdminNextPage<GroupUser>;
 
 crate::open_string_enum! {
@@ -1739,18 +1994,26 @@ crate::open_string_enum! {
 /// Official nested `User.user` details.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NestedUserDetails {
+    /// Wire discriminator identifying the resource or list type.
     pub object: NestedUserObject,
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Email address associated with this user or actor.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub email: Omittable<Nullable<String>>,
+    /// Name assigned to this resource or operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<Nullable<String>>,
+    /// URL of the user's profile image.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub picture: Omittable<Nullable<String>>,
+    /// Whether this feature or policy is enabled.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub enabled: Omittable<Nullable<bool>>,
+    /// Whether the user is currently banned.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub banned: Omittable<Nullable<bool>>,
+    /// Timestamp of the user's ban, when reported.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub banned_at: Omittable<Nullable<u64>>,
     #[serde(default, flatten)]
@@ -1758,6 +2021,7 @@ pub struct NestedUserDetails {
 }
 
 impl NestedUserDetails {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -1767,10 +2031,13 @@ impl NestedUserDetails {
 /// One project listed on official `User.projects.data`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UserProjectListItem {
+    /// Identifier used to reference this resource or protocol item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<Nullable<String>>,
+    /// Name assigned to this resource or operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<Nullable<String>>,
+    /// Role assigned to the user within this project.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub role: Omittable<Nullable<String>>,
     #[serde(default, flatten)]
@@ -1778,6 +2045,7 @@ pub struct UserProjectListItem {
 }
 
 impl UserProjectListItem {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -1787,13 +2055,16 @@ impl UserProjectListItem {
 /// Official `User.projects` list envelope.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UserProjectList {
+    /// Wire discriminator identifying the resource or list type.
     pub object: AdminListObject,
+    /// Entries returned in this response page.
     pub data: Vec<UserProjectListItem>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl UserProjectList {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -1803,33 +2074,49 @@ impl UserProjectList {
 /// Organization user. The new dashboard fields are optional and lossless.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct User {
+    /// The object type, which is always `organization.user`.
     pub object: UserObject,
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// The Unix timestamp (in seconds) of when the user was added.
     pub added_at: u64,
+    /// The name of the user.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<Nullable<String>>,
+    /// The email address of the user.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub email: Omittable<Nullable<String>>,
+    /// `owner` or `reader`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub role: Omittable<Nullable<String>>,
+    /// Whether this is the organization's default user.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub is_default: Omittable<bool>,
+    /// The Unix timestamp (in seconds) of when the user was created.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub created: Omittable<u64>,
+    /// Nested user details.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub user: Omittable<NestedUserDetails>,
+    /// Whether the user is a service account.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub is_service_account: Omittable<bool>,
+    /// Whether the user is an authorized purchaser for Scale Tier.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub is_scale_tier_authorized_purchaser: Omittable<Nullable<bool>>,
+    /// Whether the user is managed through SCIM.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub is_scim_managed: Omittable<bool>,
+    /// The Unix timestamp (in seconds) of the user's last API key usage.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub api_key_last_used_at: Omittable<Nullable<u64>>,
+    /// The technical level metadata for the user.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub technical_level: Omittable<Nullable<String>>,
+    /// The developer persona metadata for the user.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub developer_persona: Omittable<Nullable<String>>,
+    /// Projects associated with the user, if included.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub projects: Omittable<Nullable<UserProjectList>>,
     #[serde(default, flatten)]
@@ -1837,20 +2124,26 @@ pub struct User {
 }
 
 impl User {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
     }
 }
 
+/// Changes to an organization user's role or access settings.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UserRoleUpdateRequest {
+    /// `owner` or `reader`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub role: Omittable<Nullable<String>>,
+    /// Role ID to assign to the user.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub role_id: Omittable<Nullable<String>>,
+    /// Technical level metadata.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub technical_level: Omittable<Nullable<String>>,
+    /// Developer persona metadata.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub developer_persona: Omittable<Nullable<String>>,
 }
@@ -1862,15 +2155,20 @@ crate::open_string_enum! {
     }
 }
 
+/// Confirmation that an organization user was deleted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UserDeleteResponse {
+    /// Wire discriminator identifying the resource or list type.
     pub object: UserDeleteObject,
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Whether the service reports that the resource was deleted.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Paginated Administration response containing `User` entries.
 pub type UserListResponse = AdminCursorPage<User>;
 
 crate::open_string_enum! {
@@ -1883,82 +2181,118 @@ crate::open_string_enum! {
 /// Organization or project custom/predefined role.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Role {
+    /// Always `role`.
     pub object: RoleObject,
+    /// Identifier for the role.
     pub id: String,
+    /// Unique name for the role.
     pub name: String,
+    /// Optional description of the role.
     pub description: Nullable<String>,
+    /// Permissions granted by the role.
     pub permissions: Vec<String>,
+    /// Resource type the role is bound to (for example `api.organization` or `api.project`).
     pub resource_type: String,
+    /// Whether the role is predefined and managed by OpenAI.
     pub predefined_role: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl Role {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
     }
 }
 
+/// Name, description, and permissions used to create a custom role.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PublicCreateOrganizationRoleBody {
+    /// Unique name for the role.
     pub role_name: String,
+    /// Permissions to grant to the role.
     pub permissions: Vec<String>,
+    /// Optional description of the role.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub description: Omittable<Nullable<String>>,
 }
 
+/// Changes to an existing organization's custom role.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PublicUpdateOrganizationRoleBody {
+    /// New name for the role.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub role_name: Omittable<Nullable<String>>,
+    /// Updated set of permissions for the role.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub permissions: Omittable<Nullable<Vec<String>>>,
+    /// New description for the role.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub description: Omittable<Nullable<String>>,
 }
 
+/// Role identifier used to assign a role to an organization group.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicAssignOrganizationGroupRoleBody {
+    /// Identifier of the role to assign.
     pub role_id: String,
 }
 
 /// Official `AssignedRoleDetails.assignment_sources` item.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RoleAssignmentSource {
+    /// Identifier of the user, group, or service account receiving the assignment.
     pub principal_id: String,
+    /// Type of principal receiving the assignment.
     pub principal_type: String,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl RoleAssignmentSource {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
     }
 }
 
+/// Role metadata and assignment provenance returned for a principal.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AssignedRoleDetails {
+    /// Identifier for the role.
     pub id: String,
+    /// Name of the role.
     pub name: String,
+    /// Permissions associated with the role.
     pub permissions: Vec<String>,
+    /// Resource type the role applies to.
     pub resource_type: String,
+    /// Whether the role is predefined by OpenAI.
     pub predefined_role: bool,
+    /// Description of the role.
     pub description: Nullable<String>,
+    /// When the role was created.
     pub created_at: Nullable<u64>,
+    /// When the role was last updated.
     pub updated_at: Nullable<u64>,
+    /// Identifier of the actor who created the role.
     pub created_by: Nullable<String>,
+    /// User details for the actor that created the role, when available.
     pub created_by_user_obj: Nullable<AdminJsonObject>,
+    /// Arbitrary metadata stored on the role.
     pub metadata: Nullable<AdminJsonObject>,
+    /// Principals from which the role assignment is inherited, when available.
     pub assignment_sources: Nullable<Vec<RoleAssignmentSource>>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Paginated Administration response containing `Role` entries.
 pub type PublicRoleListResource = AdminNextPage<Role>;
+/// Paginated Administration response containing `AssignedRoleDetails` entries.
 pub type RoleListResource = AdminNextPage<AssignedRoleDetails>;
 
 crate::open_string_enum! {
@@ -1968,18 +2302,25 @@ crate::open_string_enum! {
     }
 }
 
+/// Confirmation that an organization role was deleted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RoleDeletedResource {
+    /// Always `role.deleted`.
     pub object: RoleDeletedObject,
+    /// Identifier of the deleted role.
     pub id: String,
+    /// Whether the role was deleted.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Confirmation that a principal's role assignment was deleted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeletedRoleAssignmentResource {
+    /// Identifier for the deleted assignment, such as `group.role.deleted` or `user.role.deleted`.
     pub object: AssignmentObject,
+    /// Whether the assignment was removed.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2024,44 +2365,65 @@ crate::open_string_enum! {
 /// Official `Invite.projects[]` / `InviteRequest.projects[]` item.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InviteProjectMembership {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Role granted to the user or principal within this scope.
     pub role: InviteProjectRole,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl InviteProjectMembership {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
     }
 }
 
+/// Organization invitation and its project membership assignments.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Invite {
+    /// The object type, which is always `organization.invite`.
     pub object: InviteObject,
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// The email address of the individual to whom the invite was sent.
     pub email: String,
+    /// `owner` or `reader`.
     pub role: InviteRole,
+    /// `accepted`,`expired`, or `pending`.
     pub status: InviteStatus,
+    /// The Unix timestamp (in seconds) of when the invite was sent.
     pub created_at: u64,
+    /// The projects that were granted membership upon acceptance of the invite.
     pub projects: Vec<InviteProjectMembership>,
+    /// The Unix timestamp (in seconds) of when the invite expires.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub expires_at: Omittable<Nullable<u64>>,
+    /// The Unix timestamp (in seconds) of when the invite was accepted.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub accepted_at: Omittable<Nullable<u64>>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Email address, role, and project memberships used to invite a user.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InviteRequest {
+    /// Send an email to this address.
     pub email: String,
+    /// `owner` or `reader`.
     pub role: InviteRole,
+    /// An array of projects to which membership is granted at the same time the org invite is
+    /// accepted. If omitted, the user will be invited to the default project for compatibility with
+    /// legacy behavior. If empty list is passed, the user will not be invited to any projects,
+    /// including the default one.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub projects: Omittable<Vec<InviteProjectMembership>>,
 }
 
+/// Paginated Administration response containing `Invite` entries.
 pub type InviteListResponse = AdminCursorPage<Invite>;
 
 crate::open_string_enum! {
@@ -2071,10 +2433,14 @@ crate::open_string_enum! {
     }
 }
 
+/// Confirmation that an organization invitation was deleted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InviteDeleteResponse {
+    /// The object type, which is always `organization.invite.deleted`.
     pub object: InviteDeleteObject,
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Whether the service reports that the resource was deleted.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2108,17 +2474,25 @@ crate::open_string_enum! {
 /// Organization project.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Project {
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// The object type, which is always `organization.project`.
     pub object: ProjectObject,
+    /// The Unix timestamp (in seconds) of when the project was created.
     pub created_at: u64,
+    /// The name of the project. This appears in reporting.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<Nullable<String>>,
+    /// The Unix timestamp (in seconds) of when the project was archived or `null`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub archived_at: Omittable<Nullable<u64>>,
+    /// `active` or `archived`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub status: Omittable<Nullable<String>>,
+    /// The external key associated with the project.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub external_key_id: Omittable<Nullable<String>>,
+    /// The residency configuration for the project.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub residency: Omittable<ProjectResidency>,
     #[serde(default, flatten)]
@@ -2126,33 +2500,50 @@ pub struct Project {
 }
 
 impl Project {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
     }
 }
 
+/// Name and configuration used to create a project.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectCreateRequest {
+    /// The friendly name of the project, this name appears in reports.
     pub name: String,
+    /// Create the project with the specified data residency region. Your organization must have
+    /// access to Data residency functionality in order to use. See data residency controls to
+    /// review the functionality and limitations of setting this field. Deprecated: use `residency`
+    /// instead. Do not provide both `geography` and `residency`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub geography: Omittable<Nullable<String>>,
+    /// Create the project with the specified residency configuration. Your organization must have
+    /// access to the requested residency configuration in order to use it. See data residency
+    /// controls to review the functionality and limitations of setting this field.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub residency: Omittable<Nullable<ProjectResidency>>,
+    /// External key ID to associate with the project.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub external_key_id: Omittable<Nullable<String>>,
 }
 
+/// Changes to an existing project's name or settings.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectUpdateRequest {
+    /// The updated name of the project, this name appears in reports.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<Nullable<String>>,
+    /// Geography for the project. Deprecated: use `residency` when creating a project to configure
+    /// data residency. This field is retained for backward compatibility.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub geography: Omittable<Nullable<String>>,
+    /// External key ID to associate with the project.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub external_key_id: Omittable<Nullable<String>>,
 }
 
+/// Paginated Administration response containing `Project` entries.
 pub type ProjectListResponse = AdminCursorPage<Project>;
 
 crate::open_string_enum! {
@@ -2170,30 +2561,42 @@ crate::open_string_enum! {
     }
 }
 
+/// Organization group assigned to a project.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectGroup {
+    /// Always `project.group`.
     pub object: ProjectGroupObject,
+    /// Identifier of the project.
     pub project_id: String,
+    /// Identifier of the group that has access to the project.
     pub group_id: String,
+    /// Display name of the group.
     pub group_name: String,
+    /// The type of the group.
     pub group_type: ProjectGroupType,
+    /// Unix timestamp (in seconds) when the group was granted project access.
     pub created_at: u64,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Paginated Administration response containing `ProjectGroup` entries.
 pub type ProjectGroupListResource = AdminNextPage<ProjectGroup>;
 
 /// Official `retrieve-project-group` query parameters.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectGroupGetParams {
+    /// Category of group represented by this resource.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub group_type: Omittable<GroupType>,
 }
 
+/// Group and role information used to add a group to a project.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InviteProjectGroupBody {
+    /// Identifier of the group to add to the project.
     pub group_id: String,
+    /// Identifier of the project role to grant to the group.
     pub role: String,
 }
 
@@ -2204,9 +2607,12 @@ crate::open_string_enum! {
     }
 }
 
+/// Confirmation that a group was removed from a project.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectGroupDeletedResource {
+    /// Always `project.group.deleted`.
     pub object: ProjectGroupDeletedObject,
+    /// Whether the group membership in the project was removed.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2215,33 +2621,46 @@ pub struct ProjectGroupDeletedResource {
 /// User membership in a project.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectUser {
+    /// The object type, which is always `organization.project.user`.
     pub object: UserObject,
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// `owner` or `member`.
     pub role: String,
+    /// The Unix timestamp (in seconds) of when the project was added.
     pub added_at: u64,
+    /// The name of the user.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<Nullable<String>>,
+    /// The email address of the user.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub email: Omittable<Nullable<String>>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// User and role information used to add a project member.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectUserCreateRequest {
+    /// `owner` or `member`.
     pub role: String,
+    /// The ID of the user.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub user_id: Omittable<Nullable<String>>,
+    /// Email of the user to add.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub email: Omittable<Nullable<String>>,
 }
 
+/// Role changes applied to an existing project member.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectUserUpdateRequest {
+    /// `owner` or `member`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub role: Omittable<Nullable<String>>,
 }
 
+/// Paginated Administration response containing `ProjectUser` entries.
 pub type ProjectUserListResponse = AdminCursorPage<ProjectUser>;
 
 crate::open_string_enum! {
@@ -2251,10 +2670,14 @@ crate::open_string_enum! {
     }
 }
 
+/// Confirmation that a user was removed from a project.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectUserDeleteResponse {
+    /// Wire discriminator identifying the resource or list type.
     pub object: ProjectUserDeleteObject,
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Whether the service reports that the resource was deleted.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2289,28 +2712,40 @@ crate::open_string_enum! {
     }
 }
 
+/// Service-account identity and role within a project.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectServiceAccount {
+    /// The object type, which is always `organization.project.service_account`.
     pub object: ProjectServiceAccountObject,
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// The name of the service account.
     pub name: String,
+    /// `owner`, `member`, or `none`.
     pub role: ProjectServiceAccountRole,
+    /// The Unix timestamp (in seconds) of when the service account was created.
     pub created_at: u64,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Parameters used to create a project service account.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectServiceAccountCreateRequest {
+    /// The name of the service account being created.
     pub name: String,
+    /// Create the service account without default roles or an API key.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub create_service_account_only: Omittable<Nullable<bool>>,
 }
 
+/// Changes to an existing project service account.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UpdateProjectServiceAccountBody {
+    /// The updated service account name.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<String>,
+    /// The updated service account role.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub role: Omittable<ProjectServiceAccountUpdateRole>,
 }
@@ -2325,10 +2760,15 @@ crate::open_string_enum! {
 /// Unredacted service-account API key, returned only at creation.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ServiceAccountApiKeyBody {
+    /// The object type, which is always `organization.project.service_account.api_key`.
     pub object: ServiceAccountApiKeyObject,
+    /// The unredacted API key value.
     pub value: WireSecret,
+    /// The name of the API key.
     pub name: String,
+    /// The Unix timestamp (in seconds) when the API key was created.
     pub created_at: u64,
+    /// The identifier of the API key.
     pub id: String,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2344,15 +2784,24 @@ impl fmt::Debug for ServiceAccountApiKeyBody {
     }
 }
 
+/// API-key data issued for a project service account.
 pub type ProjectServiceAccountApiKey = ServiceAccountApiKeyBody;
 
+/// Newly created project service account and its issued API key.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ProjectServiceAccountCreateResponse {
+    /// Wire discriminator identifying the resource or list type.
     pub object: ProjectServiceAccountObject,
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Name assigned to this resource or operation.
     pub name: String,
+    /// Service accounts created with default project membership have role `member`. Accounts
+    /// created with `create_service_account_only` have role `none`.
     pub role: ProjectServiceAccountRole,
+    /// Creation time as a Unix timestamp in seconds.
     pub created_at: u64,
+    /// API key information associated with the resource or actor.
     pub api_key: Nullable<ProjectServiceAccountApiKey>,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2369,14 +2818,18 @@ impl fmt::Debug for ProjectServiceAccountCreateResponse {
     }
 }
 
+/// Parameters used to issue an API key for a project service account.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CreateProjectServiceAccountApiKeyBody {
+    /// API key name.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<String>,
+    /// API key scopes.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub scopes: Omittable<Vec<String>>,
 }
 
+/// Paginated Administration response containing `ProjectServiceAccount` entries.
 pub type ProjectServiceAccountListResponse = AdminCursorPage<ProjectServiceAccount>;
 
 crate::open_string_enum! {
@@ -2386,10 +2839,14 @@ crate::open_string_enum! {
     }
 }
 
+/// Confirmation that a project service account was deleted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectServiceAccountDeleteResponse {
+    /// Wire discriminator identifying the resource or list type.
     pub object: ProjectServiceAccountDeleteObject,
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Whether the service reports that the resource was deleted.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2423,16 +2880,22 @@ crate::open_string_enum! {
 /// Official `ProjectApiKeyOwnerUser`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectApiKeyOwnerUser {
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// The email address of the user.
     pub email: String,
+    /// The name of the user.
     pub name: String,
+    /// The Unix timestamp (in seconds) of when the user was created.
     pub created_at: u64,
+    /// The user's project role.
     pub role: String,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl ProjectApiKeyOwnerUser {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -2442,15 +2905,20 @@ impl ProjectApiKeyOwnerUser {
 /// Official `ProjectApiKeyOwnerServiceAccount`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectApiKeyOwnerServiceAccount {
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// The name of the service account.
     pub name: String,
+    /// The Unix timestamp (in seconds) of when the service account was created.
     pub created_at: u64,
+    /// The service account's project role.
     pub role: String,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
 impl ProjectApiKeyOwnerServiceAccount {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -2460,14 +2928,17 @@ impl ProjectApiKeyOwnerServiceAccount {
 /// Official `ProjectApiKey.owner`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectApiKeyOwner {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(
         default,
         rename = "type",
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub kind: Omittable<ProjectApiKeyOwnerType>,
+    /// User associated with this resource, session, or assignment.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub user: Omittable<ProjectApiKeyOwnerUser>,
+    /// Service account associated with this resource or key owner.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub service_account: Omittable<ProjectApiKeyOwnerServiceAccount>,
     #[serde(default, flatten)]
@@ -2475,6 +2946,7 @@ pub struct ProjectApiKeyOwner {
 }
 
 impl ProjectApiKeyOwner {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -2488,20 +2960,30 @@ crate::open_string_enum! {
     }
 }
 
+/// Redacted API-key metadata and ownership within a project.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectApiKey {
+    /// The object type, which is always `organization.project.api_key`.
     pub object: ProjectApiKeyObject,
+    /// The redacted value of the API key.
     pub redacted_value: String,
+    /// The name of the API key.
     pub name: String,
+    /// The Unix timestamp (in seconds) of when the API key was created.
     pub created_at: u64,
+    /// The Unix timestamp (in seconds) of when the API key was last used.
     pub last_used_at: Nullable<u64>,
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// Whether the API key's owner currently has effective access to the project.
     pub owner_project_access: ProjectAccessState,
+    /// User or service account that owns this resource.
     pub owner: ProjectApiKeyOwner,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Paginated Administration response containing `ProjectApiKey` entries.
 pub type ProjectApiKeyListResponse = AdminCursorPage<ProjectApiKey>;
 
 crate::open_string_enum! {
@@ -2511,10 +2993,14 @@ crate::open_string_enum! {
     }
 }
 
+/// Confirmation that a project's API key was deleted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectApiKeyDeleteResponse {
+    /// Wire discriminator identifying the resource or list type.
     pub object: ProjectApiKeyDeleteObject,
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Whether the service reports that the resource was deleted.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2535,18 +3021,25 @@ crate::open_string_enum! {
     }
 }
 
+/// Model allowlist or denylist configured for a project.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectModelPermissions {
+    /// The object type, which is always `project.model_permissions`.
     pub object: ProjectModelPermissionsObject,
+    /// Whether the project uses an allowlist or a denylist.
     pub mode: ProjectModelPermissionMode,
+    /// The model IDs included in the model permissions policy.
     pub model_ids: Vec<ModelId>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Changes to a project's model permission mode and model list.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectModelPermissionsUpdateRequest {
+    /// The model permissions mode to apply.
     pub mode: ProjectModelPermissionMode,
+    /// The model IDs included in this permissions policy.
     pub model_ids: Vec<ModelId>,
 }
 
@@ -2557,9 +3050,12 @@ crate::open_string_enum! {
     }
 }
 
+/// Confirmation that a project's model permission configuration was deleted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectModelPermissionsDeleteResponse {
+    /// The object type, which is always `project.model_permissions.deleted`.
     pub object: ProjectModelPermissionsDeleteObject,
+    /// Whether the project model permissions were deleted.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2568,32 +3064,46 @@ pub struct ProjectModelPermissionsDeleteResponse {
 /// Permission state for one hosted tool.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostedToolPermission {
+    /// Whether the hosted tool is enabled for the project.
     pub enabled: bool,
 }
 
+/// Permission settings used when updating access to one hosted tool.
 pub type HostedToolPermissionUpdate = HostedToolPermission;
 
+/// Hosted-tool permissions configured for a project.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectHostedToolPermissions {
+    /// Permission state for a single hosted tool on a project.
     pub file_search: HostedToolPermission,
+    /// Permission state for a single hosted tool on a project.
     pub web_search: HostedToolPermission,
+    /// Permission state for a single hosted tool on a project.
     pub image_generation: HostedToolPermission,
+    /// Permission state for a single hosted tool on a project.
     pub mcp: HostedToolPermission,
+    /// Permission state for a single hosted tool on a project.
     pub code_interpreter: HostedToolPermission,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Changes to a project's hosted-tool permissions.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectHostedToolPermissionsUpdateRequest {
+    /// The file search permission update.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub file_search: Omittable<Nullable<HostedToolPermissionUpdate>>,
+    /// The web search permission update.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub web_search: Omittable<Nullable<HostedToolPermissionUpdate>>,
+    /// The image generation permission update.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub image_generation: Omittable<Nullable<HostedToolPermissionUpdate>>,
+    /// The MCP permission update.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub mcp: Omittable<Nullable<HostedToolPermissionUpdate>>,
+    /// The code interpreter permission update.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub code_interpreter: Omittable<Nullable<HostedToolPermissionUpdate>>,
 }
@@ -2605,41 +3115,59 @@ crate::open_string_enum! {
     }
 }
 
+/// Rate limits configured for a model within a project.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectRateLimit {
+    /// The object type, which is always `project.rate_limit`.
     pub object: ProjectRateLimitObject,
+    /// The identifier, which can be referenced in API endpoints.
     pub id: String,
+    /// The model this rate limit applies to.
     pub model: ModelId,
+    /// The maximum requests per minute.
     pub max_requests_per_1_minute: u64,
+    /// The maximum tokens per minute.
     pub max_tokens_per_1_minute: u64,
+    /// The maximum images per minute. Only present for relevant models.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub max_images_per_1_minute: Omittable<u64>,
+    /// The maximum audio megabytes per minute. Only present for relevant models.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub max_audio_megabytes_per_1_minute: Omittable<u64>,
+    /// The maximum requests per day. Only present for relevant models.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub max_requests_per_1_day: Omittable<u64>,
+    /// The maximum batch input tokens per day. Only present for relevant models.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub batch_1_day_max_input_tokens: Omittable<u64>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// New request, token, image, or audio limits for a project model.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectRateLimitUpdateRequest {
+    /// The maximum requests per minute.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub max_requests_per_1_minute: Omittable<u64>,
+    /// The maximum tokens per minute.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub max_tokens_per_1_minute: Omittable<u64>,
+    /// The maximum images per minute. Only relevant for certain models.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub max_images_per_1_minute: Omittable<u64>,
+    /// The maximum audio megabytes per minute. Only relevant for certain models.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub max_audio_megabytes_per_1_minute: Omittable<u64>,
+    /// The maximum requests per day. Only relevant for certain models.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub max_requests_per_1_day: Omittable<u64>,
+    /// The maximum batch input tokens per day. Only relevant for certain models.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub batch_1_day_max_input_tokens: Omittable<u64>,
 }
 
+/// Paginated Administration response containing `ProjectRateLimit` entries.
 pub type ProjectRateLimitListResponse = AdminCursorPage<ProjectRateLimit>;
 
 crate::open_string_enum! {
@@ -2663,23 +3191,31 @@ crate::open_string_enum! {
     }
 }
 
+/// Delivery channel and recipients for a spend alert.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpendAlertNotificationChannel {
+    /// The notification channel type. Currently only `email` is supported.
     #[serde(rename = "type")]
     pub kind: SpendNotificationType,
+    /// Email addresses that receive the spend alert notification.
     pub recipients: Vec<String>,
+    /// Optional subject prefix for alert emails.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub subject_prefix: Omittable<Nullable<String>>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Threshold and notification configuration used to create a spend alert.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CreateSpendAlertBody {
     /// Threshold in cents.
     pub threshold_amount: u64,
+    /// The currency for the threshold amount.
     pub currency: SpendCurrency,
+    /// The time interval for evaluating spend against the threshold.
     pub interval: SpendInterval,
+    /// Email notification settings for a spend alert.
     pub notification_channel: SpendAlertNotificationChannel,
 }
 
@@ -2691,21 +3227,32 @@ crate::open_string_enum! {
     }
 }
 
+/// Spend threshold and notification configuration reported by the service.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpendAlert {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Wire discriminator identifying the resource or list type.
     pub object: SpendAlertObject,
+    /// Spend amount at which the alert is triggered.
     pub threshold_amount: u64,
+    /// Currency used to denominate the monetary amount.
     pub currency: SpendCurrency,
+    /// Recurrence interval associated with the spend policy.
     pub interval: SpendInterval,
+    /// Destination used to deliver spend-alert notifications.
     pub notification_channel: SpendAlertNotificationChannel,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Organization-scoped spend-alert configuration, using the shared `SpendAlert` wire shape.
 pub type OrganizationSpendAlert = SpendAlert;
+/// Project-scoped spend-alert configuration, using the shared `SpendAlert` wire shape.
 pub type ProjectSpendAlert = SpendAlert;
+/// Paginated Administration response containing `SpendAlert` entries.
 pub type OrganizationSpendAlertListResource = AdminRequiredCursorPage<SpendAlert>;
+/// Paginated Administration response containing `SpendAlert` entries.
 pub type ProjectSpendAlertListResource = AdminRequiredCursorPage<SpendAlert>;
 
 crate::open_string_enum! {
@@ -2719,16 +3266,24 @@ crate::open_string_enum! {
     }
 }
 
+/// Confirmation that a spend alert was deleted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpendAlertDeletedResource {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Wire discriminator identifying the resource or list type.
     pub object: SpendAlertDeletedObject,
+    /// Whether the service reports that the resource was deleted.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Organization-scoped spend-alert deletion confirmation, using the shared
+/// `SpendAlertDeletedResource` wire shape.
 pub type OrganizationSpendAlertDeletedResource = SpendAlertDeletedResource;
+/// Project-scoped spend-alert deletion confirmation, using the shared `SpendAlertDeletedResource`
+/// wire shape.
 pub type ProjectSpendAlertDeletedResource = SpendAlertDeletedResource;
 
 crate::open_string_enum! {
@@ -2739,8 +3294,10 @@ crate::open_string_enum! {
     }
 }
 
+/// Enforcement settings applied when a spending limit is reached.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpendLimitEnforcement {
+    /// Whether the hard spend limit is currently enforcing.
     pub status: SpendLimitEnforcementStatus,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -2754,29 +3311,48 @@ crate::open_string_enum! {
     }
 }
 
+/// Spending limit, recurrence interval, and enforcement configuration.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpendLimitResource {
+    /// Wire discriminator identifying the resource or list type.
     pub object: SpendLimitObject,
+    /// Spend amount at which the alert is triggered.
     pub threshold_amount: u64,
+    /// Currency used to denominate the monetary amount.
     pub currency: SpendCurrency,
+    /// Recurrence interval associated with the spend policy.
     pub interval: SpendInterval,
+    /// Enforcement behavior applied when the spend limit is reached.
     pub enforcement: SpendLimitEnforcement,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Organization-scoped spending-limit configuration, using the shared `SpendLimitResource` wire
+/// shape.
 pub type OrganizationSpendLimitResource = SpendLimitResource;
+/// Project-scoped spending-limit configuration, using the shared `SpendLimitResource` wire shape.
 pub type ProjectSpendLimitResource = SpendLimitResource;
 
+/// Changes to a spending limit and its enforcement settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UpdateSpendLimitBody {
+    /// Spend amount at which the alert is triggered.
     pub threshold_amount: u64,
+    /// Currency used to denominate the monetary amount.
     pub currency: SpendCurrency,
+    /// Recurrence interval associated with the spend policy.
     pub interval: SpendInterval,
 }
 
 impl UpdateSpendLimitBody {
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), AdminConstraintError> {
         if self.threshold_amount < MIN_SPEND_LIMIT_THRESHOLD {
             return Err(AdminConstraintError::SpendThreshold {
@@ -2788,7 +3364,11 @@ impl UpdateSpendLimitBody {
     }
 }
 
+/// Organization-scoped spending-limit update parameters, using the shared `UpdateSpendLimitBody`
+/// wire shape.
 pub type UpdateOrganizationSpendLimitBody = UpdateSpendLimitBody;
+/// Project-scoped spending-limit update parameters, using the shared `UpdateSpendLimitBody` wire
+/// shape.
 pub type UpdateProjectSpendLimitBody = UpdateSpendLimitBody;
 
 crate::open_string_enum! {
@@ -2802,15 +3382,22 @@ crate::open_string_enum! {
     }
 }
 
+/// Confirmation that a spending limit was deleted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpendLimitDeletedResource {
+    /// Wire discriminator identifying the resource or list type.
     pub object: SpendLimitDeletedObject,
+    /// Whether the service reports that the resource was deleted.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Organization-scoped spending-limit deletion confirmation, using the shared
+/// `SpendLimitDeletedResource` wire shape.
 pub type OrganizationSpendLimitDeletedResource = SpendLimitDeletedResource;
+/// Project-scoped spending-limit deletion confirmation, using the shared
+/// `SpendLimitDeletedResource` wire shape.
 pub type ProjectSpendLimitDeletedResource = SpendLimitDeletedResource;
 
 crate::open_string_enum! {
@@ -2849,24 +3436,34 @@ crate::open_string_enum! {
 /// Superset of stable dimensions returned when usage endpoints group results.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UsageDimensions {
+    /// Identifier of the project associated with this resource or record.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub project_id: Omittable<Nullable<String>>,
+    /// Identifier of the user associated with this resource or operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub user_id: Omittable<Nullable<String>>,
+    /// Identifier of the API key associated with this entry.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub api_key_id: Omittable<Nullable<String>>,
+    /// Identifier of the model used or requested for the operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub model: Omittable<Nullable<ModelId>>,
+    /// Whether these usage records came from Batch API requests.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub batch: Omittable<Nullable<bool>>,
+    /// Service tier selected or reported for model execution.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub service_tier: Omittable<Nullable<String>>,
+    /// Underlying source of this payload or failure.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub source: Omittable<Nullable<String>>,
+    /// Value of the size dimension used to group these usage records.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub size: Omittable<Nullable<String>>,
+    /// Identifier of the vector store associated with this usage record.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub vector_store_id: Omittable<Nullable<String>>,
+    /// Web-search context level associated with this usage group.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub context_level: Omittable<Nullable<String>>,
 }
@@ -2956,12 +3553,16 @@ pub struct UsageQueryParams {
     /// `1m`: 60/1440) per the official docs.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub bucket_width: Omittable<UsageBucketWidth>,
+    /// Restricts results to the specified project identifiers.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub project_ids: Omittable<Vec<String>>,
+    /// Restricts results to the specified user identifiers.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub user_ids: Omittable<Vec<String>>,
+    /// Restricts results to the specified API key identifiers.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub api_key_ids: Omittable<Vec<String>>,
+    /// Model identifiers included in this filter or permission rule.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub models: Omittable<Vec<ModelId>>,
     /// Restricts results to batch usage only.
@@ -2979,10 +3580,13 @@ pub struct UsageQueryParams {
     /// Web-search endpoints only.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub context_levels: Omittable<Vec<UsageContextLevel>>,
+    /// Dimensions used to group aggregated usage or costs.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub group_by: Omittable<Vec<UsageGroupBy>>,
+    /// Maximum number of time buckets to return.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<u64>,
+    /// Cursor identifying the requested page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub page: Omittable<String>,
 }
@@ -3021,19 +3625,27 @@ impl UsageQueryParams {
 /// absent here.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageCostsQueryParams {
+    /// Inclusive start of the time interval, as a Unix timestamp in seconds.
     pub start_time: u64,
+    /// Exclusive end of the time interval, as a Unix timestamp in seconds.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub end_time: Omittable<u64>,
+    /// Width of each aggregated usage or cost time bucket.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub bucket_width: Omittable<UsageCostsBucketWidth>,
+    /// Restricts results to the specified project identifiers.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub project_ids: Omittable<Vec<String>>,
+    /// Restricts results to the specified API key identifiers.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub api_key_ids: Omittable<Vec<String>>,
+    /// Dimensions used to group aggregated usage or costs.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub group_by: Omittable<Vec<UsageCostsGroupBy>>,
+    /// Maximum number of time buckets to return.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<u64>,
+    /// Cursor identifying the requested page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub page: Omittable<String>,
 }
@@ -3061,37 +3673,59 @@ literal_tag!(
     "organization.usage.completions.result"
 );
 
+/// Aggregated completion request counts and token usage.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageCompletionsResult {
     #[serde(rename = "object")]
     kind: UsageCompletionsTag,
+    /// The aggregated number of input tokens used, including cached and cache-write tokens. This
+    /// includes text, audio, and image tokens. For customers subscribed to Scale Tier, this
+    /// includes Scale Tier tokens.
     pub input_tokens: u64,
+    /// The aggregated number of output tokens used across text, audio, and image outputs. For
+    /// customers subscribed to Scale Tier, this includes Scale Tier tokens.
     pub output_tokens: u64,
+    /// The count of requests made to the model.
     pub num_model_requests: u64,
+    /// The aggregated number of cached input tokens used across text, audio, and image inputs. For
+    /// customers subscribed to Scale Tier, this includes Scale Tier tokens.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_cached_tokens: Omittable<u64>,
+    /// The aggregated number of input tokens written to the cache.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_cache_write_tokens: Omittable<u64>,
+    /// The aggregated number of uncached input tokens used across text, audio, and image inputs,
+    /// excluding cache-write tokens.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_uncached_tokens: Omittable<u64>,
+    /// The aggregated number of uncached text input tokens used, excluding cache-write tokens.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_text_tokens: Omittable<u64>,
+    /// The aggregated number of text output tokens used.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output_text_tokens: Omittable<u64>,
+    /// The aggregated number of cached text input tokens used.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_cached_text_tokens: Omittable<u64>,
+    /// The aggregated number of uncached audio input tokens used.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_audio_tokens: Omittable<u64>,
+    /// The aggregated number of cached audio input tokens used.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_cached_audio_tokens: Omittable<u64>,
+    /// The aggregated number of audio output tokens used.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output_audio_tokens: Omittable<u64>,
+    /// The aggregated number of uncached image input tokens used.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_image_tokens: Omittable<u64>,
+    /// The aggregated number of cached image input tokens used.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_cached_image_tokens: Omittable<u64>,
+    /// The aggregated number of image output tokens used.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output_image_tokens: Omittable<u64>,
+    /// Grouping dimensions associated with these usage counters.
     #[serde(flatten)]
     pub dimensions: UsageDimensions,
     #[serde(default, flatten)]
@@ -3101,12 +3735,16 @@ pub struct UsageCompletionsResult {
 macro_rules! simple_usage_result {
     ($name:ident, $tag:ident, $wire:literal, $metric:ident, requests) => {
         literal_tag!($tag, Value, $wire);
+        #[doc = concat!("Usage counters for the `", $wire, "` resource.")]
         #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
         pub struct $name {
             #[serde(rename = "object")]
             kind: $tag,
+            #[doc = concat!("Total `", stringify!($metric), "` reported for this bucket.")]
             pub $metric: u64,
+            /// Number of model requests represented by this usage bucket.
             pub num_model_requests: u64,
+            /// Grouping dimensions associated with these counters.
             #[serde(flatten)]
             pub dimensions: UsageDimensions,
             #[serde(default, flatten)]
@@ -3115,11 +3753,14 @@ macro_rules! simple_usage_result {
     };
     ($name:ident, $tag:ident, $wire:literal, $metric:ident) => {
         literal_tag!($tag, Value, $wire);
+        #[doc = concat!("Usage counters for the `", $wire, "` resource.")]
         #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
         pub struct $name {
             #[serde(rename = "object")]
             kind: $tag,
+            #[doc = concat!("Total `", stringify!($metric), "` reported for this bucket.")]
             pub $metric: u64,
+            /// Grouping dimensions associated with these counters.
             #[serde(flatten)]
             pub dimensions: UsageDimensions,
             #[serde(default, flatten)]
@@ -3188,12 +3829,16 @@ literal_tag!(
     "organization.usage.web_searches.result"
 );
 
+/// Aggregated web-search call usage for the selected grouping dimensions.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageWebSearchCallsResult {
     #[serde(rename = "object")]
     kind: UsageWebSearchTag,
+    /// The count of model requests.
     pub num_model_requests: u64,
+    /// The count of web search calls.
     pub num_requests: u64,
+    /// Grouping dimensions associated with these usage counters.
     #[serde(flatten)]
     pub dimensions: UsageDimensions,
     #[serde(default, flatten)]
@@ -3203,8 +3848,10 @@ pub struct UsageWebSearchCallsResult {
 /// Monetary amount in a costs result.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CostAmount {
+    /// Monetary amount expressed in the accompanying currency.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub value: Omittable<f64>,
+    /// Currency used to denominate the monetary amount.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub currency: Omittable<String>,
     #[serde(default, flatten)]
@@ -3227,20 +3874,28 @@ crate::open_string_enum! {
 
 literal_tag!(CostsResultTag, Value, "organization.costs.result");
 
+/// Monetary cost aggregate and its associated grouping dimensions.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CostsResult {
     #[serde(rename = "object")]
     kind: CostsResultTag,
+    /// The monetary value in its associated currency.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub amount: Omittable<CostAmount>,
+    /// When `group_by=line_item`, this field provides the line item of the grouped costs result.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub line_item: Omittable<Nullable<String>>,
+    /// When `group_by=project_id`, this field provides the project ID of the grouped costs result.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub project_id: Omittable<Nullable<String>>,
+    /// When `group_by=api_key_id`, this field provides the API Key ID of the grouped costs result.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub api_key_id: Omittable<Nullable<String>>,
+    /// When `group_by=line_item`, this field provides the quantity of the grouped costs result.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub quantity: Omittable<Nullable<f64>>,
+    /// The unit of the `quantity` value. If no single supported unit applies to the result, this
+    /// field is `null`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub quantity_unit: Omittable<Nullable<CostQuantityUnit>>,
     #[serde(default, flatten)]
@@ -3267,12 +3922,16 @@ strict_tagged_union! {
 
 literal_tag!(UsageBucketTag, Value, "bucket");
 
+/// Usage or cost results within a bounded time interval.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageTimeBucket {
     #[serde(rename = "object")]
     kind: UsageBucketTag,
+    /// Inclusive start of the time interval, as a Unix timestamp in seconds.
     pub start_time: u64,
+    /// Exclusive end of the time interval, as a Unix timestamp in seconds.
     pub end_time: u64,
+    /// Aggregated usage or cost entries in the time bucket.
     pub results: Vec<UsageResult>,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -3280,12 +3939,16 @@ pub struct UsageTimeBucket {
 
 literal_tag!(UsagePageTag, Value, "page");
 
+/// Page of aggregated usage or cost time buckets.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageResponse {
     #[serde(rename = "object")]
     kind: UsagePageTag,
+    /// Entries returned in this response page.
     pub data: Vec<UsageTimeBucket>,
+    /// Whether the server reports additional pages after this one.
     pub has_more: bool,
+    /// Cursor for the next page of usage records.
     pub next_page: Nullable<String>,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -3308,6 +3971,7 @@ impl UsageResponse {
         }
     }
 
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra
@@ -3317,27 +3981,41 @@ impl UsageResponse {
 /// Standard administration error envelope used by non-success responses.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ErrorResponse {
+    /// Error details returned when the operation fails.
     pub error: AdminJsonObject,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
 
+/// Currency code used to denominate a spending limit.
 pub type SpendLimitCurrency = SpendCurrency;
+/// Recurrence interval used to reset a spending limit.
 pub type SpendLimitInterval = SpendInterval;
 
 /// One frozen stable Administration operation and its body/success DTO names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AdminOperationDto {
+    /// Stable identifier of the operation in the pinned API contract.
     pub operation_id: &'static str,
+    /// HTTP method required by the operation contract.
     pub method: &'static str,
+    /// HTTP route template, including named path parameters.
     pub path: &'static str,
+    /// Schema reference describing the request payload.
     pub request_schema: &'static str,
+    /// Schema reference describing the response payload.
     pub response_schema: &'static str,
+    /// Encoding mode used for the request body.
     pub request_mode: &'static str,
+    /// Decoder mode used for the response body.
     pub response_mode: &'static str,
+    /// HTTP status codes accepted as successful by this operation contract.
     pub success_statuses: &'static [u16],
+    /// Response media types accepted by the operation contract.
     pub response_content_types: &'static [&'static str],
+    /// Pinned schema references used by the request payload.
     pub request_schema_refs: &'static [&'static str],
+    /// Pinned schema references used by the response payload.
     pub response_schema_refs: &'static [&'static str],
 }
 

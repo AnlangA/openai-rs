@@ -52,6 +52,11 @@ impl Skills {
     }
 
     /// Creates a Skill from a replayable zip or one-to-500 file sources.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: CreateSkillRequest,
@@ -76,6 +81,11 @@ impl Skills {
     }
 
     /// Lists Skills with typed cursor parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         params: SkillListParams,
@@ -116,6 +126,11 @@ impl Skills {
     }
 
     /// Retrieves one Skill.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(&self, skill_id: &SkillId) -> Result<ApiResponse<SkillResource>, Error> {
         let path = skill_path(skill_id)?;
         self.client
@@ -125,6 +140,11 @@ impl Skills {
     }
 
     /// Changes the default immutable version pointer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn set_default_version(
         &self,
         skill_id: &SkillId,
@@ -138,6 +158,11 @@ impl Skills {
     }
 
     /// Deletes one Skill.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         skill_id: &SkillId,
@@ -151,6 +176,11 @@ impl Skills {
 
     /// Streams the current default Skill zip. `collect(limit)` buffers with an
     /// explicit upper bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn content(&self, skill_id: &SkillId) -> Result<SkillContentStream, Error> {
         let path = [
             PathSegment::literal("skills"),
@@ -182,6 +212,11 @@ impl SkillVersions {
     }
 
     /// Creates a new immutable version from replayable sources.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         skill_id: &SkillId,
@@ -207,6 +242,11 @@ impl SkillVersions {
     }
 
     /// Lists immutable versions.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         skill_id: &SkillId,
@@ -248,6 +288,11 @@ impl SkillVersions {
     }
 
     /// Retrieves one immutable version.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         skill_id: &SkillId,
@@ -261,6 +306,11 @@ impl SkillVersions {
     }
 
     /// Deletes one immutable version.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         skill_id: &SkillId,
@@ -274,6 +324,11 @@ impl SkillVersions {
     }
 
     /// Streams one immutable version's zip content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn content(
         &self,
         skill_id: &SkillId,

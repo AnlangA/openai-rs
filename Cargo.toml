@@ -58,11 +58,15 @@ zeroize = "1.8.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+missing_docs = "deny"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"
 todo = "deny"
 unwrap_used = "deny"
+doc_markdown = "deny"
+missing_errors_doc = "deny"
+missing_panics_doc = "deny"
 
 [profile.release]
 lto = "thin"

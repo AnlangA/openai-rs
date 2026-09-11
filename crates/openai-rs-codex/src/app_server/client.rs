@@ -53,8 +53,11 @@ const CHILD_EXIT_STDERR_SNIPPET: usize = 2048;
 /// Hard resource limits for one app-server child.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppServerLimits {
+    /// Maximum number of bytes accepted for a single JSONL frame.
     pub max_line_bytes: usize,
+    /// Maximum number of subprocess stderr bytes retained for diagnostics.
     pub max_stderr_bytes: usize,
+    /// Maximum number of requests allowed to await responses concurrently.
     pub max_pending_requests: usize,
     /// Bounded capacity of the channel that carries notifications,
     /// server-initiated requests, and orphan responses to the consumer of
@@ -71,6 +74,7 @@ pub struct AppServerLimits {
     /// API forever. Acquiring a pending-request slot is budgeted separately
     /// through [`Error::PendingCapacityTimeout`].
     pub request_timeout: Duration,
+    /// Maximum time allowed for graceful subprocess shutdown.
     pub shutdown_timeout: Duration,
 }
 
@@ -87,7 +91,7 @@ impl Default for AppServerLimits {
     }
 }
 
-/// Exact owned-child configuration. The executable path and CODEX_HOME must be
+/// Exact owned-child configuration. The executable path and `CODEX_HOME` must be
 /// explicit; this crate never downloads or discovers a runtime.
 pub struct AppServerConfig<C = ManagedAppServerCredential>
 where
@@ -142,17 +146,20 @@ impl<C> AppServerConfig<C>
 where
     C: CodexCredentialMarker,
 {
+    /// Replaces the subprocess framing, concurrency, and timeout limits.
     #[must_use]
     pub fn with_limits(mut self, limits: AppServerLimits) -> Self {
         self.limits = limits;
         self
     }
 
+    /// Returns the configured app-server executable path.
     #[must_use]
     pub fn executable(&self) -> &Path {
         &self.executable
     }
 
+    /// Returns the isolated Codex home directory used by the child process.
     #[must_use]
     pub fn codex_home(&self) -> &Path {
         &self.codex_home
@@ -182,15 +189,22 @@ where
 /// [`AppServerClient::respond_error`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawServerRequest {
+    /// Identifier used to reference this resource or protocol item.
     pub id: RpcId,
+    /// Protocol operation or HTTP method associated with this request.
     pub method: String,
+    /// Parameters carried by this JSON-RPC notification.
     pub params: Option<Value>,
+    /// Original JSON payload retained for an unrecognized protocol value.
     pub raw: Value,
 }
 
+/// Raw JSON-RPC response envelope before typed result decoding.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawResponse {
+    /// Identifier used to reference this resource or protocol item.
     pub id: RpcId,
+    /// Original JSON payload retained for an unrecognized protocol value.
     pub raw: Value,
 }
 
@@ -198,8 +212,11 @@ pub struct RawResponse {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum AppServerEvent {
+    /// Carries the `Notification` payload for this protocol alternative.
     Notification(Box<Notification>),
+    /// Carries the `RawServerRequest` payload for this protocol alternative.
     ServerRequest(Box<RawServerRequest>),
+    /// Carries the `RawResponse` payload for this protocol alternative.
     OrphanResponse(Box<RawResponse>),
 }
 
@@ -369,6 +386,11 @@ where
     /// `initialized` notification before returning. The notification is a
     /// method-only frame — the pinned `ClientNotification` schema defines no
     /// `params` key for it, so none is sent (5-20).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if configuration or runtime compatibility checks fail, the subprocess
+    /// cannot be started, or initialization or transport setup fails.
     pub async fn spawn(config: AppServerConfig<C>, client_info: ClientInfo) -> Result<Self, Error> {
         let span = tracing::debug_span!("codex.app_server.connection");
         let stdout_span = span.clone();
@@ -505,6 +527,7 @@ where
         self
     }
 
+    /// Returns the server information negotiated during initialization.
     #[must_use]
     pub fn initialize_response(&self) -> &InitializeResponse {
         &self.initialize_response
@@ -516,11 +539,13 @@ where
         &self.runtime_identity
     }
 
+    /// Returns whether this connection has been closed.
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.inner.closed.load(Ordering::Acquire)
     }
 
+    /// Returns the recorded failure that closed the connection, when available.
     #[must_use]
     pub fn connection_failure(&self) -> Option<ConnectionFailure> {
         lock(&self.inner.terminal_failure).clone()
@@ -538,6 +563,13 @@ where
         self.inner.events_rx.lock().await.recv().await
     }
 
+    /// Reads account information, optionally asking app-server to refresh its token first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, request encoding or transport fails, the
+    /// request deadline expires, the server returns a JSON-RPC error, or the response cannot be
+    /// decoded.
     pub async fn account_read(&self, refresh_token: bool) -> Result<AccountReadResponse, Error> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -549,6 +581,13 @@ where
             .await
     }
 
+    /// Reads the authenticated account's current rate-limit information.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, request encoding or transport fails, the
+    /// request deadline expires, the server returns a JSON-RPC error, or the response cannot be
+    /// decoded.
     pub async fn account_rate_limits(&self) -> Result<AccountRateLimitsResponse, Error> {
         self.request_without_params("account/rateLimits/read").await
     }
@@ -556,10 +595,22 @@ where
     /// Read account token usage. The pinned schema types the
     /// `account/usage/read` params as `null`, so the request is always sent
     /// without a `params` key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request validation or encoding fails, the connection is closed,
+    /// transport or the request deadline fails, the server returns a JSON-RPC error, or the
+    /// response cannot be decoded.
     pub async fn account_usage(&self) -> Result<AccountUsageResponse, Error> {
         self.request_without_params("account/usage/read").await
     }
 
+    /// Starts a thread with the supplied model, workspace, and policy settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if extension fields conflict with typed parameters, or if the JSON-RPC
+    /// request fails or its response cannot be decoded.
     pub async fn thread_start(
         &self,
         params: ThreadStartParams,
@@ -568,11 +619,24 @@ where
         self.request("thread/start", Some(params)).await
     }
 
+    /// Starts a new agent turn in the specified thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if extension fields conflict with typed parameters, or if the JSON-RPC
+    /// request fails or its response cannot be decoded.
     pub async fn turn_start(&self, params: TurnStartParams) -> Result<TurnStartResponse, Error> {
         params.validate_extra()?;
         self.request("turn/start", Some(params)).await
     }
 
+    /// Requests interruption of the specified active turn.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, request encoding or transport fails, the
+    /// request deadline expires, the server returns a JSON-RPC error, or the response cannot be
+    /// decoded.
     pub async fn turn_interrupt(
         &self,
         params: TurnInterruptParams,
@@ -581,6 +645,11 @@ where
     }
 
     /// Respond to a server-initiated request with a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if response encoding or writing fails, the connection is closed, or the
+    /// server-request identifier cannot be used.
     pub async fn respond_result<T>(&self, id: RpcId, result: T) -> Result<(), Error>
     where
         T: Serialize,
@@ -590,6 +659,11 @@ where
     }
 
     /// Respond to a server-initiated request with a JSON-RPC error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if response encoding or writing fails, the connection is closed, or the
+    /// server-request identifier cannot be used.
     pub async fn respond_error(&self, id: RpcId, error: RpcError) -> Result<(), Error> {
         let message = json!({"id": id, "error": error});
         self.write_message(&message).await
@@ -597,6 +671,11 @@ where
 
     /// Terminate and reap the owned child. Dropping the last client also kills
     /// the process, but explicit close lets callers observe shutdown errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subprocess or its I/O tasks cannot be shut down cleanly within the
+    /// configured shutdown budget.
     pub async fn close(&self) -> Result<(), Error> {
         terminate(
             &self.inner,
@@ -825,6 +904,13 @@ where
 // whose access token was injected into the child cannot call
 // account/login/start through its typed API.
 impl AppServerClient<ManagedAppServerCredential> {
+    /// Starts the app-server-managed browser login flow.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, request encoding or transport fails, the
+    /// request deadline expires, the server returns a JSON-RPC error, or the response cannot be
+    /// decoded.
     pub async fn account_login_browser(
         &self,
         options: BrowserLoginOptions,
@@ -879,6 +965,12 @@ impl AppServerClient<ManagedAppServerCredential> {
     /// client nor echoed in any error or `Debug` output; a server answering
     /// with a different login branch fails with [`Error::UnexpectedResponse`]
     /// naming the branch it picked instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request validation or encoding fails, the connection is closed,
+    /// transport or the request deadline fails, the server returns a JSON-RPC error, or the
+    /// response cannot be decoded.
     pub async fn account_login_api_key(&self, api_key: SecretString) -> Result<(), Error> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -906,6 +998,13 @@ impl AppServerClient<ManagedAppServerCredential> {
         Ok(())
     }
 
+    /// Starts the app-server-managed device-code login flow.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, request encoding or transport fails, the
+    /// request deadline expires, the server returns a JSON-RPC error, or the response cannot be
+    /// decoded.
     pub async fn account_login_device(&self) -> Result<DeviceCodeLogin, Error> {
         #[derive(Serialize)]
         struct Params {
@@ -947,6 +1046,13 @@ impl AppServerClient<ManagedAppServerCredential> {
         })
     }
 
+    /// Cancels the specified app-server-managed login attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, request encoding or transport fails, the
+    /// request deadline expires, the server returns a JSON-RPC error, or the response cannot be
+    /// decoded.
     pub async fn account_login_cancel(
         &self,
         login_id: impl Into<String>,
@@ -1081,11 +1187,11 @@ fn prepare_codex_home(path: &Path) -> Result<(), Error> {
 ///
 /// Stance: the child is intentionally isolated from the embedding process's
 /// environment. Credentials reach it only through `apply_credential` and all
-/// file state lives under the dedicated CODEX_HOME, so everything else is
+/// file state lives under the dedicated `CODEX_HOME`, so everything else is
 /// dropped rather than inherited. `HOME` is deliberately absent: a home
 /// directory would let the child (and anything it execs) resolve user-level
-/// config, shell history, and credential stores outside CODEX_HOME, breaking
-/// the isolation boundary — app-server treats CODEX_HOME as its home. `PATH`
+/// config, shell history, and credential stores outside `CODEX_HOME`, breaking
+/// the isolation boundary — app-server treats `CODEX_HOME` as its home. `PATH`
 /// survives so a system codex can still locate helper binaries; the locale,
 /// terminal, and Windows variables keep runtime behavior predictable across
 /// platforms.

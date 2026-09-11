@@ -28,6 +28,7 @@ macro_rules! audit_object {
         #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
         $vis struct $name {
             $(
+                #[doc = concat!("The optional `", stringify!($field), "` property recorded for this audit action.")]
                 #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
                 pub $field: Omittable<$ty>,
             )*
@@ -599,10 +600,13 @@ audit_object! {
 /// through `WireSecret::with_exposed`, matching `CertificateDetails`.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct AuditPayloadCertificateDeleted {
+    /// Identifier used to reference this resource or protocol item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
+    /// Name assigned to this resource or operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<String>,
+    /// Certificate data associated with this resource or request.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub certificate: Omittable<WireSecret>,
     #[serde(default, flatten)]
@@ -610,6 +614,7 @@ pub struct AuditPayloadCertificateDeleted {
 }
 
 impl AuditPayloadCertificateDeleted {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra(&self) -> &ExtraFields {
         &self.extra

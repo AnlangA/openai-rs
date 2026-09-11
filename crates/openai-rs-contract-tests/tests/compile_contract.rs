@@ -1,3 +1,5 @@
+//! Compile-time checks for feature isolation, credential boundaries, and public API availability.
+
 #[test]
 fn credentials_and_transport_modes_are_type_isolated() {
     let tests = trybuild::TestCases::new();

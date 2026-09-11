@@ -3,7 +3,7 @@
 //! This module models the stable Jobs HTTP surface. The grader wire types in
 //! [`experimental_graders`] exist only to support reinforcement fine-tuning
 //! job creation; the alpha grader run/validate endpoint DTOs live solely in
-//! [`crate::evals::experimental`] (single-track, 7-19).
+//! `crate::evals::experimental` (available with `legacy-evals`) (single-track, 7-19).
 
 use std::collections::BTreeMap;
 
@@ -28,7 +28,10 @@ macro_rules! strict_tagged_union {
         #[derive(Clone, Debug, PartialEq)]
         #[non_exhaustive]
         pub enum $name {
-            $($variant($ty),)+
+            $(
+                #[doc = concat!("The `", $wire, "` payload, decoded as `", stringify!($ty), "`.")]
+                $variant($ty),
+            )+
             /// Future variant retained with every JSON field.
             Unknown(UnknownTaggedObject),
         }
@@ -169,7 +172,7 @@ impl From<f64> for AutoOrNumber {
 /// These DTOs support the reinforcement fine-tuning method only. The alpha
 /// grader run/validate endpoint DTOs (including the object-shaped
 /// `token_usage` of official examples) are tracked solely in
-/// [`crate::evals::experimental`] — see 7-19 for the single-track decision.
+/// `crate::evals::experimental` (available with `legacy-evals`) — see 7-19 for the single-track decision.
 pub mod experimental_graders {
     use super::*;
 
@@ -408,6 +411,11 @@ pub mod experimental_graders {
 
     impl ScoreModelGrader {
         /// Construct from typed serializable input items.
+        ///
+        /// # Errors
+        ///
+        /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a
+        /// shape error if the encoded value is incompatible with the required wire representation.
         pub fn from_serializable_inputs<T: Serialize>(
             name: impl Into<String>,
             model: impl Into<ModelId>,
@@ -473,6 +481,11 @@ pub mod experimental_graders {
 
     impl LabelModelGrader {
         /// Construct from typed serializable input items.
+        ///
+        /// # Errors
+        ///
+        /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a
+        /// shape error if the encoded value is incompatible with the required wire representation.
         pub fn from_serializable_inputs<T: Serialize>(
             name: impl Into<String>,
             model: impl Into<ModelId>,
@@ -507,7 +520,7 @@ pub mod experimental_graders {
         ///
         /// Mirrors the pinned top-level grader unions (reinforcement method and
         /// the alpha run/validate schemas tracked in
-        /// [`crate::evals::experimental`]): exactly five variants with no
+        /// `crate::evals::experimental` (available with `legacy-evals`)): exactly five variants with no
         /// `label_model`, which the pinned schema only allows nested inside
         /// [`MultiGrader::graders`] as a [`ReinforcementGraderMember`].
         pub enum Grader {
@@ -669,10 +682,13 @@ pub mod experimental_graders {
 /// Deprecated top-level supervised hyperparameters accepted by job creation.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LegacyFineTuningHyperparameters {
+    /// Number of training examples per batch, or `auto` for server selection.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub batch_size: Omittable<AutoOrInteger>,
+    /// Multiplier applied to the base learning rate, or `auto` for server selection.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub learning_rate_multiplier: Omittable<AutoOrNumber>,
+    /// Number of passes through the training dataset, or `auto` for server selection.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub n_epochs: Omittable<AutoOrInteger>,
 }
@@ -683,8 +699,10 @@ pub struct FineTuningJobHyperparameters {
     /// Batch size may explicitly be null in the frozen response schema.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub batch_size: Omittable<Nullable<AutoOrInteger>>,
+    /// Multiplier applied to the base learning rate, or `auto` for server selection.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub learning_rate_multiplier: Omittable<AutoOrNumber>,
+    /// Number of passes through the training dataset, or `auto` for server selection.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub n_epochs: Omittable<AutoOrInteger>,
     /// Future response fields.
@@ -703,10 +721,16 @@ impl FineTuningJobHyperparameters {
 /// Supervised fine-tuning hyperparameters.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FineTuneSupervisedHyperparameters {
+    /// Number of examples in each batch. A larger batch size means that model parameters are
+    /// updated less frequently, but with lower variance.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub batch_size: Omittable<AutoOrInteger>,
+    /// Scaling factor for the learning rate. A smaller learning rate may be useful to avoid
+    /// overfitting.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub learning_rate_multiplier: Omittable<AutoOrNumber>,
+    /// The number of epochs to train the model for. An epoch refers to one full cycle through the
+    /// training dataset.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub n_epochs: Omittable<AutoOrInteger>,
     #[serde(default, flatten)]
@@ -724,12 +748,16 @@ impl FineTuneSupervisedHyperparameters {
 /// DPO fine-tuning hyperparameters.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FineTuneDpoHyperparameters {
+    /// Strength of the reference-model penalty in direct preference optimization.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub beta: Omittable<AutoOrNumber>,
+    /// Number of training examples per batch, or `auto` for server selection.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub batch_size: Omittable<AutoOrInteger>,
+    /// Multiplier applied to the base learning rate, or `auto` for server selection.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub learning_rate_multiplier: Omittable<AutoOrNumber>,
+    /// Number of passes through the training dataset, or `auto` for server selection.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub n_epochs: Omittable<AutoOrInteger>,
     #[serde(default, flatten)]
@@ -750,18 +778,28 @@ impl FineTuneDpoHyperparameters {
 /// Reinforcement fine-tuning hyperparameters.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FineTuneReinforcementHyperparameters {
+    /// Number of examples in each batch. A larger batch size means that model parameters are
+    /// updated less frequently, but with lower variance.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub batch_size: Omittable<AutoOrInteger>,
+    /// Scaling factor for the learning rate. A smaller learning rate may be useful to avoid
+    /// overfitting.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub learning_rate_multiplier: Omittable<AutoOrNumber>,
+    /// The number of epochs to train the model for. An epoch refers to one full cycle through the
+    /// training dataset.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub n_epochs: Omittable<AutoOrInteger>,
+    /// Level of reasoning effort.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub reasoning_effort: Omittable<ReinforcementReasoningEffort>,
+    /// Multiplier on amount of compute used for exploring search space during training.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub compute_multiplier: Omittable<AutoOrNumber>,
+    /// The number of training steps between evaluation runs.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub eval_interval: Omittable<AutoOrInteger>,
+    /// Number of evaluation samples to generate per training step.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub eval_samples: Omittable<AutoOrInteger>,
     #[serde(default, flatten)]
@@ -779,6 +817,7 @@ impl FineTuneReinforcementHyperparameters {
 /// Supervised method configuration.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FineTuneSupervisedMethodConfig {
+    /// Training hyperparameters for the selected fine-tuning method.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub hyperparameters: Omittable<FineTuneSupervisedHyperparameters>,
     #[serde(default, flatten)]
@@ -799,6 +838,7 @@ impl FineTuneSupervisedMethodConfig {
 /// DPO method configuration.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FineTuneDpoMethodConfig {
+    /// Training hyperparameters for the selected fine-tuning method.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub hyperparameters: Omittable<FineTuneDpoHyperparameters>,
     #[serde(default, flatten)]
@@ -821,6 +861,7 @@ impl FineTuneDpoMethodConfig {
 pub struct FineTuneReinforcementMethodConfig {
     /// Grader definition. This wire surface remains experimental.
     pub grader: experimental_graders::Grader,
+    /// Training hyperparameters for the selected fine-tuning method.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub hyperparameters: Omittable<FineTuneReinforcementHyperparameters>,
     #[serde(default, flatten)]
@@ -865,6 +906,7 @@ literal_tag!(SupervisedMethodTag, Supervised, "supervised");
 pub struct SupervisedFineTuneMethod {
     #[serde(rename = "type")]
     kind: SupervisedMethodTag,
+    /// Supervised-learning configuration for the fine-tuning method.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub supervised: Omittable<FineTuneSupervisedMethodConfig>,
     #[serde(default, flatten)]
@@ -909,6 +951,7 @@ literal_tag!(DpoMethodTag, Dpo, "dpo");
 pub struct DpoFineTuneMethod {
     #[serde(rename = "type")]
     kind: DpoMethodTag,
+    /// Direct preference optimization configuration for the fine-tuning method.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub dpo: Omittable<FineTuneDpoMethodConfig>,
     #[serde(default, flatten)]
@@ -1186,6 +1229,12 @@ impl CreateFineTuningJobRequest {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateFineTuningJobConstraintError> {
         if let Omittable::Value(Nullable::Value(suffix)) = &self.suffix {
             if suffix.is_empty() {
@@ -1662,11 +1711,17 @@ crate::open_string_enum! {
 /// Fine-tuning job event.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FineTuningJobEvent {
+    /// The object type, which is always "`fine_tuning.job.event`".
     pub object: FineTuningEventObject,
+    /// The object identifier.
     pub id: String,
+    /// The Unix timestamp (in seconds) for when the fine-tuning job was created.
     pub created_at: u64,
+    /// The log level of the event.
     pub level: FineTuningEventLevel,
+    /// The message of the event.
     pub message: String,
+    /// The type of event.
     #[serde(
         default,
         rename = "type",
@@ -1692,18 +1747,25 @@ impl FineTuningJobEvent {
 /// Metrics recorded at a fine-tuning checkpoint.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FineTuningCheckpointMetrics {
+    /// Training step associated with the reported checkpoint metrics.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub step: Omittable<f64>,
+    /// Loss measured on the training batch.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub train_loss: Omittable<f64>,
+    /// Mean token accuracy measured on the training batch.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub train_mean_token_accuracy: Omittable<f64>,
+    /// Loss measured on the validation batch.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub valid_loss: Omittable<f64>,
+    /// Mean token accuracy measured on the validation batch.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub valid_mean_token_accuracy: Omittable<f64>,
+    /// Loss measured over the full validation dataset.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub full_valid_loss: Omittable<f64>,
+    /// Mean token accuracy measured over the full validation dataset.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub full_valid_mean_token_accuracy: Omittable<f64>,
     /// Future response fields.
@@ -1729,12 +1791,19 @@ crate::open_string_enum! {
 /// Model checkpoint produced during fine-tuning.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FineTuningJobCheckpoint {
+    /// The checkpoint identifier, which can be referenced in the API endpoints.
     pub id: String,
+    /// The Unix timestamp (in seconds) for when the checkpoint was created.
     pub created_at: u64,
+    /// The name of the fine-tuned checkpoint model that is created.
     pub fine_tuned_model_checkpoint: ModelId,
+    /// The step number that the checkpoint was created at.
     pub step_number: u64,
+    /// Metrics at the step number during the fine-tuning job.
     pub metrics: FineTuningCheckpointMetrics,
+    /// The name of the fine-tuning job that this checkpoint was created from.
     pub fine_tuning_job_id: FineTuningJobId,
+    /// The object type, which is always "`fine_tuning.job.checkpoint`".
     pub object: FineTuningCheckpointObject,
     /// Future response fields.
     #[serde(default, flatten)]
@@ -1759,8 +1828,11 @@ crate::open_string_enum! {
 /// Paginated fine-tuning jobs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ListPaginatedFineTuningJobsResponse {
+    /// Wire discriminator identifying the resource or list type.
     pub object: FineTuningListObject,
+    /// Entries returned in this response page.
     pub data: Vec<FineTuningJob>,
+    /// Whether the server reports additional pages after this one.
     pub has_more: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -1786,8 +1858,11 @@ impl ListPaginatedFineTuningJobsResponse {
 /// Paginated fine-tuning job events.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ListFineTuningJobEventsResponse {
+    /// Wire discriminator identifying the resource or list type.
     pub object: FineTuningListObject,
+    /// Entries returned in this response page.
     pub data: Vec<FineTuningJobEvent>,
+    /// Whether the server reports additional pages after this one.
     pub has_more: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -1817,12 +1892,17 @@ impl ListFineTuningJobEventsResponse {
 /// Paginated fine-tuning checkpoints.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ListFineTuningJobCheckpointsResponse {
+    /// Wire discriminator identifying the resource or list type.
     pub object: FineTuningListObject,
+    /// Entries returned in this response page.
     pub data: Vec<FineTuningJobCheckpoint>,
+    /// Identifier of the first item in this page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub first_id: Omittable<Nullable<String>>,
+    /// Identifier of the last item in this page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub last_id: Omittable<Nullable<String>>,
+    /// Whether the server reports additional pages after this one.
     pub has_more: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -1854,10 +1934,13 @@ impl ListFineTuningJobCheckpointsResponse {
 /// Query for listing fine-tuning jobs.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ListFineTuningJobsParams {
+    /// Cursor identifying the item after which the next page should begin.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub after: Omittable<FineTuningJobId>,
+    /// Maximum number of entries to return in one page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<u64>,
+    /// Caller- or server-provided metadata associated with the resource.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub metadata: Omittable<Nullable<BTreeMap<String, String>>>,
 }
@@ -1865,8 +1948,10 @@ pub struct ListFineTuningJobsParams {
 /// Query for listing job events.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ListFineTuningEventsParams {
+    /// Cursor identifying the item after which the next page should begin.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub after: Omittable<String>,
+    /// Maximum number of entries to return in one page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<u64>,
 }
@@ -1874,8 +1959,10 @@ pub struct ListFineTuningEventsParams {
 /// Query for listing job checkpoints.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ListFineTuningCheckpointsParams {
+    /// Cursor identifying the item after which the next page should begin.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub after: Omittable<String>,
+    /// Maximum number of entries to return in one page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<u64>,
 }
@@ -1890,9 +1977,13 @@ crate::open_string_enum! {
 /// Permission granting a project access to a fine-tuned checkpoint.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FineTuningCheckpointPermission {
+    /// The permission identifier, which can be referenced in the API endpoints.
     pub id: String,
+    /// The Unix timestamp (in seconds) for when the permission was created.
     pub created_at: u64,
+    /// The project identifier that the permission is for.
     pub project_id: String,
+    /// The object type, which is always "checkpoint.permission".
     pub object: CheckpointPermissionObject,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -1926,12 +2017,17 @@ impl CreateFineTuningCheckpointPermissionRequest {
 /// Paginated checkpoint permissions. Also returned by permission creation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ListFineTuningCheckpointPermissionResponse {
+    /// Wire discriminator identifying the resource or list type.
     pub object: FineTuningListObject,
+    /// Entries returned in this response page.
     pub data: Vec<FineTuningCheckpointPermission>,
+    /// Identifier of the first item in this page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub first_id: Omittable<Nullable<String>>,
+    /// Identifier of the last item in this page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub last_id: Omittable<Nullable<String>>,
+    /// Whether the server reports additional pages after this one.
     pub has_more: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -1963,12 +2059,16 @@ impl ListFineTuningCheckpointPermissionResponse {
 /// Query for listing checkpoint permissions.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ListFineTuningCheckpointPermissionsParams {
+    /// Identifier of the project associated with this resource or record.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub project_id: Omittable<String>,
+    /// Cursor identifying the item after which the next page should begin.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub after: Omittable<String>,
+    /// Maximum number of entries to return in one page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<u64>,
+    /// Sort direction used when retrieving the page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub order: Omittable<CheckpointPermissionOrder>,
 }
@@ -1976,8 +2076,11 @@ pub struct ListFineTuningCheckpointPermissionsParams {
 /// Confirmation returned after deleting a checkpoint permission.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeleteFineTuningCheckpointPermissionResponse {
+    /// The ID of the fine-tuned model checkpoint permission that was deleted.
     pub id: String,
+    /// The object type, which is always "checkpoint.permission".
     pub object: CheckpointPermissionObject,
+    /// Whether the fine-tuned model checkpoint permission was successfully deleted.
     pub deleted: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,

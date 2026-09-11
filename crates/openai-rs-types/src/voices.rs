@@ -16,6 +16,7 @@ pub const MAX_CUSTOM_VOICE_AUDIO_BYTES: u64 = 10 * 1024 * 1024;
 
 macro_rules! opaque_id {
     ($name:ident) => {
+        /// An opaque custom-voice resource identifier, retained without prefix validation.
         #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
         pub struct $name(Box<str>);
@@ -150,6 +151,11 @@ pub struct CreateVoiceConsentRequest {
 
 impl CreateVoiceConsentRequest {
     /// Creates a consent upload after validating text and audio metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(
         name: impl Into<String>,
         language: impl Into<String>,
@@ -206,6 +212,11 @@ pub struct UpdateVoiceConsentRequest {
 
 impl UpdateVoiceConsentRequest {
     /// Creates a rename request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(name: impl Into<String>) -> Result<Self, VoiceRequestError> {
         let name = name.into();
         if name.trim().is_empty() {
@@ -473,6 +484,11 @@ pub struct CreateVoiceRequest {
 
 impl CreateVoiceRequest {
     /// Creates a custom voice upload after validating audio metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(
         name: impl Into<String>,
         consent: impl Into<VoiceConsentId>,

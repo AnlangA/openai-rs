@@ -73,6 +73,11 @@ impl VectorStores {
     }
 
     /// Creates a vector store.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: CreateVectorStoreRequest,
@@ -88,6 +93,11 @@ impl VectorStores {
     }
 
     /// Lists vector stores.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         params: VectorStoreListParams,
@@ -128,6 +138,11 @@ impl VectorStores {
     }
 
     /// Retrieves one vector store.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         vector_store_id: &VectorStoreId,
@@ -137,6 +152,11 @@ impl VectorStores {
     }
 
     /// Updates one vector store.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn update(
         &self,
         vector_store_id: &VectorStoreId,
@@ -153,6 +173,11 @@ impl VectorStores {
     }
 
     /// Deletes one vector store.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         vector_store_id: &VectorStoreId,
@@ -162,6 +187,11 @@ impl VectorStores {
     }
 
     /// Searches one vector store with typed ranking and attribute filters.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn search(
         &self,
         vector_store_id: &VectorStoreId,
@@ -200,6 +230,11 @@ impl VectorStores {
     /// unpinned so each sleep follows the retrieve response's
     /// `openai-poll-after-ms` hint when the server sends one, exactly like the
     /// official Vector Stores poll helpers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if polling configuration is invalid, a poll request fails, polling is
+    /// cancelled, or the configured deadline expires.
     pub async fn poll(
         &self,
         vector_store_id: &VectorStoreId,
@@ -232,6 +267,11 @@ impl VectorStoreFiles {
     }
 
     /// Attaches an existing Platform file.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         vector_store_id: &VectorStoreId,
@@ -248,6 +288,11 @@ impl VectorStoreFiles {
     }
 
     /// Lists attached files.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         vector_store_id: &VectorStoreId,
@@ -294,6 +339,11 @@ impl VectorStoreFiles {
     }
 
     /// Retrieves one attached file.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         vector_store_id: &VectorStoreId,
@@ -305,6 +355,11 @@ impl VectorStoreFiles {
     }
 
     /// Replaces or clears one attached file's attributes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn update_attributes(
         &self,
         vector_store_id: &VectorStoreId,
@@ -323,6 +378,11 @@ impl VectorStoreFiles {
 
     /// Detaches one file from a vector store without deleting the Platform
     /// file itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         vector_store_id: &VectorStoreId,
@@ -334,6 +394,11 @@ impl VectorStoreFiles {
     }
 
     /// Retrieves parsed chunks for one attached file.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn content(
         &self,
         vector_store_id: &VectorStoreId,
@@ -361,6 +426,11 @@ impl VectorStoreFiles {
     /// unpinned so each sleep follows the retrieve response's
     /// `openai-poll-after-ms` hint when the server sends one, exactly like the
     /// official Vector Stores file poll helpers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if polling configuration is invalid, a poll request fails, polling is
+    /// cancelled, or the configured deadline expires.
     pub async fn poll(
         &self,
         vector_store_id: &VectorStoreId,
@@ -389,6 +459,11 @@ impl VectorStoreFileBatches {
     }
 
     /// Creates a batch of attached files.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         vector_store_id: &VectorStoreId,
@@ -409,6 +484,11 @@ impl VectorStoreFileBatches {
     }
 
     /// Retrieves one file batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         vector_store_id: &VectorStoreId,
@@ -425,6 +505,11 @@ impl VectorStoreFileBatches {
     }
 
     /// Cancels in-progress work for one file batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn cancel(
         &self,
         vector_store_id: &VectorStoreId,
@@ -442,6 +527,11 @@ impl VectorStoreFileBatches {
     }
 
     /// Lists files belonging to one file batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list_files(
         &self,
         vector_store_id: &VectorStoreId,
@@ -501,6 +591,11 @@ impl VectorStoreFileBatches {
     /// unpinned so each sleep follows the retrieve response's
     /// `openai-poll-after-ms` hint when the server sends one, exactly like the
     /// official Vector Stores file-batch poll helpers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if polling configuration is invalid, a poll request fails, polling is
+    /// cancelled, or the configured deadline expires.
     pub async fn poll(
         &self,
         vector_store_id: &VectorStoreId,

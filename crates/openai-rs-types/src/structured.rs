@@ -134,6 +134,11 @@ where
     T: JsonSchema,
 {
     /// Builds a strict response format from `T`'s `schemars` definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema error for an invalid name, unsupported schema shape, unresolved reference,
+    /// invalid alias cycle, or exhausted normalization budget.
     pub fn new(name: impl Into<String>) -> Result<Self, StructuredError> {
         let name = name.into();
         validate_response_format_name(&name)?;
@@ -193,6 +198,11 @@ where
     T: JsonSchema + DeserializeOwned,
 {
     /// Decodes model-produced JSON directly into `T`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn parse(&self, text: &str) -> Result<T, StructuredError> {
         serde_json::from_str(text).map_err(StructuredError::Decode)
     }
@@ -214,6 +224,11 @@ where
     R: JsonSchema,
 {
     /// Builds strict input and output contracts for a function tool.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema error for an invalid name, unsupported schema shape, unresolved reference,
+    /// invalid alias cycle, or exhausted normalization budget.
     pub fn new(name: impl Into<String>) -> Result<Self, StructuredError> {
         let name = name.into();
         validate_function_tool_name(&name)?;
@@ -285,21 +300,41 @@ where
     R: JsonSchema + Serialize + DeserializeOwned,
 {
     /// Encodes arguments into the JSON string required by function-call wire data.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn encode_arguments(&self, arguments: &A) -> Result<String, StructuredError> {
         serde_json::to_string(arguments).map_err(StructuredError::Encode)
     }
 
     /// Parses a function-call argument string into the declared Rust type.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn decode_arguments(&self, arguments: &str) -> Result<A, StructuredError> {
         serde_json::from_str(arguments).map_err(StructuredError::Decode)
     }
 
     /// Encodes a typed function result without requiring callers to format JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn encode_output(&self, output: &R) -> Result<String, StructuredError> {
         serde_json::to_string(output).map_err(StructuredError::Encode)
     }
 
     /// Parses a previously encoded function result.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn decode_output(&self, output: &str) -> Result<R, StructuredError> {
         serde_json::from_str(output).map_err(StructuredError::Decode)
     }
@@ -308,6 +343,7 @@ where
 /// Context passed to a typed tool handler.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolContext {
+    /// Identifier that associates a tool invocation with its output.
     pub call_id: String,
 }
 
@@ -361,6 +397,12 @@ pub trait ToolSpec {
 /// Asynchronous execution handler for a typed function tool.
 pub trait ToolHandler: ToolSpec {
     /// Executes the tool with typed arguments and invocation context.
+    ///
+    /// # Errors
+    ///
+    /// The returned future produces a [`ToolExecutionError`] when the handler
+    /// cannot complete the requested operation. Implementations define their
+    /// own application-specific failure conditions.
     fn call(
         &self,
         arguments: Self::Arguments,
@@ -421,6 +463,10 @@ impl ToolRegistry {
     }
 
     /// Registers a typed tool handler. Returns an error if a tool with the same name is already registered.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tool name is already registered or the tool definition is invalid.
     pub fn register<H: ToolHandler + Send + Sync + 'static>(
         &mut self,
         handler: H,
@@ -437,6 +483,10 @@ impl ToolRegistry {
     }
 
     /// Returns the tool definitions for all registered tools.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a registered tool cannot produce a valid function definition.
     pub fn definitions(&self) -> Result<Vec<crate::responses::FunctionTool>, StructuredError> {
         let mut defs = Vec::with_capacity(self.tools.len());
         for tool in self.tools.values() {
@@ -447,6 +497,11 @@ impl ToolRegistry {
 
     /// Executes a single function call against the registered handlers.
     /// Business-level failures (`ToolExecutionError`) are converted into in-band JSON error outputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tool is unknown, its arguments cannot be decoded, its handler fails,
+    /// or its output cannot be encoded.
     pub async fn execute(
         &self,
         call: &crate::responses::FunctionCall,
@@ -471,6 +526,11 @@ impl ToolRegistry {
     }
 
     /// Executes all function calls and returns the corresponding function call outputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns a tool-execution error if any invocation fails. Earlier invocations may already have
+    /// run.
     pub async fn execute_all(
         &self,
         calls: impl IntoIterator<Item = &crate::responses::FunctionCall>,
@@ -484,6 +544,11 @@ impl ToolRegistry {
 }
 
 /// Converts a schemars document to OpenAI's strict object-schema convention.
+///
+/// # Errors
+///
+/// Returns an error for unsupported schema shapes, unresolved references, invalid alias cycles,
+/// invalid strict-object constraints, or an exhausted expansion budget.
 pub fn normalize_strict_schema(schema: &mut Value) -> Result<(), StructuredError> {
     // A root `$schema` key is a JSON Schema dialect declaration rather than
     // data: schemars emits it only on the document root, strict-mode

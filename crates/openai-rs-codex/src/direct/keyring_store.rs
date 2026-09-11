@@ -18,6 +18,11 @@ pub struct KeyringStore {
 }
 
 impl KeyringStore {
+    /// Selects the operating-system keyring entry used to persist credentials.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry name is blank or longer than 128 UTF-8 bytes.
     pub fn new(entry_name: impl Into<String>) -> Result<Self, DirectError> {
         let entry_name = entry_name.into();
         if entry_name.trim().is_empty() || entry_name.len() > 128 {

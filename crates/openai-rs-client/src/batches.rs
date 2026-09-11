@@ -46,6 +46,11 @@ impl Batches {
     }
 
     /// Creates a batch for an already uploaded JSONL file.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(&self, request: CreateBatchRequest) -> Result<ApiResponse<Batch>, Error> {
         let path = [PathSegment::literal("batches")];
         self.client
@@ -55,6 +60,11 @@ impl Batches {
     }
 
     /// Retrieves one batch by its opaque id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(&self, batch_id: &BatchId) -> Result<ApiResponse<Batch>, Error> {
         let path = batch_path(batch_id)?;
         self.client
@@ -64,6 +74,11 @@ impl Batches {
     }
 
     /// Lists batches using typed cursor parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         params: BatchListParams,
@@ -104,6 +119,11 @@ impl Batches {
     }
 
     /// Requests cancellation of a batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn cancel(&self, batch_id: &BatchId) -> Result<ApiResponse<Batch>, Error> {
         let path = [
             PathSegment::literal("batches"),
@@ -123,6 +143,11 @@ impl Batches {
     /// therefore expires structurally before a batch can complete; start from
     /// [`PollOptions::for_batches`] (5-second interval, 24-hour timeout)
     /// instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if polling configuration is invalid, a poll request fails, polling is
+    /// cancelled, or the configured deadline expires.
     pub async fn poll(
         &self,
         batch_id: &BatchId,
@@ -155,6 +180,11 @@ impl Batches {
     /// and 200 decimal megabytes) nor the per-line JSONL checks (at least one
     /// line, unique `custom_id`s, a single endpoint per file), so a caller that
     /// owns the file content keeps responsibility for those rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if JSONL validation or encoding, file I/O, upload, or batch creation fails.
+    /// Some failures can occur after the input file has already been uploaded.
     pub async fn submit_jsonl_path(
         &self,
         path: impl AsRef<Path>,
@@ -196,6 +226,11 @@ impl Batches {
     /// writer cannot count inside opaque typed bodies, and the metadata
     /// 16/64/512 limits stay opt-in (see
     /// [`BatchSubmissionOptions::with_metadata`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if JSONL validation or encoding, file I/O, upload, or batch creation fails.
+    /// Some failures can occur after the input file has already been uploaded.
     pub async fn submit_lines<O, I>(
         &self,
         lines: I,
@@ -215,6 +250,11 @@ impl Batches {
     }
 
     /// Opens the raw output JSONL stream when a completed batch advertises one.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn download_output(&self, batch: &Batch) -> Result<Option<FileContentStream>, Error> {
         match batch.output_file_id() {
             Some(file_id) => self.client.files().download(file_id).await.map(Some),
@@ -223,6 +263,11 @@ impl Batches {
     }
 
     /// Opens the raw error JSONL stream when a batch advertises one.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn download_errors(&self, batch: &Batch) -> Result<Option<FileContentStream>, Error> {
         match batch.error_file_id() {
             Some(file_id) => self.client.files().download(file_id).await.map(Some),

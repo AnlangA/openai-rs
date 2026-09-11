@@ -110,6 +110,11 @@ impl OneShotMultipartSource {
     }
 
     /// Validates and supplies a multipart filename.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the filename is empty or contains characters that are unsafe in a
+    /// multipart filename.
     pub fn try_with_file_name(
         self,
         file_name: impl Into<String>,
@@ -125,6 +130,10 @@ impl OneShotMultipartSource {
     }
 
     /// Validates and supplies a multipart media type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the supplied value is not a valid MIME type for the multipart part.
     pub fn try_with_media_type(
         self,
         media_type: impl Into<String>,
@@ -322,6 +331,11 @@ impl FileContentStream {
     }
 
     /// Buffers this download with an explicit upper bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading the response fails or the collected body exceeds the supplied
+    /// byte limit.
     pub async fn collect(mut self, limit: usize) -> Result<ApiResponse<FileContent>, Error> {
         if self
             .content_length

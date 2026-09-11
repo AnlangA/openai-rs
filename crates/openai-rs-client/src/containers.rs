@@ -50,6 +50,11 @@ impl Containers {
     }
 
     /// Creates a Container from a typed JSON request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: CreateContainerBody,
@@ -62,6 +67,11 @@ impl Containers {
     }
 
     /// Lists Containers using typed query parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         params: ContainerListParams,
@@ -104,6 +114,11 @@ impl Containers {
     }
 
     /// Retrieves one Container.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         container_id: &ContainerId,
@@ -116,6 +131,11 @@ impl Containers {
     }
 
     /// Deletes one Container and accepts the documented empty success body.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         container_id: &ContainerId,
@@ -149,6 +169,11 @@ impl ContainerFiles {
     }
 
     /// Attaches an existing Platform File object with JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn attach(
         &self,
         container_id: &ContainerId,
@@ -168,6 +193,11 @@ impl ContainerFiles {
     /// ([`CreateContainerFileUploadRequest::with_file_id`]), that name is
     /// sent as an additional `file_id` text part beside the binary `file`
     /// part, per the pinned multipart schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn upload(
         &self,
         container_id: &ContainerId,
@@ -192,6 +222,11 @@ impl ContainerFiles {
     }
 
     /// Lists files in one Container.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         container_id: &ContainerId,
@@ -240,6 +275,11 @@ impl ContainerFiles {
     }
 
     /// Retrieves one Container File's metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         container_id: &ContainerId,
@@ -253,6 +293,11 @@ impl ContainerFiles {
     }
 
     /// Deletes one Container File and accepts an empty success body.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         container_id: &ContainerId,
@@ -270,6 +315,11 @@ impl ContainerFiles {
 
     /// Streams raw file content. [`ContainerFileContentStream::collect`]
     /// provides bounded buffering when desired.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn content(
         &self,
         container_id: &ContainerId,

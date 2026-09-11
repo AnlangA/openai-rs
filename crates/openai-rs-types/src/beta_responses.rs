@@ -205,7 +205,10 @@ pub enum BetaCaller {
     /// The root model invoked the tool directly.
     Direct,
     /// A program item invoked the tool.
-    Program { caller_id: String },
+    Program {
+        /// Identifier of the caller that initiated the operation.
+        caller_id: String,
+    },
     /// A future caller kind retained losslessly.
     Unknown(UnknownTaggedObject),
 }
@@ -232,6 +235,7 @@ impl Serialize for BetaCaller {
                 struct Program<'a> {
                     #[serde(rename = "type")]
                     kind: ProgramCallerTag,
+                    /// Identifier of the caller that initiated the operation.
                     caller_id: &'a str,
                 }
                 Program {
@@ -372,6 +376,12 @@ impl BetaMultiAgentConfig {
     }
 
     /// Checks pinned OpenAPI `max_concurrent_subagents` `minimum: 1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         if let Omittable::Value(actual) = self.max_concurrent_subagents
             && actual < MIN_CONCURRENT_SUBAGENTS
@@ -683,6 +693,12 @@ impl BetaAgentInputText {
     }
 
     /// Checks pinned OpenAPI `text` `maxLength` without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_input_text_chars(self.text.chars().count())
     }
@@ -776,6 +792,12 @@ impl BetaAgentInputImage {
     }
 
     /// Checks pinned OpenAPI `image_url` `maxLength` without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         if let Omittable::Value(Nullable::Value(image_url)) = &self.image_url {
             validate_input_image_url_chars(image_url.chars().count())?;
@@ -890,6 +912,12 @@ impl BetaAgentInputImageParam {
     }
 
     /// Checks pinned OpenAPI `image_url` `maxLength` without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         if let Omittable::Value(Nullable::Value(image_url)) = &self.image_url {
             validate_input_image_url_chars(image_url.chars().count())?;
@@ -929,6 +957,12 @@ impl BetaAgentEncryptedContent {
     }
 
     /// Checks pinned OpenAPI `encrypted_content` `maxLength` without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         let actual = self.encrypted_content.chars().count();
         if actual > MAX_INPUT_TEXT_CHARS {
@@ -976,16 +1010,27 @@ impl BetaAgentText {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum BetaAgentMessageContent {
+    /// Carries the `BetaAgentInputText` payload for this protocol alternative.
     Text(BetaAgentInputText),
+    /// Carries the `BetaAgentInputImageParam` payload for this protocol alternative.
     Image(BetaAgentInputImageParam),
+    /// Carries the `BetaAgentEncryptedContent` payload for this protocol alternative.
     Encrypted(BetaAgentEncryptedContent),
+    /// Carries the `OutputText` payload for this protocol alternative.
     OutputText(OutputText),
+    /// Carries the `BetaAgentText` payload for this protocol alternative.
     PlainText(BetaAgentText),
+    /// Carries the `SummaryTextContent` payload for this protocol alternative.
     SummaryText(SummaryTextContent),
+    /// Carries the `ReasoningTextContent` payload for this protocol alternative.
     ReasoningText(ReasoningTextContent),
+    /// Carries the `Refusal` payload for this protocol alternative.
     Refusal(Refusal),
+    /// Carries the `ComputerScreenshot` payload for this protocol alternative.
     ComputerScreenshot(ComputerScreenshot),
+    /// Carries the `InputFile` payload for this protocol alternative.
     File(InputFile),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(UnknownTaggedObject),
 }
 
@@ -1167,6 +1212,12 @@ impl BetaAgentMessageParam {
     }
 
     /// Checks pinned OpenAPI content payload limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         for part in &self.content {
             match part {
@@ -1311,6 +1362,11 @@ pub struct BetaMultiAgentCallParam {
 
 impl BetaMultiAgentCallParam {
     /// Creates a call from automatically serialized action arguments.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable<T: Serialize>(
         action: BetaMultiAgentAction,
         call_id: impl Into<String>,
@@ -1405,6 +1461,12 @@ impl BetaMultiAgentCallParam {
 
     /// Checks the pinned `call_id` `1..=64` character range without sending
     /// the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_multi_agent_call_id(&self.call_id)
     }
@@ -1453,6 +1515,11 @@ impl BetaMultiAgentCall {
     }
 
     /// Creates a returned call from automatically serialized arguments.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable<T: Serialize>(
         id: impl Into<String>,
         action: BetaMultiAgentAction,
@@ -1755,6 +1822,12 @@ impl BetaMultiAgentCallOutputParam {
 
     /// Checks the pinned `call_id` `1..=64` character range without sending
     /// the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_multi_agent_call_id(&self.call_id)
     }
@@ -2134,9 +2207,13 @@ impl<'de> Deserialize<'de> for BetaStableOutputItem {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum BetaResponseOutputItem {
+    /// Carries the `BetaStableOutputItem` payload for this protocol alternative.
     Stable(Box<BetaStableOutputItem>),
+    /// Carries the `BetaAgentMessage` payload for this protocol alternative.
     AgentMessage(BetaAgentMessage),
+    /// Carries the `BetaMultiAgentCall` payload for this protocol alternative.
     MultiAgentCall(BetaMultiAgentCall),
+    /// Carries the `BetaMultiAgentCallOutput` payload for this protocol alternative.
     MultiAgentCallOutput(BetaMultiAgentCallOutput),
 }
 
@@ -2206,7 +2283,9 @@ impl From<BetaMultiAgentCallOutput> for BetaResponseOutputItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum BetaResponseInput {
+    /// Carries the `String` payload for this protocol alternative.
     Text(String),
+    /// Carries the `Vec<BetaResponseInputItem>` payload for this protocol alternative.
     Items(Vec<BetaResponseInputItem>),
 }
 
@@ -2354,24 +2433,28 @@ impl BetaReasoningConfig {
         Self::default()
     }
 
+    /// Sets the reasoning context configuration.
     #[must_use]
     pub fn context(mut self, context: BetaReasoningContext) -> Self {
         self.context = Omittable::Value(Nullable::Value(context));
         self
     }
 
+    /// Sets the requested reasoning effort.
     #[must_use]
     pub fn effort(mut self, effort: BetaReasoningEffort) -> Self {
         self.effort = Omittable::Value(Nullable::Value(effort));
         self
     }
 
+    /// Sets the requested reasoning mode.
     #[must_use]
     pub fn mode(mut self, mode: BetaReasoningMode) -> Self {
         self.mode = Omittable::Value(mode);
         self
     }
 
+    /// Sets the requested reasoning-summary format.
     #[must_use]
     pub fn summary(mut self, summary: BetaReasoningSummary) -> Self {
         self.summary = Omittable::Value(Nullable::Value(summary));
@@ -2465,11 +2548,13 @@ pub struct BetaPromptCacheOptionsParam {
 }
 
 impl BetaPromptCacheOptionsParam {
+    /// Creates prompt-cache options without overriding the service defaults.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets the requested prompt-cache mode.
     #[must_use]
     pub fn mode(mut self, mode: BetaPromptCacheMode) -> Self {
         self.mode = Omittable::Value(mode);
@@ -2963,6 +3048,12 @@ impl BetaCreateResponseRequest {
     /// beta-split `context_management` rules re-enter the GA bounds here
     /// because the embedded base body never carries that wire field on this
     /// channel (11-03).
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<&Self, BetaResponseInputConstraintError> {
         self.base.validate()?;
         if let Omittable::Value(input) = &self.input {
@@ -3072,6 +3163,12 @@ impl BetaCreateStreamingResponseRequest {
     /// Delegates to the non-streaming body so both typestates enforce the
     /// same constraints, mirroring the GA create pair where the shared
     /// builder macro exposes one `validate` on each mode (11-03).
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<&Self, BetaResponseInputConstraintError> {
         self.request.validate()?;
         Ok(self)
@@ -3655,6 +3752,12 @@ impl BetaCompactResponseRequest {
     ///
     /// Rejects prompt-cached message content carrying the item-form-only
     /// `computer_screenshot` branch (6-05) alongside the GA constraints.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), BetaResponseInputConstraintError> {
         if let Omittable::Value(Nullable::Value(key)) = &self.prompt_cache_key {
             let actual = key.chars().count();
@@ -3736,6 +3839,7 @@ pub struct BetaRetrieveResponseParams {
 }
 
 impl BetaRetrieveResponseParams {
+    /// Creates beta response retrieval parameters with no additional fields requested.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -3767,6 +3871,7 @@ pub struct BetaRetrieveResponseStreamParams {
 }
 
 impl BetaRetrieveResponseStreamParams {
+    /// Creates beta streaming retrieval parameters without a resume cursor or extra includes.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -3890,17 +3995,20 @@ impl<'de> Deserialize<'de> for BetaListInputItemsParams {
 }
 
 impl BetaListInputItemsParams {
+    /// Creates input-item listing parameters with all optional filters omitted.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets the cursor after which input items should be listed.
     #[must_use]
     pub fn after(mut self, after: impl Into<String>) -> Self {
         self.after = Omittable::Value(after.into());
         self
     }
 
+    /// Appends a field to the requested response include list.
     #[must_use]
     pub fn include(mut self, include: BetaResponseIncludable) -> Self {
         self.include.push(include);
@@ -3918,6 +4026,11 @@ impl BetaListInputItemsParams {
     /// The pinned prose documents a 1..=100 range with a default of 20 when
     /// omitted; this builder rejects `0` and leaves the descriptive ceiling
     /// unenforced.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn limit(mut self, limit: u32) -> Result<Self, BetaListInputItemsLimitError> {
         if limit == 0 {
             return Err(BetaListInputItemsLimitError { actual: limit });
@@ -3926,6 +4039,7 @@ impl BetaListInputItemsParams {
         Ok(self)
     }
 
+    /// Sets the ordering of the returned input items.
     #[must_use]
     pub fn order(mut self, order: BetaResponseItemOrder) -> Self {
         self.order = Omittable::Value(order);
@@ -3958,21 +4072,25 @@ pub struct BetaResponseItemList {
 }
 
 impl BetaResponseItemList {
+    /// Returns the items contained in this response page.
     #[must_use]
     pub fn data(&self) -> &[BetaResponseInputItem] {
         &self.data
     }
 
+    /// Returns whether another page of items is available.
     #[must_use]
     pub const fn has_more(&self) -> bool {
         self.has_more
     }
 
+    /// Returns the identifier of the first item in the page, when available.
     #[must_use]
     pub fn first_id(&self) -> &str {
         &self.first_id
     }
 
+    /// Returns the identifier of the last item in the page, when available.
     #[must_use]
     pub fn last_id(&self) -> &str {
         &self.last_id
@@ -4015,16 +4133,19 @@ pub struct BetaCountInputTokensRequest {
 }
 
 impl BetaCountInputTokensRequest {
+    /// Creates a token-count request with all optional properties omitted.
     #[must_use]
     pub fn empty() -> Self {
         Self::default()
     }
 
+    /// Creates a token-count request for the supplied model and input.
     #[must_use]
     pub fn new(model: impl Into<String>, input: impl Into<BetaResponseInput>) -> Self {
         Self::empty().model(model).input(input)
     }
 
+    /// Sets the model used to count input tokens.
     #[must_use]
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.model = Omittable::Value(Nullable::Value(model.into()));
@@ -4038,6 +4159,7 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sets the conversation input whose tokens should be counted.
     #[must_use]
     pub fn input(mut self, input: impl Into<BetaResponseInput>) -> Self {
         self.input = Omittable::Value(Nullable::Value(input.into()));
@@ -4051,6 +4173,7 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sets instructions included in the token count.
     #[must_use]
     pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
         self.instructions = Omittable::Value(Nullable::Value(instructions.into()));
@@ -4080,6 +4203,7 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sets whether the request permits parallel tool calls.
     #[must_use]
     pub fn parallel_tool_calls(mut self, enabled: bool) -> Self {
         self.parallel_tool_calls = Omittable::Value(Nullable::Value(enabled));
@@ -4093,6 +4217,7 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sets the personality configuration included in the request.
     #[must_use]
     pub fn personality(mut self, personality: impl Into<String>) -> Self {
         self.personality = Omittable::Value(personality.into());
@@ -4115,6 +4240,7 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sets reasoning configuration included in the request.
     #[must_use]
     pub fn reasoning(mut self, reasoning: BetaReasoningConfig) -> Self {
         self.reasoning = Omittable::Value(Nullable::Value(reasoning));
@@ -4128,6 +4254,7 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sets text-output configuration included in the request.
     #[must_use]
     pub fn text(mut self, text: ResponseTextConfig) -> Self {
         self.text = Omittable::Value(Nullable::Value(text));
@@ -4141,6 +4268,7 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sets the tool-selection policy included in the request.
     #[must_use]
     pub fn tool_choice(mut self, choice: ToolChoice) -> Self {
         self.tool_choice = Omittable::Value(Nullable::Value(choice));
@@ -4154,6 +4282,7 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Appends a tool definition to the request.
     #[must_use]
     pub fn tool(mut self, tool: impl Into<ResponseTool>) -> Self {
         let tools = match &mut self.tools {
@@ -4177,6 +4306,7 @@ impl BetaCountInputTokensRequest {
         self
     }
 
+    /// Sets the truncation policy included in the request.
     #[must_use]
     pub fn truncation(mut self, truncation: TruncationStrategy) -> Self {
         self.truncation = Omittable::Value(truncation);
@@ -4187,6 +4317,12 @@ impl BetaCountInputTokensRequest {
     ///
     /// Rejects prompt-cached message content carrying the item-form-only
     /// `computer_screenshot` branch (6-05) alongside the GA constraints.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), BetaResponseInputConstraintError> {
         if let Omittable::Value(Nullable::Value(BetaResponseInput::Text(input))) = &self.input {
             let actual = input.chars().count();
@@ -4422,6 +4558,12 @@ impl BetaResponsesCreateEvent {
     ///
     /// Rejects prompt-cached message content carrying the item-form-only
     /// `computer_screenshot` branch (6-05) alongside the GA constraints.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), BetaResponseInputConstraintError> {
         if let Omittable::Value(stream_id) = &self.stream_id {
             validate_websocket_stream_id(stream_id)?;
@@ -4546,6 +4688,12 @@ impl BetaResponseInjectEvent {
     }
 
     /// Checks pinned OpenAPI `input` `maxItems` without sending the event.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), BetaResponseInjectConstraintError> {
         validate_inject_item_count(self.input.len())
     }
@@ -4555,8 +4703,11 @@ impl BetaResponseInjectEvent {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum BetaResponsesClientEvent {
+    /// Carries the `BetaResponsesCreateEvent` payload for this protocol alternative.
     Create(Box<BetaResponsesCreateEvent>),
+    /// Carries the `BetaResponseInjectEvent` payload for this protocol alternative.
     Inject(BetaResponseInjectEvent),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(UnknownTaggedObject),
 }
 
@@ -4639,16 +4790,19 @@ pub struct BetaResponseInjectCreatedEvent {
 }
 
 impl BetaResponseInjectCreatedEvent {
+    /// Returns the response identifier associated with this event.
     #[must_use]
     pub fn response_id(&self) -> &str {
         &self.response_id
     }
 
+    /// Returns the event sequence number used to order stream events.
     #[must_use]
     pub const fn sequence_number(&self) -> u64 {
         self.sequence_number
     }
 
+    /// Returns the stream identifier associated with this event.
     #[must_use]
     pub fn stream_id(&self) -> Option<&str> {
         omitted_ref(&self.stream_id).map(String::as_str)
@@ -4679,11 +4833,13 @@ pub struct BetaResponseInjectError {
 }
 
 impl BetaResponseInjectError {
+    /// Returns the machine-readable service error code, when present.
     #[must_use]
     pub const fn code(&self) -> &BetaResponseInjectErrorCode {
         &self.code
     }
 
+    /// Returns the retained error message.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
@@ -4718,26 +4874,31 @@ pub struct BetaResponseInjectFailedEvent {
 }
 
 impl BetaResponseInjectFailedEvent {
+    /// Returns the error details carried by this event.
     #[must_use]
     pub const fn error(&self) -> &BetaResponseInjectError {
         &self.error
     }
 
+    /// Returns the input associated with the failed injection.
     #[must_use]
     pub fn input(&self) -> &[BetaResponseInputItem] {
         &self.input
     }
 
+    /// Returns the response identifier associated with this event.
     #[must_use]
     pub fn response_id(&self) -> &str {
         &self.response_id
     }
 
+    /// Returns the event sequence number used to order stream events.
     #[must_use]
     pub const fn sequence_number(&self) -> u64 {
         self.sequence_number
     }
 
+    /// Returns the stream identifier associated with this event.
     #[must_use]
     pub fn stream_id(&self) -> Option<&str> {
         omitted_ref(&self.stream_id).map(String::as_str)
@@ -4774,6 +4935,7 @@ impl BetaWebSocketErrorDetails {
         }
     }
 
+    /// Returns the retained error message.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
@@ -4788,6 +4950,7 @@ impl BetaWebSocketErrorDetails {
         }
     }
 
+    /// Returns the service-provided error type, when present.
     #[must_use]
     pub fn error_type(&self) -> &str {
         &self.kind
@@ -4831,6 +4994,7 @@ pub struct BetaWebSocketErrorEvent {
 }
 
 impl BetaWebSocketErrorEvent {
+    /// Returns the error details carried by this event.
     #[must_use]
     pub const fn error(&self) -> &BetaWebSocketErrorDetails {
         &self.error
@@ -4877,9 +5041,13 @@ impl BetaWebSocketErrorEvent {
 // stance.
 #[allow(clippy::large_enum_variant)]
 pub enum BetaResponsesServerEvent {
+    /// Carries the `BetaResponseStreamEvent` payload for this protocol alternative.
     Response(Box<BetaResponseStreamEvent>),
+    /// Carries the `BetaResponseInjectCreatedEvent` payload for this protocol alternative.
     InjectCreated(BetaResponseInjectCreatedEvent),
+    /// Carries the `BetaResponseInjectFailedEvent` payload for this protocol alternative.
     InjectFailed(BetaResponseInjectFailedEvent),
+    /// Carries the `BetaWebSocketErrorEvent` payload for this protocol alternative.
     WebSocketError(BetaWebSocketErrorEvent),
 }
 

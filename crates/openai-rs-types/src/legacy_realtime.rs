@@ -372,6 +372,11 @@ pub struct LegacyRealtimeSpeed(f64);
 
 impl LegacyRealtimeSpeed {
     /// Creates a finite speed within `0.25..=1.5`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(value: f64) -> Result<Self, LegacyRealtimeValidationError> {
         validate_speed(value)?;
         Ok(Self(value))
@@ -395,6 +400,11 @@ pub struct LegacyRealtimeTemperature(f64);
 
 impl LegacyRealtimeTemperature {
     /// Creates a finite temperature within `0.6..=1.2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(value: f64) -> Result<Self, LegacyRealtimeValidationError> {
         validate_temperature(value)?;
         Ok(Self(value))
@@ -419,6 +429,11 @@ pub enum LegacyRealtimeMaxResponseOutputTokens {
 
 impl LegacyRealtimeMaxResponseOutputTokens {
     /// Creates a finite token limit in `1..=4096`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn limited(tokens: i64) -> Result<Self, LegacyRealtimeValidationError> {
         validate_max_response_output_tokens(tokens)?;
         Ok(Self::Limited(tokens))
@@ -480,6 +495,11 @@ pub struct LegacyRealtimeSecretExpiration {
 
 impl LegacyRealtimeSecretExpiration {
     /// Creates a `created_at`-anchored lifetime in `10..=7200` seconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(seconds: i64) -> Result<Self, LegacyRealtimeValidationError> {
         validate_secret_lifetime(seconds)?;
         Ok(Self {
@@ -511,6 +531,11 @@ pub struct LegacyRealtimeClientSecretOptions {
 
 impl LegacyRealtimeClientSecretOptions {
     /// Creates options with a validated secret lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(seconds: i64) -> Result<Self, LegacyRealtimeValidationError> {
         Ok(Self {
             expires_after: Omittable::Value(LegacyRealtimeSecretExpiration::new(seconds)?),
@@ -534,6 +559,11 @@ pub struct LegacyRealtimeTranscriptionClientSecretOptions {
 
 impl LegacyRealtimeTranscriptionClientSecretOptions {
     /// Creates options with a validated secret lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(seconds: i64) -> Result<Self, LegacyRealtimeValidationError> {
         Ok(Self {
             expires_at: Omittable::Value(LegacyRealtimeSecretExpiration::new(seconds)?),
@@ -602,6 +632,12 @@ impl LegacyRealtimeSessionCreateRequest {
     /// request through Serde are re-checked here: the client-secret lifetime,
     /// `speed`, `temperature`, and `max_response_output_tokens`. Builder
     /// construction already rejects out-of-range values at the leaf types.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), LegacyRealtimeValidationError> {
         if let Omittable::Value(options) = &self.client_secret
             && let Omittable::Value(expiration) = &options.expires_after
@@ -828,6 +864,12 @@ impl LegacyRealtimeTranscriptionSessionCreateRequest {
     /// `client_secret.expires_at.seconds` value that entered the request
     /// through Serde is re-checked here; builder construction already rejects
     /// out-of-range lifetimes at the leaf type.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), LegacyRealtimeValidationError> {
         if let Omittable::Value(options) = &self.client_secret
             && let Omittable::Value(expiration) = &options.expires_at

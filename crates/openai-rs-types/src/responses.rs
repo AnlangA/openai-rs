@@ -444,7 +444,7 @@ open_string_enum! {
     ///
     /// Members match the pinned `ServiceTierEnum` (auto/default/fast/flex/
     /// priority) exactly — the same domain the beta side models as
-    /// [`crate::beta_responses::BetaCompactServiceTier`]. The create and
+    /// `crate::beta_responses::BetaCompactServiceTier` (available with `beta-responses-multi-agent`). The create and
     /// response-echo sides keep the wider [`ServiceTier`] domain, which also
     /// accepts `scale` / `ultrafast`.
     pub enum CompactServiceTier {
@@ -603,9 +603,9 @@ pub const MAX_FUNCTION_CALL_OUTPUT_CHARS: usize = 10_485_760;
 pub const MAX_COMPACTION_ENCRYPTED_CHARS: usize = 20_971_520;
 /// Inclusive maximum for input-text `text` characters.
 pub const MAX_INPUT_TEXT_CHARS: usize = 10_485_760;
-/// Inclusive minimum for apply_patch operation `path`.
+/// Inclusive minimum for `apply_patch` operation `path`.
 pub const MIN_APPLY_PATCH_PATH_CHARS: usize = 1;
-/// Inclusive maximum for apply_patch create/update `diff` characters.
+/// Inclusive maximum for `apply_patch` create/update `diff` characters.
 pub const MAX_APPLY_PATCH_DIFF_CHARS: usize = 10_485_760;
 /// Inclusive maximum for input-image `image_url` characters.
 pub const MAX_INPUT_IMAGE_URL_CHARS: usize = 20_971_520;
@@ -1169,6 +1169,12 @@ impl InputText {
     }
 
     /// Checks pinned OpenAPI `text` `maxLength` without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_input_text_chars(self.text.chars().count())
     }
@@ -1299,6 +1305,12 @@ impl InputImage {
     }
 
     /// Checks pinned OpenAPI `image_url` `maxLength` without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         if let Omittable::Value(Nullable::Value(image_url)) = &self.image_url {
             validate_input_image_url_chars(image_url.chars().count())?;
@@ -1422,6 +1434,12 @@ impl InputImageParam {
     }
 
     /// Checks pinned OpenAPI `image_url` `maxLength` without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         if let Omittable::Value(Nullable::Value(image_url)) = &self.image_url {
             validate_input_image_url_chars(image_url.chars().count())?;
@@ -1569,6 +1587,12 @@ impl InputFile {
     }
 
     /// Checks pinned OpenAPI `file_data` `maxLength` without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         if let Omittable::Value(Nullable::Value(file_data)) = &self.file_data {
             validate_input_file_data_chars(file_data.chars().count())?;
@@ -2050,6 +2074,11 @@ impl FunctionTool {
     /// The name is validated against the same 1..=128 pin that the
     /// request-level check enforces, closing the asymmetry with
     /// [`FunctionTool::new`], which performs no validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema error for an invalid name, unsupported schema shape, unresolved reference,
+    /// invalid alias cycle, or exhausted normalization budget.
     #[cfg(feature = "structured-output")]
     pub fn for_type<T: schemars::JsonSchema>(
         name: impl Into<String>,
@@ -2109,6 +2138,11 @@ impl FunctionTool {
     }
 
     /// Serializes a schema representation without requiring JSON text.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema error if the supplied or generated schema cannot be normalized into the
+    /// supported strict output format.
     pub fn parameters_from<T: Serialize>(
         mut self,
         parameters: &T,
@@ -2118,6 +2152,11 @@ impl FunctionTool {
     }
 
     /// Sets a typed output JSON Schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema error if the supplied or generated schema cannot be normalized into the
+    /// supported strict output format.
     pub fn output_schema_from<T: Serialize>(
         mut self,
         output_schema: &T,
@@ -3032,6 +3071,12 @@ impl ProgramToolCallCaller {
     }
 
     /// Checks pinned `caller_id` `1..=64`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_call_id(&self.caller_id)
     }
@@ -3213,6 +3258,11 @@ impl FunctionCall {
     }
 
     /// Parses the function arguments into a declared Rust type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the encoded arguments are invalid JSON or do not match the requested
+    /// argument type.
     pub fn arguments_as<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
         serde_json::from_str(self.arguments.as_str())
     }
@@ -3248,6 +3298,12 @@ impl FunctionCall {
     }
 
     /// Checks pinned program-caller `caller_id` `1..=64`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_omittable_caller(&self.caller)
     }
@@ -3436,6 +3492,11 @@ impl FunctionCallOutput {
     }
 
     /// Serializes a typed result into the output string.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable<T: Serialize>(
         call_id: impl Into<String>,
         output: &T,
@@ -3444,6 +3505,11 @@ impl FunctionCallOutput {
     }
 
     /// Serializes a typed result into JSON output for a function call.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn json<T: Serialize>(
         call_id: impl Into<String>,
         output: &T,
@@ -3539,6 +3605,12 @@ impl FunctionCallOutput {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_omittable_call_id(&self.call_id)?;
         if let Omittable::Value(Nullable::Value(name)) = &self.name {
@@ -3605,6 +3677,11 @@ impl FunctionCallOutput {
     }
 
     /// Parses a JSON output into a caller-selected type.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn deserialize_output<T: serde::de::DeserializeOwned>(
         &self,
     ) -> Result<T, serde_json::Error> {
@@ -5213,6 +5290,11 @@ impl TextFormatJsonSchema {
     }
 
     /// Serializes a schema representation without requiring JSON text.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable<T: Serialize>(
         name: impl Into<String>,
         schema: &T,
@@ -5844,6 +5926,11 @@ impl PromptReference {
     /// Replacing a previous `Omitted`/explicit-`null` state with a map means
     /// `variables_null().variable(..)` resolves to the single supplied
     /// variable rather than an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn variable<T: Serialize>(
         mut self,
         name: impl Into<String>,
@@ -6440,6 +6527,11 @@ macro_rules! impl_create_response_builders {
             /// bounds (`temperature` 0..=2, `top_p` 0..=1, `top_logprobs` 0..=20,
             /// `max_output_tokens` >= 16, metadata 16×64/512, `safety_identifier`
             /// 64 characters, non-empty `context_management`).
+            ///
+            /// # Errors
+            ///
+            /// Returns a [`CreateResponseConstraintError`] when one of the
+            /// enforced field or tool constraints is violated.
             pub fn validate(&self) -> Result<&Self, CreateResponseConstraintError> {
                 self.body.validate()?;
                 Ok(self)
@@ -6733,6 +6825,12 @@ impl ResponsesCreateEvent {
     }
 
     /// Checks pinned OpenAPI `stream_id` and create-body limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         if let Omittable::Value(stream_id) = &self.stream_id {
             validate_websocket_stream_id(stream_id)?;
@@ -7438,6 +7536,11 @@ impl Response {
     ///
     /// Refusal, incomplete, and failed states are routed to dedicated error
     /// variants rather than being treated as malformed JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the response is incomplete, contains a refusal or no usable text, or its
+    /// text cannot be decoded into the requested output type.
     pub fn output_parsed<T: serde::de::DeserializeOwned>(&self) -> Result<T, OutputParseError> {
         if matches!(self.status(), Some(ResponseStatus::Incomplete)) {
             let reason = self
@@ -7939,6 +8042,12 @@ impl CompactResponseRequest {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CompactResponseConstraintError> {
         if let Omittable::Value(Nullable::Value(key)) = &self.prompt_cache_key {
             let actual = key.chars().count();
@@ -8138,6 +8247,11 @@ impl ListResponseInputItemsParams {
     /// The pinned prose documents a 1..=100 range with a default of 20 when
     /// omitted; this builder rejects `0` and leaves the descriptive ceiling
     /// unenforced.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn limit(mut self, limit: u32) -> Result<Self, ListResponseInputItemsLimitError> {
         if limit == 0 {
             return Err(ListResponseInputItemsLimitError { actual: limit });
@@ -8416,6 +8530,12 @@ impl CountInputTokensRequest {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CountInputTokensConstraintError> {
         if let Omittable::Value(Nullable::Value(ResponseInput::Text(input))) = &self.input {
             let actual = input.chars().count();
@@ -9399,6 +9519,11 @@ impl ResponseAccumulator {
     }
 
     /// Consumes one event, enforcing sequence and item identity invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns an accumulator error if the event sequence is inconsistent, a required item is
+    /// missing, or the accumulated response cannot be completed.
     pub fn push(&mut self, event: ResponseStreamEvent) -> Result<(), ResponseAccumulatorError> {
         if self.terminal {
             return Err(ResponseAccumulatorError::EventAfterTerminal);
@@ -9650,6 +9775,11 @@ impl ResponseAccumulator {
     }
 
     /// Returns the terminal response, or an error if the stream ended early.
+    ///
+    /// # Errors
+    ///
+    /// Returns an accumulator error if the event sequence is inconsistent, a required item is
+    /// missing, or the accumulated response cannot be completed.
     pub fn finish(self) -> Result<Response, ResponseAccumulatorError> {
         if !self.terminal {
             return Err(ResponseAccumulatorError::MissingTerminal);
@@ -10077,6 +10207,12 @@ impl ProgramItem {
     }
 
     /// Checks pinned `call_id` `1..=64` and `code` / `fingerprint` maxLength.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_call_id(&self.call_id)?;
         let code_chars = self.code.chars().count();
@@ -10132,6 +10268,12 @@ impl ProgramOutputItem {
     }
 
     /// Checks pinned `call_id` `1..=64` and `result` maxLength.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_call_id(&self.call_id)?;
         let result_chars = self.result.chars().count();
@@ -11165,6 +11307,12 @@ impl ComputerCallOutput {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_call_id(&self.call_id)
     }
@@ -11664,6 +11812,12 @@ impl ToolSearchCallInput {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_omittable_call_id(&self.call_id)
     }
@@ -11777,6 +11931,12 @@ impl ToolSearchOutputInput {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_omittable_call_id(&self.call_id)?;
         validate_response_tools(&self.tools)
@@ -11861,6 +12021,12 @@ impl AdditionalToolsInput {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_response_tools(&self.tools)
     }
@@ -12078,6 +12244,12 @@ impl CompactionSummaryInput {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         let actual = self.encrypted_content.chars().count();
         if actual > MAX_COMPACTION_ENCRYPTED_CHARS {
@@ -12904,6 +13076,12 @@ impl FunctionShellCallInput {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_function_shell_call_id(&self.call_id)?;
         validate_omittable_caller(&self.caller)
@@ -13143,6 +13321,12 @@ impl FunctionShellCallOutputContent {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         let stdout = self.stdout.chars().count();
         if stdout > MAX_FUNCTION_SHELL_OUTPUT_CHARS {
@@ -13255,6 +13439,12 @@ impl FunctionShellCallOutputInput {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_function_shell_call_id(&self.call_id)?;
         validate_omittable_caller(&self.caller)?;
@@ -13318,7 +13508,7 @@ literal_tag!(
     "apply_patch_call_output"
 );
 
-/// Create a file via apply_patch.
+/// Create a file via `apply_patch`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplyPatchCreateFile {
     #[serde(rename = "type")]
@@ -13354,7 +13544,7 @@ impl ApplyPatchCreateFile {
     }
 }
 
-/// Delete a file via apply_patch.
+/// Delete a file via `apply_patch`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplyPatchDeleteFile {
     #[serde(rename = "type")]
@@ -13382,7 +13572,7 @@ impl ApplyPatchDeleteFile {
     }
 }
 
-/// Update a file via apply_patch.
+/// Update a file via `apply_patch`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplyPatchUpdateFile {
     #[serde(rename = "type")]
@@ -13418,7 +13608,7 @@ impl ApplyPatchUpdateFile {
     }
 }
 
-/// One create, delete, or update instruction for apply_patch.
+/// One create, delete, or update instruction for `apply_patch`.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ApplyPatchOperation {
@@ -13544,6 +13734,12 @@ impl ApplyPatchCallInput {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_call_id(&self.call_id)?;
         match &self.operation {
@@ -13669,6 +13865,12 @@ impl ApplyPatchCallOutputInput {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_call_id(&self.call_id)?;
         if let Omittable::Value(Nullable::Value(output)) = &self.output {
@@ -13742,7 +13944,7 @@ literal_tag!(
 
 /// An MCP approval response returned by the API.
 ///
-/// Ghost `request_id` is not a typed field (D0111). ExtraFields retains it
+/// Ghost `request_id` is not a typed field (D0111). `ExtraFields` retains it
 /// when present.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McpApprovalResponseResource {
@@ -13858,6 +14060,12 @@ impl CustomToolCall {
     }
 
     /// Checks pinned program-caller `caller_id` `1..=64`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_omittable_caller(&self.caller)
     }
@@ -13923,6 +14131,12 @@ impl CustomToolCallOutput {
     }
 
     /// Checks pinned program-caller `caller_id` `1..=64` and output `file_data`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_function_call_output_value(&self.output)?;
         validate_omittable_caller(&self.caller)
@@ -16378,6 +16592,11 @@ impl AllowedToolsChoice {
     }
 
     /// Serializes and adds a typed tool selector.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn tool<T: Serialize>(mut self, tool: &T) -> Result<Self, serde_json::Error> {
         self.tools.push(serde_json::to_value(tool)?);
         Ok(self)
@@ -19292,7 +19511,7 @@ mod tests {
     fn easy_input_message_role_pins_the_four_official_values() {
         // Pinned EasyInputMessage.role: user/assistant/system/developer
         // (python EasyInputMessageParam.role Literal). Multi-agent roles stay
-        // decode-only through the open MessageRole (D0137口径, 3-04).
+        // decode-only through the open MessageRole (D0137 policy, 3-04).
         const OFFICIAL_EASY_ROLES: [&str; 4] = ["user", "assistant", "system", "developer"];
         for value in OFFICIAL_EASY_ROLES {
             let decoded = EasyInputMessageRole::from_raw(value);

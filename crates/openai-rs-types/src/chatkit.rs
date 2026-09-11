@@ -168,6 +168,11 @@ pub struct ChatKitUserId(Box<str>);
 
 impl ChatKitUserId {
     /// Validates the non-empty user scope required during session creation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(value: impl Into<Box<str>>) -> Result<Self, ChatKitValidationError> {
         let value = value.into();
         if value.is_empty() {
@@ -190,6 +195,11 @@ pub struct ChatKitUserFilter(Box<str>);
 
 impl ChatKitUserFilter {
     /// Applies the endpoint's `1..=512` character constraint.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(value: impl Into<Box<str>>) -> Result<Self, ChatKitValidationError> {
         let value = value.into();
         let len = value.chars().count();
@@ -231,6 +241,11 @@ pub struct ChatKitListLimit(u8);
 
 impl ChatKitListLimit {
     /// Creates a page size in `0..=100`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(value: u16) -> Result<Self, ChatKitValidationError> {
         u8::try_from(value)
             .ok()
@@ -262,6 +277,11 @@ pub struct ChatKitPositiveLimit(u64);
 
 impl ChatKitPositiveLimit {
     /// Rejects zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(value: u64) -> Result<Self, ChatKitValidationError> {
         if value == 0 {
             Err(ChatKitValidationError::ZeroLimit)
@@ -293,6 +313,11 @@ pub struct ChatKitFileSizeMb(u16);
 
 impl ChatKitFileSizeMb {
     /// Creates a size in `1..=512` MB.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(value: u16) -> Result<Self, ChatKitValidationError> {
         if (1..=512).contains(&value) {
             Ok(Self(value))
@@ -334,6 +359,11 @@ pub enum ChatKitStateValue {
 
 impl ChatKitStateValue {
     /// Creates a bounded string state value.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn string(value: impl Into<String>) -> Result<Self, ChatKitValidationError> {
         let value = value.into();
         if value.chars().count() > 10_485_760 {
@@ -343,6 +373,11 @@ impl ChatKitStateValue {
     }
 
     /// Creates a finite floating-point state value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the numeric value is not finite or cannot be represented by the wire
+    /// type.
     pub fn number(value: f64) -> Result<Self, ChatKitValidationError> {
         Number::from_f64(value)
             .map(Self::Number)
@@ -362,6 +397,11 @@ impl ChatKitStateVariables {
     }
 
     /// Inserts one validated variable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn insert(
         &mut self,
         key: impl Into<String>,
@@ -498,6 +538,11 @@ pub struct ChatKitExpiresAfterRequest {
 
 impl ChatKitExpiresAfterRequest {
     /// Creates an expiration in `1..=600` seconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(seconds: u16) -> Result<Self, ChatKitValidationError> {
         if !(1..=600).contains(&seconds) {
             return Err(ChatKitValidationError::InvalidExpiration { seconds });
@@ -608,6 +653,11 @@ pub struct CreateChatKitSessionRequest {
 
 impl CreateChatKitSessionRequest {
     /// Creates a minimal session request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(
         workflow: ChatKitWorkflowRequest,
         user: impl Into<Box<str>>,
@@ -925,6 +975,11 @@ impl ChatKitThreadListParams {
     }
 
     /// Filters by one validated user identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn with_user(mut self, user: impl Into<Box<str>>) -> Result<Self, ChatKitValidationError> {
         self.user = Omittable::Value(ChatKitUserFilter::new(user)?);
         Ok(self)
@@ -1262,9 +1317,13 @@ pub struct ChatKitUserMessageItem {
 /// Assistant-authored ChatKit thread item.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatKitAssistantMessageItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: ChatKitThreadItemId,
+    /// Wire discriminator identifying the resource or list type.
     pub object: ChatKitThreadItemObject,
+    /// Creation time as a Unix timestamp in seconds.
     pub created_at: i64,
+    /// Identifier of the thread referenced by this payload.
     pub thread_id: ChatKitThreadId,
     #[serde(rename = "type")]
     kind: AssistantMessageTag,
@@ -1277,9 +1336,13 @@ pub struct ChatKitAssistantMessageItem {
 /// Widget-rendering ChatKit thread item.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatKitWidgetItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: ChatKitThreadItemId,
+    /// Wire discriminator identifying the resource or list type.
     pub object: ChatKitThreadItemObject,
+    /// Creation time as a Unix timestamp in seconds.
     pub created_at: i64,
+    /// Identifier of the thread referenced by this payload.
     pub thread_id: ChatKitThreadId,
     #[serde(rename = "type")]
     kind: WidgetTag,
@@ -1292,9 +1355,13 @@ pub struct ChatKitWidgetItem {
 /// Client-side tool call recorded in a ChatKit thread.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatKitClientToolCallItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: ChatKitThreadItemId,
+    /// Wire discriminator identifying the resource or list type.
     pub object: ChatKitThreadItemObject,
+    /// Creation time as a Unix timestamp in seconds.
     pub created_at: i64,
+    /// Identifier of the thread referenced by this payload.
     pub thread_id: ChatKitThreadId,
     #[serde(rename = "type")]
     kind: ClientToolCallTag,
@@ -1315,9 +1382,13 @@ pub struct ChatKitClientToolCallItem {
 /// One standalone workflow task item.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatKitTaskItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: ChatKitThreadItemId,
+    /// Wire discriminator identifying the resource or list type.
     pub object: ChatKitThreadItemObject,
+    /// Creation time as a Unix timestamp in seconds.
     pub created_at: i64,
+    /// Identifier of the thread referenced by this payload.
     pub thread_id: ChatKitThreadId,
     #[serde(rename = "type")]
     kind: TaskTag,
@@ -1348,9 +1419,13 @@ pub struct ChatKitTaskGroupTask {
 /// Group of workflow tasks.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatKitTaskGroupItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: ChatKitThreadItemId,
+    /// Wire discriminator identifying the resource or list type.
     pub object: ChatKitThreadItemObject,
+    /// Creation time as a Unix timestamp in seconds.
     pub created_at: i64,
+    /// Identifier of the thread referenced by this payload.
     pub thread_id: ChatKitThreadId,
     #[serde(rename = "type")]
     kind: TaskGroupTag,

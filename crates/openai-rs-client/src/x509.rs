@@ -59,9 +59,12 @@ type ExchangeFuture<'a> =
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum X509Region {
+    /// Use the global API region.
     #[default]
     Global,
+    /// Use the United States API region.
     Us,
+    /// Use the European Union API region.
     Eu,
 }
 
@@ -82,6 +85,13 @@ pub struct X509IdentityPem(Zeroizing<Vec<u8>>);
 impl X509IdentityPem {
     /// Performs a structural preflight. Full cryptographic parsing happens when
     /// [`X509ClientBuilder::build`] creates the rustls identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the bytes are not UTF-8, contain no certificate,
+    /// contain other than one supported private-key block, or contain an
+    /// encrypted private key. Cryptographic validation occurs when building
+    /// the client.
     pub fn new(pem: impl Into<Vec<u8>>) -> Result<Self, X509Error> {
         let pem = Zeroizing::new(pem.into());
         let text = std::str::from_utf8(&pem).map_err(|_| X509Error::InvalidIdentity)?;
@@ -130,6 +140,10 @@ pub struct X509ClientBuilder {
 
 impl X509ClientBuilder {
     /// Creates a builder from a combined PEM identity and enrolled OpenAI IDs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the identity-provider or service-account selector is invalid.
     pub fn new(
         identity: X509IdentityPem,
         identity_provider_id: impl Into<Box<str>>,
@@ -187,12 +201,14 @@ impl X509ClientBuilder {
         self
     }
 
+    /// Sets the maximum number of bytes buffered for a successful JSON response.
     #[must_use]
     pub const fn max_json_body_bytes(mut self, limit: usize) -> Self {
         self.max_json_body_bytes = limit;
         self
     }
 
+    /// Sets the maximum number of bytes read from an HTTP error response before truncation.
     #[must_use]
     pub const fn max_error_body_bytes(mut self, limit: usize) -> Self {
         self.max_error_body_bytes = limit;
@@ -216,6 +232,11 @@ impl X509ClientBuilder {
 
     /// Builds a rustls client whose certificate identity is shared by token
     /// exchange and every API request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the supplied configuration violates the limits or invariants described
+    /// by this type.
     pub fn build(self) -> Result<X509Client, X509Error> {
         if self.connect_timeout.is_zero()
             || self.request_timeout.is_zero()
@@ -302,6 +323,11 @@ struct X509Inner {
 }
 
 impl X509Client {
+    /// Creates an X.509 client builder for the supplied identity and identity selectors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the identity-provider or service-account selector is invalid.
     pub fn builder(
         identity: X509IdentityPem,
         identity_provider_id: impl Into<Box<str>>,
@@ -310,6 +336,7 @@ impl X509Client {
         X509ClientBuilder::new(identity, identity_provider_id, service_account_id)
     }
 
+    /// Returns the API region configured for this X.509 client.
     #[must_use]
     pub fn region(&self) -> X509Region {
         self.inner.region
@@ -421,12 +448,19 @@ impl fmt::Debug for X509Client {
     }
 }
 
+/// Creates and retrieves responses using the client's X.509 identity.
 #[derive(Clone, Debug)]
 pub struct X509Responses {
     client: X509Client,
 }
 
 impl X509Responses {
+    /// Creates a response using X.509-authenticated transport.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or typed response decoding fails.
     pub async fn create(
         &self,
         request: CreateResponseRequest,
@@ -440,6 +474,12 @@ impl X509Responses {
             .await
     }
 
+    /// Retrieves a stored response using X.509-authenticated transport.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or typed response decoding fails.
     pub async fn retrieve(
         &self,
         response_id: &ResponseId,
@@ -456,6 +496,12 @@ impl X509Responses {
             .await
     }
 
+    /// Cancels the specified response using X.509-authenticated transport.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or typed response decoding fails.
     pub async fn cancel(
         &self,
         response_id: &ResponseId,
@@ -473,6 +519,12 @@ impl X509Responses {
             .await
     }
 
+    /// Compacts response context using X.509-authenticated transport.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or typed response decoding fails.
     pub async fn compact(
         &self,
         request: CompactResponseRequest,
@@ -489,6 +541,12 @@ impl X509Responses {
             .await
     }
 
+    /// Counts response input tokens using X.509-authenticated transport.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or typed response decoding fails.
     pub async fn count_input_tokens(
         &self,
         request: CountInputTokensRequest,
@@ -506,18 +564,31 @@ impl X509Responses {
     }
 }
 
+/// Lists models available to the client's X.509 identity.
 #[derive(Clone, Debug)]
 pub struct X509Models {
     client: X509Client,
 }
 
 impl X509Models {
+    /// Lists models visible to the configured X.509 identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or typed response decoding fails.
     pub async fn list(&self) -> Result<ApiResponse<ModelList>, X509Error> {
         self.client
             .execute_json::<(), _>(Method::GET, &[RouteSegment::literal("models")], None)
             .await
     }
 
+    /// Retrieves metadata for a model visible to the configured X.509 identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or typed response decoding fails.
     pub async fn retrieve(&self, model: &ModelId) -> Result<ApiResponse<Model>, X509Error> {
         self.client
             .execute_json::<(), _>(
@@ -896,11 +967,15 @@ fn safe_oauth_code(bytes: &[u8]) -> Option<X509OAuthCode> {
     }
 }
 
+/// Recognized OAuth error codes returned by X.509 token exchange.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum X509OAuthCode {
+    /// The OAuth grant was rejected as invalid.
     InvalidGrant,
+    /// The exchange rejected the supplied subject token.
     InvalidSubjectToken,
+    /// The token-exchange service reported an internal error.
     TokenExchangeServerError,
 }
 
@@ -908,37 +983,54 @@ pub enum X509OAuthCode {
 #[derive(Clone, Debug, ThisError)]
 #[non_exhaustive]
 pub enum X509Error {
+    /// Invalid X.509 client identity.
     #[error("invalid X.509 client identity")]
     InvalidIdentity,
+    /// Invalid X.509 client configuration.
     #[error("invalid X.509 client configuration")]
     InvalidConfiguration,
+    /// Invalid X.509 identity selector.
     #[error("invalid X.509 identity selector")]
     InvalidSelector,
+    /// X.509 token exchange timed out.
     #[error("X.509 token exchange timed out")]
     ExchangeTimeout,
+    /// X.509 token exchange transport failed.
     #[error("X.509 token exchange transport failed")]
     ExchangeTransport,
+    /// X.509 token exchange returned OAuth status `status`.
     #[error("X.509 token exchange returned OAuth status {status}")]
     OAuth {
+        /// HTTP status code returned by the service.
         status: StatusCode,
+        /// Machine-readable error code reported by the service.
         code: Option<X509OAuthCode>,
     },
+    /// X.509 token exchange returned HTTP the supplied value.
     #[error("X.509 token exchange returned HTTP {0}")]
     ExchangeStatus(StatusCode),
+    /// X.509 token exchange returned invalid JSON.
     #[error("X.509 token exchange returned invalid JSON")]
     InvalidExchangeResponse,
+    /// X.509 token exchange returned an invalid access token.
     #[error("X.509 token exchange returned an invalid access token")]
     InvalidAccessToken,
+    /// X.509 token exchange returned an invalid token type.
     #[error("X.509 token exchange returned an invalid token type")]
     InvalidTokenType,
+    /// X.509 token exchange returned an invalid token lifetime.
     #[error("X.509 token exchange returned an invalid token lifetime")]
     InvalidTokenLifetime,
+    /// X.509 token generation was invalidated.
     #[error("X.509 token generation was invalidated")]
     Invalidated,
+    /// An error propagated from the wrapped error type.
     #[error(transparent)]
     Api(Arc<Error>),
+    /// X.509 API response body could not be read (status the supplied value).
     #[error("X.509 API response body could not be read (status {0})")]
     ApiResponseBody(StatusCode),
+    /// X.509 API response body exceeded the configured limit.
     #[error("X.509 API response body exceeded the configured limit")]
     ApiBodyTooLarge,
 }

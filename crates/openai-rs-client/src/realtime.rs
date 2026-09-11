@@ -73,11 +73,23 @@ impl Realtime {
     /// configured Platform base and cannot be supplied by the caller. The
     /// handshake itself is single-shot and never retried; see
     /// `RealtimeWebSocket::connect` for the rationale.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn connect(&self, model: impl Into<ModelId>) -> Result<RealtimeWebSocket, Error> {
         self.connect_with(model, RealtimeWebSocketConfig::default())
             .await
     }
 
+    /// Connects to a Realtime model using the supplied WebSocket configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if configuration validation, authentication, connection establishment, or
+    /// the WebSocket handshake fails.
     pub async fn connect_with(
         &self,
         model: impl Into<ModelId>,
@@ -90,11 +102,23 @@ impl Realtime {
     /// Opens a GA transcription Realtime WebSocket with
     /// `?intent=transcription`. A model must not be pinned on transcription
     /// sessions, so this target never sends `model`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn connect_transcription(&self) -> Result<RealtimeWebSocket, Error> {
         self.connect_transcription_with(RealtimeWebSocketConfig::default())
             .await
     }
 
+    /// Connects to a transcription-only Realtime session with the supplied configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if configuration validation, authentication, connection establishment, or
+    /// the WebSocket handshake fails.
     pub async fn connect_transcription_with(
         &self,
         config: RealtimeWebSocketConfig,
@@ -105,6 +129,12 @@ impl Realtime {
 
     /// Opens a GA Realtime WebSocket for an explicit connection target: one
     /// model, the transcription intent, or an in-progress `call_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn connect_target(
         &self,
         target: RealtimeConnectTarget,
@@ -113,6 +143,12 @@ impl Realtime {
             .await
     }
 
+    /// Connects to the selected Realtime target with the supplied configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if configuration validation, authentication, connection establishment, or
+    /// the WebSocket handshake fails.
     pub async fn connect_target_with(
         &self,
         target: RealtimeConnectTarget,
@@ -123,6 +159,11 @@ impl Realtime {
 
     /// Creates a short-lived client secret. The returned secret remains in a
     /// redacting wire-secret type.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create_client_secret(
         &self,
         request: RealtimeCreateClientSecretRequest,
@@ -138,6 +179,11 @@ impl Realtime {
     }
 
     /// Creates a short-lived client secret for a typed translation session.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create_translation_client_secret(
         &self,
         request: RealtimeTranslationClientSecretCreateRequest,
@@ -176,6 +222,11 @@ impl Realtime {
     /// below and is always sent exactly once. The official Python client
     /// retries every request by default; that divergence is recorded in
     /// decisions.md (3-30 item 6).
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create_call(
         &self,
         request: RealtimeCallCreateRequest,
@@ -294,6 +345,11 @@ impl Realtime {
     }
 
     /// Accepts one incoming SIP call. This side effect is never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn accept_call(
         &self,
         call_id: &str,
@@ -307,6 +363,11 @@ impl Realtime {
     }
 
     /// Rejects one incoming SIP call with an optional status override.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn reject_call(
         &self,
         call_id: &str,
@@ -320,6 +381,11 @@ impl Realtime {
     }
 
     /// Rejects a call using the service-default 603 status.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn reject_call_default(&self, call_id: &str) -> Result<ApiResponse<()>, Error> {
         let path = call_action_path(call_id, "reject")?;
         self.client
@@ -329,6 +395,11 @@ impl Realtime {
     }
 
     /// Hangs up an active SIP or WebRTC call without automatic replay.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn hangup_call(&self, call_id: &str) -> Result<ApiResponse<()>, Error> {
         let path = call_action_path(call_id, "hangup")?;
         self.client
@@ -338,6 +409,11 @@ impl Realtime {
     }
 
     /// Transfers an active SIP call without automatic replay.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn refer_call(
         &self,
         call_id: &str,
@@ -359,16 +435,19 @@ pub struct RealtimeCallCreated {
 }
 
 impl RealtimeCallCreated {
+    /// Returns the answer SDP supplied when the call was created.
     #[must_use]
     pub const fn sdp(&self) -> &RealtimeSdp {
         &self.sdp
     }
 
+    /// Returns the Location header identifying the created call.
     #[must_use]
     pub fn location(&self) -> &str {
         &self.location
     }
 
+    /// Returns the identifier of the created Realtime call.
     #[must_use]
     pub fn call_id(&self) -> &str {
         &self.call_id
@@ -420,6 +499,10 @@ impl RealtimeKeepalive {
     /// Both durations must be non-zero; the combined silence window
     /// (`ping_interval + pong_timeout`) is additionally checked when the
     /// owning [`RealtimeWebSocketConfig`] is validated at connect time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either keepalive interval is zero.
     pub fn new(ping_interval: Duration, pong_timeout: Duration) -> Result<Self, Error> {
         if ping_interval.is_zero() || pong_timeout.is_zero() {
             return Err(Error::InvalidConfiguration(
@@ -466,6 +549,7 @@ pub struct RealtimeWebSocketConfig {
 }
 
 impl RealtimeWebSocketConfig {
+    /// Creates WebSocket configuration with the default buffer limits and connection timeout.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -478,12 +562,14 @@ impl RealtimeWebSocketConfig {
         }
     }
 
+    /// Sets the maximum number of bytes accepted in a complete WebSocket message.
     #[must_use]
     pub const fn max_message_bytes(mut self, value: usize) -> Self {
         self.max_message_bytes = value;
         self
     }
 
+    /// Sets the maximum number of bytes accepted in a single WebSocket frame.
     #[must_use]
     pub const fn max_frame_bytes(mut self, value: usize) -> Self {
         self.max_frame_bytes = value;
@@ -498,12 +584,14 @@ impl RealtimeWebSocketConfig {
         self
     }
 
+    /// Sets the maximum number of bytes queued for WebSocket writes.
     #[must_use]
     pub const fn max_queued_write_bytes(mut self, value: usize) -> Self {
         self.max_queued_write_bytes = value;
         self
     }
 
+    /// Sets the time allowed for establishing the WebSocket connection.
     #[must_use]
     pub const fn connect_timeout(mut self, value: Duration) -> Self {
         self.connect_timeout = value;
@@ -522,6 +610,11 @@ impl RealtimeWebSocketConfig {
     /// Enables WebSocket keepalive from its two fields directly, for callers
     /// that have not imported [`RealtimeKeepalive`]. Both durations must be
     /// non-zero; see that type for the probing contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the supplied configuration violates the limits or invariants described
+    /// by this type.
     pub fn with_keepalive_intervals(
         self,
         ping_interval: Duration,
@@ -758,16 +851,19 @@ impl RealtimeWebSocket {
         })
     }
 
+    /// Returns the HTTP status and response-header metadata.
     #[must_use]
     pub const fn meta(&self) -> &ResponseMeta {
         &self.meta
     }
 
+    /// Returns the request identifier supplied by the service, when present.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.meta.request_id()
     }
 
+    /// Returns whether this connection has been closed.
     #[must_use]
     pub const fn is_closed(&self) -> bool {
         self.closed
@@ -805,6 +901,11 @@ impl RealtimeWebSocket {
     /// half-broken socket. Local validation failures — an event that fails to
     /// encode or exceeds the configured message limit — leave the connection
     /// open, because nothing reached the wire and the socket remains healthy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, the event is invalid or too large,
+    /// serialization fails, or writing to the WebSocket fails.
     pub async fn send(&mut self, event: RealtimeClientEvent) -> Result<(), Error> {
         if self.closed {
             return Err(Error::WebSocketProtocol(
@@ -827,12 +928,22 @@ impl RealtimeWebSocket {
     }
 
     /// Appends raw audio bytes; the typed event performs base64 encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, the event is invalid or too large,
+    /// serialization fails, or writing to the WebSocket fails.
     pub async fn append_audio(&mut self, audio: impl Into<Vec<u8>>) -> Result<(), Error> {
         self.send(RealtimeClientEventInputAudioBufferAppend::new(audio).into())
             .await
     }
 
     /// Cancels a specific or current response without reconnect/replay.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, the event is invalid or too large,
+    /// serialization fails, or writing to the WebSocket fails.
     pub async fn cancel_response(&mut self, response_id: Option<&str>) -> Result<(), Error> {
         let event = match response_id {
             Some(response_id) => RealtimeClientEventResponseCancel::for_response(response_id),
@@ -860,6 +971,11 @@ impl RealtimeWebSocket {
     /// WebSocket on any error). A failed event *decode* is the one
     /// recoverable path: the connection stays open so a malformed event need
     /// not take down an otherwise healthy session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection, frame limits, message decoding, or protocol state is
+    /// invalid.
     pub async fn recv(&mut self) -> Result<Option<RealtimeServerEvent>, Error> {
         if self.closed {
             return Ok(None);
@@ -979,6 +1095,10 @@ impl RealtimeWebSocket {
     /// (`ws.ts:202-214`, `websocket.ts:336-348`); an unframed empty close
     /// body would instead be observed by the peer as the abnormal 1005
     /// (14-E-2), so the code is sent explicitly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the close handshake or transport shutdown fails.
     pub async fn close(&mut self) -> Result<(), Error> {
         if !self.closed {
             self.socket

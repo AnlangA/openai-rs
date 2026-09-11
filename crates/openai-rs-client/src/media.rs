@@ -58,6 +58,11 @@ impl Audio {
     }
 
     /// Synthesizes speech and streams the encoded audio body without buffering.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn speech(
         &self,
         request: CreateSpeechRequest<MediaNonStreaming>,
@@ -75,6 +80,12 @@ impl Audio {
     }
 
     /// Synthesizes speech as typed SSE audio events.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn speech_stream(
         &self,
         request: CreateSpeechRequest<MediaStreaming>,
@@ -98,6 +109,11 @@ impl Audio {
 
     /// Transcribes audio, selecting the typed response variant from the request's
     /// `response_format` field.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn transcribe(
         &self,
         request: CreateTranscriptionRequest<MediaNonStreaming>,
@@ -117,6 +133,12 @@ impl Audio {
     }
 
     /// Transcribes audio as typed SSE text events.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn transcribe_stream(
         &self,
         request: CreateTranscriptionRequest<MediaStreaming>,
@@ -141,6 +163,11 @@ impl Audio {
 
     /// Translates audio to English, selecting typed JSON or bounded text output
     /// from `response_format`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn translate(
         &self,
         request: CreateTranslationRequest,
@@ -172,6 +199,11 @@ impl Images {
     }
 
     /// Generates images using a JSON request and JSON response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn generate(
         &self,
         request: CreateImageRequest<MediaNonStreaming>,
@@ -187,6 +219,12 @@ impl Images {
     }
 
     /// Generates partial and completed images as typed SSE events.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn generate_stream(
         &self,
         request: CreateImageRequest<MediaStreaming>,
@@ -209,6 +247,11 @@ impl Images {
     }
 
     /// Edits referenced images using a JSON body.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn edit_json(
         &self,
         request: CreateImageEditJsonRequest<MediaNonStreaming>,
@@ -224,6 +267,12 @@ impl Images {
     }
 
     /// Edits referenced images using JSON and returns partial SSE events.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn edit_json_stream(
         &self,
         request: CreateImageEditJsonRequest<MediaStreaming>,
@@ -246,6 +295,11 @@ impl Images {
     }
 
     /// Edits one to sixteen replayable multipart image sources.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn edit_multipart(
         &self,
         request: CreateImageEditMultipartRequest<MediaNonStreaming>,
@@ -267,6 +321,12 @@ impl Images {
     }
 
     /// Edits replayable multipart image sources and returns partial SSE events.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn edit_multipart_stream(
         &self,
         request: CreateImageEditMultipartRequest<MediaStreaming>,
@@ -344,6 +404,11 @@ impl MediaByteStream {
     }
 
     /// Buffers the raw response with an explicit upper bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading the response fails or the collected body exceeds the supplied
+    /// byte limit.
     pub async fn collect(mut self, limit: usize) -> Result<ApiResponse<Box<[u8]>>, Error> {
         if self
             .content_length
@@ -399,6 +464,10 @@ impl MediaTextBody {
     }
 
     /// UTF-8 view of this textual response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a UTF-8 decoding error if the retained response bytes are not valid text.
     pub fn as_str(&self) -> Result<&str, std::str::Utf8Error> {
         std::str::from_utf8(&self.0)
     }
@@ -417,11 +486,17 @@ impl fmt::Debug for MediaTextBody {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum TranscriptionOutput {
+    /// A typed JSON result.
     Json(Transcription),
+    /// A JSON result including detailed transcription or translation metadata.
     VerboseJson(VerboseTranscription),
+    /// A JSON transcription grouped by speaker.
     DiarizedJson(DiarizedTranscription),
+    /// Plain text returned by the service.
     Text(MediaTextBody),
+    /// SubRip subtitle text returned by the service.
     Srt(MediaTextBody),
+    /// WebVTT subtitle text returned by the service.
     Vtt(MediaTextBody),
 }
 
@@ -429,10 +504,15 @@ pub enum TranscriptionOutput {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum TranslationOutput {
+    /// A typed JSON result.
     Json(Translation),
+    /// A JSON result including detailed transcription or translation metadata.
     VerboseJson(VerboseTranslation),
+    /// Plain text returned by the service.
     Text(MediaTextBody),
+    /// SubRip subtitle text returned by the service.
     Srt(MediaTextBody),
+    /// WebVTT subtitle text returned by the service.
     Vtt(MediaTextBody),
 }
 
@@ -578,9 +658,17 @@ impl<E> fmt::Debug for MediaEventStream<E> {
     }
 }
 
+/// Incremental media stream yielding typed `SpeechStreamEvent` events and preserving response
+/// metadata.
 pub type SpeechEventStream = MediaEventStream<SpeechStreamEvent>;
+/// Incremental media stream yielding typed `TranscriptionStreamEvent` events and preserving
+/// response metadata.
 pub type TranscriptionEventStream = MediaEventStream<TranscriptionStreamEvent>;
+/// Incremental media stream yielding typed `ImageGenerationStreamEvent` events and preserving
+/// response metadata.
 pub type ImageGenerationEventStream = MediaEventStream<ImageGenerationStreamEvent>;
+/// Incremental media stream yielding typed `ImageEditStreamEvent` events and preserving response
+/// metadata.
 pub type ImageEditEventStream = MediaEventStream<ImageEditStreamEvent>;
 
 #[derive(Clone, Copy)]

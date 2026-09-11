@@ -71,6 +71,11 @@ impl ChatKitSessions {
     }
 
     /// Provisions a session and returns an ephemeral frontend client secret.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: CreateChatKitSessionRequest,
@@ -83,6 +88,11 @@ impl ChatKitSessions {
     }
 
     /// Cancels a session so its issued client secret cannot start requests.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn cancel(
         &self,
         session_id: &ChatKitSessionId,
@@ -109,6 +119,11 @@ impl ChatKitThreads {
     }
 
     /// Retrieves one ChatKit thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         thread_id: &ChatKitThreadId,
@@ -118,6 +133,11 @@ impl ChatKitThreads {
     }
 
     /// Deletes one ChatKit thread and its stored items/attachments.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         thread_id: &ChatKitThreadId,
@@ -127,6 +147,11 @@ impl ChatKitThreads {
     }
 
     /// Lists ChatKit threads.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         params: ChatKitThreadListParams,
@@ -173,6 +198,11 @@ impl ChatKitThreads {
     }
 
     /// Lists items belonging to one thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list_items(
         &self,
         thread_id: &ChatKitThreadId,

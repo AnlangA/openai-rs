@@ -126,6 +126,11 @@ impl BetaResponses {
     }
 
     /// Creates a non-streaming beta response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: BetaCreateResponseRequest,
@@ -149,6 +154,12 @@ impl BetaResponses {
     /// mid-stream timeouts) are terminal: the stream yields the error and
     /// ends, and no automatic retry happens. Re-issue the request to
     /// recover (D0244).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn create_stream(
         &self,
         request: BetaCreateStreamingResponseRequest,
@@ -168,6 +179,11 @@ impl BetaResponses {
     }
 
     /// Retrieves a stored beta response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         response_id: &ResponseId,
@@ -177,6 +193,11 @@ impl BetaResponses {
     }
 
     /// Retrieves a stored beta response with explicit expansions.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve_with(
         &self,
         response_id: &ResponseId,
@@ -196,6 +217,12 @@ impl BetaResponses {
     /// mid-stream timeouts) are terminal: the stream yields the error and
     /// ends, and no automatic retry happens. Re-issue the request to
     /// recover (D0244).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn retrieve_stream(
         &self,
         response_id: &ResponseId,
@@ -220,6 +247,11 @@ impl BetaResponses {
     ///
     /// The empty-or-JSON lane also carries the static beta header (see
     /// `execute_beta_json`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         response_id: &ResponseId,
@@ -244,6 +276,11 @@ impl BetaResponses {
     }
 
     /// Cancels a background beta response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn cancel(
         &self,
         response_id: &ResponseId,
@@ -263,6 +300,11 @@ impl BetaResponses {
     }
 
     /// Compacts beta response context.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn compact(
         &self,
         request: BetaCompactResponseRequest,
@@ -307,6 +349,11 @@ impl BetaResponses {
     }
 
     /// Polls a background beta response until it reaches a terminal status.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if polling configuration is invalid, a poll request fails, polling is
+    /// cancelled, or the configured deadline expires.
     pub async fn poll(
         &self,
         response_id: &ResponseId,
@@ -337,11 +384,23 @@ impl BetaResponses {
     }
 
     /// Opens a typed beta Responses WebSocket at the pinned `/responses` path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn connect(&self) -> Result<BetaResponsesWebSocket, Error> {
         self.connect_with(BetaResponsesWebSocketConfig::new()).await
     }
 
     /// Opens a typed beta Responses WebSocket with explicit limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn connect_with(
         &self,
         config: BetaResponsesWebSocketConfig,
@@ -358,6 +417,11 @@ pub struct BetaResponseInputItems {
 
 impl BetaResponseInputItems {
     /// Lists input items for a beta response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         response_id: &ResponseId,
@@ -418,6 +482,11 @@ pub struct BetaResponseInputTokens {
 
 impl BetaResponseInputTokens {
     /// Counts tokens for a typed beta response input.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn count(
         &self,
         request: BetaCountInputTokensRequest,
@@ -542,17 +611,24 @@ impl BetaResponseEventStream {
         })
     }
 
+    /// Returns the HTTP status and response-header metadata.
     #[must_use]
     pub const fn meta(&self) -> &ResponseMeta {
         &self.meta
     }
 
+    /// Returns the request identifier supplied by the service, when present.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.meta.request_id()
     }
 
     /// Drains the stream and returns the last terminal response snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns stream or accumulator errors encountered while consuming events, including malformed
+    /// events or an incomplete terminal response sequence.
     pub async fn collect_final(mut self) -> Result<BetaResponse, Error> {
         let mut terminal = None;
         while let Some(event) = self.next().await {
@@ -577,6 +653,11 @@ impl BetaResponseEventStream {
     /// [`Response`](openai_rs_types::responses::Response); the beta-only
     /// overlays (agent routing, lane ids, and the beta response snapshot
     /// behind [`Self::collect_final`]) are not folded into it.
+    ///
+    /// # Errors
+    ///
+    /// Returns stream or accumulator errors encountered while consuming events, including malformed
+    /// events or an incomplete terminal response sequence.
     pub async fn collect_with(
         mut self,
         mut accumulator: ResponseAccumulator,
@@ -619,6 +700,7 @@ impl fmt::Debug for BetaResponseEventStream {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BetaWebSocketReconnectPolicy {
+    /// Disable automatic reconnection; the caller establishes a new connection explicitly.
     #[default]
     Never,
     /// Retries a failed initial handshake before surfacing its error.
@@ -660,6 +742,7 @@ pub struct BetaResponsesWebSocketConfig {
 }
 
 impl BetaResponsesWebSocketConfig {
+    /// Creates WebSocket configuration with the default buffer limits and connection timeout.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -673,36 +756,42 @@ impl BetaResponsesWebSocketConfig {
         }
     }
 
+    /// Sets the maximum number of bytes accepted in a complete WebSocket message.
     #[must_use]
     pub const fn max_message_bytes(mut self, limit: usize) -> Self {
         self.max_message_bytes = limit;
         self
     }
 
+    /// Sets the maximum number of bytes accepted in a single WebSocket frame.
     #[must_use]
     pub const fn max_frame_bytes(mut self, limit: usize) -> Self {
         self.max_frame_bytes = limit;
         self
     }
 
+    /// Sets the target size in bytes of the WebSocket write buffer.
     #[must_use]
     pub const fn write_buffer_bytes(mut self, size: usize) -> Self {
         self.write_buffer_bytes = size;
         self
     }
 
+    /// Sets the maximum number of bytes queued for WebSocket writes.
     #[must_use]
     pub const fn max_queued_write_bytes(mut self, limit: usize) -> Self {
         self.max_queued_write_bytes = limit;
         self
     }
 
+    /// Sets the time allowed for establishing the WebSocket connection.
     #[must_use]
     pub const fn connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = timeout;
         self
     }
 
+    /// Selects the policy used when the WebSocket connection closes.
     #[must_use]
     pub const fn reconnect_policy(mut self, policy: BetaWebSocketReconnectPolicy) -> Self {
         self.reconnect = policy;
@@ -718,6 +807,11 @@ impl BetaResponsesWebSocketConfig {
     /// Opt-in and off by default: the pinned beta WebSocket face is reachable
     /// without the header (D0210), so the default handshake stays
     /// header-free.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the crate's fixed beta header constants fail header validation.
+    /// Caller-provided values cannot trigger this internal invariant check.
     #[must_use]
     pub fn with_beta_header(self) -> Self {
         self.extra_static_header(BETA_HEADER, BETA_VALUE)
@@ -732,6 +826,11 @@ impl BetaResponsesWebSocketConfig {
     /// The header is sent on every (re)connect attempt of this config, so it
     /// must be static per connection; per-request state belongs on the event
     /// stream instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the header name or value is invalid, or if it would override
+    /// authentication or another reserved handshake header.
     pub fn extra_static_header(
         mut self,
         name: &'static str,
@@ -885,16 +984,19 @@ impl BetaResponsesWebSocket {
         }
     }
 
+    /// Returns the HTTP status and response-header metadata.
     #[must_use]
     pub const fn meta(&self) -> &ResponseMeta {
         &self.meta
     }
 
+    /// Returns the request identifier supplied by the service, when present.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.meta.request_id()
     }
 
+    /// Returns whether this connection has been closed.
     #[must_use]
     pub const fn is_closed(&self) -> bool {
         self.closed
@@ -924,12 +1026,22 @@ impl BetaResponsesWebSocket {
     }
 
     /// Sends a typed beta `response.create` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, the event is invalid or too large,
+    /// serialization fails, or writing to the WebSocket fails.
     pub async fn send_create(&mut self, request: BetaCreateResponseRequest) -> Result<(), Error> {
         self.send_event(BetaResponsesClientEvent::create(request))
             .await
     }
 
     /// Sends a lane-routed beta `response.create` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, the event is invalid or too large,
+    /// serialization fails, or writing to the WebSocket fails.
     pub async fn send_create_on_stream(
         &mut self,
         stream_id: impl Into<String>,
@@ -949,6 +1061,11 @@ impl BetaResponsesWebSocket {
     /// so an SSE-shaped request can move to the WebSocket face without
     /// losing its obfuscation tuning; only the HTTP `stream` flag is dropped
     /// (it is implicit over the WebSocket).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, the event is invalid or too large,
+    /// serialization fails, or writing to the WebSocket fails.
     pub async fn send_create_streaming(
         &mut self,
         request: BetaCreateStreamingResponseRequest,
@@ -960,6 +1077,11 @@ impl BetaResponsesWebSocket {
     }
 
     /// Atomically injects typed client-owned output items.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, the event is invalid or too large,
+    /// serialization fails, or writing to the WebSocket fails.
     pub async fn send_inject(&mut self, event: BetaResponseInjectEvent) -> Result<(), Error> {
         self.send_event(BetaResponsesClientEvent::inject(event))
             .await
@@ -975,6 +1097,11 @@ impl BetaResponsesWebSocket {
     /// encode, carries an invalid `stream_id`, or exceeds the configured
     /// message limit — leave the connection open, because nothing reached the
     /// wire and the socket remains healthy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, the event is invalid or too large,
+    /// serialization fails, or writing to the WebSocket fails.
     pub async fn send_event(&mut self, event: BetaResponsesClientEvent) -> Result<(), Error> {
         if self.closed {
             return Err(Error::WebSocketProtocol(
@@ -1006,6 +1133,11 @@ impl BetaResponsesWebSocket {
     /// openai-node, which destroys the WebSocket on any error). A failed event
     /// *decode* is the one recoverable path: the connection stays open so a
     /// malformed event need not take down an otherwise healthy session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection, frame limits, message decoding, or protocol state is
+    /// invalid.
     pub async fn recv(&mut self) -> Result<Option<BetaResponsesServerEvent>, Error> {
         if self.closed {
             return Ok(None);
@@ -1084,6 +1216,11 @@ impl BetaResponsesWebSocket {
     /// Multiplexed callers should use [`Self::recv`], route by
     /// [`BetaResponsesServerEvent::stream_id`], then push the stable core of
     /// the matching lane's event into its accumulator.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection, frame limits, message decoding, or protocol state is
+    /// invalid. Applying the event can also return accumulator errors.
     pub async fn recv_into(
         &mut self,
         accumulator: &mut ResponseAccumulator,
@@ -1098,6 +1235,10 @@ impl BetaResponsesWebSocket {
     }
 
     /// Initiates the WebSocket close handshake.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the close handshake or transport shutdown fails.
     pub async fn close(&mut self) -> Result<(), Error> {
         if !self.closed {
             self.socket.close(None).await.map_err(map_websocket_error)?;

@@ -1,3 +1,5 @@
+//! Cross-crate wire-contract checks for typed requests, responses, and transport metadata.
+
 use std::{fmt::Debug, future::Future};
 
 use openai_rs_codex::{ManagedAppServerCredential, RuntimeCompatibility, Thread};

@@ -131,12 +131,22 @@ pub struct FileExpirationAfter {
 
 impl FileExpirationAfter {
     /// Creates a policy anchored at file creation time.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(seconds: u64) -> Result<Self, FileExpirationError> {
         Self::from_raw_anchor(FileExpirationAnchor::CreatedAt, seconds)
     }
 
     /// Creates a policy with an explicitly supplied, forward-compatible
     /// anchor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the anchor is unsupported for this expiration policy or the requested
+    /// lifetime violates its bounds.
     pub fn from_raw_anchor(
         anchor: FileExpirationAnchor,
         seconds: u64,
@@ -306,6 +316,11 @@ pub struct FileListLimit(u32);
 
 impl FileListLimit {
     /// Validates a page size of at least 1.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub const fn new(value: u32) -> Result<Self, FileListLimitError> {
         if value == 0 {
             Err(FileListLimitError { value })
@@ -405,6 +420,11 @@ impl FileListParams {
     }
 
     /// Validates and selects a page size.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn try_with_limit(self, limit: u32) -> Result<Self, FileListLimitError> {
         FileListLimit::new(limit).map(|limit| self.with_limit(limit))
     }
@@ -610,6 +630,10 @@ impl FileContent {
     }
 
     /// Returns UTF-8 text when the content is textual.
+    ///
+    /// # Errors
+    ///
+    /// Returns a UTF-8 decoding error if the retained response bytes are not valid text.
     pub fn as_str(&self) -> Result<&str, std::str::Utf8Error> {
         std::str::from_utf8(&self.0)
     }
@@ -637,6 +661,11 @@ pub struct MultipartFileName(String);
 
 impl MultipartFileName {
     /// Validates a non-empty basename suitable for multipart metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the filename is empty or contains characters that are unsafe in a
+    /// multipart filename.
     pub fn new(value: impl Into<String>) -> Result<Self, MultipartFileNameError> {
         let value = value.into();
         if value.is_empty() {
@@ -723,6 +752,10 @@ pub struct MultipartMediaType(String);
 
 impl MultipartMediaType {
     /// Validates a MIME type and rejects control/header injection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the supplied value is not an accepted MIME type for a multipart part.
     pub fn new(value: impl Into<String>) -> Result<Self, MultipartMediaTypeError> {
         let value = value.into();
         if value.is_empty() || value.trim() != value || value.chars().any(char::is_control) {
@@ -834,14 +867,20 @@ pub struct MultipartMediaTypeError;
 pub enum ReplayableMultipartSource {
     /// Immutable bytes that can be cloned cheaply for retries.
     Bytes {
+        /// Shared bytes uploaded as the multipart file body.
         data: Arc<[u8]>,
+        /// Filename sent in the multipart Content-Disposition header.
         file_name: Omittable<MultipartFileName>,
+        /// MIME type supplied for the multipart payload.
         media_type: Omittable<MultipartMediaType>,
     },
     /// A filesystem path that can be reopened for each attempt.
     Path {
+        /// Path identifying the referenced file or resource.
         path: PathBuf,
+        /// Filename sent in the multipart Content-Disposition header.
         file_name: Omittable<MultipartFileName>,
+        /// MIME type supplied for the multipart payload.
         media_type: Omittable<MultipartMediaType>,
     },
 }
@@ -882,6 +921,11 @@ impl ReplayableMultipartSource {
     }
 
     /// Validates and sets the multipart filename.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn try_with_file_name(
         self,
         file_name: impl Into<String>,
@@ -897,6 +941,11 @@ impl ReplayableMultipartSource {
     }
 
     /// Validates and sets the multipart media type.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn try_with_media_type(
         self,
         media_type: impl Into<String>,
@@ -1721,7 +1770,7 @@ mod tests {
             assert!(serde_json::from_value::<MultipartMediaType>(json!(invalid)).is_err());
         }
 
-        assert!(MultipartFileName::new("训练集.jsonl").is_ok());
+        assert!(MultipartFileName::new("training-🦀.jsonl").is_ok());
         assert!(MultipartMediaType::new("application/vnd.openai+json").is_ok());
     }
 

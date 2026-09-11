@@ -81,6 +81,11 @@ pub struct SkillListLimit(u8);
 
 impl SkillListLimit {
     /// Validate a list limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(value: u8) -> Result<Self, SkillListLimitError> {
         if value <= 100 {
             Ok(Self(value))
@@ -290,8 +295,11 @@ impl SetDefaultSkillVersionBody {
 /// Confirmation returned after deleting a Skill.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeletedSkillResource {
+    /// Wire discriminator identifying the resource or list type.
     pub object: DeletedSkillObject,
+    /// Whether the service reports that the resource was deleted.
     pub deleted: bool,
+    /// Identifier used to reference this resource or protocol item.
     pub id: SkillId,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -308,9 +316,13 @@ impl DeletedSkillResource {
 /// Confirmation returned after deleting a Skill Version.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeletedSkillVersionResource {
+    /// Wire discriminator identifying the resource or list type.
     pub object: DeletedSkillVersionObject,
+    /// Whether the service reports that the resource was deleted.
     pub deleted: bool,
+    /// Identifier used to reference this resource or protocol item.
     pub id: SkillVersionId,
+    /// The deleted skill version.
     pub version: SkillVersionNumber,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -342,6 +354,11 @@ pub struct SafeRelativeSkillPath(Box<str>);
 
 impl SafeRelativeSkillPath {
     /// Validates a normalized, non-traversing relative path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path is absolute, traverses a parent directory, or otherwise
+    /// violates the safe relative-path rules.
     pub fn new(value: impl Into<String>) -> Result<Self, SkillUploadPathError> {
         let value = value.into();
         let valid = !value.is_empty()
@@ -448,6 +465,11 @@ impl CreateSkillRequest {
     }
 
     /// Upload one to 500 directory files.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsafe or duplicate relative paths, invalid archive contents, file I/O
+    /// failures, or upload constraints violated while packaging the files.
     pub fn from_files(
         files: impl IntoIterator<Item = ReplayableMultipartSource>,
     ) -> Result<Self, SkillUploadFileCountError> {
@@ -463,6 +485,11 @@ impl CreateSkillRequest {
     }
 
     /// Uploads a directory while preserving each validated relative path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsafe or duplicate relative paths, invalid archive contents, file I/O
+    /// failures, or upload constraints violated while packaging the files.
     pub fn from_directory_files(
         files: impl IntoIterator<Item = (SafeRelativeSkillPath, ReplayableMultipartSource)>,
     ) -> Result<Self, SkillDirectoryUploadError> {
@@ -530,6 +557,11 @@ impl CreateSkillVersionRequest {
     }
 
     /// Upload one to 500 directory files.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsafe or duplicate relative paths, invalid archive contents, file I/O
+    /// failures, or upload constraints violated while packaging the files.
     pub fn from_files(
         files: impl IntoIterator<Item = ReplayableMultipartSource>,
     ) -> Result<Self, SkillUploadFileCountError> {
@@ -546,6 +578,11 @@ impl CreateSkillVersionRequest {
     }
 
     /// Uploads a directory version while preserving validated relative paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsafe or duplicate relative paths, invalid archive contents, file I/O
+    /// failures, or upload constraints violated while packaging the files.
     pub fn from_directory_files(
         files: impl IntoIterator<Item = (SafeRelativeSkillPath, ReplayableMultipartSource)>,
     ) -> Result<Self, SkillDirectoryUploadError> {

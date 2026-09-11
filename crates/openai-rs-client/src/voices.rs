@@ -42,6 +42,11 @@ impl Voices {
     }
 
     /// Creates a custom voice from an eligible customer's sample and consent.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(&self, request: &CreateVoiceRequest) -> Result<ApiResponse<Voice>, Error> {
         let sample = prepare_bounded(request.audio_sample()).await?;
         let form = ReplayableMultipartForm::new()
@@ -82,6 +87,11 @@ impl VoiceConsents {
     }
 
     /// Lists consent recordings visible to this eligible project.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         params: ListVoiceConsentsParams,
@@ -94,6 +104,11 @@ impl VoiceConsents {
     }
 
     /// Uploads a consent recording.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: &CreateVoiceConsentRequest,
@@ -116,6 +131,11 @@ impl VoiceConsents {
     }
 
     /// Retrieves one consent recording's metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         consent_id: &VoiceConsentId,
@@ -128,6 +148,11 @@ impl VoiceConsents {
     }
 
     /// Renames one consent recording.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn update(
         &self,
         consent_id: &VoiceConsentId,
@@ -141,6 +166,11 @@ impl VoiceConsents {
     }
 
     /// Deletes one consent recording.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         consent_id: &VoiceConsentId,

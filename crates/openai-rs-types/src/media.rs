@@ -28,7 +28,10 @@ macro_rules! strict_tagged_union {
         #[derive(Clone, Debug, PartialEq)]
         #[non_exhaustive]
         pub enum $name {
-            $($variant($ty),)+
+            $(
+                #[doc = concat!("The `", $wire, "` payload, decoded as `", stringify!($ty), "`.")]
+                $variant($ty),
+            )+
             /// A future event variant retained with every JSON field.
             Unknown(UnknownTaggedObject),
         }
@@ -109,6 +112,10 @@ macro_rules! bounded_u8 {
 
         impl $name {
             /// Validate and construct the bounded value.
+            ///
+            /// # Errors
+            ///
+            #[doc = concat!("Returns `MediaRangeError` when the value is outside `", stringify!($min), "..=", stringify!($max), "`.")]
             pub fn new(value: u8) -> Result<Self, MediaRangeError> {
                 if ($min..=$max).contains(&value) {
                     Ok(Self(value))
@@ -171,6 +178,11 @@ pub struct SpeechSpeed(f64);
 
 impl SpeechSpeed {
     /// Validate and construct a speech speed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(value: f64) -> Result<Self, SpeechSpeedError> {
         if value.is_finite() && (0.25..=4.0).contains(&value) {
             Ok(Self(value))
@@ -612,12 +624,23 @@ where
     }
 
     /// Validate and set playback speed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn try_with_speed(mut self, speed: f64) -> Result<Self, SpeechSpeedError> {
         self.speed = Omittable::Value(SpeechSpeed::new(speed)?);
         Ok(self)
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateSpeechConstraintError> {
         let input_chars = self.input.chars().count();
         if input_chars > MAX_SPEECH_TEXT_CHARS {
@@ -661,6 +684,10 @@ pub struct SpeechAudioDeltaEvent {
 
 impl SpeechAudioDeltaEvent {
     /// Decode the base64 audio payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the encoded audio is not valid base64.
     pub fn decode_audio(&self) -> Result<Vec<u8>, base64::DecodeError> {
         base64::engine::general_purpose::STANDARD.decode(&self.audio)
     }
@@ -930,6 +957,12 @@ impl TranscriptionRequestMetadata {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateTranscriptionConstraintError> {
         if let Omittable::Value(languages) = &self.languages
             && languages.is_empty()
@@ -1095,6 +1128,12 @@ where
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateTranscriptionConstraintError> {
         self.metadata.validate()
     }
@@ -1614,6 +1653,12 @@ impl CreateTranslationRequest {
     }
 
     /// Checks the pinned transcription temperature range reused by translation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateTranscriptionConstraintError> {
         if let Omittable::Value(temperature) = self.metadata.temperature
             && !(temperature.is_finite() && (0.0..=1.0).contains(&temperature))
@@ -1866,6 +1911,12 @@ impl ImageReference {
     }
 
     /// Checks pinned OpenAPI `image_url` `maxLength` without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
         match self {
             Self::Url(url) => validate_image_reference_url_chars(url.chars().count()),
@@ -1980,6 +2031,12 @@ impl ImageGenerationRequestBody {
     }
 
     /// Checks pinned OpenAPI prompt limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
         check_image_prompt(&self.prompt, &self.model, false)
     }
@@ -2124,6 +2181,12 @@ where
     }
 
     /// Checks pinned OpenAPI prompt limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
         self.body.validate()
     }
@@ -2201,6 +2264,12 @@ impl ImageEditJsonRequestBody {
     }
 
     /// Checks pinned OpenAPI prompt and `image_url` limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
         let actual = self.prompt.chars().count();
         if actual < MIN_IMAGE_EDIT_JSON_PROMPT_CHARS {
@@ -2371,6 +2440,12 @@ where
     }
 
     /// Checks pinned OpenAPI prompt limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
         self.body.validate()
     }
@@ -2445,6 +2520,12 @@ impl ImageEditMultipartMetadata {
     }
 
     /// Checks pinned OpenAPI prompt limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
         check_image_prompt(&self.prompt, &self.model, true)
     }
@@ -2518,6 +2599,11 @@ impl CreateImageEditMultipartRequest<MediaNonStreaming> {
     }
 
     /// Construct an edit request with one to sixteen binary images.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn from_images(
         images: impl IntoIterator<Item = ReplayableMultipartSource>,
         prompt: impl Into<String>,
@@ -2619,6 +2705,12 @@ where
     }
 
     /// Checks pinned OpenAPI prompt limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateImageConstraintError> {
         self.metadata.validate()
     }
@@ -2652,6 +2744,11 @@ pub struct GeneratedImage {
 
 impl GeneratedImage {
     /// Decode the base64 image when present.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn decode(&self) -> Result<Option<Vec<u8>>, base64::DecodeError> {
         match &self.b64_json {
             Omittable::Value(data) => base64::engine::general_purpose::STANDARD
@@ -2803,6 +2900,11 @@ pub struct ImageGenerationPartialEvent {
 
 impl ImageGenerationPartialEvent {
     /// Decode the base64 snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn decode(&self) -> Result<Vec<u8>, base64::DecodeError> {
         base64::engine::general_purpose::STANDARD.decode(&self.b64_json)
     }
@@ -2846,6 +2948,11 @@ pub struct ImageGenerationCompletedEvent {
 
 impl ImageGenerationCompletedEvent {
     /// Decode the final base64 image.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn decode(&self) -> Result<Vec<u8>, base64::DecodeError> {
         base64::engine::general_purpose::STANDARD.decode(&self.b64_json)
     }
@@ -2913,6 +3020,11 @@ pub type ImageEditPartialImageEvent = ImageEditPartialEvent;
 
 impl ImageEditPartialEvent {
     /// Decode the base64 snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn decode(&self) -> Result<Vec<u8>, base64::DecodeError> {
         base64::engine::general_purpose::STANDARD.decode(&self.b64_json)
     }
@@ -2952,6 +3064,11 @@ pub struct ImageEditCompletedEvent {
 
 impl ImageEditCompletedEvent {
     /// Decode the final base64 image.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn decode(&self) -> Result<Vec<u8>, base64::DecodeError> {
         base64::engine::general_purpose::STANDARD.decode(&self.b64_json)
     }

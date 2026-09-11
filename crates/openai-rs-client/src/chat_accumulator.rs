@@ -183,6 +183,11 @@ impl ChatCompletionAccumulator {
     /// Responses channel's `ResponseAccumulator::finish`: folding a stream
     /// that ended without any `finish_reason` and without `[DONE]` is an
     /// error rather than a silently partial completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an accumulator error if the event sequence is inconsistent, a required item is
+    /// missing, or the accumulated response cannot be completed.
     pub fn finish(self) -> Result<ChatCompletion, Error> {
         if !self.is_done() {
             return Err(Error::StreamProtocol {

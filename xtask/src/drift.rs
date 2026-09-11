@@ -96,6 +96,11 @@ impl DriftReport {
     }
 }
 
+/// Compares the selected specification snapshots and prints their drift report.
+///
+/// # Errors
+///
+/// Returns an error if either snapshot cannot be read or parsed.
 pub fn run(repository_root: &Path, arguments: &DriftArguments) -> Result<()> {
     let from_path = match &arguments.from {
         Some(path) => resolve_path(repository_root, path),
@@ -117,6 +122,11 @@ fn resolve_path(repository_root: &Path, path_str: &str) -> PathBuf {
     }
 }
 
+/// Classifies operation and schema changes between two OpenAPI snapshots.
+///
+/// # Errors
+///
+/// Returns an error if either input cannot be read or decoded as a specification.
 pub fn compute_drift(from_path: &Path, to_path: &Path) -> Result<DriftReport> {
     let from_bytes = fs::read(from_path)
         .map_err(|source| Error::io("read from-spec for drift", from_path, source))?;

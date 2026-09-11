@@ -35,14 +35,18 @@ pub enum EvalSourceConstraintError {
     /// `created_after` or `created_before` is below the pinned `minimum: 0`.
     #[error("{field} must be at least {minimum}, got {actual}")]
     CreatedTimestamp {
+        /// Name or path of the field that failed validation.
         field: &'static str,
+        /// Actual value observed when validation failed.
         actual: i64,
+        /// Smallest value permitted by the validation rule.
         minimum: i64,
     },
 }
 
 macro_rules! opaque_id {
     ($name:ident) => {
+        /// An opaque evaluation resource identifier, retained without prefix validation.
         #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
         pub struct $name(Box<str>);
@@ -697,6 +701,11 @@ impl EvalCompletionsSamplingParams {
     }
 
     /// Serializes Chat-style `response_format` without requiring JSON text.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn response_format<T: Serialize>(
         mut self,
         response_format: &T,
@@ -706,6 +715,11 @@ impl EvalCompletionsSamplingParams {
     }
 
     /// Serializes and adds one tool without requiring JSON text.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn tool<T: Serialize>(mut self, tool: &T) -> Result<Self, serde_json::Error> {
         let mut tools = match std::mem::take(&mut self.tools) {
             Omittable::Value(tools) => tools,
@@ -795,12 +809,22 @@ impl EvalResponsesSamplingParams {
 
     /// Serializes Responses-style `text` configuration without requiring JSON
     /// text.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn text<T: Serialize>(mut self, text: &T) -> Result<Self, serde_json::Error> {
         self.text = Omittable::Value(serde_json::to_value(text)?);
         Ok(self)
     }
 
     /// Serializes and adds one tool without requiring JSON text.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn tool<T: Serialize>(mut self, tool: &T) -> Result<Self, serde_json::Error> {
         let mut tools = match std::mem::take(&mut self.tools) {
             Omittable::Value(tools) => tools,
@@ -919,6 +943,12 @@ impl EvalGraderSamplingParams {
     ///
     /// Official `null` and omitted values skip the numeric bound. Serde decode
     /// stays lossless for out-of-range values.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), EvalSamplingConstraintError> {
         if let Omittable::Value(Nullable::Value(tokens)) = self.max_completions_tokens
             && tokens < MIN_EVAL_MAX_COMPLETIONS_TOKENS
@@ -1347,6 +1377,11 @@ pub struct CreateCustomDataSourceConfig {
 
 impl CreateCustomDataSourceConfig {
     /// Creates a custom data-source config from a typed schema representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable<T: Serialize>(schema: &T) -> Result<Self, serde_json::Error> {
         Ok(Self {
             kind: CreateCustomDataSourceTag::Custom,
@@ -1387,6 +1422,11 @@ impl CreateLogsDataSourceConfig {
     }
 
     /// Serializes log filters without requiring JSON text.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn metadata<T: Serialize>(mut self, value: &T) -> Result<Self, serde_json::Error> {
         self.metadata = Omittable::Value(serde_json::to_value(value)?);
         Ok(self)
@@ -1446,6 +1486,7 @@ tagged_union! {
 
 macro_rules! response_data_source {
     ($name:ident, $tag:ident, $variant:ident) => {
+        #[doc = concat!("The schema and metadata for the `", stringify!($variant), "` evaluation data source.")]
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct $name {
             #[serde(rename = "type")]
@@ -1798,6 +1839,11 @@ pub struct EvalDataRow {
 
 impl EvalDataRow {
     /// Serializes a typed dataset item.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable<T: Serialize>(item: &T) -> Result<Self, serde_json::Error> {
         Ok(Self {
             item: serde_json::to_value(item)?,
@@ -1807,6 +1853,11 @@ impl EvalDataRow {
     }
 
     /// Adds a typed pre-populated sample namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn sample<T: Serialize>(mut self, sample: &T) -> Result<Self, serde_json::Error> {
         self.sample = Omittable::Value(serde_json::to_value(sample)?);
         Ok(self)
@@ -2162,6 +2213,12 @@ impl EvalResponsesSource {
     ///
     /// Official `null` and omitted values skip the bound. Stored-completions
     /// timestamps have no official minimum. Serde decode stays lossless.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), EvalSourceConstraintError> {
         validate_eval_created_timestamp("created_after", &self.created_after)?;
         validate_eval_created_timestamp("created_before", &self.created_before)
@@ -2297,6 +2354,7 @@ impl EvalJsonlRunDataSource {
 
 macro_rules! model_run_data_source {
     ($name:ident, $tag:ident, $variant:ident, $source:ty, $params:ty) => {
+        #[doc = concat!("A `", stringify!($variant), "` evaluation run source with input and sampling configuration.")]
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct $name {
             #[serde(rename = "type")]
@@ -3048,6 +3106,11 @@ pub mod experimental {
         }
 
         /// Serializes a typed dataset item.
+        ///
+        /// # Errors
+        ///
+        /// Returns a validation or conversion error if the supplied value violates the documented
+        /// field, size, count, or cross-field constraints for this type.
         pub fn item<T: Serialize>(mut self, item: &T) -> Result<Self, serde_json::Error> {
             self.item = Omittable::Value(serde_json::to_value(item)?);
             Ok(self)

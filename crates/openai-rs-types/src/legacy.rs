@@ -519,6 +519,11 @@ impl CreateCompletionRequest {
     }
 
     /// Converts to streaming mode unless a non-null `best_of` was supplied.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn into_streaming(
         self,
     ) -> Result<CreateStreamingCompletionRequest, CompletionRequestError> {
@@ -533,6 +538,12 @@ impl CreateCompletionRequest {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateCompletionConstraintError> {
         self.body.validate()?;
         if let Omittable::Value(Nullable::Value(best_of)) = self.best_of
@@ -592,6 +603,12 @@ impl CreateStreamingCompletionRequest {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateCompletionConstraintError> {
         self.body.validate()
     }
@@ -635,58 +652,103 @@ pub const MAX_COMPLETION_LOGIT_BIAS: i32 = 100;
 pub enum CreateCompletionConstraintError {
     /// `temperature` is non-finite or outside `0..=2`.
     #[error("temperature must be finite and within 0..=2, got {value}")]
-    Temperature { value: String },
+    Temperature {
+        /// Invalid value, retained as text for the validation error.
+        value: String,
+    },
     /// `top_p` is non-finite or outside `0..=1`.
     #[error("top_p must be finite and within 0..=1, got {value}")]
-    TopP { value: String },
+    TopP {
+        /// Invalid value, retained as text for the validation error.
+        value: String,
+    },
     /// `frequency_penalty` is non-finite or outside `-2..=2`.
     #[error("frequency_penalty must be finite and within -2..=2, got {value}")]
-    FrequencyPenalty { value: String },
+    FrequencyPenalty {
+        /// Invalid value, retained as text for the validation error.
+        value: String,
+    },
     /// `presence_penalty` is non-finite or outside `-2..=2`.
     #[error("presence_penalty must be finite and within -2..=2, got {value}")]
-    PresencePenalty { value: String },
+    PresencePenalty {
+        /// Invalid value, retained as text for the validation error.
+        value: String,
+    },
     /// `logprobs` is outside `0..=5`.
     #[error("logprobs must be 0..={maximum}, got {actual}")]
-    Logprobs { actual: u8, maximum: u8 },
+    Logprobs {
+        /// Actual value observed when validation failed.
+        actual: u8,
+        /// Largest value permitted by the validation rule.
+        maximum: u8,
+    },
     /// `n` is outside `1..=128`.
     #[error("n must be {minimum}..={maximum}, got {actual}")]
     Choices {
+        /// Actual value observed when validation failed.
         actual: u32,
+        /// Smallest value permitted by the validation rule.
         minimum: u32,
+        /// Largest value permitted by the validation rule.
         maximum: u32,
     },
     /// `best_of` is outside `0..=20`.
     #[error("best_of must be {minimum}..={maximum}, got {actual}")]
     BestOf {
+        /// Actual value observed when validation failed.
         actual: u8,
+        /// Smallest value permitted by the validation rule.
         minimum: u8,
+        /// Largest value permitted by the validation rule.
         maximum: u8,
     },
     /// `best_of` is not greater than an explicitly set `n`. The pinned
     /// `best_of` description states "`best_of` must be greater than `n`".
     #[error("best_of must be greater than n when both are set, got best_of {best_of} and n {n}")]
-    BestOfNotGreaterThanN { best_of: u8, n: u32 },
+    BestOfNotGreaterThanN {
+        /// Number of candidate completions generated before selecting the best result.
+        best_of: u8,
+        /// Number of completions requested.
+        n: u32,
+    },
     /// `stop` array length is outside `1..=4`.
     #[error("stop must contain {minimum}..={maximum} sequences, got {actual}")]
     StopSequences {
+        /// Actual value observed when validation failed.
         actual: usize,
+        /// Smallest value permitted by the validation rule.
         minimum: usize,
+        /// Largest value permitted by the validation rule.
         maximum: usize,
     },
     /// A `logit_bias` value is outside `-100..=100`.
     #[error("logit_bias[{token}] must be {minimum}..={maximum}, got {actual}")]
     LogitBias {
+        /// Token text or token identifier associated with this entry.
         token: String,
+        /// Actual value observed when validation failed.
         actual: i32,
+        /// Smallest value permitted by the validation rule.
         minimum: i32,
+        /// Largest value permitted by the validation rule.
         maximum: i32,
     },
     /// Token `prompt` array is empty (`minItems: 1`).
     #[error("token prompt must contain at least {minimum} tokens, got {actual}")]
-    EmptyPromptTokens { actual: usize, minimum: usize },
+    EmptyPromptTokens {
+        /// Actual value observed when validation failed.
+        actual: usize,
+        /// Smallest value permitted by the validation rule.
+        minimum: usize,
+    },
     /// Nested token-batch `prompt` array is empty (`minItems: 1`).
     #[error("token-batch prompt must contain at least {minimum} tokens, got {actual}")]
-    EmptyPromptTokenBatch { actual: usize, minimum: usize },
+    EmptyPromptTokenBatch {
+        /// Actual value observed when validation failed.
+        actual: usize,
+        /// Smallest value permitted by the validation rule.
+        minimum: usize,
+    },
 }
 
 impl CompletionRequestBody {

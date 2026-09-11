@@ -5,6 +5,30 @@
 //! that child. They are deliberately not interchangeable with Platform API
 //! credentials.
 //!
+//! # Examples
+//!
+//! Prepare typed app-server initialization and turn parameters:
+//!
+//! ```
+//! use openai_rs_codex::{ClientInfo, InitializeParams, TurnStartParams};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let initialize = InitializeParams::new(ClientInfo::new("example-client", "1.0"));
+//! assert_eq!(initialize.client_info.name, "example-client");
+//!
+//! let turn = TurnStartParams::text("existing-thread-id", "Explain the project structure.");
+//! let payload = serde_json::to_value(turn)?;
+//! assert_eq!(payload["threadId"], "existing-thread-id");
+//! assert_eq!(payload["input"][0]["type"], "text");
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! The default `app-server` feature exposes the subprocess client. Starting it
+//! requires a runtime accepted by `RuntimeCompatibility` and an isolated Codex
+//! home directory. Experimental direct authentication and transport are separate
+//! opt-in features and use their own credential store.
+//!
 //! # Tracing facade
 //!
 //! Local `tracing` output only; nothing is reported over the network. Two

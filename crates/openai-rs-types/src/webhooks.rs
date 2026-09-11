@@ -565,7 +565,10 @@ macro_rules! webhook_union {
         #[derive(Debug, Clone, PartialEq)]
         #[non_exhaustive]
         pub enum WebhookEvent {
-            $($variant($event),)+
+            $(
+                #[doc = concat!("The `", $wire, "` webhook with its typed event payload.")]
+                $variant($event),
+            )+
             /// A future event retained as a complete semantic JSON object.
             Unknown(UnknownTaggedObject),
         }

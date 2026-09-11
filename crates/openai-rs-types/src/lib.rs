@@ -1,4 +1,35 @@
 //! Lossless wire types and Serde primitives for the OpenAI API.
+//!
+//! This crate constructs and decodes protocol payloads without performing
+//! network I/O. Use the `openai-rs-sdk` facade when an HTTP client is also needed.
+//! Resource modules contain their request, response, pagination, and event types.
+//!
+//! # Examples
+//!
+//! Construct a typed Responses request and inspect the serialized payload:
+//!
+//! ```
+//! use openai_rs_types::responses::CreateResponseRequest;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let request = CreateResponseRequest::new("your-model-id", "Hello!").store(false);
+//! let payload = serde_json::to_value(&request)?;
+//! assert_eq!(payload["input"], "Hello!");
+//! assert_eq!(payload["store"], false);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Presence and compatibility
+//!
+//! [`Omittable`] represents an absent property, and [`Nullable`] represents a
+//! required property that can contain null. Combining them preserves all three
+//! wire states. [`ExtraFields`] retains additional object properties. Open
+//! string enums retain new service values through their `Unknown` variants.
+//!
+//! Builders preserve supplied values. Call a request's `validate` method to
+//! check its enforced constraints before sending it. Malformed known variants
+//! remain decoding errors instead of silently becoming unknown variants.
 
 #[macro_use]
 pub mod kernel;

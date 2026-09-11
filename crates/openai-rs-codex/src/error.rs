@@ -11,7 +11,9 @@ use crate::protocol::redacted_extra_debug;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RpcId {
+    /// A numeric JSON-RPC request identifier.
     Number(u64),
+    /// A string JSON-RPC request identifier.
     String(String),
 }
 
@@ -19,7 +21,9 @@ pub enum RpcId {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcError {
+    /// Machine-readable error code reported by the service.
     pub code: i64,
+    /// Human-readable message describing this event or failure.
     pub message: String,
     /// Server-controlled payload. The pinned JSON-RPC envelope allows the
     /// `data` key to be absent or explicitly `null`, so the field keeps all
@@ -27,6 +31,7 @@ pub struct RpcError {
     /// omitted key on re-serialization.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub data: Omittable<Nullable<Value>>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -48,13 +53,21 @@ impl std::error::Error for RpcError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ConnectionFailureKind {
+    /// The connection was explicitly closed.
     Closed,
+    /// The subprocess ended its output stream.
     EndOfFile,
+    /// An I/O error interrupted the subprocess connection.
     Io,
+    /// An incoming JSONL frame could not be parsed as JSON.
     InvalidJson,
+    /// An incoming JSON-RPC envelope did not match the protocol.
     InvalidMessage,
+    /// An incoming JSONL frame exceeded the configured byte limit.
     LineTooLong,
+    /// The consumer event queue filled before the event could be delivered.
     EventQueueFull,
+    /// The app-server subprocess exited.
     ChildExit,
     /// The write phase of a request exceeded its budget and the connection
     /// was torn down because the cancelled write may have left a half-written
@@ -65,11 +78,14 @@ pub enum ConnectionFailureKind {
 /// Cloneable terminal failure shared with all in-flight requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionFailure {
+    /// Category of transport or framing failure that closed the connection.
     pub kind: ConnectionFailureKind,
+    /// Human-readable message describing this event or failure.
     pub message: String,
 }
 
 impl ConnectionFailure {
+    /// Creates a connection-failure record with a category and diagnostic message.
     #[must_use]
     pub fn new(kind: ConnectionFailureKind, message: impl Into<String>) -> Self {
         Self {
@@ -91,6 +107,7 @@ impl std::error::Error for ConnectionFailure {}
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// Invalid app-server configuration.
     #[error("invalid app-server configuration: {0}")]
     InvalidConfiguration(String),
 
@@ -100,26 +117,42 @@ pub enum Error {
     /// the platform-side `RequestPayloadTooLarge` stance of D0204 instead of
     /// reusing the configuration category.
     #[error("app-server outbound frame exceeds the {limit_bytes}-byte limit before transport")]
-    RequestPayloadTooLarge { limit_bytes: usize },
+    RequestPayloadTooLarge {
+        /// Maximum permitted size in bytes.
+        limit_bytes: usize,
+    },
 
+    /// Could not prepare the dedicated `CODEX_HOME`.
     #[error("could not prepare the dedicated CODEX_HOME: {0}")]
     CodexHome(#[source] std::io::Error),
 
+    /// Could not spawn the Codex app-server child.
     #[error("could not spawn the Codex app-server child: {0}")]
     Spawn(#[source] std::io::Error),
 
+    /// Could not inspect the Codex runtime artifact.
     #[error("could not inspect the Codex runtime artifact: {0}")]
     RuntimeArtifact(#[source] std::io::Error),
 
+    /// Codex runtime hashing task failed.
     #[error("Codex runtime hashing task failed: {0}")]
     RuntimeHashTask(String),
 
+    /// The runtime executable's digest is not included in the audited compatibility set.
     #[error("Codex runtime SHA-256 {actual_sha256} is not present in the compatibility set")]
-    RuntimeArtifactMismatch { actual_sha256: String },
+    RuntimeArtifactMismatch {
+        /// SHA-256 digest computed from the inspected runtime artifact.
+        actual_sha256: String,
+    },
 
+    /// No bundled runtime has been audited for the requested compilation target.
     #[error("no bundled Codex app-server runtime is audited for target {target}")]
-    UnsupportedRuntimeTarget { target: String },
+    UnsupportedRuntimeTarget {
+        /// Compilation target triple absent from the audited runtime manifest.
+        target: String,
+    },
 
+    /// App-server stdio error.
     #[error("app-server stdio error: {0}")]
     Io(#[source] std::io::Error),
 
@@ -133,27 +166,37 @@ pub enum Error {
     /// A response body could not be decoded into the typed result of `method`.
     #[error("could not decode the app-server {method} response")]
     ResponseDecode {
+        /// Protocol operation or HTTP method associated with this request.
         method: &'static str,
+        /// Underlying error that caused this failure.
         #[source]
         source: serde_json::Error,
     },
 
+    /// An error propagated from the wrapped error type.
     #[error(transparent)]
     Rpc(Box<RpcError>),
 
+    /// App-server connection failed.
     #[error("app-server connection failed: {0}")]
     Connection(#[from] ConnectionFailure),
 
+    /// App-server request `method` (id `id`) timed out after `timeout`.
     #[error("app-server request {method} (id {id}) timed out after {timeout:?}")]
     RequestTimeout {
+        /// Protocol operation or HTTP method associated with this request.
         method: &'static str,
+        /// Identifier used to reference this resource or protocol item.
         id: u64,
+        /// Maximum time allowed for the operation to complete.
         timeout: std::time::Duration,
     },
 
+    /// Timed out after the supplied value while waiting for an app-server pending-request slot.
     #[error("timed out after {0:?} while waiting for an app-server pending-request slot")]
     PendingCapacityTimeout(std::time::Duration),
 
+    /// App-server response channel closed before request the supplied value completed.
     #[error("app-server response channel closed before request {0} completed")]
     ResponseChannelClosed(u64),
 
@@ -164,8 +207,14 @@ pub enum Error {
     #[error(
         "app-server {method} params extra field `{key}` collides with a typed field of the same object"
     )]
-    ExtraFieldConflict { method: &'static str, key: String },
+    ExtraFieldConflict {
+        /// Protocol operation or HTTP method associated with this request.
+        method: &'static str,
+        /// Name of the extension field that conflicts with a typed wire property.
+        key: String,
+    },
 
+    /// Unexpected app-server response.
     #[error("unexpected app-server response: {0}")]
     UnexpectedResponse(String),
 }

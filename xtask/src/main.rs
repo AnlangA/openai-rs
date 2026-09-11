@@ -1,3 +1,6 @@
+//! Maintainer commands for checking pinned specifications and generated contracts.
+
+/// Command-line argument parsing for the repository maintenance commands.
 mod cli;
 mod codegen;
 mod codex_compat;

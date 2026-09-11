@@ -1,4 +1,42 @@
 //! Typed Rust SDK for the OpenAI API.
+//!
+//! Use this facade for the asynchronous Platform client, lossless request and
+//! response types, and optional Realtime, webhook, MCP, and Codex integrations.
+//! The default features enable the HTTP client, rustls, and Structured Outputs.
+//! With default features disabled, the wire types remain available through
+//! [`types`] and [`responses`].
+//!
+//! # Examples
+//!
+//! Create a response with the default `client` feature enabled:
+//!
+//! ```no_run
+//! # #[cfg(feature = "client")]
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! use openai_rs::{ApiKey, Client, responses::CreateResponseRequest};
+//!
+//! let key = ApiKey::new(std::env::var("OPENAI_API_KEY")?)?;
+//! let client = Client::new(key)?;
+//! let request = CreateResponseRequest::new("your-model-id", "Explain Rust ownership.");
+//! let response = client.responses().create(request).await?;
+//! println!("{}", response.output_text());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Wire semantics
+//!
+//! [`types::Omittable`] distinguishes an absent JSON property from a supplied
+//! value, while [`types::Nullable`] preserves explicit null. Unknown response
+//! fields and open-enum strings are retained where the protocol permits them.
+//! Request validation is separate from lossless construction and decoding.
+//!
+//! # Optional integrations
+//!
+//! Enable `realtime` for live audio and WebSocket connections, `webhook-verification` for
+//! signed webhook handling, `admin` for organization administration, and `rmcp`
+//! for local MCP tool execution. Codex integrations have separate feature flags
+//! and credentials; Platform API keys cannot authenticate a Codex subscription.
 
 pub use openai_rs_types as types;
 pub use openai_rs_types::responses::{self, OutputParseError};

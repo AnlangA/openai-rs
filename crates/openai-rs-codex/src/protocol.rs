@@ -62,11 +62,13 @@ pub(crate) fn ensure_no_reserved(
 /// [`Omittable`]`<`[`Nullable`]`<String>>` and keeps all three wire states.
 /// The optional `trace` property of the pinned `JSONRPCRequest` is therefore
 /// modelled as `Omittable<Nullable<W3cTraceContext>>` at the injection
-/// surface ([`AppServerClient::with_trace_context`](crate::AppServerClient::with_trace_context)).
+/// surface (`AppServerClient::with_trace_context`, available with `app-server`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct W3cTraceContext {
+    /// W3C Trace Context parent identifier forwarded with the request.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub traceparent: Omittable<Nullable<String>>,
+    /// Vendor-specific W3C Trace Context state forwarded with the request.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tracestate: Omittable<Nullable<String>>,
 }
@@ -93,13 +95,17 @@ impl W3cTraceContext {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientInfo {
+    /// Stable client identifier sent during the initialization handshake.
     pub name: String,
+    /// Human-readable title displayed for this client or resource.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Version string identifying the client software.
     pub version: String,
 }
 
 impl ClientInfo {
+    /// Creates client identification from its stable name and version string.
     #[must_use]
     pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
         Self {
@@ -109,6 +115,7 @@ impl ClientInfo {
         }
     }
 
+    /// Sets the human-readable client title used during initialization.
     #[must_use]
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -154,15 +161,19 @@ redacted_extra_debug!(InitializeCapabilities {
     request_attestation
 });
 
+/// Client identity and capabilities sent in the app-server initialization handshake.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
+    /// Client identity and version sent during initialization.
     pub client_info: ClientInfo,
+    /// Client-declared capabilities negotiated during initialize.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<InitializeCapabilities>,
 }
 
 impl InitializeParams {
+    /// Creates initialization parameters without additional capability requests.
     #[must_use]
     pub fn new(client_info: ClientInfo) -> Self {
         Self {
@@ -182,6 +193,10 @@ impl InitializeParams {
 
     /// Ensures no flattened `extra` key shadows a typed key of this request
     /// (7-21). Called by the send path before encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an extension property conflicts with a typed wire field.
     pub fn validate_extra(&self) -> Result<(), crate::Error> {
         match &self.capabilities {
             Some(capabilities) => ensure_no_reserved(
@@ -194,13 +209,20 @@ impl InitializeParams {
     }
 }
 
+/// Server identity and capabilities returned by the initialization handshake.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
+    /// Client identification string reported by the server.
     pub user_agent: String,
+    /// Absolute path to the server's $`CODEX_HOME` directory.
     pub codex_home: PathBuf,
+    /// Platform family for the running app-server target, for example `"unix"` or `"windows"`.
     pub platform_family: String,
+    /// Operating system for the running app-server target, for example `"macos"`, `"linux"`, or
+    /// `"windows"`.
     pub platform_os: String,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -212,35 +234,49 @@ redacted_extra_debug!(InitializeResponse {
     platform_os
 });
 
+/// Application branding selected for a browser login flow.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LoginAppBrand {
+    /// Use Codex branding during browser authentication.
     #[default]
     Codex,
+    /// Use ChatGPT branding during browser authentication.
     Chatgpt,
 }
 
+/// Optional parameters controlling the browser authorization flow.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserLoginOptions {
+    /// Whether the browser login uses the streamlined Codex flow.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub codex_streamlined_login: bool,
+    /// Whether login completion uses the service-hosted success page.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub use_hosted_login_success_page: bool,
+    /// Branding configuration used by the login flow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_brand: Option<LoginAppBrand>,
 }
 
+/// Browser authorization details returned when login starts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserLogin {
+    /// Identifier of the login attempt.
     pub login_id: String,
+    /// URL where the user completes browser authentication.
     pub auth_url: Url,
 }
 
+/// Verification URL and user code needed to complete device authorization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceCodeLogin {
+    /// Identifier of the login attempt.
     pub login_id: String,
+    /// URL where the user enters the device authorization code.
     pub verification_url: Url,
+    /// Short code the user enters to authorize a device login.
     pub user_code: String,
 }
 
@@ -287,10 +323,13 @@ openai_rs_types::open_string_enum! {
     }
 }
 
+/// Outcome of cancelling a pending login attempt.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelLoginResponse {
+    /// Current lifecycle state of the operation or resource.
     pub status: CancelLoginStatus,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -334,6 +373,7 @@ openai_rs_types::open_string_enum! {
     }
 }
 
+/// Account identity and plan information reported by app-server.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {
@@ -341,10 +381,13 @@ pub struct Account {
     /// account type).
     #[serde(rename = "type")]
     pub kind: String,
+    /// Email address associated with this user or actor.
     #[serde(default)]
     pub email: Option<String>,
+    /// Subscription plan reported by the account service.
     #[serde(default)]
     pub plan_type: Option<PlanType>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -355,11 +398,15 @@ redacted_extra_debug!(Account {
     plan_type
 });
 
+/// Account information returned by the account-read operation.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountReadResponse {
+    /// Account information returned by the server.
     pub account: Option<Account>,
+    /// Whether the server requires an authenticated OpenAI account.
     pub requires_openai_auth: bool,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -369,12 +416,17 @@ redacted_extra_debug!(AccountReadResponse {
     requires_openai_auth
 });
 
+/// Usage percentage, window duration, and reset time for one rate-limit window.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitWindow {
+    /// Percentage of the rate-limit allowance already consumed.
     pub used_percent: i32,
+    /// Length of the rate-limit window in minutes.
     pub window_duration_mins: Option<i64>,
+    /// Rate-limit reset time as a Unix timestamp in seconds.
     pub resets_at: Option<i64>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -385,12 +437,17 @@ redacted_extra_debug!(RateLimitWindow {
     resets_at
 });
 
+/// Available-credit information reported for the authenticated account.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreditsSnapshot {
+    /// Whether the account has credits available for use.
     pub has_credits: bool,
+    /// Whether the account has an unlimited credit allowance.
     pub unlimited: bool,
+    /// Remaining credit balance reported by the service.
     pub balance: Option<String>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -401,18 +458,25 @@ redacted_extra_debug!(CreditsSnapshot {
     balance
 });
 
+/// Usage and credit snapshot for an account rate-limit bucket.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitSnapshot {
+    /// Identifier of the rate-limit bucket.
     pub limit_id: Option<String>,
+    /// Human-readable name of the rate-limit bucket.
     pub limit_name: Option<String>,
+    /// Usage information for the primary rate-limit window.
     pub primary: Option<RateLimitWindow>,
+    /// Usage information for the secondary rate-limit window.
     pub secondary: Option<RateLimitWindow>,
+    /// Credit availability and balance reported by the service.
     pub credits: Option<CreditsSnapshot>,
     /// Plan classification; unknown plans stay lossless.
     pub plan_type: Option<PlanType>,
     /// Why the limit was reached; unknown states stay lossless.
     pub rate_limit_reached_type: Option<RateLimitReachedType>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -427,14 +491,19 @@ redacted_extra_debug!(RateLimitSnapshot {
     rate_limit_reached_type
 });
 
+/// Account rate limits, including both legacy and per-bucket representations.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRateLimitsResponse {
+    /// Backward-compatible view of the account's rate limits.
     pub rate_limits: RateLimitSnapshot,
+    /// Rate-limit information grouped by limit identifier.
     #[serde(default)]
     pub rate_limits_by_limit_id: Option<BTreeMap<String, RateLimitSnapshot>>,
+    /// Raw usage-reset credit information reported by the account service.
     #[serde(default)]
     pub rate_limit_reset_credits: Option<Value>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -445,14 +514,21 @@ redacted_extra_debug!(AccountRateLimitsResponse {
     rate_limit_reset_credits
 });
 
+/// Aggregate activity and token-usage statistics for the authenticated account.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageSummary {
+    /// Total token usage accumulated over the account's lifetime.
     pub lifetime_tokens: Option<i64>,
+    /// Highest token total recorded for a single day.
     pub peak_daily_tokens: Option<i64>,
+    /// Duration of the longest recorded turn in seconds.
     pub longest_running_turn_sec: Option<i64>,
+    /// Number of consecutive days in the current usage streak.
     pub current_streak_days: Option<i64>,
+    /// Longest recorded streak of consecutive usage days.
     pub longest_streak_days: Option<i64>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -465,22 +541,30 @@ redacted_extra_debug!(AccountUsageSummary {
     longest_streak_days
 });
 
+/// Token usage and activity counts grouped into one calendar day.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyUsageBucket {
+    /// Calendar date identifying the usage bucket.
     pub start_date: String,
+    /// Token count associated with this usage entry.
     pub tokens: i64,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
 
 redacted_extra_debug!(DailyUsageBucket { start_date, tokens });
 
+/// Aggregate and daily account usage returned by the service.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageResponse {
+    /// Aggregate account usage statistics reported by the service.
     pub summary: AccountUsageSummary,
+    /// Usage totals grouped by calendar day.
     pub daily_usage_buckets: Option<Vec<DailyUsageBucket>>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -505,7 +589,7 @@ openai_rs_types::open_string_enum! {
 /// Settings of the granular approval-policy branch.
 ///
 /// Wire shape of the `granular` object inside the pinned
-/// `v2/AskForApproval` union. The keys stay snake_case exactly as pinned
+/// `v2/AskForApproval` union. The keys stay `snake_case` exactly as pinned
 /// (`mcp_elicitations`, `rules`, `sandbox_approval` required;
 /// `request_permissions`, `skill_approval` optional, defaulting to `false`
 /// on the app-server side when omitted). Future sub-keys a later app-server
@@ -513,11 +597,16 @@ openai_rs_types::open_string_enum! {
 /// and round-trip losslessly (17-O-1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GranularAskForApproval {
+    /// Approval behavior for questions initiated by MCP servers.
     pub mcp_elicitations: bool,
+    /// Approval behavior for requests to grant additional permissions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_permissions: Option<bool>,
+    /// Controls approval prompts triggered by command-execution rules.
     pub rules: bool,
+    /// Approval behavior for operations that require sandbox exceptions.
     pub sandbox_approval: bool,
+    /// Approval behavior for loading or executing skills.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_approval: Option<bool>,
     /// Future branch properties, retained losslessly (17-O-1).
@@ -560,12 +649,14 @@ impl GranularAskForApproval {
 /// Mirrors the two-branch `oneOf` of the pinned `v2/AskForApproval`: the
 /// string branch is typed by the open enum [`AskForApprovalMode`] (unknown
 /// strings stay lossless), and the object branch serializes as
-/// `{"granular": {...}}` with the pinned snake_case keys. A third shape a
+/// `{"granular": {...}}` with the pinned `snake_case` keys. A third shape a
 /// later app-server introduces stays verbatim in [`AskForApproval::Unknown`]
 /// instead of failing the surrounding response decode (D0237 fallback, 13-O-1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AskForApproval {
+    /// Carries the `AskForApprovalMode` payload for this protocol alternative.
     Mode(AskForApprovalMode),
+    /// Carries the `GranularAskForApproval` payload for this protocol alternative.
     Granular(GranularAskForApproval),
     /// A policy shape this crate has not modelled; the payload stays verbatim.
     Unknown(Value),
@@ -731,21 +822,27 @@ pub enum SandboxPolicy {
     },
     /// Read-only filesystem view of the host.
     ReadOnly {
+        /// Network access allowed by the sandbox policy.
         network_access: Option<bool>,
         /// Future branch properties, retained losslessly (17-O-1).
         extra: serde_json::Map<String, Value>,
     },
     /// Sandbox enforcement delegated to an external sandbox implementation.
     ExternalSandbox {
+        /// Network access allowed by the sandbox policy.
         network_access: Option<NetworkAccess>,
         /// Future branch properties, retained losslessly (17-O-1).
         extra: serde_json::Map<String, Value>,
     },
     /// Writable workspace plus explicit writable roots.
     WorkspaceWrite {
+        /// Filesystem roots the workspace-write sandbox permits the agent to modify.
         writable_roots: Option<Vec<PathBuf>>,
+        /// Network access allowed by the sandbox policy.
         network_access: Option<bool>,
+        /// Whether the workspace-write sandbox excludes `/tmp` from its writable paths.
         exclude_slash_tmp: Option<bool>,
+        /// Whether the workspace-write sandbox excludes the path specified by `TMPDIR`.
         exclude_tmpdir_env_var: Option<bool>,
         /// Future branch properties, retained losslessly (17-O-1).
         extra: serde_json::Map<String, Value>,
@@ -917,33 +1014,42 @@ impl<'de> Deserialize<'de> for SandboxPolicy {
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartParams {
+    /// Identifier of the model used or requested for the operation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Identifier of the model provider selected for the thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_provider: Option<String>,
     /// Working directory of the thread. When omitted, app-server inherits the
     /// child process's cwd — and this crate always spawns the child with the
-    /// dedicated CODEX_HOME as its cwd — so an absent `cwd` means CODEX_HOME,
+    /// dedicated `CODEX_HOME` as its cwd — so an absent `cwd` means `CODEX_HOME`,
     /// never the embedding process's working directory. Set it explicitly to
     /// anchor the thread in a workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
+    /// Policy controlling when the agent must request user approval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<AskForApproval>,
     /// Where approval requests raised by this thread and its subsequent turns
     /// are routed for review; defaults to the user on the app-server side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Sandbox configuration applied to the thread or turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<SandboxMode>,
+    /// Personality preset used for the model's responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
+    /// Name of the service associated with this thread or account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_name: Option<String>,
+    /// Service tier selected or reported for model execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
+    /// Instructions used as the base prompt for the thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_instructions: Option<String>,
+    /// Developer instructions applied to the thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub developer_instructions: Option<String>,
     /// Client-supplied analytics source classification. The pinned
@@ -959,6 +1065,7 @@ pub struct ThreadStartParams {
     /// keeps them redacted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Map<String, Value>>,
+    /// Whether the thread should use ephemeral storage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ephemeral: Option<bool>,
     /// Future `thread/start` properties, retained losslessly. Send paths
@@ -1008,6 +1115,10 @@ impl ThreadStartParams {
 
     /// Ensures no flattened `extra` key shadows a typed `thread/start` key
     /// (7-21). Called by the send path before encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an extension property conflicts with a typed wire field.
     pub fn validate_extra(&self) -> Result<(), crate::Error> {
         ensure_no_reserved(&self.extra, "thread/start", Self::RESERVED_KEYS)
     }
@@ -1033,7 +1144,9 @@ openai_rs_types::open_string_enum! {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveThreadStatus {
+    /// Flags describing activity currently associated with the thread.
     pub active_flags: Vec<ThreadActiveFlag>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -1132,16 +1245,21 @@ openai_rs_types::open_string_enum! {
 /// `#/definitions/v2/SubAgentSource`: `depth` and `parent_thread_id` are
 /// required while `agent_nickname`/`agent_path`/`agent_role` default to
 /// `null` server-side, so they are [`Option`] fields that send no key when
-/// unset. The keys stay snake_case exactly as pinned.
+/// unset. The keys stay `snake_case` exactly as pinned.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ThreadSpawnSubAgentSource {
+    /// Depth of the agent in the parent-child collaboration hierarchy.
     pub depth: i32,
+    /// Identifier of the thread that created this child thread.
     pub parent_thread_id: String,
+    /// Human-readable nickname assigned to the participating agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_nickname: Option<String>,
+    /// Path identifying the agent within the collaboration hierarchy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_path: Option<String>,
+    /// Role assigned to the participating agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_role: Option<String>,
 }
@@ -1357,26 +1475,39 @@ openai_rs_types::open_string_enum! {
     }
 }
 
+/// Thread identity, lifecycle state, configuration, and recorded turns.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
+    /// Identifier for this thread. Codex-generated thread IDs are UUIDv7.
     pub id: String,
+    /// Session id shared by threads that belong to the same session tree.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Usually the first user message in the thread, if available.
     #[serde(default)]
     pub preview: Option<String>,
+    /// Whether the thread is ephemeral and should not be materialized on disk.
     #[serde(default)]
     pub ephemeral: Option<bool>,
+    /// Model provider used for this thread (for example, 'openai').
     #[serde(default)]
     pub model_provider: Option<String>,
+    /// Unix timestamp (in seconds) when the thread was created.
     #[serde(default)]
     pub created_at: Option<i64>,
+    /// Unix timestamp (in seconds) when the thread was last updated.
     #[serde(default)]
     pub updated_at: Option<i64>,
+    /// Working directory captured for the thread.
     #[serde(default)]
     pub cwd: Option<PathBuf>,
+    /// Optional user-facing thread title.
     #[serde(default)]
     pub name: Option<String>,
+    /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when
+    /// `includeTurns` is true) responses. For all other responses and notifications returning a
+    /// Thread, the turns field will be an empty list.
     #[serde(default)]
     pub turns: Option<Vec<Turn>>,
     /// Current runtime status. `#/definitions/v2/Thread` requires `status` as
@@ -1400,6 +1531,7 @@ pub struct Thread {
     /// the other pinned required keys, D0267).
     #[serde(default)]
     pub cli_version: Option<String>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -1432,15 +1564,22 @@ redacted_extra_debug!(Thread {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartResponse {
+    /// Thread state returned by the operation or notification.
     pub thread: Thread,
+    /// Identifier of the model used or requested for the operation.
     #[serde(default)]
     pub model: Option<String>,
+    /// Identifier of the model provider selected for the thread.
     #[serde(default)]
     pub model_provider: Option<String>,
+    /// Service tier selected or reported for model execution.
     #[serde(default)]
     pub service_tier: Option<String>,
+    /// A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be
+    /// canonicalized or exist on the filesystem).
     #[serde(default)]
     pub cwd: Option<PathBuf>,
+    /// Environment-native paths to instruction source files currently loaded for this thread.
     #[serde(default)]
     pub instruction_sources: Vec<PathBuf>,
     /// Approval policy negotiated for the thread, typed as the pinned
@@ -1463,6 +1602,7 @@ pub struct ThreadStartResponse {
     /// (nullable).
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -1480,17 +1620,23 @@ redacted_extra_debug!(ThreadStartResponse {
     reasoning_effort
 });
 
+/// Byte offsets locating a range within a text buffer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ByteRange {
+    /// Starting byte offset in the containing text buffer.
     pub start: usize,
+    /// Ending byte offset in the containing text buffer.
     pub end: usize,
 }
 
+/// Structured reference associated with a byte range in message text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextElement {
+    /// Byte range in the parent `text` buffer that this element occupies.
     pub byte_range: ByteRange,
+    /// Optional human-readable placeholder for the element, displayed in the UI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
 }
@@ -1517,32 +1663,48 @@ openai_rs_types::open_string_enum! {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum UserInput {
+    /// User text with optional structured references to ranges within the text.
     Text {
+        /// Text carried by this content item or notification.
         text: String,
+        /// Structured references embedded within the message text.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         text_elements: Vec<TextElement>,
     },
+    /// An image supplied by URL, with optional image-detail settings.
     Image {
+        /// URL identifying the referenced page, image, or resource.
         url: String,
+        /// Requested level of detail for processing the image.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<ImageDetail>,
     },
+    /// An image loaded from a local filesystem path.
     LocalImage {
+        /// Path identifying the referenced file or resource.
         path: PathBuf,
+        /// Requested level of detail for processing the image.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<ImageDetail>,
     },
+    /// A named skill identified by its local definition path.
     Skill {
+        /// Name assigned to this resource or operation.
         name: String,
+        /// Path identifying the referenced file or resource.
         path: PathBuf,
     },
+    /// A named file or resource explicitly mentioned in the user input.
     Mention {
+        /// Name assigned to this resource or operation.
         name: String,
+        /// Path identifying the referenced file or resource.
         path: String,
     },
 }
 
 impl UserInput {
+    /// Creates a user-text item with no embedded structured references.
     #[must_use]
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text {
@@ -1576,22 +1738,30 @@ openai_rs_types::open_string_enum! {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartParams {
+    /// Identifier of the thread referenced by this payload.
     pub thread_id: String,
+    /// Input content or input-side configuration for this operation.
     pub input: Vec<UserInput>,
+    /// Caller-supplied identifier used to correlate the submitted user message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_user_message_id: Option<String>,
+    /// Override the working directory for this turn and subsequent turns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
+    /// Override the model for this turn and subsequent turns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Plain string: the pinned `v2/ReasoningEffort` is a `minLength 1`
     /// string with no enumerated values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// Override the reasoning summary for this turn and subsequent turns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<ReasoningSummary>,
+    /// Override the personality for this turn and subsequent turns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
+    /// Optional JSON Schema used to constrain the final assistant message for this turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<Value>,
     /// Sandbox policy override for this turn and subsequent turns.
@@ -1652,10 +1822,15 @@ impl TurnStartParams {
 
     /// Ensures no flattened `extra` key shadows a typed `turn/start` key
     /// (7-21). Called by the send path before encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an extension property conflicts with a typed wire field.
     pub fn validate_extra(&self) -> Result<(), crate::Error> {
         ensure_no_reserved(&self.extra, "turn/start", Self::RESERVED_KEYS)
     }
 
+    /// Creates a turn request containing one user-text item in the specified thread.
     #[must_use]
     pub fn text(thread_id: impl Into<String>, text: impl Into<String>) -> Self {
         Self {
@@ -1753,6 +1928,7 @@ openai_rs_types::open_string_enum! {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForwardedHttpStatus {
+    /// HTTP status code reported for the failed upstream operation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_status_code: Option<u16>,
 }
@@ -1761,6 +1937,7 @@ pub struct ForwardedHttpStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveTurnNotSteerableDetails {
+    /// Category of turn represented by this activity item.
     pub turn_kind: NonSteerableTurnKind,
 }
 
@@ -1777,24 +1954,29 @@ pub enum CodexErrorInfo {
     Code(CodexErrorCode),
     /// The upstream HTTP connection could not be established.
     HttpConnectionFailed {
+        /// Details associated with failure to establish an HTTP connection.
         http_connection_failed: ForwardedHttpStatus,
     },
     /// Failed to connect to the response SSE stream.
     ResponseStreamConnectionFailed {
+        /// Details associated with failure to establish the response stream.
         response_stream_connection_failed: ForwardedHttpStatus,
     },
     /// The response SSE stream disconnected in the middle of a turn before
     /// completion.
     ResponseStreamDisconnected {
+        /// Details associated with an interrupted response stream.
         response_stream_disconnected: ForwardedHttpStatus,
     },
     /// Reached the retry limit for responses.
     ResponseTooManyFailedAttempts {
+        /// Details reported after the response retry limit was exhausted.
         response_too_many_failed_attempts: ForwardedHttpStatus,
     },
     /// `turn/start` or `turn/steer` was submitted while the active turn cannot
     /// accept same-turn steering, for example `/review` or `/compact`.
     ActiveTurnNotSteerable {
+        /// Details explaining why the active turn cannot accept steering input.
         active_turn_not_steerable: ActiveTurnNotSteerableDetails,
     },
 }
@@ -1807,11 +1989,15 @@ pub enum CodexErrorInfo {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnError {
+    /// Human-readable message describing this event or failure.
     pub message: String,
+    /// Additional server-provided details about the operation or failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub additional_details: Option<String>,
+    /// This translation layer make sure that we expose codex error code in camel case.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_error_info: Option<CodexErrorInfo>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -1976,7 +2162,9 @@ openai_rs_types::open_string_enum! {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookPromptFragment {
+    /// Identifier of the hook execution that produced this item.
     pub hook_run_id: String,
+    /// Text carried by this content item or notification.
     pub text: String,
 }
 
@@ -1987,9 +2175,13 @@ pub struct HookPromptFragment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryCitationEntry {
+    /// First source line included in the citation.
     pub line_start: u32,
+    /// Final source line included in the citation.
     pub line_end: u32,
+    /// Additional explanatory note associated with the result.
     pub note: String,
+    /// Path identifying the referenced file or resource.
     pub path: String,
 }
 
@@ -1999,7 +2191,9 @@ pub struct MemoryCitationEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryCitation {
+    /// Individual references contained in this memory citation.
     pub entries: Vec<MemoryCitationEntry>,
+    /// Identifiers of the threads participating in this operation.
     pub thread_ids: Vec<String>,
 }
 
@@ -2018,33 +2212,43 @@ pub struct MemoryCitation {
 pub enum CommandAction {
     /// Reading one file.
     Read {
+        /// Command associated with this execution or parsed command action.
         command: String,
+        /// Name assigned to this resource or operation.
         name: String,
         /// Pinned `v2/AbsolutePathBuf`, kept as its lossless string form.
         path: String,
     },
     /// Listing a directory.
     ListFiles {
+        /// Command associated with this execution or parsed command action.
         command: String,
+        /// Path identifying the referenced file or resource.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
     },
     /// Searching a directory tree.
     Search {
+        /// Command associated with this execution or parsed command action.
         command: String,
+        /// Path identifying the referenced file or resource.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
+        /// Search query executed by this action.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         query: Option<String>,
     },
     /// Anything the parser did not recognize.
-    Unknown { command: String },
+    Unknown {
+        /// Command associated with this execution or parsed command action.
+        command: String,
+    },
 }
 
 /// Kind of one change inside a `fileChange` thread item.
 ///
 /// Mirrors the three-branch `oneOf` of the pinned `v2/PatchChangeKind`. The
-/// `move_path` property keeps its pinned snake_case wire key.
+/// `move_path` property keeps its pinned `snake_case` wire key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum PatchChangeKind {
@@ -2054,6 +2258,7 @@ pub enum PatchChangeKind {
     Delete,
     /// Modified file, with its post-move location when it moved.
     Update {
+        /// Destination path when this change moves or renames a file.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         move_path: Option<String>,
     },
@@ -2064,8 +2269,11 @@ pub enum PatchChangeKind {
 /// Wire shape of the pinned `v2/FileUpdateChange`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileUpdateChange {
+    /// Patch or diff describing the file changes.
     pub diff: String,
+    /// Whether the file was added, updated, moved, or deleted.
     pub kind: PatchChangeKind,
+    /// Path identifying the referenced file or resource.
     pub path: String,
 }
 
@@ -2077,15 +2285,21 @@ pub struct FileUpdateChange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpToolCallAppContext {
+    /// Identifier of the connector associated with this application context.
     pub connector_id: String,
+    /// Name of the action recorded by the server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_name: Option<String>,
+    /// Name of the application associated with this event or context.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_name: Option<String>,
+    /// Identifier used to correlate the login link.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_id: Option<String>,
+    /// URI identifying the referenced MCP resource.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uri: Option<String>,
+    /// Identifier of the template used for the notification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template_id: Option<String>,
 }
@@ -2095,6 +2309,7 @@ pub struct McpToolCallAppContext {
 /// Wire shape of the pinned `v2/McpToolCallError`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpToolCallError {
+    /// Human-readable message describing this event or failure.
     pub message: String,
 }
 
@@ -2106,9 +2321,12 @@ pub struct McpToolCallError {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpToolCallResult {
+    /// Content carried by this message or result.
     pub content: Vec<Value>,
+    /// Structured JSON content returned by the MCP tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<Value>,
+    /// Protocol metadata attached to the tool result.
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Value>,
 }
@@ -2124,8 +2342,16 @@ pub struct McpToolCallResult {
     rename_all_fields = "camelCase"
 )]
 pub enum DynamicToolCallOutputContentItem {
-    InputText { text: String },
-    InputImage { image_url: String },
+    /// Text content returned by a dynamic tool.
+    InputText {
+        /// Text carried by this content item or notification.
+        text: String,
+    },
+    /// Image content returned by a dynamic tool as a URL or data URL.
+    InputImage {
+        /// URL or data URL identifying the image content.
+        image_url: String,
+    },
 }
 
 /// Last known state of one target agent of a collab tool call.
@@ -2134,7 +2360,9 @@ pub enum DynamicToolCallOutputContentItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollabAgentState {
+    /// Current lifecycle state of the operation or resource.
     pub status: CollabAgentStatus,
+    /// Human-readable message describing this event or failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
@@ -2152,20 +2380,25 @@ pub struct CollabAgentState {
 pub enum WebSearchAction {
     /// Run one or more search queries.
     Search {
+        /// Search queries executed by this web-search action.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         queries: Option<Vec<String>>,
+        /// Search query executed by this action.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         query: Option<String>,
     },
     /// Open a page in the browser view.
     OpenPage {
+        /// URL identifying the referenced page, image, or resource.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         url: Option<String>,
     },
     /// Find a pattern inside an open page.
     FindInPage {
+        /// Search expression associated with the command action.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pattern: Option<String>,
+        /// URL identifying the referenced page, image, or resource.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         url: Option<String>,
     },
@@ -2182,9 +2415,12 @@ pub enum WebSearchAction {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserMessageThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Identifier of the client participating in authentication.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    /// Content carried by this message or result.
     pub content: Vec<UserInput>,
     /// Future branch properties, retained losslessly.
     #[serde(default, flatten)]
@@ -2204,7 +2440,9 @@ redacted_extra_debug!(UserMessageThreadItem {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookPromptThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Prompt fragments contributed by the hook.
     pub fragments: Vec<HookPromptFragment>,
     /// Future branch properties, retained losslessly.
     #[serde(default, flatten)]
@@ -2220,11 +2458,14 @@ redacted_extra_debug!(HookPromptThreadItem { id, fragments });
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMessageThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Text carried by this content item or notification.
     pub text: String,
     /// Interim commentary versus terminal answer; absent means unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<MessagePhase>,
+    /// Memory references supporting the generated item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_citation: Option<MemoryCitation>,
     /// Future branch properties, retained losslessly.
@@ -2246,7 +2487,9 @@ redacted_extra_debug!(AgentMessageThreadItem {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Text carried by this content item or notification.
     pub text: String,
     /// Future branch properties, retained losslessly.
     #[serde(default, flatten)]
@@ -2264,9 +2507,12 @@ redacted_extra_debug!(PlanThreadItem { id, text });
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReasoningThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Content carried by this message or result.
     #[serde(default)]
     pub content: Vec<String>,
+    /// Summary content associated with the reasoning or activity item.
     #[serde(default)]
     pub summary: Vec<String>,
     /// Future branch properties, retained losslessly.
@@ -2289,6 +2535,7 @@ redacted_extra_debug!(ReasoningThreadItem {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExecutionThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
     /// The command to be executed.
     pub command: String,
@@ -2296,6 +2543,7 @@ pub struct CommandExecutionThreadItem {
     pub command_actions: Vec<CommandAction>,
     /// Pinned `v2/LegacyAppPathString`, kept as its lossless string form.
     pub cwd: String,
+    /// Current lifecycle state of the operation or resource.
     pub status: CommandExecutionStatus,
     /// The command's output, aggregated from stdout and stderr.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2338,8 +2586,11 @@ redacted_extra_debug!(CommandExecutionThreadItem {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileChangeThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Changes to files or resources recorded by this item.
     pub changes: Vec<FileUpdateChange>,
+    /// Current lifecycle state of the operation or resource.
     pub status: PatchApplyStatus,
     /// Future branch properties, retained losslessly.
     #[serde(default, flatten)]
@@ -2362,25 +2613,32 @@ redacted_extra_debug!(FileChangeThreadItem {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpToolCallThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Name of the MCP server that owns the tool.
     pub server: String,
     /// Name of the invoked MCP tool.
     pub tool: String,
+    /// Current lifecycle state of the operation or resource.
     pub status: McpToolCallStatus,
     /// Tool arguments; the pin declares no structure, so the value stays raw.
     pub arguments: Value,
+    /// Application context associated with this MCP tool call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_context: Option<McpToolCallAppContext>,
     /// Duration of the call in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<i64>,
+    /// Error details returned when the operation fails.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<McpToolCallError>,
     /// Deprecated upstream: prefer `appContext.resourceUri`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_app_resource_uri: Option<String>,
+    /// Identifier of the plugin associated with this context.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_id: Option<String>,
+    /// Result payload returned by the operation or tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<McpToolCallResult>,
     /// Future branch properties, retained losslessly.
@@ -2409,18 +2667,24 @@ redacted_extra_debug!(McpToolCallThreadItem {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DynamicToolCallThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Name or descriptor of the tool associated with this invocation.
     pub tool: String,
+    /// Current lifecycle state of the operation or resource.
     pub status: DynamicToolCallStatus,
     /// Tool arguments; the pin declares no structure, so the value stays raw.
     pub arguments: Value,
+    /// Content items returned by the tool invocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_items: Option<Vec<DynamicToolCallOutputContentItem>>,
     /// Duration of the call in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<i64>,
+    /// Namespace used to qualify the tool or function name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
+    /// Whether the operation completed successfully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub success: Option<bool>,
     /// Future branch properties, retained losslessly.
@@ -2449,6 +2713,7 @@ redacted_extra_debug!(DynamicToolCallThreadItem {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollabAgentToolCallThreadItem {
+    /// Unique identifier for this collab tool call.
     pub id: String,
     /// Last known status of the target agents, keyed by thread id.
     pub agents_states: BTreeMap<String, CollabAgentState>,
@@ -2456,7 +2721,9 @@ pub struct CollabAgentToolCallThreadItem {
     pub receiver_thread_ids: Vec<String>,
     /// Thread id of the agent issuing the collab request.
     pub sender_thread_id: String,
+    /// Current status of the collab tool call.
     pub status: CollabAgentToolCallStatus,
+    /// Name of the collab tool that was invoked.
     pub tool: CollabAgentTool,
     /// Model requested for the spawned agent, when applicable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2491,9 +2758,13 @@ redacted_extra_debug!(CollabAgentToolCallThreadItem {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubAgentActivityThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Path identifying the agent within the collaboration hierarchy.
     pub agent_path: String,
+    /// Identifier of the thread owned by the participating agent.
     pub agent_thread_id: String,
+    /// Discriminator identifying the payload, policy, or failure category.
     pub kind: SubAgentActivityKind,
     /// Future branch properties, retained losslessly.
     #[serde(default, flatten)]
@@ -2514,8 +2785,11 @@ redacted_extra_debug!(SubAgentActivityThreadItem {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebSearchThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Search query executed by this action.
     pub query: String,
+    /// Action represented by this tool call or audit entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<WebSearchAction>,
     /// Future branch properties, retained losslessly.
@@ -2533,7 +2807,9 @@ redacted_extra_debug!(WebSearchThreadItem { id, query, action });
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageViewThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Path identifying the referenced file or resource.
     pub path: String,
     /// Future branch properties, retained losslessly.
     #[serde(default, flatten)]
@@ -2549,7 +2825,9 @@ redacted_extra_debug!(ImageViewThreadItem { id, path });
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SleepThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Duration of the sleep operation in milliseconds.
     pub duration_ms: u64,
     /// Future branch properties, retained losslessly.
     #[serde(default, flatten)]
@@ -2568,11 +2846,17 @@ redacted_extra_debug!(SleepThreadItem { id, duration_ms });
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageGenerationThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Result payload returned by the operation or tool.
     pub result: String,
+    /// Current lifecycle state of the operation or resource.
     pub status: String,
+    /// Prompt revised by the service before image generation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revised_prompt: Option<String>,
+    /// A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be
+    /// canonicalized or exist on the filesystem).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_path: Option<String>,
     /// Future branch properties, retained losslessly.
@@ -2595,7 +2879,9 @@ redacted_extra_debug!(ImageGenerationThreadItem {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnteredReviewModeThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Review text associated with entering or leaving review mode.
     pub review: String,
     /// Future branch properties, retained losslessly.
     #[serde(default, flatten)]
@@ -2611,7 +2897,9 @@ redacted_extra_debug!(EnteredReviewModeThreadItem { id, review });
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExitedReviewModeThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Review text associated with entering or leaving review mode.
     pub review: String,
     /// Future branch properties, retained losslessly.
     #[serde(default, flatten)]
@@ -2627,6 +2915,7 @@ redacted_extra_debug!(ExitedReviewModeThreadItem { id, review });
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextCompactionThreadItem {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
     /// Future branch properties, retained losslessly.
     #[serde(default, flatten)]
@@ -2865,15 +3154,18 @@ impl<'de> Deserialize<'de> for ThreadItem {
     }
 }
 
+/// One agent turn and its ordered items, status, and error information.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
+    /// Identifier for this turn. Codex-generated turn IDs are UUIDv7.
     pub id: String,
     /// Thread items currently included in this turn payload, typed as the
     /// pinned `v2/ThreadItem` union; unrecognized items stay verbatim as
     /// [`ThreadItem::Unknown`] instead of failing the turn decode (7-05).
     #[serde(default)]
     pub items: Vec<ThreadItem>,
+    /// Current lifecycle state of the operation or resource.
     pub status: TurnStatus,
     /// How much of [`Turn::items`] this payload carries. `#/definitions/v2/Turn`
     /// leaves `itemsView` optional with a pinned default of `full`, so `None`
@@ -2884,12 +3176,16 @@ pub struct Turn {
     /// `v2/TurnError` payload with unknown properties retained losslessly.
     #[serde(default)]
     pub error: Option<TurnError>,
+    /// Unix timestamp (in seconds) when the turn started.
     #[serde(default)]
     pub started_at: Option<i64>,
+    /// Unix timestamp (in seconds) when the turn completed.
     #[serde(default)]
     pub completed_at: Option<i64>,
+    /// Duration between turn start and completion in milliseconds, if known.
     #[serde(default)]
     pub duration_ms: Option<i64>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -2914,37 +3210,50 @@ redacted_extra_debug!(Turn {
     duration_ms
 });
 
+/// Turn state returned after starting an agent turn.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartResponse {
+    /// Turn state returned by the operation or notification.
     pub turn: Turn,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
 
 redacted_extra_debug!(TurnStartResponse { turn });
 
+/// Identifiers of the thread and active turn to interrupt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnInterruptParams {
+    /// Identifier of the thread referenced by this payload.
     pub thread_id: String,
+    /// Identifier of the turn referenced by this payload.
     pub turn_id: String,
 }
 
+/// Response object with no modeled payload fields.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmptyResponse {
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
 
 redacted_extra_debug!(EmptyResponse {});
 
+/// Notification that a pending account login completed.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountLoginCompletedNotification {
+    /// Identifier of the login attempt.
     pub login_id: Option<String>,
+    /// Whether the operation completed successfully.
     pub success: bool,
+    /// Error details returned when the operation fails.
     pub error: Option<String>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -2973,11 +3282,15 @@ openai_rs_types::open_string_enum! {
     }
 }
 
+/// Notification that the authenticated account information changed.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUpdatedNotification {
+    /// Authentication mode for OpenAI-backed providers.
     pub auth_mode: Option<AuthMode>,
+    /// Subscription plan reported by the account service.
     pub plan_type: Option<PlanType>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -2987,10 +3300,13 @@ redacted_extra_debug!(AccountUpdatedNotification {
     plan_type
 });
 
+/// Notification carrying updated account rate-limit information.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRateLimitsUpdatedNotification {
+    /// Backward-compatible view of the account's rate limits.
     pub rate_limits: RateLimitSnapshot,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -3006,11 +3322,15 @@ redacted_extra_debug!(AccountRateLimitsUpdatedNotification { rate_limits });
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorNotification {
+    /// Identifier of the thread referenced by this payload.
     pub thread_id: String,
+    /// Identifier of the turn referenced by this payload.
     pub turn_id: String,
     /// Whether the app-server will retry the failed turn on its own.
     pub will_retry: bool,
+    /// Error details returned when the operation fails.
     pub error: TurnError,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -3022,32 +3342,43 @@ redacted_extra_debug!(ErrorNotification {
     error
 });
 
+/// Notification carrying the state of a newly started thread.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartedNotification {
+    /// Thread state returned by the operation or notification.
     pub thread: Thread,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
 
 redacted_extra_debug!(ThreadStartedNotification { thread });
 
+/// Notification that an agent turn has started.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartedNotification {
+    /// Identifier of the thread referenced by this payload.
     pub thread_id: String,
+    /// Turn state returned by the operation or notification.
     pub turn: Turn,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
 
 redacted_extra_debug!(TurnStartedNotification { thread_id, turn });
 
+/// Notification that an agent turn reached its terminal state.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnCompletedNotification {
+    /// Identifier of the thread referenced by this payload.
     pub thread_id: String,
+    /// Turn state returned by the operation or notification.
     pub turn: Turn,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -3064,13 +3395,19 @@ redacted_extra_debug!(TurnCompletedNotification { thread_id, turn });
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemLifecycleNotification {
+    /// Identifier of the thread referenced by this payload.
     pub thread_id: String,
+    /// Identifier of the turn referenced by this payload.
     pub turn_id: String,
+    /// Protocol item carried by this notification.
     pub item: ThreadItem,
+    /// Start time as a Unix timestamp in milliseconds.
     #[serde(default)]
     pub started_at_ms: Option<i64>,
+    /// Completion time as a Unix timestamp in milliseconds.
     #[serde(default)]
     pub completed_at_ms: Option<i64>,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -3083,13 +3420,19 @@ redacted_extra_debug!(ItemLifecycleNotification {
     completed_at_ms
 });
 
+/// Incremental assistant text associated with a thread, turn, and item.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMessageDeltaNotification {
+    /// Identifier of the thread referenced by this payload.
     pub thread_id: String,
+    /// Identifier of the turn referenced by this payload.
     pub turn_id: String,
+    /// Identifier of the item referenced by this event.
     pub item_id: String,
+    /// Incremental content added by this stream event.
     pub delta: String,
+    /// Unrecognized JSON properties retained for forward compatibility.
     #[serde(default, flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -3104,24 +3447,39 @@ redacted_extra_debug!(AgentMessageDeltaNotification {
 /// Full, lossless envelope for a notification not understood by this crate.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawNotification {
+    /// Protocol operation or HTTP method associated with this request.
     pub method: String,
+    /// Parameters carried by this JSON-RPC notification.
     pub params: Option<Value>,
+    /// Original JSON payload retained for an unrecognized protocol value.
     pub raw: Value,
 }
 
+/// Typed app-server notifications with a fallback for unrecognized methods.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Notification {
+    /// Carries the `AccountLoginCompletedNotification` payload for this protocol alternative.
     AccountLoginCompleted(Box<AccountLoginCompletedNotification>),
+    /// Carries the `AccountUpdatedNotification` payload for this protocol alternative.
     AccountUpdated(Box<AccountUpdatedNotification>),
+    /// Carries the `AccountRateLimitsUpdatedNotification` payload for this protocol alternative.
     AccountRateLimitsUpdated(Box<AccountRateLimitsUpdatedNotification>),
+    /// Carries the `ErrorNotification` payload for this protocol alternative.
     Error(Box<ErrorNotification>),
+    /// Carries the `ThreadStartedNotification` payload for this protocol alternative.
     ThreadStarted(Box<ThreadStartedNotification>),
+    /// Carries the `TurnStartedNotification` payload for this protocol alternative.
     TurnStarted(Box<TurnStartedNotification>),
+    /// Carries the `TurnCompletedNotification` payload for this protocol alternative.
     TurnCompleted(Box<TurnCompletedNotification>),
+    /// Carries the `ItemLifecycleNotification` payload for this protocol alternative.
     ItemStarted(Box<ItemLifecycleNotification>),
+    /// Carries the `ItemLifecycleNotification` payload for this protocol alternative.
     ItemCompleted(Box<ItemLifecycleNotification>),
+    /// Carries the `AgentMessageDeltaNotification` payload for this protocol alternative.
     AgentMessageDelta(Box<AgentMessageDeltaNotification>),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(Box<RawNotification>),
 }
 
@@ -3378,7 +3736,7 @@ mod tests {
     /// The pinned `v2/UserInput` schema names this property `text_elements`
     /// even though every neighbouring property of the Text variant is
     /// camelCase. The enum-level `rename_all` only renames variant tags, so
-    /// the field keeps its snake_case Rust name; this test locks that wire key
+    /// the field keeps its `snake_case` Rust name; this test locks that wire key
     /// so a future `rename_all_fields`/variant-level `rename_all` cannot break
     /// it silently.
     #[test]
@@ -4921,7 +5279,7 @@ mod tests {
     }
 
     /// 3-02: the granular object branch of `v2/AskForApproval` keeps the
-    /// pinned `{"granular": {...}}` wrapper with snake_case settings keys.
+    /// pinned `{"granular": {...}}` wrapper with `snake_case` settings keys.
     #[test]
     fn approval_policy_granular_branch_matches_the_pinned_wire_shape()
     -> Result<(), serde_json::Error> {

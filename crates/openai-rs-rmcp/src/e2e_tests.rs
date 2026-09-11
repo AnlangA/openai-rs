@@ -391,7 +391,7 @@ async fn in_process_full_typed_round_trip_preserves_all_content_order() {
         "fc_rich",
         "call_rich",
         harness.openai_name(RICH_TOOL),
-        JsonText::from_raw(r#"{"city":"杭州"}"#),
+        JsonText::from_raw(r#"{"city":"Montréal"}"#),
         FunctionCallItemStatus::Completed,
     );
 
@@ -419,7 +419,7 @@ async fn in_process_full_typed_round_trip_preserves_all_content_order() {
         kinds,
         ["text", "image", "audio", "resource", "resource_link"]
     );
-    assert_eq!(payload["content"][0]["text"], "weather:杭州");
+    assert_eq!(payload["content"][0]["text"], "weather:Montréal");
     assert_eq!(payload["structuredContent"]["temperature"], 23);
     assert_eq!(payload["isError"], false);
     assert_eq!(harness.state.calls.load(Ordering::SeqCst), 1);
