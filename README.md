@@ -190,6 +190,33 @@ Do not assume that the first output item is always an assistant text
 message. The same code is checked as the executable
 [`responses` example](crates/openai-rs/examples/responses.rs).
 
+## Interactive terminal chat
+
+The [`chat_loop` example](crates/openai-rs/examples/chat_loop.rs) reads one message
+per line, prints the assistant's reply, and retains conversation history locally.
+Set all three environment variables before running it from the repository root:
+
+```powershell
+$env:OPENAI_BASE_URL = "https://api.openai.com/v1"
+$env:OPENAI_MODEL = "gpt-5.6-sol"
+$env:OPENAI_API_KEY = "your-api-key"
+cargo run -p openai-rs-sdk --example chat_loop
+```
+
+`OPENAI_MODEL` is the model name. `OPENAI_BASE_URL` must point to a service that
+supports the Responses API; include `/v1` if the service uses that prefix. Local
+HTTP services can use a literal loopback address such as
+`http://127.0.0.1:8080/v1`.
+
+Blank lines are ignored. Enter `/clear` to start a fresh conversation and `/exit`
+or `/quit` to quit; EOF also exits. Request failures leave the previous history
+intact so another message can be entered. Replies are printed after each request
+finishes. The example uses `store: false`, requests encrypted reasoning items,
+and replays full output items following the official
+[conversation state guide](https://developers.openai.com/api/docs/guides/conversation-state).
+History lasts for this process only; use `/clear` when starting a new topic or
+when the model's context limit is reached.
+
 ## Legacy Completions (opt-in)
 
 The legacy text Completions endpoint is excluded by default. Enable it only for
