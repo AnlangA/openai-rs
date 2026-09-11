@@ -108,6 +108,15 @@ impl Transport {
         &self.base_url
     }
 
+    async fn trace_discarded_response(&self, response: reqwest::Response) -> Option<Error> {
+        // Avoid reading retry bodies unless the application enables body tracing.
+        if trace::json_body_enabled() {
+            Some(self.error_from_response(response).await)
+        } else {
+            None
+        }
+    }
+
     pub(crate) const fn sse_limits(&self) -> SseLimits {
         self.sse_limits
     }
@@ -386,6 +395,10 @@ impl Transport {
                     "operation URL escaped the configured authentication origin".into(),
                 ));
             }
+            if let Some(encoded) = &encoded_body {
+                trace::emit_json_request(&meta.method, meta.route, encoded);
+            }
+            trace::emit_request_attempt(meta.id, retries, remaining);
             let response = match self.http.execute(request).await {
                 Ok(response) => response,
                 Err(error)
@@ -419,12 +432,12 @@ impl Transport {
                     .await;
                 auth_refreshed = true;
                 trace::emit_auth_refresh();
-                drop(response);
+                let _ = self.trace_discarded_response(response).await;
                 continue;
             }
 
             if meta.success_statuses.contains(&response.status()) {
-                trace::record_http_outcome(retries, &response);
+                trace::record_http_outcome(meta.id, started, retries, &response, true);
                 return Ok(response);
             }
 
@@ -445,14 +458,23 @@ impl Transport {
                 if let Some(delay) = delay
                     && can_wait(started, delay, self.overall_timeout)
                 {
+                    let retry_meta =
+                        ResponseMeta::from_headers(response.status(), response.headers());
+                    let logged_error = self.trace_discarded_response(response).await;
+                    // Reading the diagnostic body also consumes the request budget.
+                    if !can_wait(started, delay, self.overall_timeout)
+                        && let Some(error) = logged_error
+                    {
+                        trace::record_retry_count(retries);
+                        return Err(error);
+                    }
                     retries += 1;
-                    trace::emit_retry(retries, delay, RetryReason::HttpStatus);
-                    drop(response);
+                    trace::emit_http_retry(retries, delay, &retry_meta);
                     tokio::time::sleep(delay).await;
                     continue;
                 }
             }
-            trace::record_http_outcome(retries, &response);
+            trace::record_http_outcome(meta.id, started, retries, &response, false);
             return self.api_error(response).await;
         }
     }
@@ -464,7 +486,10 @@ impl Transport {
     pub(crate) async fn error_from_response(&self, response: reqwest::Response) -> Error {
         let response_meta = ResponseMeta::from_headers(response.status(), response.headers());
         match read_up_to(response, self.max_error_body_bytes).await {
-            Ok((body, truncated)) => ApiError::from_body(response_meta, &body, truncated).into(),
+            Ok((body, truncated)) => {
+                trace::emit_json_response(response_meta.status(), &body, truncated);
+                ApiError::from_body(response_meta, &body, truncated).into()
+            }
             Err(error) => Error::from_response_body(error, &response_meta),
         }
     }
@@ -478,16 +503,21 @@ impl Transport {
     {
         let meta = ResponseMeta::from_headers(response.status(), response.headers());
         let body = read_success(response, self.max_json_body_bytes, &meta).await?;
-        let decoded = deserialize_json(&body).map_err(|error| Error::Decode {
-            source: error.source,
-            path: error.path,
-            meta_status: meta.status(),
-            request_id: meta.request_id().map(Box::<str>::from),
-            body: BodyPreview::from_bytes(
-                &body[..body.len().min(DECODE_PREVIEW_BYTES)],
-                body.len() > DECODE_PREVIEW_BYTES,
-            ),
-        })?;
+        trace::emit_json_response(meta.status(), &body, false);
+        let decoded = deserialize_json(&body)
+            .inspect_err(|error| {
+                trace::emit_json_decode_error(&meta, &error.source, error.path.as_deref());
+            })
+            .map_err(|error| Error::Decode {
+                source: error.source,
+                path: error.path,
+                meta_status: meta.status(),
+                request_id: meta.request_id().map(Box::<str>::from),
+                body: BodyPreview::from_bytes(
+                    &body[..body.len().min(DECODE_PREVIEW_BYTES)],
+                    body.len() > DECODE_PREVIEW_BYTES,
+                ),
+            })?;
         Ok(ApiResponse::new(decoded, meta))
     }
 
@@ -500,19 +530,26 @@ impl Transport {
     {
         let meta = ResponseMeta::from_headers(response.status(), response.headers());
         let body = read_success(response, self.max_json_body_bytes, &meta).await?;
+        trace::emit_json_response(meta.status(), &body, false);
         let decoded = if body.iter().all(u8::is_ascii_whitespace) {
             None
         } else {
-            Some(deserialize_json(&body).map_err(|error| Error::Decode {
-                source: error.source,
-                path: error.path,
-                meta_status: meta.status(),
-                request_id: meta.request_id().map(Box::<str>::from),
-                body: BodyPreview::from_bytes(
-                    &body[..body.len().min(DECODE_PREVIEW_BYTES)],
-                    body.len() > DECODE_PREVIEW_BYTES,
-                ),
-            })?)
+            Some(
+                deserialize_json(&body)
+                    .inspect_err(|error| {
+                        trace::emit_json_decode_error(&meta, &error.source, error.path.as_deref());
+                    })
+                    .map_err(|error| Error::Decode {
+                        source: error.source,
+                        path: error.path,
+                        meta_status: meta.status(),
+                        request_id: meta.request_id().map(Box::<str>::from),
+                        body: BodyPreview::from_bytes(
+                            &body[..body.len().min(DECODE_PREVIEW_BYTES)],
+                            body.len() > DECODE_PREVIEW_BYTES,
+                        ),
+                    })?,
+            )
         };
         Ok(ApiResponse::new(decoded, meta))
     }
@@ -666,6 +703,7 @@ async fn read_success(
             request_id: meta.request_id().map(Box::<str>::from),
         })
     } else {
+        trace::emit_body_read(meta, body.len());
         Ok(body)
     }
 }

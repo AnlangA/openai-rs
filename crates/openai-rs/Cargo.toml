@@ -57,6 +57,7 @@ schemars.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt"] }
 
 [[example]]
 name = "responses"

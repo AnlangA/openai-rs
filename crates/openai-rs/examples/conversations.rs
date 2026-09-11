@@ -1,10 +1,24 @@
+//! Creates a server-side conversation and uses it in a Responses request.
+//!
+//! Set `OPENAI_API_KEY` before running. This example uses the default Platform
+//! endpoint and the model configured in the source. `RUST_LOG` controls logging.
+//!
+//! # Usage
+//!
+//! ```text
+//! cargo run -p openai-rs-sdk --example conversations
+//! ```
+
 use openai_rs::{
     ApiKey, Client, responses::CreateResponseRequest,
     types::conversations::CreateConversationRequest,
 };
 
+mod support;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    support::init_logging()?;
     let api_key = ApiKey::new(std::env::var("OPENAI_API_KEY")?)?;
     let client = Client::new(api_key)?;
 

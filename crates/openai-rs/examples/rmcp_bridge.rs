@@ -125,8 +125,11 @@ fn output_text(output: &FunctionCallOutput) -> &str {
     text
 }
 
+mod support;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    support::init_logging()?;
     let control = ExecutionControl::unbounded();
     let bridge =
         ResponsesToolBridge::discover(LocalTools, CatalogPolicy::default(), &control).await?;

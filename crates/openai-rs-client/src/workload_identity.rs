@@ -495,6 +495,7 @@ impl WorkloadIdentityAuth {
     ) -> Result<CachedToken, Arc<WorkloadIdentityError>> {
         let span = trace::http_request_span("workload_identity.exchange", "POST", "/oauth/token");
         async move {
+            let started = std::time::Instant::now();
             let subject = self
                 .config
                 .provider
@@ -517,7 +518,13 @@ impl WorkloadIdentityAuth {
                 .send()
                 .await
                 .map_err(|_| Arc::new(WorkloadIdentityError::Transport))?;
-            trace::record_http_outcome(0, &response);
+            trace::record_http_outcome(
+                "workload_identity.exchange",
+                started,
+                0,
+                &response,
+                response.status().is_success(),
+            );
             let status = response.status();
             let (bytes, truncated) = read_bounded(response, MAX_EXCHANGE_BODY_BYTES)
                 .await

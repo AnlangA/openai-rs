@@ -1,8 +1,22 @@
+//! Iterates through uploaded-file pages using the SDK pagination stream.
+//!
+//! Set `OPENAI_API_KEY` before running. This example uses the default Platform
+//! endpoint. `RUST_LOG` controls logging.
+//!
+//! # Usage
+//!
+//! ```text
+//! cargo run -p openai-rs-sdk --example files_list
+//! ```
+
 use openai_rs::{ApiKey, Client, types::files::FileListParams};
 use tokio_stream::StreamExt;
 
+mod support;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    support::init_logging()?;
     let api_key = ApiKey::new(std::env::var("OPENAI_API_KEY")?)?;
     let client = Client::new(api_key)?;
 

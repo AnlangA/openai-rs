@@ -672,6 +672,12 @@ impl From<std::sync::Arc<crate::WorkloadIdentityError>> for Error {
 impl Error {
     pub(crate) fn from_reqwest(error: reqwest::Error) -> Self {
         let is_timeout = error.is_timeout();
+        tracing::error!(
+            error.timeout = is_timeout,
+            error.connect = error.is_connect(),
+            error.request = error.is_request(),
+            "OpenAI HTTP transport failed"
+        );
         // reqwest errors can retain the complete request URL, including opaque
         // cursors or signed query values. They are never needed for this
         // public error because the typed operation already identifies the call.
@@ -684,6 +690,12 @@ impl Error {
     }
 
     pub(crate) fn from_response_body(error: reqwest::Error, meta: &ResponseMeta) -> Self {
+        tracing::error!(
+            http.response.status_code = meta.status().as_u16(),
+            openai.request_id = meta.request_id().unwrap_or_default(),
+            error.timeout = error.is_timeout(),
+            "failed to read OpenAI response body"
+        );
         Self::ResponseBody {
             source: error.without_url(),
             status: meta.status(),

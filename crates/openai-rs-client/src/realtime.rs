@@ -186,8 +186,9 @@ impl Realtime {
             PathSegment::literal("calls"),
         ])?;
         let RealtimeCallCreateRequest { sdp, session, .. } = request;
+        let started = std::time::Instant::now();
         let (authorization, remaining) = transport
-            .authorization(std::time::Instant::now(), transport.overall_timeout())
+            .authorization(started, transport.overall_timeout())
             .await?;
         let builder = match session {
             Omittable::Value(session) => {
@@ -241,12 +242,19 @@ impl Realtime {
         // accept/reject/hangup/refer operations (3-20).
         let span = trace::http_request_span("realtime.create_call", "POST", "/realtime/calls");
         let response = async {
+            trace::emit_request_attempt("realtime.create_call", 0, remaining);
             let response = transport
                 .http()
                 .execute(request)
                 .await
                 .map_err(Error::from_reqwest)?;
-            trace::record_http_outcome(0, &response);
+            trace::record_http_outcome(
+                "realtime.create_call",
+                started,
+                0,
+                &response,
+                response.status() == CREATED,
+            );
             if response.status() != CREATED {
                 if response.status() == StatusCode::UNAUTHORIZED {
                     let _ = transport

@@ -2370,6 +2370,7 @@ impl AdminClient {
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(encoded.clone());
             }
+            trace::emit_request_attempt(O::ID, retries, remaining);
             let response = match builder.send().await {
                 Ok(response) => response,
                 // Connection failures and timeouts are retryable for any
@@ -2396,7 +2397,7 @@ impl AdminClient {
             };
 
             if O::SUCCESS_STATUSES.contains(&response.status()) {
-                trace::record_http_outcome(retries, &response);
+                trace::record_http_outcome(O::ID, started, retries, &response, true);
                 break response;
             }
 
@@ -2413,13 +2414,17 @@ impl AdminClient {
                     && can_wait(started, delay, self.inner.request_timeout)
                 {
                     retries += 1;
-                    trace::emit_retry(retries, delay, trace::RetryReason::HttpStatus);
+                    trace::emit_http_retry(
+                        retries,
+                        delay,
+                        &ResponseMeta::from_headers(response.status(), response.headers()),
+                    );
                     drop(response);
                     tokio::time::sleep(delay).await;
                     continue;
                 }
             }
-            trace::record_http_outcome(retries, &response);
+            trace::record_http_outcome(O::ID, started, retries, &response, false);
             return Err(self.error_from_response(response).await);
         };
         let meta = ResponseMeta::from_headers(response.status(), response.headers());
@@ -2444,8 +2449,11 @@ impl AdminClient {
             }
         }
         let body = read_limited(response, self.inner.max_json_body_bytes, &meta).await?;
-        let decoded =
-            serde_json::from_slice::<O::Response>(&body).map_err(|source| Error::Decode {
+        let decoded = serde_json::from_slice::<O::Response>(&body)
+            .inspect_err(|source| {
+                trace::emit_json_decode_error(&meta, source, None);
+            })
+            .map_err(|source| Error::Decode {
                 source,
                 path: None,
                 meta_status: meta.status(),

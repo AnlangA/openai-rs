@@ -381,6 +381,7 @@ impl X509Client {
                         .header(header::CONTENT_TYPE, JSON_MIME)
                         .body(encoded.clone());
                 }
+                trace::emit_request_attempt("x509.execute_json", 0, remaining);
                 let response = request.send().await.map_err(safe_transport_error)?;
                 if response.status() == StatusCode::UNAUTHORIZED && !auth_replayed {
                     drop(response);
@@ -393,7 +394,13 @@ impl X509Client {
                     trace::emit_auth_refresh();
                     continue;
                 }
-                trace::record_http_outcome(0, &response);
+                trace::record_http_outcome(
+                    "x509.execute_json",
+                    started,
+                    0,
+                    &response,
+                    response.status() == StatusCode::OK,
+                );
                 if response.status() == StatusCode::OK {
                     return decode_api_response(response, self.inner.max_json_body_bytes).await;
                 }
@@ -762,6 +769,7 @@ impl X509Exchange for HttpX509Exchange {
         Box::pin(
             async move {
                 let started_at = Instant::now();
+                trace::emit_request_attempt("x509.token_exchange", 0, TOKEN_EXCHANGE_DEADLINE);
                 let body = TokenExchangeRequest {
                     grant_type: TOKEN_EXCHANGE_GRANT,
                     subject_token_type: X509_SUBJECT_TOKEN_TYPE,
@@ -783,7 +791,13 @@ impl X509Exchange for HttpX509Exchange {
                             X509Error::ExchangeTransport
                         }
                     })?;
-                trace::record_http_outcome(0, &response);
+                trace::record_http_outcome(
+                    "x509.token_exchange",
+                    started_at,
+                    0,
+                    &response,
+                    response.status().is_success(),
+                );
                 let status = response.status();
                 let bytes = read_bounded(response, MAX_TOKEN_RESPONSE_BYTES)
                     .await
@@ -1026,16 +1040,20 @@ where
 {
     let meta = ResponseMeta::from_headers(response.status(), response.headers());
     let body = read_success(response, limit, &meta).await?;
-    let decoded = deserialize_json(&body).map_err(|failure| Error::Decode {
-        source: failure.source,
-        path: failure.path,
-        meta_status: meta.status(),
-        request_id: meta.request_id().map(Box::<str>::from),
-        body: BodyPreview::from_bytes(
-            &body[..body.len().min(DECODE_PREVIEW_BYTES)],
-            body.len() > DECODE_PREVIEW_BYTES,
-        ),
-    })?;
+    let decoded = deserialize_json(&body)
+        .inspect_err(|failure| {
+            trace::emit_json_decode_error(&meta, &failure.source, failure.path.as_deref());
+        })
+        .map_err(|failure| Error::Decode {
+            source: failure.source,
+            path: failure.path,
+            meta_status: meta.status(),
+            request_id: meta.request_id().map(Box::<str>::from),
+            body: BodyPreview::from_bytes(
+                &body[..body.len().min(DECODE_PREVIEW_BYTES)],
+                body.len() > DECODE_PREVIEW_BYTES,
+            ),
+        })?;
     Ok(ApiResponse::new(decoded, meta))
 }
 
