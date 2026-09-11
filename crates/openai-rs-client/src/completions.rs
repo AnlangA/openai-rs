@@ -38,6 +38,11 @@ impl Completions {
     }
 
     /// Creates a non-streaming legacy completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: CreateCompletionRequest,
@@ -51,6 +56,12 @@ impl Completions {
 
     /// Creates a legacy completion stream terminated by the required `[DONE]`
     /// sentinel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn create_stream(
         &self,
         request: CreateStreamingCompletionRequest,

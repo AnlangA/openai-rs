@@ -216,16 +216,19 @@ impl ApiError {
         }
     }
 
+    /// Returns the HTTP status associated with this response or failure.
     #[must_use]
     pub fn status(&self) -> StatusCode {
         self.meta.status()
     }
 
+    /// Returns the request identifier supplied by the service, when present.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.meta.request_id()
     }
 
+    /// Returns the retained error message.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
@@ -242,41 +245,49 @@ impl ApiError {
         self.meta.retry_after()
     }
 
+    /// Returns the service-provided error category, when present.
     #[must_use]
     pub fn kind(&self) -> Option<&str> {
         self.kind.as_deref()
     }
 
+    /// Returns the parameter associated with the service error, when present.
     #[must_use]
     pub fn param(&self) -> Option<&str> {
         self.param.as_deref()
     }
 
+    /// Returns the machine-readable service error code, when present.
     #[must_use]
     pub fn code(&self) -> Option<&str> {
         self.code.as_deref()
     }
 
+    /// Returns the bounded, sanitized response-body preview.
     #[must_use]
     pub fn body_preview(&self) -> &BodyPreview {
         &self.body
     }
 
+    /// Returns the HTTP status and response-header metadata.
     #[must_use]
     pub const fn meta(&self) -> &ResponseMeta {
         &self.meta
     }
 
+    /// Returns rate-limit metadata retained from the response headers.
     #[must_use]
     pub const fn rate_limits(&self) -> &crate::RateLimitMetadata {
         self.meta.rate_limits()
     }
 
+    /// Returns whether the server responded with HTTP 429.
     #[must_use]
     pub fn is_rate_limited(&self) -> bool {
         self.status() == StatusCode::TOO_MANY_REQUESTS
     }
 
+    /// Returns whether the HTTP status code is greater than or equal to 500.
     #[must_use]
     pub fn is_server_error(&self) -> bool {
         // The bound is numeric, not `StatusCode::is_server_error()` (exactly
@@ -379,11 +390,13 @@ impl StreamError {
         }
     }
 
+    /// Returns the request identifier supplied by the service, when present.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.request_id.as_deref()
     }
 
+    /// Returns the retained error message.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
@@ -395,16 +408,19 @@ impl StreamError {
         self.kind.as_deref()
     }
 
+    /// Returns the machine-readable service error code, when present.
     #[must_use]
     pub fn code(&self) -> Option<&str> {
         self.code.as_deref()
     }
 
+    /// Returns the parameter associated with the service error, when present.
     #[must_use]
     pub fn param(&self) -> Option<&str> {
         self.param.as_deref()
     }
 
+    /// Returns the bounded, sanitized response-body preview.
     #[must_use]
     pub const fn body_preview(&self) -> &BodyPreview {
         &self.body
@@ -504,9 +520,11 @@ pub enum PaginationFault {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// The API returned a structured error response.
     #[error(transparent)]
     Api(Box<ApiError>),
 
+    /// HTTP transport failed.
     #[error("HTTP transport failed: {0}")]
     Transport(#[source] reqwest::Error),
 
@@ -517,6 +535,7 @@ pub enum Error {
     #[error("HTTP request timed out: {0}")]
     Timeout(#[source] reqwest::Error),
 
+    /// The overall request deadline elapsed before a response was delivered.
     #[error("the overall request deadline elapsed before a response was delivered")]
     DeadlineExceeded,
 
@@ -526,25 +545,34 @@ pub enum Error {
     /// `source().is_timeout()`.
     #[error("failed while reading HTTP response body (status {status}): {source}")]
     ResponseBody {
+        /// Underlying error that caused this failure.
         #[source]
         source: reqwest::Error,
+        /// HTTP status code returned by the service.
         status: StatusCode,
+        /// Identifier used to correlate the request with its response or failure.
         request_id: Option<Box<str>>,
     },
 
+    /// Failed to encode request JSON.
     #[error("failed to encode request JSON: {0}")]
     Encode(#[source] serde_json::Error),
 
+    /// Failed to encode request query.
     #[error("failed to encode request query: {0}")]
     EncodeQuery(Box<str>),
 
+    /// Failed to decode an SSE stream.
     #[error("failed to decode an SSE stream: {source}")]
     Sse {
+        /// Underlying error that caused this failure.
         #[source]
         source: crate::sse::SseDecodeError,
+        /// Identifier used to correlate the request with its response or failure.
         request_id: Option<Box<str>>,
     },
 
+    /// The service delivered an error inside an otherwise established stream.
     #[error(transparent)]
     Stream(Box<StreamError>),
 
@@ -555,43 +583,66 @@ pub enum Error {
     /// D0195 stance; only the `message` field carries lane specifics).
     #[error("invalid stream protocol: {message}")]
     StreamProtocol {
+        /// Human-readable message describing this event or failure.
         message: &'static str,
+        /// Identifier used to correlate the request with its response or failure.
         request_id: Option<Box<str>>,
+        /// Bounded, sanitized preview of the response body associated with this failure.
         body: BodyPreview,
     },
 
+    /// Unexpected response content type; expected `expected`, received `actual`.
     #[error("unexpected response content type; expected {expected}, received {actual:?}")]
     UnexpectedContentType {
+        /// Required response media type.
         expected: &'static str,
+        /// Response media type received from the server, when present.
         actual: Option<Box<str>>,
+        /// HTTP status code returned by the service.
         status: StatusCode,
+        /// Identifier used to correlate the request with its response or failure.
         request_id: Option<Box<str>>,
     },
 
+    /// Failed to decode response JSON (status `meta_status`).
     #[error("failed to decode response JSON (status {meta_status}): {source}")]
     Decode {
+        /// Underlying error that caused this failure.
         #[source]
         source: serde_json::Error,
+        /// Path to the JSON field that could not be decoded, when available.
         path: Option<Box<str>>,
+        /// HTTP status associated with the response that failed to decode.
         meta_status: StatusCode,
+        /// Identifier used to correlate the request with its response or failure.
         request_id: Option<Box<str>>,
+        /// Bounded, sanitized preview of the response body associated with this failure.
         body: BodyPreview,
     },
 
+    /// Response body exceeds the configured `limit`-byte limit.
     #[error("response body exceeds the configured {limit}-byte limit")]
     BodyTooLarge {
+        /// Configured response-body size limit in bytes.
         limit: usize,
+        /// HTTP status code returned by the service.
         status: StatusCode,
+        /// Identifier used to correlate the request with its response or failure.
         request_id: Option<Box<str>>,
     },
 
+    /// Response text is not valid UTF-8 (status `status`).
     #[error("response text is not valid UTF-8 (status {status})")]
     InvalidUtf8 {
+        /// HTTP status code returned by the service.
         status: StatusCode,
+        /// Identifier used to correlate the request with its response or failure.
         request_id: Option<Box<str>>,
+        /// Bounded, sanitized preview of the response body associated with this failure.
         body: BodyPreview,
     },
 
+    /// Invalid client configuration.
     #[error("invalid client configuration: {0}")]
     InvalidConfiguration(Box<str>),
 
@@ -602,26 +653,39 @@ pub enum Error {
     /// triggered the fault is not carried yet.
     #[error("automatic {resource} pagination failed closed: {reason}")]
     Pagination {
+        /// Name of the resource whose pagination state is invalid.
         resource: &'static str,
+        /// Explanation or classification associated with this outcome.
         reason: PaginationFault,
     },
 
+    /// The encoded request exceeds its configured size limit before any transport I/O.
     #[error("request payload exceeds the {limit_bytes}-byte limit before transport")]
-    RequestPayloadTooLarge { limit_bytes: usize },
+    RequestPayloadTooLarge {
+        /// Maximum permitted size in bytes.
+        limit_bytes: usize,
+    },
 
+    /// Invalid `name` path parameter.
     #[error("invalid {name} path parameter: {reason}")]
     InvalidPathParameter {
+        /// Name of the parameter that failed validation.
         name: &'static str,
+        /// Explanation or classification associated with this outcome.
         reason: &'static str,
     },
 
+    /// The response accumulator rejected an inconsistent event sequence.
     #[error(transparent)]
     Accumulator(Box<openai_rs_types::responses::ResponseAccumulatorError>),
 
+    /// WebSocket handshake failed with HTTP `status`.
     #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
     #[error("WebSocket handshake failed with HTTP {status}")]
     WebSocketHandshake {
+        /// HTTP status code returned by the service.
         status: StatusCode,
+        /// Identifier used to correlate the request with its response or failure.
         request_id: Option<Box<str>>,
         /// Sanitized, bounded preview of the handshake rejection body that
         /// tungstenite buffered alongside the response head (4-17). Kept out
@@ -631,14 +695,17 @@ pub enum Error {
         body: BodyPreview,
     },
 
+    /// WebSocket transport failed.
     #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
     #[error("WebSocket transport failed: {0}")]
     WebSocketTransport(Box<str>),
 
+    /// Invalid WebSocket protocol state.
     #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
     #[error("invalid WebSocket protocol state: {0}")]
     WebSocketProtocol(&'static str),
 
+    /// Workload-identity authentication failed.
     #[cfg(feature = "workload-identity")]
     #[error(transparent)]
     WorkloadIdentity(std::sync::Arc<crate::WorkloadIdentityError>),
@@ -672,6 +739,12 @@ impl From<std::sync::Arc<crate::WorkloadIdentityError>> for Error {
 impl Error {
     pub(crate) fn from_reqwest(error: reqwest::Error) -> Self {
         let is_timeout = error.is_timeout();
+        tracing::error!(
+            error.timeout = is_timeout,
+            error.connect = error.is_connect(),
+            error.request = error.is_request(),
+            "OpenAI HTTP transport failed"
+        );
         // reqwest errors can retain the complete request URL, including opaque
         // cursors or signed query values. They are never needed for this
         // public error because the typed operation already identifies the call.
@@ -684,6 +757,12 @@ impl Error {
     }
 
     pub(crate) fn from_response_body(error: reqwest::Error, meta: &ResponseMeta) -> Self {
+        tracing::error!(
+            http.response.status_code = meta.status().as_u16(),
+            openai.request_id = meta.request_id().unwrap_or_default(),
+            error.timeout = error.is_timeout(),
+            "failed to read OpenAI response body"
+        );
         Self::ResponseBody {
             source: error.without_url(),
             status: meta.status(),
@@ -691,6 +770,7 @@ impl Error {
         }
     }
 
+    /// Returns the HTTP status associated with this response or failure.
     #[must_use]
     pub fn status(&self) -> Option<StatusCode> {
         match self {
@@ -722,6 +802,7 @@ impl Error {
         }
     }
 
+    /// Returns the request identifier supplied by the service, when present.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         match self {

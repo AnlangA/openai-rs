@@ -88,6 +88,11 @@ impl FineTuningJobs {
     }
 
     /// Creates a fine-tuning job.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: CreateFineTuningJobRequest,
@@ -100,6 +105,11 @@ impl FineTuningJobs {
     }
 
     /// Retrieves one fine-tuning job.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         fine_tuning_job_id: &FineTuningJobId,
@@ -112,6 +122,11 @@ impl FineTuningJobs {
     }
 
     /// Lists fine-tuning jobs using cursor and deep-object metadata filters.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         params: ListFineTuningJobsParams,
@@ -155,6 +170,11 @@ impl FineTuningJobs {
     }
 
     /// Cancels a queued or running fine-tuning job.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn cancel(
         &self,
         fine_tuning_job_id: &FineTuningJobId,
@@ -164,6 +184,11 @@ impl FineTuningJobs {
     }
 
     /// Pauses a fine-tuning job.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn pause(
         &self,
         fine_tuning_job_id: &FineTuningJobId,
@@ -173,6 +198,11 @@ impl FineTuningJobs {
     }
 
     /// Resumes a paused fine-tuning job.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn resume(
         &self,
         fine_tuning_job_id: &FineTuningJobId,
@@ -220,6 +250,11 @@ impl FineTuningJobs {
     /// Fine-tuning jobs routinely run far longer than the ten-minute
     /// [`PollOptions::new`] deadline; start from [`PollOptions::for_fine_tuning`]
     /// (5-second interval, 24-hour timeout) instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if polling configuration is invalid, a poll request fails, polling is
+    /// cancelled, or the configured deadline expires.
     pub async fn poll(
         &self,
         fine_tuning_job_id: &FineTuningJobId,
@@ -247,6 +282,11 @@ impl FineTuningJobEvents {
     }
 
     /// Lists events for one fine-tuning job.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         fine_tuning_job_id: &FineTuningJobId,
@@ -309,6 +349,11 @@ impl FineTuningJobCheckpoints {
     }
 
     /// Lists checkpoints for one fine-tuning job.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         fine_tuning_job_id: &FineTuningJobId,

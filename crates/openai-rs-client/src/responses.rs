@@ -52,6 +52,7 @@ pub struct RetrieveResponseStreamParams {
 }
 
 impl RetrieveResponseStreamParams {
+    /// Creates streaming retrieval parameters without a resume cursor or extra includes.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -62,18 +63,21 @@ impl RetrieveResponseStreamParams {
         }
     }
 
+    /// Appends a field to the requested response include list.
     #[must_use]
     pub fn include(mut self, value: impl Into<ResponseIncludable>) -> Self {
         self.include.push(value.into());
         self
     }
 
+    /// Resumes event retrieval after the specified sequence number.
     #[must_use]
     pub const fn starting_after(mut self, sequence_number: u64) -> Self {
         self.starting_after = Some(sequence_number);
         self
     }
 
+    /// Controls whether retrieved stream events include obfuscation data.
     #[must_use]
     pub const fn include_obfuscation(mut self, include: bool) -> Self {
         self.include_obfuscation = Some(include);
@@ -107,11 +111,13 @@ where
 }
 
 impl RetrieveResponseParams {
+    /// Creates retrieval parameters with no additional fields requested.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Appends a field to the requested response include list.
     #[must_use]
     pub fn include(mut self, value: impl Into<ResponseIncludable>) -> Self {
         self.include.push(value.into());
@@ -131,6 +137,11 @@ impl Responses {
     }
 
     /// Creates a non-streaming model response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: CreateResponseRequest,
@@ -148,6 +159,12 @@ impl Responses {
     /// mid-stream timeouts) are terminal: the stream yields the error and
     /// ends, and no automatic retry happens. Re-issue the request to
     /// recover (D0244).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn create_stream(
         &self,
         request: CreateStreamingResponseRequest,
@@ -162,12 +179,22 @@ impl Responses {
     }
 
     /// Retrieves a stored response by its opaque identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(&self, response_id: &ResponseId) -> Result<ApiResponse<Response>, Error> {
         self.retrieve_with(response_id, RetrieveResponseParams::new())
             .await
     }
 
     /// Retrieves a stored response with explicitly selected optional fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve_with(
         &self,
         response_id: &ResponseId,
@@ -181,6 +208,12 @@ impl Responses {
     }
 
     /// Retrieves or resumes the SSE event stream for a stored response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     pub async fn retrieve_stream(
         &self,
         response_id: &ResponseId,
@@ -199,6 +232,11 @@ impl Responses {
     ///
     /// The wire API and official SDKs differ on whether a successful body is
     /// returned. Both forms are represented explicitly.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         response_id: &ResponseId,
@@ -218,6 +256,11 @@ impl Responses {
     }
 
     /// Requests cancellation of a background response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn cancel(&self, response_id: &ResponseId) -> Result<ApiResponse<Response>, Error> {
         let path = [
             PathSegment::literal("responses"),
@@ -231,6 +274,11 @@ impl Responses {
     }
 
     /// Compacts a conversation input into a compacted response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn compact(
         &self,
         request: CompactResponseRequest,
@@ -262,6 +310,11 @@ impl Responses {
     }
 
     /// Convenience alias for `responses().input_items().list(...)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list_input_items(
         &self,
         response_id: &ResponseId,
@@ -271,6 +324,11 @@ impl Responses {
     }
 
     /// Convenience alias for `responses().input_tokens().count(...)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn count_input_tokens(
         &self,
         request: CountInputTokensRequest,
@@ -282,6 +340,11 @@ impl Responses {
     ///
     /// With default [`PollOptions`] the polling pace is server-controlled via
     /// the `openai-poll-after-ms` hint on each retrieve response (D0275).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if polling configuration is invalid, a poll request fails, polling is
+    /// cancelled, or the configured deadline expires.
     pub async fn poll(
         &self,
         response_id: &ResponseId,
@@ -322,6 +385,12 @@ impl Responses {
     }
 
     /// Opens a persistent Responses WebSocket using bounded defaults.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     #[cfg(feature = "realtime")]
     pub async fn connect(&self) -> Result<crate::ResponsesWebSocket, Error> {
         self.connect_with(crate::ResponsesWebSocketConfig::default())
@@ -330,6 +399,12 @@ impl Responses {
 
     /// Opens a persistent Responses WebSocket with explicit limits and an
     /// initial-connect-only reconnect policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request preparation, authentication, connection establishment, or the
+    /// streaming handshake fails. Errors encountered after the handshake are yielded by the
+    /// returned stream.
     #[cfg(feature = "realtime")]
     pub async fn connect_with(
         &self,
@@ -344,7 +419,9 @@ impl Responses {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum DeleteResponseResult {
+    /// The server confirmed deletion without a JSON response body.
     Empty,
+    /// The server returned a typed deletion confirmation.
     Deleted(DeletedResponse),
 }
 
@@ -355,6 +432,12 @@ pub struct InputItems {
 }
 
 impl InputItems {
+    /// Lists the input items associated with the specified response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or typed response decoding fails.
     pub async fn list(
         &self,
         response_id: &ResponseId,
@@ -414,6 +497,12 @@ pub struct InputTokens {
 }
 
 impl InputTokens {
+    /// Counts input tokens for the supplied Responses request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or typed response decoding fails.
     pub async fn count(
         &self,
         request: CountInputTokensRequest,
@@ -770,6 +859,61 @@ mod tests {
             .allow_insecure_loopback(true)
             .build()
             .expect("loopback client")
+    }
+
+    #[tokio::test]
+    async fn deepseek_response_without_cache_write_tokens_decodes_and_replays_history() {
+        const DEEPSEEK_RESPONSE: &str = include_str!("../tests/fixtures/deepseek_response.json");
+        let original: Value =
+            serde_json::from_str(DEEPSEEK_RESPONSE).expect("captured DeepSeek response");
+        let (base_url, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, DEEPSEEK_RESPONSE.to_owned()),
+            (StatusCode::OK, DEEPSEEK_RESPONSE.to_owned()),
+        ])
+        .await;
+        let client = client(base_url);
+        let first_input: openai_rs_types::responses::ResponseInputItem =
+            openai_rs_types::responses::InputMessage::user("hi").into();
+        let response = client
+            .responses()
+            .create(
+                CreateResponseRequest::new("deepseek-flash", vec![first_input.clone()])
+                    .store(false),
+            )
+            .await
+            .expect("DeepSeek response without cache-write usage");
+        assert_eq!(response.output_text(), "Hi! How can I help you today?");
+        let usage = response.usage().expect("usage preserved");
+        assert_eq!(usage.input_tokens(), 31);
+        assert_eq!(usage.output_tokens(), 39);
+        assert_eq!(usage.total_tokens(), 70);
+        assert_eq!(usage.input_tokens_details().cached_tokens(), 0);
+        assert_eq!(usage.input_tokens_details().cache_write_tokens(), None);
+        assert_eq!(usage.output_tokens_details().reasoning_tokens(), 29);
+        assert_eq!(
+            serde_json::to_value(response.body()).expect("response round trip"),
+            original
+        );
+
+        let mut history = vec![first_input];
+        history.extend(response.to_input_items());
+        history.push(openai_rs_types::responses::InputMessage::user("Continue.").into());
+        let next = client
+            .responses()
+            .create(CreateResponseRequest::new("deepseek-flash", history).store(false))
+            .await
+            .expect("second conversation turn");
+        assert!(!next.output_text().is_empty());
+        let first = captured.recv().await.expect("first request");
+        let second = captured.recv().await.expect("second request");
+        assert_eq!(first.path_and_query, "/v1/responses");
+        let request: Value = serde_json::from_slice(&second.body).expect("replayed input");
+        assert_eq!(request["model"], "deepseek-flash");
+        assert_eq!(request["store"], false);
+        assert_eq!(request["input"][0]["content"], "hi");
+        assert_eq!(request["input"][1], original["output"][0]);
+        assert_eq!(request["input"][2], original["output"][1]);
+        assert_eq!(request["input"][3]["content"], "Continue.");
     }
 
     #[tokio::test]

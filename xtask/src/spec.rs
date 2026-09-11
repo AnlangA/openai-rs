@@ -70,6 +70,12 @@ struct SourceManifest {
     schema_count: usize,
 }
 
+/// Downloads the explicitly selected immutable specification and records its provenance.
+///
+/// # Errors
+///
+/// Returns an error if source validation, downloading, content verification,
+/// or writing the snapshot and provenance manifest fails.
 pub fn fetch(repository_root: &Path, arguments: &FetchArguments) -> Result<()> {
     let url = resolve_source_url(arguments)?;
     println!("fetching immutable OpenAPI source {url}");
@@ -107,6 +113,12 @@ pub fn fetch(repository_root: &Path, arguments: &FetchArguments) -> Result<()> {
     Ok(())
 }
 
+/// Checks the committed specification bytes against their pinned identity and inventory.
+///
+/// # Errors
+///
+/// Returns an error for unreadable or malformed inputs, or a mismatch in hashes,
+/// versions, byte counts, or the recorded operation and schema inventories.
 pub fn verify(repository_root: &Path) -> Result<()> {
     let snapshot_path = repository_root.join(SNAPSHOT_PATH);
     let bytes = fs::read(&snapshot_path)

@@ -35,7 +35,9 @@ pub type SubjectTokenFuture<'a> =
 /// RFC 8693 subject-token kind accepted by OpenAI workload identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubjectTokenType {
+    /// Exchange a subject token identified as a JWT.
     Jwt,
+    /// Exchange a subject token identified as an ID token.
     Id,
 }
 
@@ -53,6 +55,12 @@ impl SubjectTokenType {
 pub struct SubjectToken(SecretString);
 
 impl SubjectToken {
+    /// Validates and wraps external subject-token material without exposing it through Debug.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token is empty or contains whitespace, control characters, or
+    /// non-ASCII characters.
     pub fn new(token: impl Into<String>) -> Result<Self, SubjectTokenValidationError> {
         validate_bearer_material(&token.into()).map(|token| Self(SecretString::from(token)))
     }
@@ -79,6 +87,7 @@ pub struct SubjectTokenValidationError;
 pub struct SubjectTokenProviderError;
 
 impl SubjectTokenProviderError {
+    /// Creates a provider-failure marker without retaining potentially sensitive source text.
     #[must_use]
     pub const fn new() -> Self {
         Self
@@ -100,7 +109,14 @@ mod provider_private {
 /// Callers construct an implementation through [`SubjectTokenProviderFn`],
 /// which snapshots the closure inside the client configuration.
 pub trait SubjectTokenProvider: provider_private::Sealed + Send + Sync {
+    /// Returns the subject-token format expected by the exchange service.
     fn token_type(&self) -> SubjectTokenType;
+    /// Obtains fresh subject-token material from the external identity provider.
+    ///
+    /// # Errors
+    ///
+    /// The returned future fails if the provider cannot obtain a usable token. Implementations
+    /// should return a provider error without embedding secret token material.
     fn subject_token(&self) -> SubjectTokenFuture<'_>;
 }
 
@@ -111,6 +127,7 @@ pub struct SubjectTokenProviderFn<F> {
 }
 
 impl<F> SubjectTokenProviderFn<F> {
+    /// Wraps an asynchronous provider callback and its subject-token format.
     #[must_use]
     pub const fn new(token_type: SubjectTokenType, provider: F) -> Self {
         Self {
@@ -159,6 +176,11 @@ pub struct WorkloadIdentityConfig {
 }
 
 impl WorkloadIdentityConfig {
+    /// Creates workload-identity configuration for a provider and service account.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the identity-provider or service-account identifier is invalid.
     pub fn new<P>(
         identity_provider_id: impl Into<String>,
         service_account_id: impl Into<String>,
@@ -178,6 +200,11 @@ impl WorkloadIdentityConfig {
         })
     }
 
+    /// Sets the client identifier used during token exchange.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the supplied client identifier is invalid.
     pub fn with_client_id(
         mut self,
         client_id: impl Into<String>,
@@ -186,6 +213,7 @@ impl WorkloadIdentityConfig {
         Ok(self)
     }
 
+    /// Sets how long before token expiry a refresh should be attempted.
     #[must_use]
     pub const fn with_refresh_buffer(mut self, refresh_buffer: Duration) -> Self {
         self.refresh_buffer = refresh_buffer;
@@ -229,23 +257,34 @@ pub struct WorkloadIdentityConfigError;
 #[derive(Error)]
 #[non_exhaustive]
 pub enum WorkloadIdentityError {
+    /// Subject token provider failed.
     #[error("subject token provider failed")]
     SubjectToken,
+    /// Workload token exchange transport failed.
     #[error("workload token exchange transport failed")]
     Transport,
+    /// Workload token exchange was rejected with HTTP `status`.
     #[error("workload token exchange was rejected with HTTP {status}")]
     OAuthRejected {
+        /// HTTP status code returned by the service.
         status: StatusCode,
+        /// Bounded, sanitized preview of the response body associated with this failure.
         body: BodyPreview,
     },
+    /// Workload token exchange failed with HTTP `status`.
     #[error("workload token exchange failed with HTTP {status}")]
     ExchangeRejected {
+        /// HTTP status code returned by the service.
         status: StatusCode,
+        /// Bounded, sanitized preview of the response body associated with this failure.
         body: BodyPreview,
     },
+    /// Workload token exchange returned an invalid response.
     #[error("workload token exchange returned an invalid response: {reason}")]
     InvalidResponse {
+        /// Explanation or classification associated with this outcome.
         reason: &'static str,
+        /// Bounded, sanitized preview of the response body associated with this failure.
         body: BodyPreview,
     },
 }
@@ -275,6 +314,7 @@ impl fmt::Debug for WorkloadIdentityError {
 }
 
 impl WorkloadIdentityError {
+    /// Returns the HTTP status associated with this response or failure.
     #[must_use]
     pub const fn status(&self) -> Option<StatusCode> {
         match self {
@@ -495,6 +535,7 @@ impl WorkloadIdentityAuth {
     ) -> Result<CachedToken, Arc<WorkloadIdentityError>> {
         let span = trace::http_request_span("workload_identity.exchange", "POST", "/oauth/token");
         async move {
+            let started = std::time::Instant::now();
             let subject = self
                 .config
                 .provider
@@ -517,7 +558,13 @@ impl WorkloadIdentityAuth {
                 .send()
                 .await
                 .map_err(|_| Arc::new(WorkloadIdentityError::Transport))?;
-            trace::record_http_outcome(0, &response);
+            trace::record_http_outcome(
+                "workload_identity.exchange",
+                started,
+                0,
+                &response,
+                response.status().is_success(),
+            );
             let status = response.status();
             let (bytes, truncated) = read_bounded(response, MAX_EXCHANGE_BODY_BYTES)
                 .await

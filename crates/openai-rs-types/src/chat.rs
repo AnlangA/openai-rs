@@ -30,7 +30,10 @@ macro_rules! strict_tagged_union {
         #[derive(Clone, Debug, PartialEq)]
         #[non_exhaustive]
         pub enum $name {
-            $($variant($ty),)+
+            $(
+                #[doc = concat!("The `", $wire, "` payload, decoded as `", stringify!($ty), "`.")]
+                $variant($ty),
+            )+
             /// A future tagged object retained without losing fields.
             Unknown(UnknownTaggedObject),
         }
@@ -683,6 +686,11 @@ impl ChatFunctionInvocation {
     }
 
     /// Serialize typed arguments into the inner JSON wire string.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable<T: Serialize>(
         name: impl Into<String>,
         arguments: &T,
@@ -691,6 +699,11 @@ impl ChatFunctionInvocation {
     }
 
     /// Parses the JSON arguments into a declared Rust type.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn arguments_as<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
         serde_json::from_str(self.arguments.as_str())
     }
@@ -729,6 +742,11 @@ impl ChatFunctionToolCall {
     }
 
     /// Serialize typed arguments into the nested function-call string.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable<T: Serialize>(
         id: impl Into<String>,
         name: impl Into<String>,
@@ -739,6 +757,11 @@ impl ChatFunctionToolCall {
     }
 
     /// Parses the JSON arguments into a declared Rust type.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn arguments_as<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
         self.function.arguments_as()
     }
@@ -1039,6 +1062,11 @@ impl ChatToolMessage {
     }
 
     /// Serialize a typed tool result into the Chat string field.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable<T: Serialize>(
         tool_call_id: impl Into<String>,
         content: &T,
@@ -1262,6 +1290,11 @@ impl ChatFunctionDefinition {
     }
 
     /// Serialize a typed schema representation into the parameters object.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema error if the supplied or generated schema cannot be normalized into the
+    /// supported strict output format.
     pub fn with_parameters<T: Serialize>(
         mut self,
         parameters: &T,
@@ -1317,6 +1350,11 @@ impl ChatCompletionFunction {
     }
 
     /// Serialize a typed schema representation into the parameters object.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema error if the supplied or generated schema cannot be normalized into the
+    /// supported strict output format.
     pub fn with_parameters<T: Serialize>(
         mut self,
         parameters: &T,
@@ -1396,6 +1434,11 @@ impl ChatFunctionTool {
     /// [`MAX_CHAT_FUNCTION_TOOL_NAME_CHARS`]), mirroring the Responses
     /// channel's `FunctionTool::for_type` check (D0247) with the Chat pin's
     /// stricter bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema error for an invalid name, unsupported schema shape, unresolved reference,
+    /// invalid alias cycle, or exhausted normalization budget.
     #[cfg(feature = "structured-output")]
     pub fn for_type<T: schemars::JsonSchema>(
         name: impl Into<String>,
@@ -1650,6 +1693,11 @@ pub enum ChatAllowedTool {
 
 impl ChatAllowedTool {
     /// Construct an arbitrary descriptor from a typed serializable object.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable<T: Serialize>(value: &T) -> Result<Self, serde_json::Error> {
         serialize_object(value, "allowed tool must serialize as a JSON object").map(Self::Arbitrary)
     }
@@ -1936,6 +1984,11 @@ impl ChatJsonSchemaDefinition {
     }
 
     /// Serialize a typed schema representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema error if the supplied or generated schema cannot be normalized into the
+    /// supported strict output format.
     pub fn with_schema<T: Serialize>(mut self, schema: &T) -> Result<Self, serde_json::Error> {
         self.schema = Omittable::Value(serialize_object(
             schema,
@@ -2226,6 +2279,11 @@ impl ChatModerationConfig {
     /// [`ModerationPolicy`] cannot represent are rejected with an error
     /// instead of being silently dropped. New shapes should grow on
     /// [`ModerationPolicy`] itself, which keeps the wire form lossless.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema error if the supplied or generated schema cannot be normalized into the
+    /// supported strict output format.
     pub fn with_policy<T: Serialize>(mut self, policy: &T) -> Result<Self, serde_json::Error> {
         let object = serialize_object(policy, "moderation policy must serialize as a JSON object")?;
         let typed: ModerationPolicy = serde_json::from_value(Value::Object(object.clone()))?;
@@ -2274,58 +2332,108 @@ pub enum CreateChatCompletionConstraintError {
     EmptyPredictionParts,
     /// `temperature` is non-finite or outside `0..=2`.
     #[error("temperature must be finite and within 0..=2, got {value}")]
-    Temperature { value: String },
+    Temperature {
+        /// Invalid value, retained as text for the validation error.
+        value: String,
+    },
     /// `top_p` is non-finite or outside `0..=1`.
     #[error("top_p must be finite and within 0..=1, got {value}")]
-    TopP { value: String },
+    TopP {
+        /// Invalid value, retained as text for the validation error.
+        value: String,
+    },
     /// `frequency_penalty` is non-finite or outside `-2..=2`.
     #[error("frequency_penalty must be finite and within -2..=2, got {value}")]
-    FrequencyPenalty { value: String },
+    FrequencyPenalty {
+        /// Invalid value, retained as text for the validation error.
+        value: String,
+    },
     /// `presence_penalty` is non-finite or outside `-2..=2`.
     #[error("presence_penalty must be finite and within -2..=2, got {value}")]
-    PresencePenalty { value: String },
+    PresencePenalty {
+        /// Invalid value, retained as text for the validation error.
+        value: String,
+    },
     /// `top_logprobs` is outside `0..=20`.
     #[error("top_logprobs must be 0..={maximum}, got {actual}")]
-    TopLogprobs { actual: u8, maximum: u32 },
+    TopLogprobs {
+        /// Actual value observed when validation failed.
+        actual: u8,
+        /// Largest value permitted by the validation rule.
+        maximum: u32,
+    },
     /// `n` is outside `1..=128`.
     #[error("n must be {minimum}..={maximum}, got {actual}")]
     Choices {
+        /// Actual value observed when validation failed.
         actual: u32,
+        /// Smallest value permitted by the validation rule.
         minimum: u32,
+        /// Largest value permitted by the validation rule.
         maximum: u32,
     },
     /// `safety_identifier` exceeds 64 characters.
     #[error("safety_identifier has {actual} characters; maximum is {maximum}")]
-    SafetyIdentifier { actual: usize, maximum: usize },
+    SafetyIdentifier {
+        /// Actual value observed when validation failed.
+        actual: usize,
+        /// Largest value permitted by the validation rule.
+        maximum: usize,
+    },
     /// Metadata contains more than 16 pairs.
     #[error("metadata contains {actual} pairs; maximum is {maximum}")]
-    MetadataPairCount { actual: usize, maximum: usize },
+    MetadataPairCount {
+        /// Actual value observed when validation failed.
+        actual: usize,
+        /// Largest value permitted by the validation rule.
+        maximum: usize,
+    },
     /// A metadata key exceeds 64 characters.
     #[error("metadata key has {actual} characters; maximum is {maximum}")]
-    MetadataKey { actual: usize, maximum: usize },
+    MetadataKey {
+        /// Actual value observed when validation failed.
+        actual: usize,
+        /// Largest value permitted by the validation rule.
+        maximum: usize,
+    },
     /// A metadata value exceeds 512 characters.
     #[error("metadata value has {actual} characters; maximum is {maximum}")]
-    MetadataValue { actual: usize, maximum: usize },
+    MetadataValue {
+        /// Actual value observed when validation failed.
+        actual: usize,
+        /// Largest value permitted by the validation rule.
+        maximum: usize,
+    },
     /// `stop` array length is outside `1..=4`.
     #[error("stop must contain {minimum}..={maximum} sequences, got {actual}")]
     StopSequences {
+        /// Actual value observed when validation failed.
         actual: usize,
+        /// Smallest value permitted by the validation rule.
         minimum: usize,
+        /// Largest value permitted by the validation rule.
         maximum: usize,
     },
     /// A `logit_bias` value is outside `-100..=100`.
     #[error("logit_bias[{token}] must be {minimum}..={maximum}, got {actual}")]
     LogitBias {
+        /// Token text or token identifier associated with this entry.
         token: String,
+        /// Actual value observed when validation failed.
         actual: i32,
+        /// Smallest value permitted by the validation rule.
         minimum: i32,
+        /// Largest value permitted by the validation rule.
         maximum: i32,
     },
     /// Deprecated `functions` array length is outside `1..=128`.
     #[error("functions must contain {minimum}..={maximum} entries, got {actual}")]
     Functions {
+        /// Actual value observed when validation failed.
         actual: usize,
+        /// Smallest value permitted by the validation rule.
         minimum: usize,
+        /// Largest value permitted by the validation rule.
         maximum: usize,
     },
     /// A `tools[].function.name` or deprecated `functions[].name` is empty,
@@ -2334,8 +2442,11 @@ pub enum CreateChatCompletionConstraintError {
     /// `ChatCompletionFunctions.name` repeats it).
     #[error("function name must be {minimum}..={maximum} chars of a-z/A-Z/0-9/_/-, got {actual}")]
     FunctionName {
+        /// Actual value observed when validation failed.
         actual: usize,
+        /// Smallest value permitted by the validation rule.
         minimum: usize,
+        /// Largest value permitted by the validation rule.
         maximum: usize,
     },
 }
@@ -2707,6 +2818,12 @@ impl ChatCompletionRequestBody {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateChatCompletionConstraintError> {
         if self.messages.is_empty() {
             return Err(CreateChatCompletionConstraintError::EmptyMessages);
@@ -3116,6 +3233,12 @@ where
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<&Self, CreateChatCompletionConstraintError> {
         self.body.validate()?;
         Ok(self)
@@ -4107,13 +4230,13 @@ mod tests {
         assert_eq!(value["tool_choice"]["function"]["name"], "weather");
 
         let arguments = WeatherArguments {
-            city: "上海".to_owned(),
+            city: "Montréal".to_owned(),
             units: "metric".to_owned(),
         };
         let call = ok(ChatFunctionToolCall::from_serializable(
             "call_1", "weather", &arguments,
         ));
-        assert_eq!(ok(call.function.arguments.parse())["city"], "上海");
+        assert_eq!(ok(call.function.arguments.parse())["city"], "Montréal");
 
         let result = ok(ChatToolMessage::from_serializable(
             "call_1",
@@ -4625,7 +4748,7 @@ mod tests {
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": "你好！",
+                    "content": "Hello! 🦀",
                     "reasoning_content": "The user greeted me."
                 },
                 "logprobs": null,
@@ -4643,7 +4766,7 @@ mod tests {
             "system_fingerprint": "a26a7955944dc5c60445bff77fac9c8e"
         });
         let completion = ok(serde_json::from_value::<ChatCompletion>(fixture));
-        assert_eq!(completion.output_text(), "你好！");
+        assert_eq!(completion.output_text(), "Hello! 🦀");
         assert!(completion.choices[0].message.refusal.is_omitted());
         assert_eq!(
             completion.choices[0]

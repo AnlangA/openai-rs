@@ -1,13 +1,43 @@
 //! Shared, crate-private tracing helpers for outbound HTTP.
 //!
-//! Field names stay low-cardinality. Callers must never pass credentials,
-//! URLs, query strings, or request/response bodies into these helpers.
+//! Metadata fields stay low-cardinality and exclude credentials and URLs.
+//! Raw JSON bodies use a separate TRACE target, enabled by the application.
 
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::ResponseMeta;
 use crate::transport::PathSegment;
+
+const JSON_BODY_TARGET: &str = "openai_rs_client::http_body";
+
+pub(crate) fn json_body_enabled() -> bool {
+    tracing::enabled!(target: JSON_BODY_TARGET, tracing::Level::TRACE)
+}
+
+pub(crate) fn emit_json_request(method: &http::Method, route: &str, body: &[u8]) {
+    tracing::trace!(
+        target: JSON_BODY_TARGET,
+        {
+            http.request.method = %method,
+            http.route = route,
+            body = %String::from_utf8_lossy(body),
+        },
+        "JSON request"
+    );
+}
+
+pub(crate) fn emit_json_response(status: http::StatusCode, body: &[u8], truncated: bool) {
+    tracing::trace!(
+        target: JSON_BODY_TARGET,
+        {
+            http.response.status_code = status.as_u16(),
+            body.truncated = truncated,
+            body = %String::from_utf8_lossy(body),
+        },
+        "JSON response"
+    );
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RetryReason {
@@ -101,12 +131,76 @@ pub(crate) fn record_response(meta: &ResponseMeta) {
     }
 }
 
-pub(crate) fn record_http_outcome(retries: u32, response: &reqwest::Response) {
+pub(crate) fn emit_request_attempt(operation_id: &str, retries: u32, remaining: Duration) {
+    tracing::debug!(
+        operation.id = operation_id,
+        retry.count = retries,
+        timeout_ms = duration_ms(remaining),
+        "sending OpenAI HTTP request"
+    );
+}
+
+pub(crate) fn record_http_outcome(
+    operation_id: &str,
+    started: Instant,
+    retries: u32,
+    response: &reqwest::Response,
+    accepted: bool,
+) {
     record_retry_count(retries);
-    record_response(&ResponseMeta::from_headers(
-        response.status(),
-        response.headers(),
-    ));
+    let meta = ResponseMeta::from_headers(response.status(), response.headers());
+    record_response(&meta);
+    // Header latency includes authentication and retries, but not body decoding
+    // or stream consumption. Keep context on the event even without DEBUG spans.
+    if accepted {
+        tracing::info!(
+            operation.id = operation_id,
+            http.response.status_code = meta.status().as_u16(),
+            openai.request_id = meta.request_id().unwrap_or_default(),
+            retry.count = retries,
+            elapsed_ms = duration_ms(started.elapsed()),
+            "OpenAI HTTP response received"
+        );
+    } else {
+        tracing::error!(
+            operation.id = operation_id,
+            http.response.status_code = meta.status().as_u16(),
+            openai.request_id = meta.request_id().unwrap_or_default(),
+            retry.count = retries,
+            elapsed_ms = duration_ms(started.elapsed()),
+            "OpenAI HTTP request rejected"
+        );
+    }
+}
+
+pub(crate) fn emit_json_decode_error(
+    meta: &ResponseMeta,
+    source: &serde_json::Error,
+    path: Option<&str>,
+) {
+    // serde_json's Display can quote body values; report position/category only.
+    tracing::error!(
+        http.response.status_code = meta.status().as_u16(),
+        openai.request_id = meta.request_id().unwrap_or_default(),
+        json.path = path.unwrap_or_default(),
+        json.line = source.line(),
+        json.column = source.column(),
+        error.category = ?source.classify(),
+        "failed to decode OpenAI response JSON"
+    );
+}
+
+pub(crate) fn emit_body_read(meta: &ResponseMeta, bytes: usize) {
+    tracing::debug!(
+        http.response.status_code = meta.status().as_u16(),
+        openai.request_id = meta.request_id().unwrap_or_default(),
+        body.bytes = bytes,
+        "OpenAI response body read"
+    );
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 pub(crate) fn emit_retry(attempt: u32, delay: Duration, reason: RetryReason) {
@@ -118,6 +212,17 @@ pub(crate) fn emit_retry(attempt: u32, delay: Duration, reason: RetryReason) {
         retry.count = attempt,
         retry.delay_ms = delay_ms,
         retry.reason = reason.as_str(),
+        "retrying OpenAI request"
+    );
+}
+
+pub(crate) fn emit_http_retry(attempt: u32, delay: Duration, meta: &ResponseMeta) {
+    tracing::warn!(
+        retry.count = attempt,
+        retry.delay_ms = duration_ms(delay),
+        retry.reason = RetryReason::HttpStatus.as_str(),
+        http.response.status_code = meta.status().as_u16(),
+        openai.request_id = meta.request_id().unwrap_or_default(),
         "retrying OpenAI request"
     );
 }
@@ -205,6 +310,7 @@ pub(crate) mod capture {
     pub(crate) struct Capture {
         inner: Arc<Mutex<Inner>>,
         next_id: Arc<AtomicU64>,
+        max_level: tracing::Level,
     }
 
     impl Capture {
@@ -212,7 +318,13 @@ pub(crate) mod capture {
             Self {
                 inner: Arc::new(Mutex::new(Inner::default())),
                 next_id: Arc::new(AtomicU64::new(1)),
+                max_level: tracing::Level::TRACE,
             }
+        }
+
+        pub(crate) fn with_max_level(mut self, level: tracing::Level) -> Self {
+            self.max_level = level;
+            self
         }
 
         fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -269,8 +381,8 @@ pub(crate) mod capture {
     }
 
     impl Subscriber for Capture {
-        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-            true
+        fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+            *metadata.level() <= self.max_level
         }
 
         fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
@@ -583,9 +695,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn captured_fields_do_not_include_secrets_or_prompts() {
+    async fn debug_fields_do_not_include_secrets_or_prompts() {
         let base = serve_sequence(vec![(StatusCode::OK, "req_embed", EMBEDDING_BODY)]).await;
-        let capture = Capture::new();
+        let capture = Capture::new().with_max_level(tracing::Level::DEBUG);
         let _guard = tracing::subscriber::set_default(capture.clone());
         let request = CreateEmbeddingRequest::new("text-embedding-3-small", SECRET_PROMPT);
         client(base, SECRET_KEY)
@@ -594,6 +706,16 @@ mod tests {
             .await
             .expect("embeddings create");
 
+        let events = capture.events();
+        assert!(
+            events
+                .iter()
+                .any(|event| event.message() == Some("sending OpenAI HTTP request"))
+        );
+        assert!(
+            events.iter().any(|event| event.field("body.bytes")
+                == Some(EMBEDDING_BODY.len().to_string().as_str()))
+        );
         assert!(
             !capture.contains_text(SECRET_KEY),
             "API key leaked into tracing fields"
@@ -718,13 +840,202 @@ mod tests {
             "SSE delta content leaked into tracing fields"
         );
         assert!(
-            !capture.contains_text(SECRET_PROMPT),
-            "streamed prompt leaked into tracing fields"
+            capture.contains_text(SECRET_PROMPT),
+            "TRACE includes the serialized streaming request, but never SSE deltas"
         );
         assert!(
             !capture.contains_text("Bearer "),
             "authorization header leaked into tracing fields"
         );
+    }
+
+    #[tokio::test]
+    async fn info_result_keeps_context_without_debug_spans_or_bodies() {
+        let base = serve_sequence(vec![(StatusCode::OK, "req_info", MODEL_LIST)]).await;
+        let capture = Capture::new().with_max_level(tracing::Level::INFO);
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        client(base, SECRET_KEY)
+            .models()
+            .list()
+            .await
+            .expect("models list");
+
+        assert!(capture.spans().is_empty());
+        let events = capture.events();
+        let event = events
+            .iter()
+            .find(|event| event.level == "INFO")
+            .expect("info result");
+        assert_eq!(event.field("operation.id"), Some("ListModels"));
+        assert_eq!(event.field("http.response.status_code"), Some("200"));
+        assert_eq!(event.field("openai.request_id"), Some("req_info"));
+        assert_eq!(event.field("retry.count"), Some("0"));
+        assert!(
+            event
+                .field("elapsed_ms")
+                .expect("elapsed time")
+                .parse::<u64>()
+                .is_ok()
+        );
+        assert!(!capture.contains_text(MODEL_LIST));
+        assert!(!capture.contains_text(SECRET_KEY));
+    }
+
+    #[tokio::test]
+    async fn trace_captures_json_request_and_response_without_authentication() {
+        let base = serve_sequence(vec![(StatusCode::OK, "req_trace", EMBEDDING_BODY)]).await;
+        let capture = Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        let request = CreateEmbeddingRequest::new("text-embedding-3-small", SECRET_PROMPT);
+        let expected_body = serde_json::to_string(&request).expect("request JSON");
+        client(base, SECRET_KEY)
+            .embeddings()
+            .create(request)
+            .await
+            .expect("embedding");
+
+        let events = capture.events();
+        let request_event = events
+            .iter()
+            .find(|event| event.message() == Some("JSON request"))
+            .expect("raw request");
+        assert_eq!(request_event.level, "TRACE");
+        assert_eq!(request_event.field("body"), Some(expected_body.as_str()));
+        assert_eq!(request_event.field("http.route"), Some("/embeddings"));
+        let response_event = events
+            .iter()
+            .find(|event| event.message() == Some("JSON response"))
+            .expect("raw response");
+        assert_eq!(response_event.field("body"), Some(EMBEDDING_BODY));
+        assert_eq!(response_event.field("body.truncated"), Some("false"));
+        assert!(!capture.contains_text(SECRET_KEY));
+        assert!(!capture.contains_text("Bearer "));
+    }
+
+    #[tokio::test]
+    async fn trace_keeps_raw_response_before_nullable_decode_failure() {
+        const BODY: &str = concat!(
+            r#"{"id":"resp_compat","created_at":1,"error":null,"incomplete_details":null,"instructions":null,"metadata":null,"model":"deepseek-flash","object":"response","output":[],"parallel_tool_calls":true,"temperature":1.0,"tool_choice":"auto","tools":[],"top_p":1.0,"status":"completed","usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":null},"output_tokens":2,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":12}}"#,
+        );
+        let base = serve_sequence(vec![(StatusCode::OK, "req_compat", BODY)]).await;
+        let capture = Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        let error = client(base, SECRET_KEY)
+            .responses()
+            .create(CreateResponseRequest::new("deepseek-flash", "hi"))
+            .await
+            .expect_err("an explicitly null cache_write_tokens is still invalid");
+        assert_eq!(error.decode_path(), Some("usage"));
+
+        let events = capture.events();
+        let raw_index = events
+            .iter()
+            .position(|event| event.message() == Some("JSON response"))
+            .expect("raw response");
+        let error_index = events
+            .iter()
+            .position(|event| event.level == "ERROR")
+            .expect("decode error");
+        assert!(raw_index < error_index);
+        assert_eq!(events[raw_index].field("body"), Some(BODY));
+        assert_eq!(events[error_index].field("json.path"), Some("usage"));
+        assert_eq!(
+            events[error_index].field("openai.request_id"),
+            Some("req_compat")
+        );
+    }
+
+    #[tokio::test]
+    async fn error_level_reports_decode_position_without_echoing_body_values() {
+        let body = r#"{"object":"list","data":"SUPER_SECRET_PROMPT_XYZ"}"#;
+        let base = serve_sequence(vec![(StatusCode::OK, "req_bad_json", body)]).await;
+        let capture = Capture::new().with_max_level(tracing::Level::ERROR);
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        client(base, SECRET_KEY)
+            .models()
+            .list()
+            .await
+            .expect_err("invalid data");
+
+        let events = capture.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].level, "ERROR");
+        assert_eq!(events[0].field("json.path"), Some("data"));
+        assert_eq!(events[0].field("json.line"), Some("1"));
+        assert_eq!(events[0].field("http.response.status_code"), Some("200"));
+        assert!(!capture.contains_text(SECRET_PROMPT));
+        assert!(!capture.contains_text(SECRET_KEY));
+    }
+
+    #[tokio::test]
+    async fn http_rejection_is_error_and_retry_body_is_traced_without_false_error() {
+        const RETRY_BODY: &str = r#"{"error":{"message":"temporary"}}"#;
+        let base = serve_sequence(vec![
+            (StatusCode::TOO_MANY_REQUESTS, "req_retry", RETRY_BODY),
+            (StatusCode::OK, "req_ok", MODEL_LIST),
+        ])
+        .await;
+        let capture = Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        client(base, SECRET_KEY)
+            .models()
+            .list()
+            .await
+            .expect("retried list");
+        let events = capture.events();
+        let bodies: Vec<_> = events
+            .iter()
+            .filter(|event| event.message() == Some("JSON response"))
+            .filter_map(|event| event.field("body"))
+            .collect();
+        assert_eq!(bodies, [RETRY_BODY, MODEL_LIST]);
+        assert!(events.iter().all(|event| event.level != "ERROR"));
+        let retry = events
+            .iter()
+            .find(|event| event.level == "WARN")
+            .expect("retry warning");
+        assert_eq!(retry.field("http.response.status_code"), Some("429"));
+        assert_eq!(retry.field("openai.request_id"), Some("req_retry"));
+
+        let base =
+            serve_sequence(vec![(StatusCode::BAD_REQUEST, "req_rejected", RETRY_BODY)]).await;
+        client(base, SECRET_KEY)
+            .models()
+            .list()
+            .await
+            .expect_err("HTTP rejection");
+        let events = capture.events();
+        let error = events
+            .iter()
+            .find(|event| event.level == "ERROR")
+            .expect("HTTP error");
+        assert_eq!(error.field("operation.id"), Some("ListModels"));
+        assert_eq!(error.field("http.response.status_code"), Some("400"));
+        assert_eq!(error.field("retry.count"), Some("0"));
+    }
+
+    #[tokio::test]
+    async fn trace_marks_error_body_truncation_at_the_configured_limit() {
+        const BODY: &str = r#"{"error":{"message":"long error response"}}"#;
+        const LIMIT: usize = 16;
+        let base = serve_sequence(vec![(StatusCode::BAD_REQUEST, "req_bounded", BODY)]).await;
+        let capture = Capture::new();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        let client = Client::builder(ApiKey::new(SECRET_KEY).expect("test key"))
+            .base_url(base)
+            .allow_insecure_loopback(true)
+            .max_error_body_bytes(LIMIT)
+            .build()
+            .expect("client");
+        client.models().list().await.expect_err("HTTP error");
+
+        let events = capture.events();
+        let raw = events
+            .iter()
+            .find(|event| event.message() == Some("JSON response"))
+            .expect("raw response");
+        assert_eq!(raw.field("body"), Some(&BODY[..LIMIT]));
+        assert_eq!(raw.field("body.truncated"), Some("true"));
     }
 
     /// 6-18: the Administration lane keeps the same six-field span shape as

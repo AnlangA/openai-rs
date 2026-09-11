@@ -51,6 +51,10 @@ impl SseLimits {
     /// `data` string, including the newline inserted between adjacent `data`
     /// fields. `event`, `id`, comments, and unknown fields are each constrained
     /// by `max_line_bytes` and are never accumulated without replacement.
+    ///
+    /// # Errors
+    ///
+    /// Returns an SSE configuration error if a byte or data-line limit is invalid.
     pub fn new(
         max_line_bytes: usize,
         max_event_bytes: usize,
@@ -279,6 +283,11 @@ impl SseDecoder {
     /// UTF-8 sequences and CRLF terminators may cross calls. An empty chunk is
     /// a no-op. A structural error is fail-stop: the decoder enters
     /// [`SseDecoderState::Failed`] and releases retained input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an input line or event exceeds the configured limits, or if the
+    /// assembled event contains invalid UTF-8.
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<SseFrame>, SseDecodeError> {
         self.ensure_active()?;
 
@@ -295,6 +304,11 @@ impl SseDecoder {
     /// A final unterminated physical line is decoded before the pending event is
     /// flushed. Endpoint-specific policy decides whether EOF itself is success;
     /// see [`SseStreamDecoder::finish`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the final buffered line or event violates the configured limits or UTF-8
+    /// requirements.
     pub fn finish(&mut self) -> Result<Vec<SseFrame>, SseDecodeError> {
         self.ensure_active()?;
 
@@ -811,6 +825,11 @@ impl SseStreamDecoder {
     /// Once a terminal or remote-error dispatch is returned, later frames from
     /// the same chunk are ignored and parser-owned input is released. The HTTP
     /// layer should immediately drop/close the authenticated response body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if framing or UTF-8 validation fails, an event exceeds the configured
+    /// limits, or the stream violates its endpoint policy.
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<SseDispatch>, SseDecodeError> {
         self.ensure_active()?;
         let mut dispatches = Vec::new();
@@ -854,6 +873,11 @@ impl SseStreamDecoder {
     /// [`SseDecodeError::UnexpectedEof`]; dispatches already classified from
     /// the EOF flush are dropped in that case. Callers that need them (14-G-1)
     /// use [`SseStreamDecoder::finish_with_flushed`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if flushing the buffered input fails or the stream ends without the
+    /// terminal marker required by its endpoint policy.
     pub fn finish(&mut self) -> Result<Vec<SseDispatch>, SseDecodeError> {
         self.finish_with_flushed()
             .map_err(|(error, _dispatches)| error)
@@ -869,6 +893,11 @@ impl SseStreamDecoder {
     /// would be classified as a plain [`SseDispatch::Event`] and silently lost
     /// under the error. A decoder-level flush error never produced frames, so
     /// its error carries an empty vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns the framing or terminal-policy error together with events successfully decoded
+    /// before that error, so callers can preserve the flushed events.
     pub fn finish_with_flushed(
         &mut self,
     ) -> Result<Vec<SseDispatch>, (SseDecodeError, Vec<SseDispatch>)> {
@@ -978,12 +1007,12 @@ mod tests {
 
     #[test]
     fn decodes_every_two_chunk_split_including_utf8_and_crlf() {
-        let input = "\u{feff}: keepalive\r\nevent: 文本\r\nid: 标识\r\nretry: 1250\r\ndata: 你\r\ndata: 好\r\n\r\n"
+        let input = "\u{feff}: keepalive\r\nevent: text-€\r\nid: event-🦀\r\nretry: 1250\r\ndata: Hello, café\r\ndata: World! 🦀\r\n\r\n"
             .as_bytes();
         let expected = SseFrame {
-            event: Some("文本".into()),
-            data: "你\n好".into(),
-            id: Some("标识".into()),
+            event: Some("text-€".into()),
+            data: "Hello, café\nWorld! 🦀".into(),
+            id: Some("event-🦀".into()),
             retry: Some(Duration::from_millis(1250)),
         };
 

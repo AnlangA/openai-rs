@@ -155,6 +155,11 @@ fn flattenable_structured_content(envelope: &ToolResultEnvelope) -> Option<&Valu
 /// media-heavy tools should budget for the expansion — or surface media to
 /// the model through a different channel — instead of relying on this
 /// encoder to clamp the size.
+///
+/// # Errors
+///
+/// Returns an error if the selected encoding cannot represent a content block or the result cannot
+/// be serialized.
 pub fn encode_tool_result(
     result: &CallToolResult,
     policy: ResultEncoding,

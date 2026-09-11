@@ -45,6 +45,11 @@ impl LegacyRealtimeSessions {
     ///
     /// The pinned operations declare no `OpenAI-Beta` header, so no beta
     /// header is sent; `assistants=v2` belongs to the Assistants family.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: LegacyRealtimeSessionCreateRequest,
@@ -60,6 +65,11 @@ impl LegacyRealtimeSessions {
     }
 
     /// Creates a legacy flat transcription session and ephemeral token.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create_transcription(
         &self,
         request: LegacyRealtimeTranscriptionSessionCreateRequest,

@@ -132,11 +132,13 @@ impl ResponseMeta {
         }
     }
 
+    /// Returns the HTTP status associated with this response or failure.
     #[must_use]
     pub const fn status(&self) -> StatusCode {
         self.status
     }
 
+    /// Returns the request identifier supplied by the service, when present.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.request_id.as_deref()
@@ -179,6 +181,7 @@ impl ResponseMeta {
         self.x_should_retry
     }
 
+    /// Returns rate-limit metadata retained from the response headers.
     #[must_use]
     pub const fn rate_limits(&self) -> &RateLimitMetadata {
         &self.rate_limits
@@ -188,11 +191,17 @@ impl ResponseMeta {
 /// OpenAI rate-limit headers preserved as opaque protocol strings.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RateLimitMetadata {
+    /// Server-provided request limit, retained in its original header representation.
     pub limit_requests: Option<Box<str>>,
+    /// Server-provided token limit, retained in its original header representation.
     pub limit_tokens: Option<Box<str>>,
+    /// Server-provided remaining request allowance, retained as header text.
     pub remaining_requests: Option<Box<str>>,
+    /// Server-provided remaining token allowance, retained as header text.
     pub remaining_tokens: Option<Box<str>>,
+    /// Server-provided request-limit reset hint, retained as header text.
     pub reset_requests: Option<Box<str>>,
+    /// Server-provided token-limit reset hint, retained as header text.
     pub reset_tokens: Option<Box<str>>,
 }
 
@@ -208,26 +217,31 @@ impl<T> ApiResponse<T> {
         Self { body, meta }
     }
 
+    /// Borrows the decoded response body.
     #[must_use]
     pub const fn body(&self) -> &T {
         &self.body
     }
 
+    /// Returns the HTTP status and response-header metadata.
     #[must_use]
     pub const fn meta(&self) -> &ResponseMeta {
         &self.meta
     }
 
+    /// Returns the request identifier supplied by the service, when present.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.meta.request_id()
     }
 
+    /// Consumes the response wrapper and returns its decoded body.
     #[must_use]
     pub fn into_inner(self) -> T {
         self.body
     }
 
+    /// Consumes the response wrapper and returns the decoded body together with its HTTP metadata.
     #[must_use]
     pub fn into_parts(self) -> (T, ResponseMeta) {
         (self.body, self.meta)

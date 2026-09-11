@@ -42,6 +42,11 @@ impl Files {
     }
 
     /// Lists files visible to the configured Platform project.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(&self, params: FileListParams) -> Result<ApiResponse<FileListPage>, Error> {
         let path = [PathSegment::literal("files")];
         self.client
@@ -83,6 +88,11 @@ impl Files {
     /// The multipart form is rebuilt for every permitted retry. Path sources
     /// are reopened and checked against their original identity before each
     /// attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: CreateFileRequest,
@@ -94,6 +104,11 @@ impl Files {
     }
 
     /// Creates a file from a reader or stream that is never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create_one_shot(
         &self,
         request: CreateFileOneShotRequest,
@@ -105,6 +120,11 @@ impl Files {
     }
 
     /// Retrieves metadata for one stored file.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(&self, file_id: &FileId) -> Result<ApiResponse<FileObject>, Error> {
         let path = file_path(file_id)?;
         self.client
@@ -127,6 +147,11 @@ impl Files {
     /// deadline), which matches the official `wait_for_processing` defaults;
     /// an expired deadline reports [`PollError::DeadlineExceeded`] with the
     /// last observed status.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if polling configuration is invalid, a poll request fails, polling is
+    /// cancelled, or the configured deadline expires.
     pub async fn wait_for_processing(
         &self,
         file_id: &FileId,
@@ -145,6 +170,11 @@ impl Files {
     }
 
     /// Deletes one stored file.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(&self, file_id: &FileId) -> Result<ApiResponse<DeleteFileResponse>, Error> {
         let path = file_path(file_id)?;
         self.client
@@ -154,6 +184,11 @@ impl Files {
     }
 
     /// Streams the raw body returned by `GET /files/{file_id}/content`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn download(&self, file_id: &FileId) -> Result<FileContentStream, Error> {
         self.client
             .multipart_transport()
@@ -202,6 +237,11 @@ impl Uploads {
     /// after creation; see the [struct documentation](Uploads) for all three
     /// upload constraints and [`Upload::expires_at`]
     /// for the exact deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(&self, request: CreateUploadRequest) -> Result<ApiResponse<Upload>, Error> {
         if request.bytes() < 0 {
             return Err(Error::InvalidConfiguration(
@@ -236,6 +276,11 @@ impl Uploads {
     /// accepts at most 8 GB in total and expires about an hour after
     /// creation, so complete it before [`Upload::expires_at`] passes. See the
     /// [struct documentation](Uploads) for the full constraint list.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn add_part(
         &self,
         upload_id: &UploadId,
@@ -266,6 +311,11 @@ impl Uploads {
     /// enforcement, since measuring it would consume the one-shot source. The
     /// 8 GB session total and the roughly one-hour expiry reported by
     /// [`Upload::expires_at`] also apply.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn add_part_one_shot(
         &self,
         upload_id: &UploadId,
@@ -285,6 +335,11 @@ impl Uploads {
 
     /// Completes an Upload using part ids in their intended concatenation
     /// order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn complete(
         &self,
         upload_id: &UploadId,
@@ -302,6 +357,11 @@ impl Uploads {
     }
 
     /// Cancels an Upload session.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn cancel(&self, upload_id: &UploadId) -> Result<ApiResponse<Upload>, Error> {
         let path = [
             PathSegment::literal("uploads"),

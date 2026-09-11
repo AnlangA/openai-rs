@@ -334,6 +334,11 @@ impl VectorStoreMetadata {
     }
 
     /// Inserts one validated pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn insert(
         &mut self,
         key: impl Into<String>,
@@ -357,6 +362,12 @@ impl VectorStoreMetadata {
     /// Decoding accepts oversized metadata so responses stay readable; senders
     /// that want the documented limits enforced before a request call this
     /// method (or one of the request-level `validate` hooks).
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), VectorStoreValidationError> {
         if self.0.len() > MAX_VECTOR_STORE_PROPERTIES {
             return Err(VectorStoreValidationError::TooManyProperties {
@@ -433,6 +444,11 @@ pub enum VectorStoreAttributeValue {
 
 impl VectorStoreAttributeValue {
     /// Creates a validated string value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the string exceeds the attribute limits or the numeric value is
+    /// non-finite.
     pub fn string(value: impl Into<String>) -> Result<Self, VectorStoreValidationError> {
         let value = value.into();
         validate_string_value(&value)?;
@@ -440,6 +456,11 @@ impl VectorStoreAttributeValue {
     }
 
     /// Creates a JSON number from a finite `f64`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the string exceeds the attribute limits or the numeric value is
+    /// non-finite.
     pub fn number(value: f64) -> Result<Self, VectorStoreValidationError> {
         Number::from_f64(value)
             .map(Self::Number)
@@ -477,6 +498,11 @@ impl VectorStoreFileAttributes {
     }
 
     /// Inserts one validated attribute.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn insert(
         &mut self,
         key: impl Into<String>,
@@ -584,11 +610,21 @@ pub struct VectorStoreExpirationAfter {
 
 impl VectorStoreExpirationAfter {
     /// Creates a policy anchored at the store's last activity.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(days: u16) -> Result<Self, VectorStoreValidationError> {
         Self::from_raw_anchor(VectorStoreExpirationAnchor::LastActiveAt, days)
     }
 
     /// Creates a policy with a forward-compatible anchor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the anchor is unsupported for this expiration policy or the requested
+    /// lifetime violates its bounds.
     pub fn from_raw_anchor(
         anchor: VectorStoreExpirationAnchor,
         days: u16,
@@ -668,6 +704,11 @@ impl StaticChunkingStrategy {
     /// sending.
     ///
     /// [`validate`]: StaticChunkingStrategy::validate
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(
         max_chunk_size_tokens: u32,
         chunk_overlap_tokens: u32,
@@ -685,6 +726,12 @@ impl StaticChunkingStrategy {
 
     /// Checks the documented rule that overlap must not exceed half the
     /// maximum chunk size.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), VectorStoreValidationError> {
         if self.chunk_overlap_tokens > self.max_chunk_size_tokens / 2 {
             return Err(VectorStoreValidationError::InvalidChunkOverlap {
@@ -802,6 +849,12 @@ impl VectorStoreChunkingStrategyRequest {
     }
 
     /// Checks the descriptive overlap rule on a static strategy.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), VectorStoreValidationError> {
         match self {
             Self::Static(strategy) => strategy.validate(),
@@ -1056,6 +1109,11 @@ pub struct VectorStoreInitialFileIds(Vec<FileId>);
 
 impl VectorStoreInitialFileIds {
     /// Validates initial file IDs. An empty list remains distinct from omission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(values: Vec<FileId>) -> Result<Self, VectorStoreValidationError> {
         if values.len() > MAX_VECTOR_STORE_INITIAL_FILES {
             return Err(VectorStoreValidationError::TooManyInitialFiles {
@@ -1108,6 +1166,11 @@ impl CreateVectorStoreRequest {
     }
 
     /// Sets initial files.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn with_file_ids(
         mut self,
         file_ids: Vec<FileId>,
@@ -1171,6 +1234,12 @@ impl CreateVectorStoreRequest {
     /// values can still be constructed and echoed; this opt-in hook enforces
     /// the pinned metadata 16/64/512 limits and the descriptive static-chunk
     /// overlap rule before the body is transmitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), VectorStoreValidationError> {
         if let Omittable::Value(strategy) = &self.chunking_strategy {
             strategy.validate()?;
@@ -1304,6 +1373,12 @@ impl UpdateVectorStoreRequest {
     ///
     /// Mirrors [`CreateVectorStoreRequest::validate`] for the fields this
     /// patch body can carry.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), VectorStoreValidationError> {
         if let Omittable::Value(Nullable::Value(metadata)) = &self.metadata {
             metadata.validate()?;
@@ -1520,6 +1595,11 @@ impl VectorStoreListLimit {
     ///
     /// The pinned schemas document "between 1 and 100" in prose but carry no
     /// `maximum`, so no upper bound is enforced.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub const fn new(value: u32) -> Result<Self, VectorStoreValidationError> {
         if value == 0 {
             Err(VectorStoreValidationError::InvalidListLimit { limit: value })
@@ -2080,6 +2160,11 @@ pub struct VectorStoreBatchFileIds(Vec<FileId>);
 
 impl VectorStoreBatchFileIds {
     /// Validates `1..=2000` file IDs.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(values: Vec<FileId>) -> Result<Self, VectorStoreValidationError> {
         if values.is_empty() || values.len() > MAX_VECTOR_STORE_BATCH_FILES {
             return Err(VectorStoreValidationError::InvalidBatchFileCount {
@@ -2113,6 +2198,11 @@ pub struct VectorStoreBatchFiles(Vec<CreateVectorStoreFileRequest>);
 
 impl VectorStoreBatchFiles {
     /// Validates `1..=2000` per-file request objects.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(
         values: Vec<CreateVectorStoreFileRequest>,
     ) -> Result<Self, VectorStoreValidationError> {
@@ -2160,6 +2250,11 @@ pub struct CreateVectorStoreFileBatchRequest {
 impl CreateVectorStoreFileBatchRequest {
     /// Creates a batch from bare file IDs. Global chunking and attributes may
     /// subsequently be attached.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn from_file_ids(values: Vec<FileId>) -> Result<Self, VectorStoreValidationError> {
         Ok(Self {
             file_ids: Omittable::Value(VectorStoreBatchFileIds::new(values)?),
@@ -2170,6 +2265,11 @@ impl CreateVectorStoreFileBatchRequest {
     }
 
     /// Creates a batch from per-file request objects.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn from_files(
         values: Vec<CreateVectorStoreFileRequest>,
     ) -> Result<Self, VectorStoreValidationError> {
@@ -2184,6 +2284,11 @@ impl CreateVectorStoreFileBatchRequest {
     /// Applies one global chunking strategy. The API ignores this field for the
     /// per-file `files` form, so this method rejects that ambiguous
     /// combination.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn with_chunking_strategy(
         mut self,
         strategy: VectorStoreChunkingStrategyRequest,
@@ -2196,6 +2301,11 @@ impl CreateVectorStoreFileBatchRequest {
     }
 
     /// Applies global attributes to the bare-ID form.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn with_attributes(
         mut self,
         attributes: VectorStoreFileAttributes,
@@ -2208,6 +2318,11 @@ impl CreateVectorStoreFileBatchRequest {
     }
 
     /// Applies explicit `null` global attributes to the bare-ID form.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn with_attributes_null(mut self) -> Result<Self, VectorStoreValidationError> {
         if self.files.is_value() {
             return Err(VectorStoreValidationError::GlobalFieldsWithPerFileBatch);
@@ -2378,6 +2493,11 @@ pub enum VectorStoreSearchQueryOutput {
 
 impl VectorStoreSearchQuery {
     /// Creates a non-empty list query.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn multiple(values: Vec<String>) -> Result<Self, VectorStoreValidationError> {
         if values.is_empty() {
             return Err(VectorStoreValidationError::EmptySearchQueries);
@@ -2424,6 +2544,11 @@ pub struct VectorStoreMaxResults(u8);
 
 impl VectorStoreMaxResults {
     /// Creates a result count in `1..=50`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub const fn new(value: u8) -> Result<Self, VectorStoreValidationError> {
         if value == 0 || value > MAX_VECTOR_STORE_SEARCH_RESULTS {
             Err(VectorStoreValidationError::InvalidMaxResults { actual: value })
@@ -2454,6 +2579,11 @@ pub struct VectorStoreScore(f64);
 
 impl VectorStoreScore {
     /// Validates a score.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(value: f64) -> Result<Self, VectorStoreValidationError> {
         if !value.is_finite() || !(0.0..=1.0).contains(&value) {
             return Err(VectorStoreValidationError::InvalidScore {
@@ -2596,6 +2726,12 @@ impl VectorStoreSearchRequest {
     /// decode. This opt-in hook re-reports that state as
     /// [`VectorStoreValidationError::EmptySearchQueries`] before the body is
     /// transmitted, mirroring the other request-level `validate` hooks.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), VectorStoreValidationError> {
         if let VectorStoreSearchQuery::Texts(queries) = &self.query
             && queries.is_empty()

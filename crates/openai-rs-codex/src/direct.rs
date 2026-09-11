@@ -36,10 +36,13 @@ pub(crate) const CODEX_ORIGINATOR: &str = "codex_cli_rs";
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum DirectError {
+    /// Invalid direct Codex configuration.
     #[error("invalid direct Codex configuration: {0}")]
     Configuration(String),
+    /// Secure randomness failed.
     #[error("secure randomness failed")]
     Random,
+    /// Direct Codex HTTP request failed.
     #[error("direct Codex HTTP request failed: {0}")]
     Http(#[from] reqwest::Error),
     /// Neutral display (the D0206 app-server stance, synced to the direct
@@ -49,26 +52,42 @@ pub enum DirectError {
     /// reachable for handlers that want line/column diagnostics.
     #[error("direct Codex JSON codec failed")]
     Json(#[from] serde_json::Error),
+    /// OIDC token validation failed.
     #[error("OIDC token validation failed: {0}")]
     Jwt(String),
+    /// OAuth protocol failed.
     #[error("OAuth protocol failed: {0}")]
     OAuth(String),
+    /// Credential store failed.
     #[error("credential store failed: {0}")]
     Store(String),
+    /// Operation was cancelled.
     #[error("operation was cancelled")]
     Cancelled,
+    /// Operation timed out.
     #[error("operation timed out")]
     Timeout,
+    /// HTTP redirect was rejected.
     #[error("HTTP redirect was rejected")]
     RedirectRejected,
+    /// The experimental direct endpoint rejected the request with an HTTP error.
     #[error("direct Codex returned HTTP {status}: {message}")]
-    HttpStatus { status: u16, message: String },
+    HttpStatus {
+        /// HTTP status code returned by the service.
+        status: u16,
+        /// Human-readable message describing this event or failure.
+        message: String,
+    },
+    /// Response body exceeded the configured limit.
     #[error("response body exceeded the configured limit")]
     BodyTooLarge,
+    /// Invalid SSE stream.
     #[error("invalid SSE stream: {0}")]
     Sse(String),
+    /// Request field the supplied value is not supported by the sealed Codex backend.
     #[error("request field {0} is not supported by the sealed Codex backend")]
     UnsupportedRequestField(&'static str),
+    /// Authentication is required.
     #[error("authentication is required")]
     ReauthenticationRequired,
 }
@@ -86,12 +105,14 @@ struct CancellationInner {
 }
 
 impl CancellationToken {
+    /// Signals cancellation to every clone of this token.
     pub fn cancel(&self) {
         if !self.inner.cancelled.swap(true, Ordering::AcqRel) {
             self.inner.notify.notify_waiters();
         }
     }
 
+    /// Returns whether cancellation has been signalled.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.inner.cancelled.load(Ordering::Acquire)

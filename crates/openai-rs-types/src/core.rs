@@ -200,6 +200,12 @@ impl CreateEmbeddingRequest {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateEmbeddingConstraintError> {
         match &self.input {
             EmbeddingInput::Text(text) if text.is_empty() => {
@@ -367,6 +373,11 @@ impl EncodedEmbedding {
     /// The service encodes each component as a 4-byte little-endian IEEE 754
     /// `f32`, so the decoded byte length must be a multiple of four; a
     /// truncated payload is reported instead of silently shortened.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the embedding data is not valid base64 or its decoded length cannot
+    /// represent complete 32-bit floating-point values.
     pub fn decode_f32_vec(&self) -> Result<Vec<f32>, EncodedEmbeddingDecodeError> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(self.embedding.as_bytes())

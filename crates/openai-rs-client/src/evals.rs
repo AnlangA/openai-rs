@@ -47,6 +47,11 @@ impl Evals {
     }
 
     /// Creates an Eval definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(&self, request: CreateEvalRequest) -> Result<ApiResponse<Eval>, Error> {
         let path = [PathSegment::literal("evals")];
         self.client
@@ -56,6 +61,11 @@ impl Evals {
     }
 
     /// Retrieves one Eval definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(&self, eval_id: &EvalId) -> Result<ApiResponse<Eval>, Error> {
         let path = eval_path(eval_id)?;
         self.client
@@ -65,6 +75,11 @@ impl Evals {
     }
 
     /// Updates an Eval's name and/or metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn update(
         &self,
         eval_id: &EvalId,
@@ -78,6 +93,11 @@ impl Evals {
     }
 
     /// Deletes an Eval definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(&self, eval_id: &EvalId) -> Result<ApiResponse<DeletedEval>, Error> {
         let path = eval_path(eval_id)?;
         self.client
@@ -87,6 +107,11 @@ impl Evals {
     }
 
     /// Lists Eval definitions.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(&self, params: ListEvalsParams) -> Result<ApiResponse<EvalList>, Error> {
         let path = [PathSegment::literal("evals")];
         self.client
@@ -143,6 +168,11 @@ impl EvalRuns {
     }
 
     /// Creates a run for an Eval.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         eval_id: &EvalId,
@@ -156,6 +186,11 @@ impl EvalRuns {
     }
 
     /// Retrieves one Eval run.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         eval_id: &EvalId,
@@ -169,6 +204,11 @@ impl EvalRuns {
     }
 
     /// Lists runs for an Eval.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         eval_id: &EvalId,
@@ -211,6 +251,11 @@ impl EvalRuns {
     }
 
     /// Deletes one Eval run.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(
         &self,
         eval_id: &EvalId,
@@ -224,6 +269,11 @@ impl EvalRuns {
     }
 
     /// Requests cancellation of one Eval run.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn cancel(
         &self,
         eval_id: &EvalId,
@@ -243,6 +293,11 @@ impl EvalRuns {
     /// start from [`PollOptions::for_eval_runs`] (1-second interval,
     /// 30-minute timeout) to poll at the cadence this surface is designed
     /// for.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if polling configuration is invalid, a poll request fails, polling is
+    /// cancelled, or the configured deadline expires.
     pub async fn poll(
         &self,
         eval_id: &EvalId,
@@ -277,6 +332,11 @@ impl EvalRunOutputItems {
     }
 
     /// Retrieves one output item.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(
         &self,
         eval_id: &EvalId,
@@ -291,6 +351,11 @@ impl EvalRunOutputItems {
     }
 
     /// Lists output items for one run.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(
         &self,
         eval_id: &EvalId,

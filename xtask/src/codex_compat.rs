@@ -29,6 +29,12 @@ struct RuntimeIdentity {
     app_server_schema_sha256: String,
 }
 
+/// Verifies the pinned runtime manifest and its protocol-schema provenance.
+///
+/// # Errors
+///
+/// Returns an error for unreadable inputs, invalid manifest data, or a mismatch
+/// between the recorded runtime, schema, and audited identity.
 pub fn verify(repository_root: &Path) -> Result<()> {
     let manifest_path = repository_root.join(MANIFEST_PATH);
     let input = fs::read_to_string(&manifest_path)

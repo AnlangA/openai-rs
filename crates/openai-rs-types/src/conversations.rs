@@ -228,6 +228,11 @@ impl CreateConversationRequest {
     }
 
     /// Sets validated metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn metadata(
         mut self,
         metadata: ConversationMetadata,
@@ -238,6 +243,11 @@ impl CreateConversationRequest {
     }
 
     /// Adds one validated metadata pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn metadata_entry(
         mut self,
         key: impl Into<String>,
@@ -261,6 +271,11 @@ impl CreateConversationRequest {
     }
 
     /// Sets up to twenty typed initial items.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn items(
         mut self,
         items: impl IntoIterator<Item = responses::ResponseInputItem>,
@@ -272,6 +287,11 @@ impl CreateConversationRequest {
     }
 
     /// Appends one typed initial item.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn item(
         mut self,
         item: impl Into<responses::ResponseInputItem>,
@@ -322,6 +342,11 @@ impl<'de> Deserialize<'de> for UpdateConversationRequest {
 
 impl UpdateConversationRequest {
     /// Replaces conversation metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(metadata: ConversationMetadata) -> Result<Self, ConversationValidationError> {
         validate_metadata(&metadata)?;
         Ok(Self {
@@ -457,6 +482,7 @@ literal_tag!(
 
 macro_rules! text_content {
     ($name:ident, $tag:ident, $variant:ident) => {
+        #[doc = concat!("A `", stringify!($variant), "` text part stored in a conversation.")]
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct $name {
             #[serde(rename = "type")]
@@ -572,6 +598,12 @@ impl ConversationInputImage {
     }
 
     /// Checks pinned OpenAPI `image_url` `maxLength` without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), responses::CreateResponseConstraintError> {
         if let Omittable::Value(Nullable::Value(image_url)) = &self.image_url {
             responses::validate_input_image_url_chars(image_url.chars().count())?;
@@ -1030,6 +1062,11 @@ impl ConversationMessage {
     }
 
     /// Converts this resource to a legal Responses input item.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conversion error if the stored conversation item cannot be represented by the
+    /// Responses input-item wire schema.
     pub fn to_response_input_item(
         &self,
     ) -> Result<responses::ResponseInputItem, ConversationItemConversionError> {
@@ -1439,6 +1476,11 @@ impl<'de> Deserialize<'de> for ConversationItem {
 
 impl ConversationItem {
     /// Converts a persisted item back into a Responses input item.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conversion error if the stored conversation item cannot be represented by the
+    /// Responses input-item wire schema.
     pub fn to_response_input_item(
         &self,
     ) -> Result<responses::ResponseInputItem, ConversationItemConversionError> {
@@ -1609,6 +1651,11 @@ impl<'de> Deserialize<'de> for CreateConversationItemsRequest {
 
 impl CreateConversationItemsRequest {
     /// Creates a validated body containing up to twenty items.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(
         items: impl IntoIterator<Item = responses::ResponseInputItem>,
     ) -> Result<Self, ConversationValidationError> {
@@ -1626,6 +1673,11 @@ impl CreateConversationItemsRequest {
     }
 
     /// Appends an item while enforcing the per-request maximum.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn item(
         mut self,
         item: impl Into<responses::ResponseInputItem>,
@@ -1754,6 +1806,11 @@ impl ListConversationItemsParams {
     ///
     /// The pinned list schema documents "between 1 and 100" in prose but
     /// carries no `maximum`, so no upper bound is enforced (D0154/D0174).
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn limit(mut self, limit: u32) -> Result<Self, ConversationValidationError> {
         if limit == 0 {
             return Err(ConversationValidationError::InvalidListLimit { actual: limit });

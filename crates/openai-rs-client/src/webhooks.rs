@@ -63,6 +63,12 @@ impl WebhookVerifier {
     /// at first verification. An empty decoded key must not construct a
     /// usable verifier: HMAC accepts an empty key, so anyone could forge
     /// signatures for a `whsec_` secret.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the secret is empty, or a `whsec_`-prefixed secret
+    /// contains invalid base64 or decodes to an empty key. Nonempty secrets
+    /// without that prefix are used as raw signing material.
     pub fn new(secret: impl Into<Secret>) -> Result<Self, WebhookVerificationError> {
         let secret = secret.into();
         if secret.is_empty() {
@@ -93,6 +99,10 @@ impl WebhookVerifier {
     /// The window is compared in whole seconds against the delivery
     /// timestamp, so sub-second durations are rejected: `500ms` would
     /// otherwise truncate to a zero window and reject valid deliveries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tolerance is less than one second.
     pub fn with_tolerance(mut self, tolerance: Duration) -> Result<Self, WebhookVerificationError> {
         if tolerance < Duration::from_secs(1) {
             return Err(WebhookVerificationError::InvalidTolerance);
@@ -102,6 +112,10 @@ impl WebhookVerifier {
     }
 
     /// Replaces the maximum body size accepted before HMAC work or decoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload-size limit is zero.
     pub fn with_max_payload_bytes(
         mut self,
         max_payload_bytes: usize,
@@ -125,6 +139,11 @@ impl WebhookVerifier {
     /// before any JSON middleware parses it, the same way openai-node's
     /// `docs/webhooks.md` instructs node users to register a raw-body
     /// middleware ahead of the JSON body parser.
+    ///
+    /// # Errors
+    ///
+    /// Returns a verification error for malformed or missing headers, an unacceptable timestamp, a
+    /// signature mismatch, an oversized body, or an invalid event payload.
     pub fn verify(
         &self,
         payload: &[u8],
@@ -141,6 +160,12 @@ impl WebhookVerifier {
     ///
     /// Like [`Self::verify`], this requires the original, un-re-serialized
     /// request bytes; see the raw-body requirement on [`Self::verify`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a verification error for malformed or missing headers, a timestamp outside the
+    /// supplied clock tolerance, a signature mismatch, an oversized body, or an invalid event
+    /// payload.
     pub fn verify_at(
         &self,
         payload: &[u8],

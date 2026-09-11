@@ -13,16 +13,25 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwn
 ///
 /// The generated enum is non-exhaustive and always contains an
 /// `Unknown(Box<str>)` variant. Known values use ordinary Rust variants, while
-/// [`from_raw`](#method.from_raw) is the explicit forward-compatibility escape
+/// the generated enum's `from_raw` constructor is the forward-compatibility escape
 /// hatch for request construction.
 ///
-/// ```ignore
+/// # Examples
+///
+/// ```
+/// use openai_rs_types::open_string_enum;
+///
 /// open_string_enum! {
+///     /// The lifecycle state reported by a response.
 ///     pub enum ResponseStatus {
 ///         Completed = "completed",
 ///         InProgress = "in_progress",
 ///     }
 /// }
+///
+/// assert_eq!(ResponseStatus::Completed.as_str(), "completed");
+/// let future = ResponseStatus::from_raw("future_state");
+/// assert_eq!(future.unknown_value(), Some("future_state"));
 /// ```
 #[macro_export]
 macro_rules! open_string_enum {
@@ -41,6 +50,7 @@ macro_rules! open_string_enum {
         $visibility enum $name {
             $(
                 $(#[$variant_meta])*
+                #[doc = concat!("The `", $wire_value, "` value defined by the API.")]
                 $variant,
             )*
             /// A value added by the service after this crate was released.
@@ -416,6 +426,11 @@ impl<T> JsonText<T> {
     }
 
     /// Serializes a typed value into the inner JSON text.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable(value: &T) -> serde_json::Result<Self>
     where
         T: Serialize,
@@ -442,6 +457,11 @@ impl<T> JsonText<T> {
     }
 
     /// Parses the retained JSON text as its declared type.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn parse(&self) -> serde_json::Result<T>
     where
         T: DeserializeOwned,
@@ -450,6 +470,11 @@ impl<T> JsonText<T> {
     }
 
     /// Parses the retained JSON text as a different type.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn deserialize_as<U>(&self) -> serde_json::Result<U>
     where
         U: DeserializeOwned,
@@ -673,7 +698,7 @@ mod tests {
     #[test]
     fn json_text_encodes_inner_value_without_manual_json() {
         let arguments = Arguments {
-            city: String::from("上海"),
+            city: String::from("Montréal"),
             units: String::from("metric"),
         };
         let text = JsonText::from_serializable(&arguments).expect("encode inner JSON");

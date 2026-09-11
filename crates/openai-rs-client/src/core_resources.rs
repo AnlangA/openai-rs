@@ -28,6 +28,11 @@ impl Models {
     }
 
     /// Lists models visible to this project.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn list(&self) -> Result<ApiResponse<ModelList>, Error> {
         let path = [PathSegment::literal("models")];
         self.client
@@ -37,6 +42,11 @@ impl Models {
     }
 
     /// Retrieves one model by its opaque identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(&self, model: &ModelId) -> Result<ApiResponse<Model>, Error> {
         let path = model_path(model)?;
         self.client
@@ -46,6 +56,11 @@ impl Models {
     }
 
     /// Deletes a fine-tuned model owned by the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn delete(&self, model: &ModelId) -> Result<ApiResponse<DeletedModel>, Error> {
         let path = model_path(model)?;
         self.client
@@ -67,6 +82,11 @@ impl Embeddings {
     }
 
     /// Creates floating-point embedding vectors.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: CreateEmbeddingRequest,
@@ -89,6 +109,11 @@ impl Embeddings {
     /// Creates base64-encoded embedding vectors. The method sets the matching
     /// wire discriminator, so callers cannot accidentally request one shape
     /// and deserialize another.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create_encoded(
         &self,
         mut request: CreateEmbeddingRequest,
@@ -114,6 +139,11 @@ impl Moderations {
     }
 
     /// Classifies text or multimodal input for policy categories.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: CreateModerationRequest,

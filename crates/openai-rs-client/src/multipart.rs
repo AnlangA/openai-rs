@@ -110,6 +110,11 @@ impl OneShotMultipartSource {
     }
 
     /// Validates and supplies a multipart filename.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the filename is empty or contains characters that are unsafe in a
+    /// multipart filename.
     pub fn try_with_file_name(
         self,
         file_name: impl Into<String>,
@@ -125,6 +130,10 @@ impl OneShotMultipartSource {
     }
 
     /// Validates and supplies a multipart media type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the supplied value is not a valid MIME type for the multipart part.
     pub fn try_with_media_type(
         self,
         media_type: impl Into<String>,
@@ -322,6 +331,11 @@ impl FileContentStream {
     }
 
     /// Buffers this download with an explicit upper bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading the response fails or the collected body exceeds the supplied
+    /// byte limit.
     pub async fn collect(mut self, limit: usize) -> Result<ApiResponse<FileContent>, Error> {
         if self
             .content_length
@@ -554,6 +568,7 @@ impl MultipartTransport {
                     .build()
                     .map_err(Error::from_reqwest)?;
                 self.ensure_same_origin(request.url())?;
+                trace::emit_request_attempt(operation_id, retries, remaining);
                 let response = match self.http.execute(request).await {
                     Ok(response) => response,
                     Err(error)
@@ -590,7 +605,7 @@ impl MultipartTransport {
                     continue;
                 }
                 if is_success_status(response.status()) {
-                    trace::record_http_outcome(retries, &response);
+                    trace::record_http_outcome(operation_id, started, retries, &response, true);
                     return Ok(response);
                 }
                 if self.retry_policy.retry_replayable_mutations
@@ -606,13 +621,17 @@ impl MultipartTransport {
                         && can_wait(started, delay, self.overall_timeout)
                     {
                         retries += 1;
-                        trace::emit_retry(retries, delay, RetryReason::HttpStatus);
+                        trace::emit_http_retry(
+                            retries,
+                            delay,
+                            &ResponseMeta::from_headers(response.status(), response.headers()),
+                        );
                         drop(response);
                         tokio::time::sleep(delay).await;
                         continue;
                     }
                 }
-                trace::record_http_outcome(retries, &response);
+                trace::record_http_outcome(operation_id, started, retries, &response, false);
                 return self.api_error(response).await;
             }
         }
@@ -637,9 +656,10 @@ impl MultipartTransport {
         let span =
             trace::http_request_span_lazy(operation_id, "POST", || trace::route_template(path));
         async move {
+            let started = Instant::now();
             let (authorization, remaining) = self
                 .auth
-                .authorization_with_budget(Instant::now(), self.overall_timeout)
+                .authorization_with_budget(started, self.overall_timeout)
                 .await?;
             let request = self
                 .request(
@@ -653,6 +673,7 @@ impl MultipartTransport {
                 .build()
                 .map_err(Error::from_reqwest)?;
             self.ensure_same_origin(request.url())?;
+            trace::emit_request_attempt(operation_id, 0, remaining);
             let response = self
                 .http
                 .execute(request)
@@ -668,7 +689,13 @@ impl MultipartTransport {
                 // retry (6-17).
                 trace::emit_auth_refresh_no_retry();
             }
-            trace::record_http_outcome(0, &response);
+            trace::record_http_outcome(
+                operation_id,
+                started,
+                0,
+                &response,
+                is_success_status(response.status()),
+            );
             if is_success_status(response.status()) {
                 Ok(response)
             } else {
@@ -722,6 +749,7 @@ impl MultipartTransport {
                     .build()
                     .map_err(Error::from_reqwest)?;
                 self.ensure_same_origin(request.url())?;
+                trace::emit_request_attempt(operation_id, retries, remaining);
                 let response = match self.http.execute(request).await {
                     Ok(response) => response,
                     Err(error)
@@ -758,7 +786,7 @@ impl MultipartTransport {
                     continue;
                 }
                 if is_success_status(response.status()) {
-                    trace::record_http_outcome(retries, &response);
+                    trace::record_http_outcome(operation_id, started, retries, &response, true);
                     return Ok(response);
                 }
                 if self.retry_policy.retry_replayable_mutations
@@ -774,13 +802,17 @@ impl MultipartTransport {
                         && can_wait(started, delay, self.overall_timeout)
                     {
                         retries += 1;
-                        trace::emit_retry(retries, delay, RetryReason::HttpStatus);
+                        trace::emit_http_retry(
+                            retries,
+                            delay,
+                            &ResponseMeta::from_headers(response.status(), response.headers()),
+                        );
                         drop(response);
                         tokio::time::sleep(delay).await;
                         continue;
                     }
                 }
-                trace::record_http_outcome(retries, &response);
+                trace::record_http_outcome(operation_id, started, retries, &response, false);
                 return self.api_error(response).await;
             }
         }
@@ -818,6 +850,7 @@ impl MultipartTransport {
                     .build()
                     .map_err(Error::from_reqwest)?;
                 self.ensure_same_origin(request.url())?;
+                trace::emit_request_attempt(operation_id, retries, remaining);
                 let response = match self.http.execute(request).await {
                     Ok(response) => response,
                     Err(error)
@@ -853,7 +886,7 @@ impl MultipartTransport {
                     continue;
                 }
                 if is_success_status(response.status()) {
-                    trace::record_http_outcome(retries, &response);
+                    trace::record_http_outcome(operation_id, started, retries, &response, true);
                     return Ok(response);
                 }
                 if retries < self.retry_policy.max_retries && should_retry_response(&response) {
@@ -866,13 +899,17 @@ impl MultipartTransport {
                         && can_wait(started, delay, self.overall_timeout)
                     {
                         retries += 1;
-                        trace::emit_retry(retries, delay, RetryReason::HttpStatus);
+                        trace::emit_http_retry(
+                            retries,
+                            delay,
+                            &ResponseMeta::from_headers(response.status(), response.headers()),
+                        );
                         drop(response);
                         tokio::time::sleep(delay).await;
                         continue;
                     }
                 }
-                trace::record_http_outcome(retries, &response);
+                trace::record_http_outcome(operation_id, started, retries, &response, false);
                 return self.api_error(response).await;
             }
         }
@@ -941,16 +978,20 @@ impl MultipartTransport {
     {
         let meta = ResponseMeta::from_headers(response.status(), response.headers());
         let body = read_success(response, self.max_json_body_bytes, &meta).await?;
-        let decoded = deserialize_json(&body).map_err(|error| Error::Decode {
-            source: error.source,
-            path: error.path,
-            meta_status: meta.status(),
-            request_id: meta.request_id().map(Box::<str>::from),
-            body: BodyPreview::from_bytes(
-                &body[..body.len().min(DECODE_PREVIEW_BYTES)],
-                body.len() > DECODE_PREVIEW_BYTES,
-            ),
-        })?;
+        let decoded = deserialize_json(&body)
+            .inspect_err(|error| {
+                trace::emit_json_decode_error(&meta, &error.source, error.path.as_deref());
+            })
+            .map_err(|error| Error::Decode {
+                source: error.source,
+                path: error.path,
+                meta_status: meta.status(),
+                request_id: meta.request_id().map(Box::<str>::from),
+                body: BodyPreview::from_bytes(
+                    &body[..body.len().min(DECODE_PREVIEW_BYTES)],
+                    body.len() > DECODE_PREVIEW_BYTES,
+                ),
+            })?;
         Ok(ApiResponse::new(decoded, meta))
     }
 
@@ -1406,6 +1447,7 @@ async fn read_success(
     if truncated {
         Err(body_too_large(limit, meta))
     } else {
+        trace::emit_body_read(meta, body.len());
         Ok(body)
     }
 }

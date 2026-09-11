@@ -163,6 +163,11 @@ pub struct ToolCatalog {
 
 impl ToolCatalog {
     /// Validate and freeze a collection of MCP tools.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for duplicate or invalid tool names, conflicting name mappings, or schemas
+    /// rejected by the selected catalog policy.
     pub fn build(
         tools: impl IntoIterator<Item = Tool>,
         policy: CatalogPolicy,
@@ -358,7 +363,7 @@ mod tests {
     fn catalog_retains_valid_names_and_reversibly_maps_invalid_names() {
         let tools = vec![
             tool("weather", json!({"type": "object"})),
-            tool("database/read 天气", json!({"properties": {}})),
+            tool("database/read weather-🦀", json!({"properties": {}})),
         ];
         let catalog = ToolCatalog::build(tools, CatalogPolicy::default());
         let Ok(catalog) = catalog else {
@@ -379,7 +384,7 @@ mod tests {
 
         let mapped = catalog
             .entries()
-            .find(|entry| entry.mcp_name() == "database/read 天气");
+            .find(|entry| entry.mcp_name() == "database/read weather-🦀");
         assert!(matches!(
             mapped,
             Some(entry)
@@ -401,7 +406,7 @@ mod tests {
         let mut warned = false;
         for _ in 0..16 {
             drop(tracing::subscriber::set_default(capture.clone()));
-            let tools = vec![tool("database/read 天气", json!({"properties": {}}))];
+            let tools = vec![tool("database/read weather-🦀", json!({"properties": {}}))];
             ToolCatalog::build(tools, CatalogPolicy::default()).expect("mapped catalog");
             if capture.events_contain("mapped invalid MCP tool name") {
                 warned = true;
@@ -410,7 +415,7 @@ mod tests {
         }
         assert!(warned, "mapped-name WARN event never reached the capture");
         assert!(capture.events_contain("inserted type=object on MCP tool schema"));
-        assert!(!capture.contains_text("database/read 天气"));
+        assert!(!capture.contains_text("database/read weather-🦀"));
     }
 
     #[test]

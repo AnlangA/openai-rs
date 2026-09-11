@@ -64,6 +64,7 @@ pub(crate) type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 #[non_exhaustive]
 #[cfg(feature = "realtime")]
 pub enum WebSocketReconnectPolicy {
+    /// Disable automatic reconnection; the caller establishes a new connection explicitly.
     #[default]
     Never,
     /// Retries a failed initial handshake before surfacing its error.
@@ -93,6 +94,7 @@ pub struct ResponsesWebSocketConfig {
 
 #[cfg(feature = "realtime")]
 impl ResponsesWebSocketConfig {
+    /// Creates WebSocket configuration with the default buffer limits and connection timeout.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -105,12 +107,14 @@ impl ResponsesWebSocketConfig {
         }
     }
 
+    /// Sets the maximum number of bytes accepted in a complete WebSocket message.
     #[must_use]
     pub const fn max_message_bytes(mut self, limit: usize) -> Self {
         self.max_message_bytes = limit;
         self
     }
 
+    /// Sets the maximum number of bytes accepted in a single WebSocket frame.
     #[must_use]
     pub const fn max_frame_bytes(mut self, limit: usize) -> Self {
         self.max_frame_bytes = limit;
@@ -125,18 +129,21 @@ impl ResponsesWebSocketConfig {
         self
     }
 
+    /// Sets the target size in bytes of the WebSocket write buffer.
     #[must_use]
     pub const fn write_buffer_bytes(mut self, size: usize) -> Self {
         self.write_buffer_bytes = size;
         self
     }
 
+    /// Sets the time allowed for establishing the WebSocket connection.
     #[must_use]
     pub const fn connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = timeout;
         self
     }
 
+    /// Selects the policy used when the WebSocket connection closes.
     #[must_use]
     pub const fn reconnect_policy(mut self, policy: WebSocketReconnectPolicy) -> Self {
         self.reconnect = policy;
@@ -267,16 +274,19 @@ impl ResponsesWebSocket {
         }
     }
 
+    /// Returns the HTTP status and response-header metadata.
     #[must_use]
     pub const fn meta(&self) -> &ResponseMeta {
         &self.meta
     }
 
+    /// Returns the request identifier supplied by the service, when present.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.meta.request_id()
     }
 
+    /// Returns whether this connection has been closed.
     #[must_use]
     pub const fn is_closed(&self) -> bool {
         self.closed
@@ -306,11 +316,21 @@ impl ResponsesWebSocket {
     }
 
     /// Sends a typed `response.create` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, the event is invalid or too large,
+    /// serialization fails, or writing to the WebSocket fails.
     pub async fn send_create(&mut self, request: CreateResponseRequest) -> Result<(), Error> {
         self.send_event(ResponsesClientEvent::create(request)).await
     }
 
     /// Sends a typed `response.create` event on a FIFO WebSocket lane.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, the event is invalid or too large,
+    /// serialization fails, or writing to the WebSocket fails.
     pub async fn send_create_on_stream(
         &mut self,
         stream_id: impl Into<String>,
@@ -330,6 +350,11 @@ impl ResponsesWebSocket {
     /// encode, carries an invalid `stream_id`, or exceeds the configured
     /// message limit — leave the connection open, because nothing reached the
     /// wire and the socket remains healthy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, the event is invalid or too large,
+    /// serialization fails, or writing to the WebSocket fails.
     pub async fn send_event(&mut self, event: ResponsesClientEvent) -> Result<(), Error> {
         if self.closed {
             return Err(Error::WebSocketProtocol(
@@ -362,6 +387,11 @@ impl ResponsesWebSocket {
     /// which destroys the WebSocket on any error). A failed event *decode* is
     /// the one recoverable path: the connection stays open so a malformed
     /// event need not take down an otherwise healthy session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection, frame limits, message decoding, or protocol state is
+    /// invalid.
     pub async fn recv(&mut self) -> Result<Option<ResponsesServerEvent>, Error> {
         if self.closed {
             return Ok(None);
@@ -438,6 +468,11 @@ impl ResponsesWebSocket {
     /// accumulator. Multiplexed callers should use [`Self::recv`], route by
     /// [`ResponsesServerEvent::stream_id`], then push into the matching lane's
     /// accumulator.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection, frame limits, message decoding, or protocol state is
+    /// invalid. Applying the event can also return accumulator errors.
     pub async fn recv_into(
         &mut self,
         accumulator: &mut ResponseAccumulator,
@@ -456,6 +491,10 @@ impl ResponsesWebSocket {
     /// as the Realtime socket (14-E-2): openai-python's `close()` defaults to
     /// `code=1000` and openai-node's to `1000`/`"OK"`, while an unframed empty
     /// close body is observed by the peer as the abnormal 1005.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the close handshake or transport shutdown fails.
     pub async fn close(&mut self) -> Result<(), Error> {
         if !self.closed {
             self.socket

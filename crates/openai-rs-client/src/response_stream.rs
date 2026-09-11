@@ -147,23 +147,35 @@ impl ResponseEventStream {
         })
     }
 
+    /// Returns the HTTP status and response-header metadata.
     #[must_use]
     pub const fn meta(&self) -> &ResponseMeta {
         &self.meta
     }
 
+    /// Returns the request identifier supplied by the service, when present.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.meta.request_id()
     }
 
     /// Reduces all events into the terminal [`Response`].
+    ///
+    /// # Errors
+    ///
+    /// Returns stream or accumulator errors encountered while consuming events, including malformed
+    /// events or an incomplete terminal response sequence.
     pub async fn collect_final(self) -> Result<Response, Error> {
         self.collect_with(ResponseAccumulator::new()).await
     }
 
     /// Continues reduction with a caller-supplied accumulator, which is useful
     /// after explicitly validated stream resumption.
+    ///
+    /// # Errors
+    ///
+    /// Returns stream or accumulator errors encountered while consuming events, including malformed
+    /// events or an incomplete terminal response sequence.
     pub async fn collect_with(
         mut self,
         mut accumulator: ResponseAccumulator,

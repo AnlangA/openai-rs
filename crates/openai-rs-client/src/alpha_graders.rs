@@ -37,6 +37,11 @@ impl AlphaGraders {
     }
 
     /// Runs one experimental grader against a model sample.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn run(
         &self,
         request: RunGraderRequest,
@@ -49,6 +54,12 @@ impl AlphaGraders {
     }
 
     /// Validates one experimental grader definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub async fn validate(
         &self,
         request: ValidateGraderRequest,

@@ -12,6 +12,24 @@
 //! credentials remain in the Responses client and MCP credentials remain in
 //! the transport used to create an executor.
 //!
+//! # Examples
+//!
+//! Freeze a catalog before advertising local MCP tools to the model:
+//!
+//! ```
+//! use std::sync::Arc;
+//! use openai_rs_rmcp::{CatalogPolicy, JsonObject, Tool, ToolCatalog};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut schema = JsonObject::new();
+//! schema.insert("type".into(), "object".into());
+//! let tool = Tool::new("weather", "Read the current weather", Arc::new(schema));
+//! let catalog = ToolCatalog::build([tool], CatalogPolicy::default())?;
+//! assert_eq!(catalog.function_tools()[0].name(), "weather");
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Tracing facade
 //!
 //! Local `tracing` output only; no network telemetry. One debug span,
@@ -26,7 +44,7 @@
 //! both are visible adaptations a stricter [`CatalogPolicy`] can avoid, so
 //! they are worth default-level attention. Discovery emits one DEBUG event
 //! carrying the frozen `tool_count`. Field naming deliberately keeps this
-//! crate's flat snake_case style (`call_id`, not OTel-dotted names) instead
+//! crate's flat `snake_case` style (`call_id`, not OTel-dotted names) instead
 //! of mirroring the client crate's span namespace.
 //!
 //! # HTTP transport proxy posture (10-10)
@@ -73,7 +91,7 @@
 //! # RMCP peer behaviors inherited by `RmcpExecutor` (14-P-1 / 14-P-2)
 //!
 //! Two rmcp 3.1.4 client-peer behaviors surface through
-//! [`RmcpExecutor`] and are documented in full on the
+//! `RmcpExecutor` (available with `client`) and are documented in full on the
 //! executor:
 //!
 //! - **Response cache.** The rmcp client caches list responses per peer
@@ -83,13 +101,13 @@
 //!   for servers that send a positive `ttlMs`. Strict-freshness callers can
 //!   disable the cache via
 //!   `executor.peer().set_response_cache_config(rmcp::ClientCacheConfig::disabled())`
-//!   (see [`RmcpExecutor::list_tools`] docs for the verified paths).
+//!   (see `RmcpExecutor::list_tools` docs for the verified paths).
 //! - **Progress.** Every `tools/call` advertises a progress token, yet the
 //!   executor consumes no progress notifications and the fixed
 //!   [`ExecutionControl`] deadline is never extended
 //!   by progress; rmcp's `reset_timeout_on_progress` is unused. Applications
 //!   needing progress should drive their own `rmcp::ClientHandler` through
-//!   [`RmcpExecutor::peer`](crate::RmcpExecutor::peer).
+//!   `RmcpExecutor::peer`.
 
 mod arguments;
 mod bridge;

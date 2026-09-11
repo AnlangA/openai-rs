@@ -42,6 +42,11 @@ pub trait ResponsesToolExecutor: Send + Sync {
     /// when pagination ends, so an executor must not invent its own page
     /// limit: the [`ExecutionControl`] deadline and cancellation token are
     /// the only bound on how long discovery may run.
+    ///
+    /// # Errors
+    ///
+    /// Returns an executor error if discovery fails, or a cancellation or
+    /// timeout error if the execution control interrupts pagination.
     async fn list_tools(&self, control: &ExecutionControl) -> Result<Vec<Tool>, BridgeError>;
 
     /// Execute a single MCP tool with an already validated argument object.
@@ -66,11 +71,17 @@ pub trait ResponsesToolExecutor: Send + Sync {
     ///   (`isError: true`) is an in-band result, not an error — surface it
     ///   as an `Ok(CallToolResult)` so the bridge can return it to the model
     ///   as a function output. Reserve errors for failures of the *exchange*
-    ///   itself: protocol-level rejections map to [`BridgeError::Protocol`],
-    ///   transport/stream failures to [`BridgeError::Transport`], local
-    ///   bounds to [`BridgeError::Cancelled`]/[`BridgeError::Timeout`], and
+    ///   itself. With the `client` feature, protocol-level rejections map to `BridgeError::Protocol`,
+    ///   transport/stream failures to `BridgeError::Transport`. Local
+    ///   bounds map to [`BridgeError::Cancelled`]/[`BridgeError::Timeout`], and
     ///   result kinds the bridge cannot represent to
     ///   [`BridgeError::UnsupportedResult`].
+    ///
+    /// # Errors
+    ///
+    /// Returns exchange, cancellation, timeout, or unsupported-result errors
+    /// as described above. A tool's in-band `isError: true` result remains an
+    /// `Ok(CallToolResult)` so the model can receive the tool's explanation.
     async fn call_tool(
         &self,
         name: &str,

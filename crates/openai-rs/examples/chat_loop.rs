@@ -1,5 +1,21 @@
-//! Terminal conversation using OPENAI_BASE_URL, OPENAI_MODEL and OPENAI_API_KEY.
-//! Run from the repository root: cargo run -p openai-rs-sdk --example chat_loop
+//! Runs an interactive terminal conversation through the Responses API.
+//!
+//! # Configuration
+//!
+//! Set `OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_API_KEY` before starting
+//! the example. Set `RUST_LOG=openai_rs_client=trace` to write raw JSON request
+//! and response bodies to stderr, including responses that fail to decode.
+//!
+//! # Usage
+//!
+//! ```text
+//! cargo run -p openai-rs-sdk --example chat_loop
+//! ```
+//!
+//! Enter one message per line. `/clear` resets the local conversation;
+//! `/exit`, `/quit`, and end-of-file terminate the program. Successful turns
+//! retain complete output items, including reasoning, for the next request.
+//! Request failures leave the previous conversation history unchanged.
 
 use std::{
     env,
@@ -14,18 +30,35 @@ use openai_rs::{
     },
 };
 
+/// Reads a required, nonblank environment variable without trimming its value.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::InvalidInput`] if the variable is missing, contains
+/// only whitespace, or cannot be represented as UTF-8.
 fn required_env(name: &str) -> io::Result<String> {
     match env::var(name) {
         Ok(value) if !value.trim().is_empty() => Ok(value),
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("请设置非空环境变量 {name}"),
+            format!("Set the {name} environment variable to a nonblank value"),
         )),
     }
 }
 
+mod support;
+
+/// Initializes the client and processes terminal messages until the user exits.
+///
+/// # Errors
+///
+/// Returns an error if logging initialization, environment validation, client
+/// configuration, or terminal I/O fails. Individual API failures are printed
+/// and leave the loop available for another message.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    support::init_logging()?;
+
     let base_url = required_env("OPENAI_BASE_URL")?;
     let model = required_env("OPENAI_MODEL")?.trim().to_owned();
     let api_key = ApiKey::new(required_env("OPENAI_API_KEY")?)?;
@@ -37,11 +70,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut history: Vec<ResponseInputItem> = Vec::new();
     let stdin = io::stdin();
-    println!("终端对话已启动，模型：{model}");
-    println!("每行发送一条消息；/clear 清空上下文，/exit 或 /quit 退出。\n");
+    println!("Terminal chat started. Model: {model}");
+    println!("Enter one message per line; /clear resets history; /exit or /quit exits.\n");
 
     loop {
-        print!("你> ");
+        print!("You> ");
         io::stdout().flush()?;
         let mut line = String::new();
         if stdin.read_line(&mut line)? == 0 {
@@ -53,7 +86,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "/exit" | "/quit" => break,
             "/clear" => {
                 history.clear();
-                println!("已清空上下文。\n");
+                println!("Conversation history cleared.\n");
                 continue;
             }
             _ => {}
@@ -69,33 +102,42 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let response = match client.responses().create(request).await {
             Ok(response) => response,
             Err(error) => {
-                eprintln!("请求失败：{error}\n");
+                eprintln!("Request failed: {error}\n");
+                if let Some(path) = error.decode_path() {
+                    eprintln!("JSON decode path: {path}\n");
+                }
                 continue;
             }
         };
         if let Some(error) = response.error() {
-            eprintln!("生成失败：{}：{}\n", error.code().as_str(), error.message());
+            eprintln!(
+                "Generation failed: {}: {}\n",
+                error.code().as_str(),
+                error.message()
+            );
             continue;
         }
         if matches!(
             response.status(),
             Some(ResponseStatus::Failed | ResponseStatus::Cancelled)
         ) {
-            eprintln!("本轮生成未成功完成，请重新输入。\n");
+            eprintln!("This turn did not complete successfully. Enter another message.\n");
             continue;
         }
 
         let text = response.output_text();
         println!(
-            "助手> {}\n",
+            "Assistant> {}\n",
             if text.is_empty() {
-                response.refusal().unwrap_or("（本轮未返回文本）")
+                response
+                    .refusal()
+                    .unwrap_or("(No text returned for this turn.)")
             } else {
                 &text
             }
         );
         if matches!(response.status(), Some(ResponseStatus::Incomplete)) {
-            eprintln!("本轮回复未完成，可以继续追问。\n");
+            eprintln!("This response is incomplete. You can send a follow-up message.\n");
         }
 
         // Replay full output items, including reasoning and message metadata.
@@ -103,6 +145,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         history.extend(response.to_input_items());
     }
 
-    println!("对话已结束。");
+    println!("Chat ended.");
     Ok(())
 }

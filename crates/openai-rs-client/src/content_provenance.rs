@@ -26,6 +26,11 @@ impl ContentProvenanceChecks {
     }
 
     /// Checks one replayable image or audio source for provenance signals.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn create(
         &self,
         request: CreateContentProvenanceCheckRequest,

@@ -1,7 +1,32 @@
 //! Async transports and resource clients for the OpenAI Platform API.
 //!
-//! [`Client`] deliberately accepts only an [`ApiKey`]. ChatGPT/Codex credentials
-//! live in the separate `openai-rs-codex` crate and cannot cross this boundary.
+//! [`Client`] uses Platform API credentials: an [`ApiKey`], or workload identity
+//! when that feature is enabled. ChatGPT/Codex credentials live in the separate
+//! `openai-rs-codex` crate and cannot cross this boundary.
+//!
+//! # Examples
+//!
+//! The client can be reused across asynchronous requests. Responses retain their
+//! HTTP status and request identifier alongside the decoded resource:
+//!
+//! ```no_run
+//! use openai_rs_client::{ApiKey, Client};
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let key = ApiKey::new(std::env::var("OPENAI_API_KEY")?)?;
+//! let client = Client::new(key)?;
+//! let models = client.models().list().await?;
+//! println!("Request ID: {:?}", models.request_id());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Configuration and errors
+//!
+//! [`ClientBuilder`] configures the endpoint, timeouts, body limits, TLS, retries,
+//! and explicit proxy. Resource methods return [`ApiResponse`] on success and
+//! [`Error`] on failure. A stream can report additional errors after its initial
+//! handshake, so applications must check the stream items as they consume them.
 //!
 //! # Tracing facade
 //!
@@ -30,20 +55,32 @@
 //! The X.509 token refresh additionally wraps its single-flight exchange in a
 //! debug span `openai.x509.token_refresh` with no fields.
 //!
-//! **Event whitelist.** Two WARN events — `retrying OpenAI request`
-//! (`retry.count`, `retry.delay_ms`, `retry.reason`) and
-//! `request deadline exceeded` — plus the DEBUG `401 received, invalidating
-//! cached authentication` pair, where the `...and retrying` variant is
-//! reserved for lanes that actually replay the request. WARN was chosen over
-//! openai-python's INFO for retries and deadline exhaustion because both
-//! change observable latency and belong in default-level logs; openai-node
-//! emits nothing comparable.
+//! **Event levels.** ERROR reports terminal HTTP rejection, transport/body
+//! read failure, and JSON decode category/path/line/column without formatting
+//! raw error values. WARN reports retries (count, delay, reason, and HTTP
+//! status/request ID when available) and exhausted deadlines. INFO records
+//! accepted response headers with operation ID, status, request ID, retry
+//! count and `elapsed_ms` (time until headers, including auth/retries on the
+//! request path, excluding body decoding and stream consumption). DEBUG
+//! records request attempts and remaining timeout, buffered body size and
+//! the 401 invalidation pair; only lanes that replay say `...and retrying`.
 //!
-//! **Never recorded:** credentials of any kind (API keys, Administration
-//! keys, workload-identity and X.509 bearer tokens, client certificates),
-//! full URLs, query strings, concrete path values, request or response
-//! bodies, and stream events or deltas. SSE/WS *consumption* happens below
-//! span scope entirely. Leak tests pin every lane to this list.
+//! **Raw JSON diagnostics (TRACE).** The Platform JSON transport emits
+//! `JSON request` and `JSON response` events under the dedicated
+//! `openai_rs_client::http_body` target. With an application subscriber that
+//! reads `RUST_LOG`, use `RUST_LOG=openai_rs_client=trace` (or just
+//! `openai_rs_client::http_body=trace`) to inspect serialized request bodies
+//! and raw response bodies before typed decoding, including HTTP errors and
+//! retried responses. Existing body limits apply; truncated error bodies have
+//! `body.truncated=true`. DEBUG and higher-severity levels exclude bodies.
+//! Raw bodies may contain sensitive conversation or application data.
+//!
+//! **Never recorded by the SDK:** authentication headers, full URLs, query
+//! strings, concrete route parameter values, multipart/binary bodies, and
+//! stream events or deltas. SSE/WS *consumption* happens below span scope
+//! entirely. Credentials explicitly placed in JSON bodies are not redacted
+//! from the opt-in raw TRACE events. Leak tests cover metadata-only logging
+//! and verify that body tracing excludes authentication headers.
 
 #[cfg(feature = "admin")]
 mod admin;

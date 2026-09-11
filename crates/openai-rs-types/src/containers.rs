@@ -97,7 +97,10 @@ macro_rules! strict_tagged_union {
         #[derive(Clone, Debug)]
         #[non_exhaustive]
         pub enum $name {
-            $($variant($ty),)+
+            $(
+                #[doc = concat!("The `", $wire, "` payload, decoded as `", stringify!($ty), "`.")]
+                $variant($ty),
+            )+
             /// Future tagged object retained with all fields.
             Unknown(UnknownTaggedObject),
         }
@@ -264,8 +267,10 @@ impl CreateContainerExpiration {
 /// Expiration policy returned on a Container.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContainerExpiration {
+    /// Timestamp used as the origin of the relative expiration period.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub anchor: Omittable<ContainerExpirationAnchor>,
+    /// Duration of the configured window in minutes.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub minutes: Omittable<u64>,
     #[serde(default, flatten)]
@@ -332,6 +337,12 @@ impl ContainerDomainSecret {
     }
 
     /// Checks pinned OpenAPI domain-secret length limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateContainerConstraintError> {
         let domain = self.domain.chars().count();
         if domain < MIN_DOMAIN_SECRET_CHARS {
@@ -436,8 +447,10 @@ crate::open_string_enum! {
 /// Network policy returned on a Container.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ContainerNetworkPolicy {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(rename = "type")]
     pub kind: ContainerNetworkPolicyKind,
+    /// Hostnames permitted by this network policy.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub allowed_domains: Omittable<Vec<String>>,
     #[serde(default, flatten)]
@@ -509,6 +522,11 @@ impl InlineSkillSource {
     }
 
     /// Decode the retained zip bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn decode(&self) -> Result<Vec<u8>, base64::DecodeError> {
         base64::engine::general_purpose::STANDARD.decode(&self.data)
     }
@@ -647,6 +665,12 @@ impl CreateContainerBody {
     }
 
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateContainerConstraintError> {
         if let Omittable::Value(skills) = &self.skills {
             for skill in skills {
@@ -765,7 +789,7 @@ impl ContainerListLimitError {
 /// infallible public fields, so a rejected value is stored and surfaced as
 /// [`ContainerListLimitError`] through the serde boundary instead — the
 /// send-time half of the two-phase split documented on
-/// [`crate::voices::VoiceConsentListLimitError`].
+/// `crate::voices::VoiceConsentListLimitError` (available with `custom-voice`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContainerListLimit(u64);
 
@@ -774,6 +798,11 @@ impl ContainerListLimit {
     ///
     /// The pinned parameters document a prose range of 1..=100 with a default
     /// of 20 but carry no schema bounds, so no upper limit is applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub const fn new(value: u64) -> Result<Self, ContainerListLimitError> {
         if value == 0 {
             Err(ContainerListLimitError { actual: value })
@@ -825,12 +854,16 @@ impl<'de> Deserialize<'de> for ContainerListLimit {
 /// bound of 1 is enforced, and it is enforced on both encode and decode.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContainerListParams {
+    /// Maximum number of entries to return in one page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<ContainerListLimit>,
+    /// Sort direction used when retrieving the page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub order: Omittable<ContainerListOrder>,
+    /// Cursor identifying the item after which the next page should begin.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub after: Omittable<ContainerId>,
+    /// Name assigned to this resource or operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<String>,
 }
@@ -838,10 +871,15 @@ pub struct ContainerListParams {
 /// Page of Containers.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ContainerListResource {
+    /// The type of object returned, must be 'list'.
     pub object: ContainerListObject,
+    /// A list of containers.
     pub data: Vec<ContainerResource>,
+    /// The ID of the first container in the list.
     pub first_id: String,
+    /// The ID of the last container in the list.
     pub last_id: String,
+    /// Whether there are more containers available.
     pub has_more: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -895,10 +933,13 @@ impl ContainerListResource {
 /// bound of 1 is enforced, and it is enforced on both encode and decode.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContainerFileListParams {
+    /// Maximum number of entries to return in one page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<ContainerListLimit>,
+    /// Sort direction used when retrieving the page.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub order: Omittable<ContainerListOrder>,
+    /// Cursor identifying the item after which the next page should begin.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub after: Omittable<ContainerFileId>,
 }
@@ -989,12 +1030,19 @@ impl fmt::Debug for CreateContainerFileUploadRequest {
 /// Container File metadata returned by create/retrieve/list.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ContainerFileResource {
+    /// Unique identifier for the file.
     pub id: ContainerFileId,
+    /// The type of this object (`container.file`).
     pub object: ContainerFileObject,
+    /// The container this file belongs to.
     pub container_id: ContainerId,
+    /// Unix timestamp (in seconds) when the file was created.
     pub created_at: u64,
+    /// Size of the file in bytes.
     pub bytes: u64,
+    /// Path of the file in the container.
     pub path: String,
+    /// Source of the file (e.g., `user`, `assistant`).
     pub source: ContainerFileSource,
     #[serde(default, flatten)]
     extra: ExtraFields,
@@ -1011,10 +1059,15 @@ impl ContainerFileResource {
 /// Page of Container Files.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ContainerFileListResource {
+    /// The type of object returned, must be 'list'.
     pub object: ContainerListObject,
+    /// A list of container files.
     pub data: Vec<ContainerFileResource>,
+    /// The ID of the first file in the list.
     pub first_id: String,
+    /// The ID of the last file in the list.
     pub last_id: String,
+    /// Whether there are more files available.
     pub has_more: bool,
     #[serde(default, flatten)]
     extra: ExtraFields,

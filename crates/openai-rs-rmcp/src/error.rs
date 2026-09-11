@@ -12,23 +12,38 @@ pub enum BridgeError {
     /// An MCP name cannot be exposed as an OpenAI function under a rejecting
     /// name policy.
     #[error("MCP tool name `{name}` is not a valid OpenAI function name")]
-    InvalidToolName { name: String },
+    InvalidToolName {
+        /// Name assigned to this resource or operation.
+        name: String,
+    },
 
     /// The MCP server advertised the same tool name more than once.
     #[error("MCP server advertised duplicate tool name `{name}`")]
-    DuplicateToolName { name: String },
+    DuplicateToolName {
+        /// Name assigned to this resource or operation.
+        name: String,
+    },
 
     /// An MCP input schema cannot be represented under the selected policy.
     #[error("MCP tool `{tool}` has an incompatible input schema: {reason}")]
-    InvalidSchema { tool: String, reason: &'static str },
+    InvalidSchema {
+        /// Name or descriptor of the tool associated with this invocation.
+        tool: String,
+        /// Explanation or classification associated with this outcome.
+        reason: &'static str,
+    },
 
     /// A function name was not present in the catalog used for this response.
     #[error("unknown local MCP function `{name}`")]
-    UnknownFunction { name: String },
+    UnknownFunction {
+        /// Name assigned to this resource or operation.
+        name: String,
+    },
 
     /// OpenAI function arguments were not syntactically valid JSON.
     #[error("function arguments are not valid JSON")]
     InvalidArguments {
+        /// Underlying error that caused this failure.
         #[source]
         source: serde_json::Error,
     },
@@ -40,6 +55,7 @@ pub enum BridgeError {
     /// An MCP result could not be encoded as function-call output.
     #[error("failed to serialize MCP tool output")]
     SerializeOutput {
+        /// Underlying error that caused this failure.
         #[source]
         source: serde_json::Error,
     },
@@ -48,6 +64,7 @@ pub enum BridgeError {
     #[cfg(feature = "client")]
     #[error("MCP transport failed: {source}")]
     Transport {
+        /// Underlying error that caused this failure.
         #[source]
         source: rmcp::service::ServiceError,
     },
@@ -56,13 +73,17 @@ pub enum BridgeError {
     #[cfg(feature = "client")]
     #[error("MCP protocol exchange failed: {source}")]
     Protocol {
+        /// Underlying error that caused this failure.
         #[source]
         source: rmcp::service::ServiceError,
     },
 
     /// The local execution deadline elapsed.
     #[error("MCP tool execution timed out after {timeout:?}")]
-    Timeout { timeout: Duration },
+    Timeout {
+        /// Maximum time allowed for the operation to complete.
+        timeout: Duration,
+    },
 
     /// Tool execution ended by cancellation before completing.
     ///
@@ -79,11 +100,17 @@ pub enum BridgeError {
     ///   the in-flight request, which rmcp surfaces as a
     ///   cancellation-completed request.
     #[error("MCP tool execution was cancelled")]
-    Cancelled { reason: Option<String> },
+    Cancelled {
+        /// Explanation or classification associated with this outcome.
+        reason: Option<String>,
+    },
 
     /// The executor returned an operation-specific failure.
     #[error("MCP executor failed: {message}")]
-    Executor { message: String },
+    Executor {
+        /// Human-readable message describing this event or failure.
+        message: String,
+    },
 
     /// The peer completed the exchange with a result kind this bridge cannot
     /// adapt to a Responses function-call output.
@@ -94,9 +121,12 @@ pub enum BridgeError {
     /// (the caller must answer the server's input requests and retry) and
     /// `"task"` for SEP-2663 task handles (the caller must poll the task to
     /// completion). Applications that need either continuation should drive
-    /// them through [`crate::RmcpExecutor::peer`] directly.
+    /// them through `crate::RmcpExecutor::peer` (with the `client` feature) directly.
     #[error("MCP result kind `{kind}` is not supported by the Responses bridge")]
-    UnsupportedResult { kind: &'static str },
+    UnsupportedResult {
+        /// Discriminator identifying the payload, policy, or failure category.
+        kind: &'static str,
+    },
 }
 
 impl BridgeError {

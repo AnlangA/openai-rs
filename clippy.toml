@@ -1,0 +1,15 @@
+# Product names and established acronyms remain prose, while Rust identifiers
+# and environment-variable names must use code formatting in documentation.
+doc-valid-idents = [
+    "OpenAI",
+    "OpenAPI",
+    "ChatGPT",
+    "ChatKit",
+    "DeepSeek",
+    "SynthID",
+    "UUIDv7",
+    "DoS",
+    "SubRip",
+    "WebVTT",
+    "..",
+]

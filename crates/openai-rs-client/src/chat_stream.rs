@@ -170,11 +170,13 @@ impl ChatCompletionEventStream {
         })
     }
 
+    /// Returns the HTTP status and response-header metadata.
     #[must_use]
     pub const fn meta(&self) -> &ResponseMeta {
         &self.meta
     }
 
+    /// Returns the request identifier supplied by the service, when present.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.meta.request_id()
@@ -186,6 +188,11 @@ impl ChatCompletionEventStream {
     /// and openai-python's `get_final_completion`. Fails on the first stream
     /// error (transport, decode, or in-band remote error), and fails if the
     /// stream ends without any `finish_reason` or the `[DONE]` sentinel.
+    ///
+    /// # Errors
+    ///
+    /// Returns stream or accumulator errors encountered while consuming events, including malformed
+    /// events or an incomplete terminal response sequence.
     pub async fn collect_final(self) -> Result<ChatCompletion, Error> {
         self.collect_with(ChatCompletionAccumulator::new()).await
     }
@@ -197,6 +204,11 @@ impl ChatCompletionEventStream {
     /// every decoded chunk is pushed into `accumulator`, a clean end of stream
     /// (the transport-consumed `[DONE]` sentinel) marks the fold done, and the
     /// first error item aborts the reduction.
+    ///
+    /// # Errors
+    ///
+    /// Returns stream or accumulator errors encountered while consuming events, including malformed
+    /// events or an incomplete terminal response sequence.
     pub async fn collect_with(
         mut self,
         mut accumulator: ChatCompletionAccumulator,

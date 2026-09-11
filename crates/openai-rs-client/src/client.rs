@@ -43,8 +43,10 @@ const DEFAULT_MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TlsBackend {
+    /// Use rustls for TLS connections.
     #[cfg(feature = "rustls-tls")]
     Rustls,
+    /// Use the platform-native TLS implementation.
     #[cfg(feature = "native-tls")]
     Native,
 }
@@ -126,11 +128,21 @@ impl Client {
     }
 
     /// Builds a client with secure defaults and the official Platform base URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration or HTTP client initialization error if the default client cannot be
+    /// constructed with the supplied key.
     pub fn new(api_key: ApiKey) -> Result<Self, Error> {
         Self::builder(api_key).build()
     }
 
     /// Builds a Platform client backed by RFC 8693 workload identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the workload-identity client or its default transport configuration
+    /// cannot be constructed.
     #[cfg(feature = "workload-identity")]
     pub fn from_workload_identity(config: WorkloadIdentityConfig) -> Result<Self, Error> {
         Self::workload_identity_builder(config).build()
@@ -395,6 +407,7 @@ enum ClientCredential {
 }
 
 impl ClientBuilder {
+    /// Creates a client builder using the supplied Platform API key and default transport settings.
     #[must_use]
     pub fn new(api_key: ApiKey) -> Self {
         Self {
@@ -415,6 +428,7 @@ impl ClientBuilder {
         }
     }
 
+    /// Creates a client builder using the supplied workload-identity configuration.
     #[cfg(feature = "workload-identity")]
     #[must_use]
     pub fn from_workload_identity(config: WorkloadIdentityConfig) -> Self {
@@ -452,12 +466,14 @@ impl ClientBuilder {
         self
     }
 
+    /// Sets the organization identifier sent in the OpenAI-Organization header.
     #[must_use]
     pub fn organization(mut self, organization: impl Into<String>) -> Self {
         self.organization = Some(organization.into());
         self
     }
 
+    /// Sets the project identifier sent in the OpenAI-Project header.
     #[must_use]
     pub fn project(mut self, project: impl Into<String>) -> Self {
         self.project = Some(project.into());
@@ -543,12 +559,14 @@ impl ClientBuilder {
         self
     }
 
+    /// Sets the maximum number of bytes buffered for a successful JSON response.
     #[must_use]
     pub const fn max_json_body_bytes(mut self, limit: usize) -> Self {
         self.max_json_body_bytes = limit;
         self
     }
 
+    /// Sets the maximum number of bytes read from an HTTP error response before truncation.
     #[must_use]
     pub const fn max_error_body_bytes(mut self, limit: usize) -> Self {
         self.max_error_body_bytes = limit;
@@ -577,6 +595,12 @@ impl ClientBuilder {
         self
     }
 
+    /// Validates the configuration and constructs a reusable Platform client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid base URL, zero timeout or body limit, invalid header values,
+    /// unavailable TLS configuration, or HTTP client initialization failure.
     pub fn build(self) -> Result<Client, Error> {
         if self.connect_timeout.is_zero() {
             return Err(invalid_configuration("connect timeout must be non-zero"));
@@ -938,7 +962,7 @@ mod tests {
             Client::builder(key())
                 .base_url(loopback.clone())
                 .allow_insecure_loopback(true)
-                .client_request_id("编号")
+                .client_request_id("request-🦀")
                 .build()
                 .is_err()
         );

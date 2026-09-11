@@ -218,6 +218,11 @@ pub struct UnknownRealtimeObject {
 
 impl UnknownRealtimeObject {
     /// Validates and retains an unknown tagged object.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn from_value(value: Value) -> Result<Self, UnknownRealtimeObjectError> {
         let discriminator = object_discriminator(&value)
             .map_err(UnknownRealtimeObjectError::Invalid)?
@@ -566,6 +571,7 @@ impl<'de> Deserialize<'de> for RealtimePcmRate {
 pub struct RealtimePcmAudioFormat {
     #[serde(rename = "type")]
     kind: RealtimePcmTag,
+    /// Audio sample rate in hertz.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub rate: Omittable<RealtimePcmRate>,
     #[serde(flatten)]
@@ -624,9 +630,13 @@ impl Default for RealtimePcmaAudioFormat {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RealtimeAudioFormat {
+    /// Carries the `RealtimePcmAudioFormat` payload for this protocol alternative.
     Pcm(RealtimePcmAudioFormat),
+    /// Carries the `RealtimePcmuAudioFormat` payload for this protocol alternative.
     Pcmu(RealtimePcmuAudioFormat),
+    /// Carries the `RealtimePcmaAudioFormat` payload for this protocol alternative.
     Pcma(RealtimePcmaAudioFormat),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(UnknownRealtimeObject),
 }
 
@@ -688,6 +698,7 @@ impl From<RealtimePcmaAudioFormat> for RealtimeAudioFormat {
 /// Reference to a custom voice.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeCustomVoice {
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -708,7 +719,9 @@ impl RealtimeCustomVoice {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RealtimeVoice {
+    /// Carries the `RealtimeVoiceName` payload for this protocol alternative.
     BuiltIn(RealtimeVoiceName),
+    /// Carries the `RealtimeCustomVoice` payload for this protocol alternative.
     Custom(RealtimeCustomVoice),
 }
 
@@ -727,16 +740,22 @@ impl From<RealtimeCustomVoice> for RealtimeVoice {
 /// Input-audio transcription configuration.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeAudioTranscription {
+    /// Identifier of the model used or requested for the operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub model: Omittable<String>,
+    /// Language code used for transcription or translation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub language: Omittable<Nullable<String>>,
+    /// Language codes configured for the translation session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub languages: Omittable<Vec<String>>,
+    /// Keywords used to guide transcription or translation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub keywords: Omittable<Vec<String>>,
+    /// Prompt text supplied to the model or agent.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub prompt: Omittable<String>,
+    /// Latency preference used by input-audio transcription.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub delay: Omittable<RealtimeTranscriptionDelay>,
     #[serde(flatten)]
@@ -746,6 +765,7 @@ pub struct RealtimeAudioTranscription {
 /// Noise-reduction configuration for input audio.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeNoiseReduction {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(
         rename = "type",
         default,
@@ -764,16 +784,22 @@ literal_tag!(RealtimeSemanticVadTag, SemanticVad, "semantic_vad");
 pub struct RealtimeServerVad {
     #[serde(rename = "type")]
     kind: RealtimeServerVadTag,
+    /// Audio activation threshold used by voice activity detection.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub threshold: Omittable<f64>,
+    /// Audio retained before detected speech, measured in milliseconds.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub prefix_padding_ms: Omittable<i64>,
+    /// Silence duration in milliseconds required to end the detected speech turn.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub silence_duration_ms: Omittable<i64>,
+    /// Whether the server automatically creates a response after detecting a turn boundary.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub create_response: Omittable<bool>,
+    /// Whether detected speech interrupts a response already being generated.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub interrupt_response: Omittable<bool>,
+    /// Inactivity duration in milliseconds before the server triggers a turn timeout.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub idle_timeout_ms: Omittable<Nullable<i64>>,
     #[serde(flatten)]
@@ -800,10 +826,13 @@ impl Default for RealtimeServerVad {
 pub struct RealtimeSemanticVad {
     #[serde(rename = "type")]
     kind: RealtimeSemanticVadTag,
+    /// How eagerly semantic voice activity detection decides that a turn has ended.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub eagerness: Omittable<RealtimeVadEagerness>,
+    /// Whether the server automatically creates a response after detecting a turn boundary.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub create_response: Omittable<bool>,
+    /// Whether detected speech interrupts a response already being generated.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub interrupt_response: Omittable<bool>,
     #[serde(flatten)]
@@ -826,8 +855,11 @@ impl Default for RealtimeSemanticVad {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RealtimeTurnDetection {
+    /// Carries the `RealtimeServerVad` payload for this protocol alternative.
     ServerVad(RealtimeServerVad),
+    /// Carries the `RealtimeSemanticVad` payload for this protocol alternative.
     SemanticVad(RealtimeSemanticVad),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(UnknownRealtimeObject),
 }
 
@@ -879,12 +911,16 @@ impl From<RealtimeSemanticVad> for RealtimeTurnDetection {
 /// Realtime input-audio configuration.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeAudioInputConfig {
+    /// Format used to encode or render this content.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub format: Omittable<RealtimeAudioFormat>,
+    /// Configuration or state for input-audio transcription.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub transcription: Omittable<Nullable<RealtimeAudioTranscription>>,
+    /// Noise-reduction settings applied to incoming audio.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub noise_reduction: Omittable<Nullable<RealtimeNoiseReduction>>,
+    /// Configuration for detecting boundaries between spoken turns.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub turn_detection: Omittable<Nullable<RealtimeTurnDetection>>,
     #[serde(flatten)]
@@ -894,10 +930,13 @@ pub struct RealtimeAudioInputConfig {
 /// Realtime output-audio configuration.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeAudioOutputConfig {
+    /// Format used to encode or render this content.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub format: Omittable<RealtimeAudioFormat>,
+    /// Voice selected for generated audio.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub voice: Omittable<RealtimeVoice>,
+    /// Playback speed multiplier used for generated speech.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub speed: Omittable<f64>,
     #[serde(flatten)]
@@ -907,8 +946,10 @@ pub struct RealtimeAudioOutputConfig {
 /// Input and output audio configuration for a Realtime session.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeSessionAudio {
+    /// Input-audio processing configuration for this session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input: Omittable<RealtimeAudioInputConfig>,
+    /// Output-audio generation configuration for this response or session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output: Omittable<RealtimeAudioOutputConfig>,
     #[serde(flatten)]
@@ -918,10 +959,13 @@ pub struct RealtimeSessionAudio {
 /// Effective output-audio settings returned for a Realtime session.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeSessionAudioOutputState {
+    /// Format used to encode or render this content.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub format: Omittable<RealtimeAudioFormat>,
+    /// Voice selected for generated audio.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub voice: Omittable<RealtimeVoiceName>,
+    /// Playback speed multiplier used for generated speech.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub speed: Omittable<f64>,
     #[serde(flatten)]
@@ -931,8 +975,10 @@ pub struct RealtimeSessionAudioOutputState {
 /// Effective input and output audio settings returned for a session.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeSessionAudioState {
+    /// Input-audio processing configuration for this session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input: Omittable<RealtimeAudioInputConfig>,
+    /// Output-audio generation configuration for this response or session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output: Omittable<RealtimeSessionAudioOutputState>,
     #[serde(flatten)]
@@ -942,6 +988,7 @@ pub struct RealtimeSessionAudioState {
 /// Input-only audio configuration for a transcription session.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranscriptionAudio {
+    /// Input-audio processing configuration for this session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input: Omittable<RealtimeAudioInputConfig>,
     #[serde(flatten)]
@@ -951,8 +998,10 @@ pub struct RealtimeTranscriptionAudio {
 /// Output-audio override accepted by `response.create`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeResponseCreateAudioOutput {
+    /// Format used to encode or render this content.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub format: Omittable<RealtimeAudioFormat>,
+    /// Voice selected for generated audio.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub voice: Omittable<RealtimeVoice>,
     #[serde(flatten)]
@@ -962,6 +1011,7 @@ pub struct RealtimeResponseCreateAudioOutput {
 /// Audio configuration accepted by `response.create`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeResponseCreateAudio {
+    /// Output-audio generation configuration for this response or session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output: Omittable<RealtimeResponseCreateAudioOutput>,
     #[serde(flatten)]
@@ -971,8 +1021,10 @@ pub struct RealtimeResponseCreateAudio {
 /// Effective output-audio configuration on a Realtime response.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeResponseAudioOutput {
+    /// Format used to encode or render this content.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub format: Omittable<RealtimeAudioFormat>,
+    /// Voice selected for generated audio.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub voice: Omittable<RealtimeVoiceName>,
     #[serde(flatten)]
@@ -982,6 +1034,7 @@ pub struct RealtimeResponseAudioOutput {
 /// Effective audio configuration on a Realtime response.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeResponseAudio {
+    /// Output-audio generation configuration for this response or session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output: Omittable<RealtimeResponseAudioOutput>,
     #[serde(flatten)]
@@ -991,6 +1044,8 @@ pub struct RealtimeResponseAudio {
 /// Reasoning configuration for a Realtime session or response.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeReasoning {
+    /// Constrains effort on reasoning for reasoning-capable Realtime models such as
+    /// `gpt-realtime-2`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub effort: Omittable<RealtimeReasoningEffort>,
     #[serde(flatten)]
@@ -1000,10 +1055,13 @@ pub struct RealtimeReasoning {
 /// Granular tracing configuration.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTracingConfig {
+    /// Workflow name recorded in Realtime tracing metadata.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub workflow_name: Omittable<String>,
+    /// Identifier of the group associated with this resource or assignment.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub group_id: Omittable<String>,
+    /// Caller- or server-provided metadata associated with the resource.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub metadata: Omittable<BTreeMap<String, Value>>,
     #[serde(flatten)]
@@ -1014,14 +1072,18 @@ pub struct RealtimeTracingConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RealtimeTracing {
+    /// Carries the `RealtimeTracingMode` payload for this protocol alternative.
     Mode(RealtimeTracingMode),
+    /// Carries the `RealtimeTracingConfig` payload for this protocol alternative.
     Config(RealtimeTracingConfig),
 }
 
 /// Integer output-token limit or the wire string `"inf"`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RealtimeMaxOutputTokens {
+    /// Limit generated output to the specified token count.
     Limited(i64),
+    /// Use the service-defined unlimited setting, encoded as `inf`.
     Unlimited,
 }
 
@@ -1068,6 +1130,8 @@ literal_tag!(RealtimeRetentionRatioTag, RetentionRatio, "retention_ratio");
 /// Optional custom token limits for retention-ratio truncation.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTruncationTokenLimits {
+    /// Maximum conversation tokens allowed after instructions and tool definitions, before
+    /// truncation occurs.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub post_instructions: Omittable<i64>,
     #[serde(flatten)]
@@ -1079,7 +1143,9 @@ pub struct RealtimeTruncationTokenLimits {
 pub struct RealtimeRetentionRatioTruncation {
     #[serde(rename = "type")]
     kind: RealtimeRetentionRatioTag,
+    /// Fraction of context retained when automatic truncation occurs.
     pub retention_ratio: f64,
+    /// Token thresholds used by the truncation policy.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub token_limits: Omittable<RealtimeTruncationTokenLimits>,
     #[serde(flatten)]
@@ -1108,8 +1174,11 @@ impl RealtimeRetentionRatioTruncation {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RealtimeTruncation {
+    /// Carries the `RealtimeTruncationMode` payload for this protocol alternative.
     Mode(RealtimeTruncationMode),
+    /// Carries the `RealtimeRetentionRatioTruncation` payload for this protocol alternative.
     RetentionRatio(RealtimeRetentionRatioTruncation),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(UnknownRealtimeObject),
 }
 
@@ -1156,10 +1225,14 @@ literal_tag!(RealtimeFunctionToolTag, Function, "function");
 pub struct RealtimeFunctionTool {
     #[serde(rename = "type")]
     kind: RealtimeFunctionToolTag,
+    /// The name of the function.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<String>,
+    /// The description of the function, including guidance on when and how to call it, and guidance
+    /// about what to tell the user when calling (if anything).
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub description: Omittable<String>,
+    /// Parameters of the function in JSON Schema.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub parameters: Omittable<Value>,
     #[serde(flatten)]
@@ -1188,8 +1261,11 @@ impl RealtimeFunctionTool {
 // from wire fixes, mirroring the sibling union stances.
 #[allow(clippy::large_enum_variant)]
 pub enum RealtimeTool {
+    /// Carries the `RealtimeFunctionTool` payload for this protocol alternative.
     Function(RealtimeFunctionTool),
+    /// Carries the `McpTool` payload for this protocol alternative.
     Mcp(McpTool),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(UnknownRealtimeObject),
 }
 
@@ -1246,6 +1322,7 @@ literal_tag!(RealtimeMcpChoiceTag, Mcp, "mcp");
 pub struct RealtimeFunctionToolChoice {
     #[serde(rename = "type")]
     kind: RealtimeFunctionChoiceTag,
+    /// Name assigned to this resource or operation.
     pub name: String,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -1268,7 +1345,9 @@ impl RealtimeFunctionToolChoice {
 pub struct RealtimeMcpToolChoice {
     #[serde(rename = "type")]
     kind: RealtimeMcpChoiceTag,
+    /// Label identifying the remote MCP server.
     pub server_label: String,
+    /// Name assigned to this resource or operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<Nullable<String>>,
     #[serde(flatten)]
@@ -1299,9 +1378,13 @@ impl RealtimeMcpToolChoice {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RealtimeToolChoice {
+    /// Carries the `RealtimeToolChoiceMode` payload for this protocol alternative.
     Mode(RealtimeToolChoiceMode),
+    /// Carries the `RealtimeFunctionToolChoice` payload for this protocol alternative.
     Function(RealtimeFunctionToolChoice),
+    /// Carries the `RealtimeMcpToolChoice` payload for this protocol alternative.
     Mcp(RealtimeMcpToolChoice),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(UnknownRealtimeObject),
 }
 
@@ -1372,30 +1455,54 @@ literal_tag!(
 pub struct RealtimeSessionCreateRequest {
     #[serde(rename = "type")]
     kind: RealtimeSessionRequestTag,
+    /// Modalities requested or reported for the model's response.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output_modalities: Omittable<Vec<RealtimeOutputModality>>,
+    /// Identifier of the model used or requested for the operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub model: Omittable<String>,
+    /// The default system instructions (i.e. system message) prepended to model calls. This field
+    /// allows the client to guide the model on desired responses. The model can be instructed on
+    /// response content and format, (e.g. "be extremely succinct", "act friendly", "here are
+    /// examples of good responses") and on audio behavior (e.g. "talk quickly", "inject emotion
+    /// into your voice", "laugh frequently"). The instructions are not guaranteed to be followed by
+    /// the model, but they provide guidance to the model on the desired behavior. Note that the
+    /// server sets default instructions which will be used if this field is not set and are visible
+    /// in the `session.created` event at the start of the session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub instructions: Omittable<String>,
+    /// Audio content or configuration associated with this payload.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeSessionAudio>,
+    /// Additional response fields requested from the service.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub include: Omittable<Vec<String>>,
+    /// Configuration options for tracing. Set to null to disable tracing. Once tracing is enabled
+    /// for a session, the configuration cannot be modified.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tracing: Omittable<Nullable<RealtimeTracing>>,
+    /// Tools (functions) available to the model.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tools: Omittable<Vec<RealtimeTool>>,
+    /// How the model chooses tools. Options are `auto`, `none`, `required`, or specify a function.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tool_choice: Omittable<RealtimeToolChoice>,
+    /// Whether the model may issue multiple tool calls in parallel.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub parallel_tool_calls: Omittable<bool>,
+    /// Reasoning configuration applied to the model response.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub reasoning: Omittable<RealtimeReasoning>,
+    /// Maximum number of tokens the model may generate for this response.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub max_output_tokens: Omittable<RealtimeMaxOutputTokens>,
+    /// When the number of tokens in a conversation exceeds the model's input token limit, the
+    /// conversation be truncated, meaning messages (starting from the oldest) will not be included
+    /// in the model's context. A 32k context model with 4,096 max output tokens can only include
+    /// 28,224 tokens in the context before truncation occurs.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub truncation: Omittable<RealtimeTruncation>,
+    /// Reference to a prompt template and its variables. Learn more.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub prompt: Omittable<Nullable<PromptReference>>,
     #[serde(flatten)]
@@ -1404,6 +1511,12 @@ pub struct RealtimeSessionCreateRequest {
 
 impl RealtimeSessionCreateRequest {
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
         if let Omittable::Value(audio) = &self.audio {
             if let Omittable::Value(input) = &audio.input {
@@ -1461,8 +1574,11 @@ impl Default for RealtimeSessionCreateRequest {
 pub struct RealtimeTranscriptionSessionCreateRequest {
     #[serde(rename = "type")]
     kind: RealtimeTranscriptionRequestTag,
+    /// Audio content or configuration associated with this payload.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeTranscriptionAudio>,
+    /// The set of items to include in the transcription. Current available items are:
+    /// `item.input_audio_transcription.logprobs`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub include: Omittable<Vec<String>>,
     #[serde(flatten)]
@@ -1482,6 +1598,12 @@ impl Default for RealtimeTranscriptionSessionCreateRequest {
 
 impl RealtimeTranscriptionSessionCreateRequest {
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
         if let Omittable::Value(audio) = &self.audio
             && let Omittable::Value(input) = &audio.input
@@ -1496,8 +1618,12 @@ impl RealtimeTranscriptionSessionCreateRequest {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RealtimeSessionConfig {
+    /// Carries the `RealtimeSessionCreateRequest` payload for this protocol alternative.
     Realtime(Box<RealtimeSessionCreateRequest>),
+    /// Carries the `RealtimeTranscriptionSessionCreateRequest` payload for this protocol
+    /// alternative.
     Transcription(Box<RealtimeTranscriptionSessionCreateRequest>),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(UnknownRealtimeObject),
 }
 
@@ -1550,6 +1676,12 @@ impl From<RealtimeTranscriptionSessionCreateRequest> for RealtimeSessionConfig {
 
 impl RealtimeSessionConfig {
     /// Checks pinned OpenAPI limits on the nested session body.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
         match self {
             Self::Realtime(session) => session.validate(),
@@ -1570,33 +1702,54 @@ literal_tag!(RealtimeSessionObjectTag, Session, "realtime.session");
 pub struct RealtimeSession {
     #[serde(rename = "type")]
     kind: RealtimeSessionRequestTag,
+    /// Unique identifier for the session that looks like `sess_1234567890abcdef`.
     pub id: String,
     #[serde(rename = "object")]
     object: RealtimeSessionObjectTag,
+    /// Expiration timestamp for the session, in seconds since epoch.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub expires_at: Omittable<i64>,
+    /// Modalities requested or reported for the model's response.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output_modalities: Omittable<Vec<RealtimeOutputModality>>,
+    /// The Realtime model used for this session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub model: Omittable<String>,
+    /// The default system instructions (i.e. system message) prepended to model calls. This field
+    /// allows the client to guide the model on desired responses. The model can be instructed on
+    /// response content and format, (e.g. "be extremely succinct", "act friendly", "here are
+    /// examples of good responses") and on audio behavior (e.g. "talk quickly", "inject emotion
+    /// into your voice", "laugh frequently"). The instructions are not guaranteed to be followed by
+    /// the model, but they provide guidance to the model on the desired behavior.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub instructions: Omittable<String>,
+    /// Audio content or configuration associated with this payload.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeSessionAudioState>,
+    /// Additional fields to include in server outputs. - `item.input_audio_transcription.logprobs`:
+    /// Include logprobs for input audio transcription.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub include: Omittable<Nullable<Vec<String>>>,
+    /// Configuration options for tracing. Set to null to disable tracing. Once tracing is enabled
+    /// for a session, the configuration cannot be modified.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tracing: Omittable<Nullable<RealtimeTracing>>,
+    /// Tools (functions) available to the model.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tools: Omittable<Vec<RealtimeTool>>,
+    /// How the model chooses tools. Options are `auto`, `none`, `required`, or specify a function.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tool_choice: Omittable<RealtimeToolChoice>,
+    /// Reasoning configuration applied to the model response.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub reasoning: Omittable<RealtimeReasoning>,
+    /// Maximum number of tokens the model may generate for this response.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub max_output_tokens: Omittable<RealtimeMaxOutputTokens>,
+    /// Policy controlling how context is truncated when token limits are reached.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub truncation: Omittable<RealtimeTruncation>,
+    /// Reference to a prompt template and its variables. Learn more.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub prompt: Omittable<Nullable<PromptReference>>,
     #[serde(flatten)]
@@ -1608,12 +1761,17 @@ pub struct RealtimeSession {
 pub struct RealtimeTranscriptionSession {
     #[serde(rename = "type")]
     kind: RealtimeTranscriptionRequestTag,
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Wire discriminator identifying the resource or list type.
     pub object: String,
+    /// Expiration time as a Unix timestamp in seconds.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub expires_at: Omittable<i64>,
+    /// Additional response fields requested from the service.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub include: Omittable<Nullable<Vec<String>>>,
+    /// Audio content or configuration associated with this payload.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeTranscriptionAudio>,
     #[serde(flatten)]
@@ -1624,8 +1782,11 @@ pub struct RealtimeTranscriptionSession {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RealtimeSessionState {
+    /// Carries the `RealtimeSession` payload for this protocol alternative.
     Realtime(Box<RealtimeSession>),
+    /// Carries the `RealtimeTranscriptionSession` payload for this protocol alternative.
     Transcription(Box<RealtimeTranscriptionSession>),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(UnknownRealtimeObject),
 }
 
@@ -1691,12 +1852,14 @@ open_string_enum! {
 /// One system-message content part.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeSystemContentPart {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(
         rename = "type",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub kind: Omittable<RealtimeSystemContentType>,
+    /// Text carried by this content item or notification.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub text: Omittable<String>,
     #[serde(flatten)]
@@ -1718,20 +1881,26 @@ impl RealtimeSystemContentPart {
 /// One user-message content part.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeUserContentPart {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(
         rename = "type",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub kind: Omittable<RealtimeUserContentType>,
+    /// Text carried by this content item or notification.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub text: Omittable<String>,
+    /// Audio content or configuration associated with this payload.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeAudio>,
+    /// URL or data URL identifying the image content.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub image_url: Omittable<String>,
+    /// Requested level of detail for processing the image.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub detail: Omittable<RealtimeImageDetail>,
+    /// Text transcribed from the audio content.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub transcript: Omittable<String>,
     #[serde(flatten)]
@@ -1773,16 +1942,20 @@ impl RealtimeUserContentPart {
 /// One assistant-message content part.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeAssistantContentPart {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(
         rename = "type",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub kind: Omittable<RealtimeAssistantContentType>,
+    /// Text carried by this content item or notification.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub text: Omittable<String>,
+    /// Audio content or configuration associated with this payload.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeAudio>,
+    /// Text transcribed from the audio content.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub transcript: Omittable<String>,
     #[serde(flatten)]
@@ -1815,15 +1988,20 @@ literal_tag!(
 /// System message in a Realtime conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeConversationItemMessageSystem {
+    /// The unique ID of the item. This may be provided by the client or generated by the server.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
+    /// Identifier for the API object being returned - always `realtime.item`. Optional when
+    /// creating a new item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub object: Omittable<String>,
+    /// The status of the item. Has no effect on the conversation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub status: Omittable<RealtimeItemStatus>,
     #[serde(rename = "type")]
     kind: RealtimeMessageItemTag,
     role: RealtimeSystemRoleTag,
+    /// The content of the message.
     pub content: Vec<RealtimeSystemContentPart>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -1848,15 +2026,20 @@ impl RealtimeConversationItemMessageSystem {
 /// User message in a Realtime conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeConversationItemMessageUser {
+    /// The unique ID of the item. This may be provided by the client or generated by the server.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
+    /// Identifier for the API object being returned - always `realtime.item`. Optional when
+    /// creating a new item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub object: Omittable<String>,
+    /// The status of the item. Has no effect on the conversation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub status: Omittable<RealtimeItemStatus>,
     #[serde(rename = "type")]
     kind: RealtimeMessageItemTag,
     role: RealtimeUserRoleTag,
+    /// The content of the message.
     pub content: Vec<RealtimeUserContentPart>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -1881,15 +2064,20 @@ impl RealtimeConversationItemMessageUser {
 /// Assistant message in a Realtime conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeConversationItemMessageAssistant {
+    /// The unique ID of the item. This may be provided by the client or generated by the server.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
+    /// Identifier for the API object being returned - always `realtime.item`. Optional when
+    /// creating a new item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub object: Omittable<String>,
+    /// The status of the item. Has no effect on the conversation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub status: Omittable<RealtimeItemStatus>,
     #[serde(rename = "type")]
     kind: RealtimeMessageItemTag,
     role: RealtimeAssistantRoleTag,
+    /// The content of the message.
     pub content: Vec<RealtimeAssistantContentPart>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -1898,17 +2086,25 @@ pub struct RealtimeConversationItemMessageAssistant {
 /// Function call in a Realtime conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeConversationItemFunctionCall {
+    /// The unique ID of the item. This may be provided by the client or generated by the server.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
+    /// Identifier for the API object being returned - always `realtime.item`. Optional when
+    /// creating a new item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub object: Omittable<String>,
     #[serde(rename = "type")]
     kind: RealtimeFunctionCallItemTag,
+    /// The status of the item. Has no effect on the conversation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub status: Omittable<RealtimeItemStatus>,
+    /// The ID of the function call.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub call_id: Omittable<String>,
+    /// The name of the function being called.
     pub name: String,
+    /// The arguments of the function call. This is a JSON-encoded string representing the arguments
+    /// passed to the function, for example `{"arg1": "value1", "arg2": 42}`.
     pub arguments: JsonText,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -1931,6 +2127,11 @@ impl RealtimeConversationItemFunctionCall {
     }
 
     /// Serializes typed function arguments into the protocol string field.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable<T: Serialize>(
         name: impl Into<String>,
         arguments: &T,
@@ -1944,15 +2145,22 @@ impl RealtimeConversationItemFunctionCall {
 /// Output for a preceding Realtime function call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeConversationItemFunctionCallOutput {
+    /// The unique ID of the item. This may be provided by the client or generated by the server.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
+    /// Identifier for the API object being returned - always `realtime.item`. Optional when
+    /// creating a new item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub object: Omittable<String>,
     #[serde(rename = "type")]
     kind: RealtimeFunctionCallOutputItemTag,
+    /// The status of the item. Has no effect on the conversation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub status: Omittable<RealtimeItemStatus>,
+    /// The ID of the function call this output is for.
     pub call_id: String,
+    /// The output of the function call, this is free text and can contain any information or simply
+    /// be empty.
     pub output: String,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -1974,6 +2182,11 @@ impl RealtimeConversationItemFunctionCallOutput {
     }
 
     /// Serializes a typed function result into the protocol string field.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the supplied value cannot be encoded as JSON, or a shape
+    /// error if the encoded value is incompatible with the required wire representation.
     pub fn from_serializable<T: Serialize>(
         call_id: impl Into<String>,
         output: &T,
@@ -1987,9 +2200,13 @@ impl RealtimeConversationItemFunctionCallOutput {
 pub struct RealtimeMcpApprovalResponse {
     #[serde(rename = "type")]
     kind: RealtimeMcpApprovalResponseItemTag,
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Identifier of the approval request answered by this response.
     pub approval_request_id: String,
+    /// Whether the requested tool action is approved.
     pub approve: bool,
+    /// Explanation or classification associated with this outcome.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub reason: Omittable<Nullable<String>>,
     #[serde(flatten)]
@@ -2018,10 +2235,14 @@ impl RealtimeMcpApprovalResponse {
 /// One tool in a Realtime `mcp_list_tools` item.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeMcpListedTool {
+    /// Name assigned to this resource or operation.
     pub name: String,
+    /// Human-readable description of the resource, function, or tool.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub description: Omittable<Nullable<String>>,
+    /// JSON Schema describing the tool's accepted arguments.
     pub input_schema: Value,
+    /// Annotations attached to the generated content.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub annotations: Omittable<Nullable<Value>>,
     #[serde(flatten)]
@@ -2033,9 +2254,12 @@ pub struct RealtimeMcpListedTool {
 pub struct RealtimeMcpListTools {
     #[serde(rename = "type")]
     kind: RealtimeMcpListToolsItemTag,
+    /// Identifier used to reference this resource or protocol item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
+    /// Label identifying the remote MCP server.
     pub server_label: String,
+    /// Tool definitions available to the model or returned by the MCP server.
     pub tools: Vec<RealtimeMcpListedTool>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -2054,7 +2278,9 @@ literal_tag!(RealtimeMcpHttpErrorTag, HttpError, "http_error");
 pub struct RealtimeMcpProtocolError {
     #[serde(rename = "type")]
     kind: RealtimeMcpProtocolErrorTag,
+    /// Machine-readable error code reported by the service.
     pub code: i64,
+    /// Human-readable message describing this event or failure.
     pub message: String,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -2065,6 +2291,7 @@ pub struct RealtimeMcpProtocolError {
 pub struct RealtimeMcpToolExecutionError {
     #[serde(rename = "type")]
     kind: RealtimeMcpToolExecutionErrorTag,
+    /// Human-readable message describing this event or failure.
     pub message: String,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -2075,7 +2302,9 @@ pub struct RealtimeMcpToolExecutionError {
 pub struct RealtimeMcpHttpError {
     #[serde(rename = "type")]
     kind: RealtimeMcpHttpErrorTag,
+    /// Machine-readable error code reported by the service.
     pub code: i64,
+    /// Human-readable message describing this event or failure.
     pub message: String,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -2085,9 +2314,13 @@ pub struct RealtimeMcpHttpError {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RealtimeMcpError {
+    /// Carries the `RealtimeMcpProtocolError` payload for this protocol alternative.
     Protocol(RealtimeMcpProtocolError),
+    /// Carries the `RealtimeMcpToolExecutionError` payload for this protocol alternative.
     ToolExecution(RealtimeMcpToolExecutionError),
+    /// Carries the `RealtimeMcpHttpError` payload for this protocol alternative.
     Http(RealtimeMcpHttpError),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(UnknownRealtimeObject),
 }
 
@@ -2133,14 +2366,21 @@ impl<'de> Deserialize<'de> for RealtimeMcpError {
 pub struct RealtimeMcpToolCall {
     #[serde(rename = "type")]
     kind: RealtimeMcpCallItemTag,
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Label identifying the remote MCP server.
     pub server_label: String,
+    /// Name assigned to this resource or operation.
     pub name: String,
+    /// Arguments supplied to the function or tool call.
     pub arguments: JsonText,
+    /// Identifier of the approval request answered by this response.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub approval_request_id: Omittable<Nullable<String>>,
+    /// Output content or output-side configuration for this operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output: Omittable<Nullable<String>>,
+    /// Error details returned when the operation fails.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub error: Omittable<Nullable<RealtimeMcpError>>,
     #[serde(flatten)]
@@ -2152,9 +2392,13 @@ pub struct RealtimeMcpToolCall {
 pub struct RealtimeMcpApprovalRequest {
     #[serde(rename = "type")]
     kind: RealtimeMcpApprovalRequestItemTag,
+    /// Identifier used to reference this resource or protocol item.
     pub id: String,
+    /// Label identifying the remote MCP server.
     pub server_label: String,
+    /// Name assigned to this resource or operation.
     pub name: String,
+    /// Arguments supplied to the function or tool call.
     pub arguments: JsonText,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -2164,15 +2408,27 @@ pub struct RealtimeMcpApprovalRequest {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RealtimeConversationItem {
+    /// Carries the `RealtimeConversationItemMessageSystem` payload for this protocol alternative.
     SystemMessage(RealtimeConversationItemMessageSystem),
+    /// Carries the `RealtimeConversationItemMessageUser` payload for this protocol alternative.
     UserMessage(RealtimeConversationItemMessageUser),
+    /// Carries the `RealtimeConversationItemMessageAssistant` payload for this protocol
+    /// alternative.
     AssistantMessage(RealtimeConversationItemMessageAssistant),
+    /// Carries the `RealtimeConversationItemFunctionCall` payload for this protocol alternative.
     FunctionCall(RealtimeConversationItemFunctionCall),
+    /// Carries the `RealtimeConversationItemFunctionCallOutput` payload for this protocol
+    /// alternative.
     FunctionCallOutput(RealtimeConversationItemFunctionCallOutput),
+    /// Carries the `RealtimeMcpApprovalResponse` payload for this protocol alternative.
     McpApprovalResponse(RealtimeMcpApprovalResponse),
+    /// Carries the `RealtimeMcpListTools` payload for this protocol alternative.
     McpListTools(RealtimeMcpListTools),
+    /// Carries the `RealtimeMcpToolCall` payload for this protocol alternative.
     McpCall(RealtimeMcpToolCall),
+    /// Carries the `RealtimeMcpApprovalRequest` payload for this protocol alternative.
     McpApprovalRequest(RealtimeMcpApprovalRequest),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(UnknownRealtimeObject),
 }
 
@@ -2288,28 +2544,61 @@ open_string_enum! {
 /// Parameters supplied by `response.create`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeResponseCreateParams {
+    /// The set of modalities the model used to respond, currently the only possible values are
+    /// `[\"audio\"]`, `[\"text\"]`. Audio output always include a text transcript. Setting the
+    /// output to mode `text` will disable audio output from the model.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output_modalities: Omittable<Vec<RealtimeOutputModality>>,
+    /// The default system instructions (i.e. system message) prepended to model calls. This field
+    /// allows the client to guide the model on desired responses. The model can be instructed on
+    /// response content and format, (e.g. "be extremely succinct", "act friendly", "here are
+    /// examples of good responses") and on audio behavior (e.g. "talk quickly", "inject emotion
+    /// into your voice", "laugh frequently"). The instructions are not guaranteed to be followed by
+    /// the model, but they provide guidance to the model on the desired behavior. Note that the
+    /// server sets default instructions which will be used if this field is not set and are visible
+    /// in the `session.created` event at the start of the session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub instructions: Omittable<String>,
+    /// Configuration for audio input and output.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeResponseCreateAudio>,
+    /// Tools available to the model.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tools: Omittable<Vec<RealtimeTool>>,
+    /// How the model chooses tools. Provide one of the string modes or force a specific
+    /// function/MCP tool.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub tool_choice: Omittable<RealtimeToolChoice>,
+    /// Whether the model may call multiple tools in parallel. Only supported by reasoning Realtime
+    /// models such as `gpt-realtime-2`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub parallel_tool_calls: Omittable<bool>,
+    /// Configuration for reasoning-capable Realtime models such as `gpt-realtime-2`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub reasoning: Omittable<RealtimeReasoning>,
+    /// Maximum number of output tokens for a single assistant response, inclusive of tool calls.
+    /// Provide an integer between 1 and 4096 to limit output tokens, or `inf` for the maximum
+    /// available tokens for a given model. Defaults to `inf`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub max_output_tokens: Omittable<RealtimeMaxOutputTokens>,
+    /// Controls which conversation the response is added to. Currently supports `auto` and `none`,
+    /// with `auto` as the default value. The `auto` value means that the contents of the response
+    /// will be added to the default conversation. Set this to `none` to create an out-of-band
+    /// response which will not add items to default conversation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub conversation: Omittable<RealtimeResponseConversation>,
+    /// Set of 16 key-value pairs that can be attached to an object. This can be useful for storing
+    /// additional information about the object in a structured format, and querying for objects via
+    /// API or the dashboard.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub metadata: Omittable<Nullable<BTreeMap<String, String>>>,
+    /// Reference to a prompt template and its variables. Learn more.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub prompt: Omittable<Nullable<PromptReference>>,
+    /// Input items to include in the prompt for the model. Using this field creates a new context
+    /// for this Response instead of using the default conversation. An empty array `[]` will clear
+    /// the context for this Response. Note that this can include references to items that
+    /// previously appeared in the session using their id.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input: Omittable<Vec<RealtimeConversationItem>>,
     #[serde(flatten)]
@@ -2319,12 +2608,14 @@ pub struct RealtimeResponseCreateParams {
 /// Error details attached to a failed Realtime response.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeResponseFailure {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(
         rename = "type",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub kind: Omittable<String>,
+    /// Machine-readable error code reported by the service.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub code: Omittable<Nullable<String>>,
     #[serde(flatten)]
@@ -2334,14 +2625,17 @@ pub struct RealtimeResponseFailure {
 /// Additional status details for a Realtime response.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeResponseStatusDetails {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(
         rename = "type",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub kind: Omittable<RealtimeResponseStatusDetailsType>,
+    /// Explanation or classification associated with this outcome.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub reason: Omittable<RealtimeResponseStopReason>,
+    /// Error details returned when the operation fails.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub error: Omittable<RealtimeResponseFailure>,
     #[serde(flatten)]
@@ -2351,10 +2645,13 @@ pub struct RealtimeResponseStatusDetails {
 /// Cached token breakdown for a Realtime response.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeCachedTokenDetails {
+    /// Number of text tokens represented by this usage counter.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub text_tokens: Omittable<i64>,
+    /// Number of image tokens represented by this usage counter.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub image_tokens: Omittable<i64>,
+    /// Number of audio tokens represented by this usage counter.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio_tokens: Omittable<i64>,
     #[serde(flatten)]
@@ -2364,14 +2661,19 @@ pub struct RealtimeCachedTokenDetails {
 /// Input-token breakdown for a Realtime response.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeInputTokenDetails {
+    /// Number of input tokens served from the prompt cache.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub cached_tokens: Omittable<i64>,
+    /// Number of text tokens represented by this usage counter.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub text_tokens: Omittable<i64>,
+    /// Number of image tokens represented by this usage counter.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub image_tokens: Omittable<i64>,
+    /// Number of audio tokens represented by this usage counter.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio_tokens: Omittable<i64>,
+    /// Breakdown of cached tokens by input modality.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub cached_tokens_details: Omittable<RealtimeCachedTokenDetails>,
     #[serde(flatten)]
@@ -2381,8 +2683,10 @@ pub struct RealtimeInputTokenDetails {
 /// Output-token breakdown for a Realtime response.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeOutputTokenDetails {
+    /// Number of text tokens represented by this usage counter.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub text_tokens: Omittable<i64>,
+    /// Number of audio tokens represented by this usage counter.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio_tokens: Omittable<i64>,
     #[serde(flatten)]
@@ -2392,14 +2696,19 @@ pub struct RealtimeOutputTokenDetails {
 /// Token usage for a Realtime response.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeResponseUsage {
+    /// Total number of input and output tokens consumed by the operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub total_tokens: Omittable<i64>,
+    /// Total number of input tokens consumed by the operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_tokens: Omittable<i64>,
+    /// Total number of tokens generated by the operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output_tokens: Omittable<i64>,
+    /// Breakdown of input-token usage by modality and cache status.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_token_details: Omittable<RealtimeInputTokenDetails>,
+    /// Breakdown of generated-token usage by modality.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output_token_details: Omittable<RealtimeOutputTokenDetails>,
     #[serde(flatten)]
@@ -2411,6 +2720,7 @@ literal_tag!(RealtimeResponseObjectTag, Response, "realtime.response");
 /// Realtime response resource carried by lifecycle events.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeResponse {
+    /// The unique ID of the response, will look like `resp_1234`.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
     #[serde(
@@ -2419,22 +2729,44 @@ pub struct RealtimeResponse {
         skip_serializing_if = "Omittable::is_omitted"
     )]
     object: Omittable<RealtimeResponseObjectTag>,
+    /// The final status of the response (`completed`, `cancelled`, `failed`, or `incomplete`,
+    /// `in_progress`).
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub status: Omittable<RealtimeResponseStatus>,
+    /// Additional details about the status.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub status_details: Omittable<Nullable<RealtimeResponseStatusDetails>>,
+    /// The list of output items generated by the response.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output: Omittable<Vec<RealtimeConversationItem>>,
+    /// Set of 16 key-value pairs that can be attached to an object. This can be useful for storing
+    /// additional information about the object in a structured format, and querying for objects via
+    /// API or the dashboard.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub metadata: Omittable<Nullable<BTreeMap<String, String>>>,
+    /// Configuration for audio output.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeResponseAudio>,
+    /// Usage statistics for the Response, this will correspond to billing. A Realtime API session
+    /// will maintain a conversation context and append new Items to the Conversation, thus output
+    /// from previous turns (text and audio tokens) will become the input for later turns.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub usage: Omittable<Nullable<RealtimeResponseUsage>>,
+    /// Which conversation the response is added to, determined by the `conversation` field in the
+    /// `response.create` event. If `auto`, the response will be added to the default conversation
+    /// and the value of `conversation_id` will be an id like `conv_1234`. If `none`, the response
+    /// will not be added to any conversation and the value of `conversation_id` will be `null`. If
+    /// responses are being triggered automatically by VAD the response will be added to the default
+    /// conversation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub conversation_id: Omittable<Nullable<String>>,
+    /// The set of modalities the model used to respond, currently the only possible values are
+    /// `[\"audio\"]`, `[\"text\"]`. Audio output always include a text transcript. Setting the
+    /// output to mode `text` will disable audio output from the model.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output_modalities: Omittable<Vec<RealtimeOutputModality>>,
+    /// Maximum number of output tokens for a single assistant response, inclusive of tool calls,
+    /// that was used in this response.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub max_output_tokens: Omittable<Nullable<RealtimeMaxOutputTokens>>,
     #[serde(flatten)]
@@ -2444,8 +2776,11 @@ pub struct RealtimeResponse {
 /// Log probability attached to input-audio transcription.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranscriptionLogprob {
+    /// Token text or token identifier associated with this entry.
     pub token: String,
+    /// Natural logarithm of the probability assigned to this token.
     pub logprob: f64,
+    /// Byte values associated with the token or payload.
     pub bytes: Vec<i64>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -2457,8 +2792,10 @@ literal_tag!(RealtimeTranscriptDurationUsageTag, Duration, "duration");
 /// Input token details for transcription billing.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranscriptInputTokenDetails {
+    /// Number of text tokens represented by this usage counter.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub text_tokens: Omittable<i64>,
+    /// Number of audio tokens represented by this usage counter.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio_tokens: Omittable<i64>,
     #[serde(flatten)]
@@ -2470,10 +2807,14 @@ pub struct RealtimeTranscriptInputTokenDetails {
 pub struct RealtimeTranscriptTokenUsage {
     #[serde(rename = "type")]
     kind: RealtimeTranscriptTokenUsageTag,
+    /// Total number of input tokens consumed by the operation.
     pub input_tokens: i64,
+    /// Breakdown of input-token usage by modality and cache status.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input_token_details: Omittable<RealtimeTranscriptInputTokenDetails>,
+    /// Total number of tokens generated by the operation.
     pub output_tokens: i64,
+    /// Total number of input and output tokens consumed by the operation.
     pub total_tokens: i64,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -2484,6 +2825,7 @@ pub struct RealtimeTranscriptTokenUsage {
 pub struct RealtimeTranscriptDurationUsage {
     #[serde(rename = "type")]
     kind: RealtimeTranscriptDurationUsageTag,
+    /// Duration represented by this usage record, in seconds.
     pub seconds: f64,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -2500,8 +2842,11 @@ pub struct RealtimeTranscriptDurationUsage {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RealtimeTranscriptionUsage {
+    /// Carries the `RealtimeTranscriptTokenUsage` payload for this protocol alternative.
     Tokens(RealtimeTranscriptTokenUsage),
+    /// Carries the `RealtimeTranscriptDurationUsage` payload for this protocol alternative.
     Duration(RealtimeTranscriptDurationUsage),
+    /// An unrecognized wire value retained for forward compatibility.
     Unknown(UnknownRealtimeObject),
 }
 
@@ -2541,16 +2886,20 @@ impl<'de> Deserialize<'de> for RealtimeTranscriptionUsage {
 /// Optional properties on a transcription failure.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranscriptionError {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(
         rename = "type",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub kind: Omittable<String>,
+    /// Machine-readable error code reported by the service.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub code: Omittable<Nullable<String>>,
+    /// Human-readable message describing this event or failure.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub message: Omittable<String>,
+    /// Parameter associated with the reported service error.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub param: Omittable<Nullable<String>>,
     #[serde(flatten)]
@@ -2560,15 +2909,21 @@ pub struct RealtimeTranscriptionError {
 /// Error payload in a GA Realtime `error` server event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeErrorDetails {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(rename = "type")]
     pub kind: String,
+    /// Machine-readable error code reported by the service.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub code: Omittable<Nullable<String>>,
+    /// Human-readable message describing this event or failure.
     pub message: String,
+    /// Parameter associated with the reported service error.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub param: Omittable<Nullable<String>>,
+    /// Identifier used to correlate this event with related protocol messages.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub event_id: Omittable<Nullable<String>>,
+    /// HTTP headers included in this protocol request or error context.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub headers: Omittable<BTreeMap<String, String>>,
     #[serde(flatten)]
@@ -2578,8 +2933,10 @@ pub struct RealtimeErrorDetails {
 /// Realtime conversation resource.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeConversation {
+    /// Identifier used to reference this resource or protocol item.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub id: Omittable<String>,
+    /// Wire discriminator identifying the resource or list type.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub object: Omittable<String>,
     #[serde(flatten)]
@@ -2589,12 +2946,16 @@ pub struct RealtimeConversation {
 /// One current Realtime rate-limit snapshot.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeRateLimit {
+    /// Name assigned to this resource or operation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub name: Omittable<RealtimeRateLimitName>,
+    /// Maximum number of units permitted in this rate-limit window.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub limit: Omittable<i64>,
+    /// Number of units remaining in the rate-limit window.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub remaining: Omittable<i64>,
+    /// Seconds remaining until the rate-limit window resets.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub reset_seconds: Omittable<f64>,
     #[serde(flatten)]
@@ -2612,16 +2973,20 @@ open_string_enum! {
 /// Content part carried by response content lifecycle events.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeResponseContentPart {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(
         rename = "type",
         default,
         skip_serializing_if = "Omittable::is_omitted"
     )]
     pub kind: Omittable<RealtimeResponseContentType>,
+    /// Text carried by this content item or notification.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub text: Omittable<String>,
+    /// Audio content or configuration associated with this payload.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeAudio>,
+    /// Text transcribed from the audio content.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub transcript: Omittable<String>,
     #[serde(flatten)]
@@ -2631,8 +2996,10 @@ pub struct RealtimeResponseContentPart {
 /// Client-secret expiration configuration.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeClientSecretExpiration {
+    /// Timestamp used as the origin of the relative expiration period.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub anchor: Omittable<RealtimeClientSecretExpirationAnchor>,
+    /// Duration represented by this usage record, in seconds.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub seconds: Omittable<i64>,
     #[serde(flatten)]
@@ -2642,8 +3009,14 @@ pub struct RealtimeClientSecretExpiration {
 /// Request body for `POST /realtime/client_secrets`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeCreateClientSecretRequest {
+    /// Configuration for the client secret expiration. Expiration refers to the time after which a
+    /// client secret will no longer be valid for creating sessions. The session itself may continue
+    /// after that time once started. A secret can be used to create multiple sessions until it
+    /// expires.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub expires_after: Omittable<RealtimeClientSecretExpiration>,
+    /// Session configuration to use for the client secret. Choose either a realtime session or a
+    /// transcription session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub session: Omittable<RealtimeSessionConfig>,
     #[serde(flatten)]
@@ -2652,6 +3025,12 @@ pub struct RealtimeCreateClientSecretRequest {
 
 impl RealtimeCreateClientSecretRequest {
     /// Checks pinned OpenAPI field limits without sending the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
         if let Omittable::Value(expiration) = &self.expires_after
             && let Omittable::Value(seconds) = expiration.seconds
@@ -2680,8 +3059,11 @@ impl RealtimeCreateClientSecretRequest {
 /// Client secret and effective session returned by the service.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RealtimeCreateClientSecretResponse {
+    /// The generated client secret value.
     pub value: WireSecret,
+    /// Expiration timestamp for the client secret, in seconds since epoch.
     pub expires_at: i64,
+    /// The session configuration for either a realtime or transcription session.
     pub session: RealtimeSessionState,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -2745,6 +3127,7 @@ impl RealtimeTranslationClientSecretExpiration {
         }
     }
 
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
@@ -2754,12 +3137,14 @@ impl RealtimeTranslationClientSecretExpiration {
 /// Required source-transcription model for translation sessions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranslationTranscription {
+    /// Identifier of the model used or requested for the operation.
     pub model: String,
     #[serde(flatten)]
     extra: ExtraFields,
 }
 
 impl RealtimeTranslationTranscription {
+    /// Selects the model used to transcribe incoming audio for translation.
     #[must_use]
     pub fn new(model: impl Into<String>) -> Self {
         Self {
@@ -2768,6 +3153,7 @@ impl RealtimeTranslationTranscription {
         }
     }
 
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
@@ -2777,6 +3163,7 @@ impl RealtimeTranslationTranscription {
 /// Required translation input noise-reduction mode.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranslationNoiseReduction {
+    /// Discriminator identifying the payload, policy, or failure category.
     #[serde(rename = "type")]
     pub kind: RealtimeNoiseReductionType,
     #[serde(flatten)]
@@ -2784,6 +3171,7 @@ pub struct RealtimeTranslationNoiseReduction {
 }
 
 impl RealtimeTranslationNoiseReduction {
+    /// Selects the noise-reduction mode applied before transcription.
     #[must_use]
     pub fn new(kind: RealtimeNoiseReductionType) -> Self {
         Self {
@@ -2792,6 +3180,7 @@ impl RealtimeTranslationNoiseReduction {
         }
     }
 
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
@@ -2801,8 +3190,10 @@ impl RealtimeTranslationNoiseReduction {
 /// Translation input-audio configuration.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranslationAudioInput {
+    /// Configuration or state for input-audio transcription.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub transcription: Omittable<Nullable<RealtimeTranslationTranscription>>,
+    /// Noise-reduction settings applied to incoming audio.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub noise_reduction: Omittable<Nullable<RealtimeTranslationNoiseReduction>>,
     #[serde(flatten)]
@@ -2810,42 +3201,49 @@ pub struct RealtimeTranslationAudioInput {
 }
 
 impl RealtimeTranslationAudioInput {
+    /// Sets input-audio transcription configuration.
     #[must_use]
     pub fn with_transcription(mut self, value: RealtimeTranslationTranscription) -> Self {
         self.transcription = Omittable::Value(Nullable::Value(value));
         self
     }
 
+    /// Serializes the input-audio transcription setting as an explicit JSON null.
     #[must_use]
     pub fn with_transcription_null(mut self) -> Self {
         self.transcription = Omittable::Value(Nullable::Null);
         self
     }
 
+    /// Omits the input-audio transcription setting from the serialized request.
     #[must_use]
     pub fn clear_transcription(mut self) -> Self {
         self.transcription = Omittable::Omitted;
         self
     }
 
+    /// Sets the noise-reduction configuration applied to incoming audio.
     #[must_use]
     pub fn with_noise_reduction(mut self, value: RealtimeTranslationNoiseReduction) -> Self {
         self.noise_reduction = Omittable::Value(Nullable::Value(value));
         self
     }
 
+    /// Serializes the noise-reduction setting as an explicit JSON null.
     #[must_use]
     pub fn with_noise_reduction_null(mut self) -> Self {
         self.noise_reduction = Omittable::Value(Nullable::Null);
         self
     }
 
+    /// Omits the noise-reduction setting from the serialized request.
     #[must_use]
     pub fn clear_noise_reduction(mut self) -> Self {
         self.noise_reduction = Omittable::Omitted;
         self
     }
 
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
@@ -2855,6 +3253,7 @@ impl RealtimeTranslationAudioInput {
 /// Translation output-audio configuration.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranslationAudioOutput {
+    /// Language code used for transcription or translation.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub language: Omittable<String>,
     #[serde(flatten)]
@@ -2862,6 +3261,7 @@ pub struct RealtimeTranslationAudioOutput {
 }
 
 impl RealtimeTranslationAudioOutput {
+    /// Selects the language used for translated output audio.
     #[must_use]
     pub fn new(language: impl Into<String>) -> Self {
         Self {
@@ -2870,6 +3270,7 @@ impl RealtimeTranslationAudioOutput {
         }
     }
 
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
@@ -2879,8 +3280,10 @@ impl RealtimeTranslationAudioOutput {
 /// Translation input/output audio settings.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranslationAudio {
+    /// Input-audio processing configuration for this session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub input: Omittable<RealtimeTranslationAudioInput>,
+    /// Output-audio generation configuration for this response or session.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub output: Omittable<RealtimeTranslationAudioOutput>,
     #[serde(flatten)]
@@ -2888,18 +3291,21 @@ pub struct RealtimeTranslationAudio {
 }
 
 impl RealtimeTranslationAudio {
+    /// Sets input-audio processing configuration.
     #[must_use]
     pub fn with_input(mut self, input: RealtimeTranslationAudioInput) -> Self {
         self.input = Omittable::Value(input);
         self
     }
 
+    /// Sets output-audio generation configuration.
     #[must_use]
     pub fn with_output(mut self, output: RealtimeTranslationAudioOutput) -> Self {
         self.output = Omittable::Value(output);
         self
     }
 
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
@@ -2909,7 +3315,9 @@ impl RealtimeTranslationAudio {
 /// Configuration used to create a Realtime translation session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranslationSessionCreateRequest {
+    /// The Realtime translation model used for this session.
     pub model: String,
+    /// Configuration for translation input and output audio.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeTranslationAudio>,
     #[serde(flatten)]
@@ -2917,6 +3325,7 @@ pub struct RealtimeTranslationSessionCreateRequest {
 }
 
 impl RealtimeTranslationSessionCreateRequest {
+    /// Creates a translation session request for the supplied model.
     #[must_use]
     pub fn new(model: impl Into<String>) -> Self {
         Self {
@@ -2926,12 +3335,14 @@ impl RealtimeTranslationSessionCreateRequest {
         }
     }
 
+    /// Sets the session audio configuration.
     #[must_use]
     pub fn with_audio(mut self, audio: RealtimeTranslationAudio) -> Self {
         self.audio = Omittable::Value(audio);
         self
     }
 
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
@@ -2943,17 +3354,23 @@ literal_tag!(RealtimeTranslationSessionTag, Translation, "translation");
 /// Effective Realtime translation session returned by the service.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranslationSession {
+    /// Unique identifier for the session that looks like `sess_1234567890abcdef`.
     pub id: String,
     #[serde(rename = "type")]
     kind: RealtimeTranslationSessionTag,
+    /// Expiration timestamp for the session, in seconds since epoch.
     pub expires_at: i64,
+    /// The Realtime translation model used for this session. This field is set at session creation
+    /// and cannot be changed with `session.update`.
     pub model: String,
+    /// Configuration for translation input and output audio.
     pub audio: RealtimeTranslationAudio,
     #[serde(flatten)]
     extra: ExtraFields,
 }
 
 impl RealtimeTranslationSession {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
@@ -2963,6 +3380,7 @@ impl RealtimeTranslationSession {
 /// Fields that can be updated on a translation session.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranslationSessionUpdateRequest {
+    /// Configuration for translation input and output audio.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub audio: Omittable<RealtimeTranslationAudio>,
     #[serde(flatten)]
@@ -2993,14 +3411,21 @@ impl RealtimeTranslationSessionUpdateRequest {
 /// Request for a translation session client secret.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTranslationClientSecretCreateRequest {
+    /// Configuration for the client secret expiration. Expiration refers to the time after which a
+    /// client secret will no longer be valid for creating sessions. The session itself may continue
+    /// after that time once started. A secret can be used to create multiple sessions until it
+    /// expires.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub expires_after: Omittable<RealtimeTranslationClientSecretExpiration>,
+    /// Realtime translation session configuration. Translation sessions stream source audio in and
+    /// translated audio plus transcript deltas out continuously.
     pub session: RealtimeTranslationSessionCreateRequest,
     #[serde(flatten)]
     extra: ExtraFields,
 }
 
 impl RealtimeTranslationClientSecretCreateRequest {
+    /// Creates a client-secret request for the supplied translation-session configuration.
     #[must_use]
     pub fn new(session: RealtimeTranslationSessionCreateRequest) -> Self {
         Self {
@@ -3018,6 +3443,12 @@ impl RealtimeTranslationClientSecretCreateRequest {
     /// client-secret expiration, so it is enforced only through this opt-in
     /// hook, reusing the GA [`CreateRealtimeSessionConstraintError`] variant
     /// (D0036).
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
         if let Omittable::Value(expiration) = &self.expires_after
             && let Omittable::Value(seconds) = expiration.seconds
@@ -3035,6 +3466,7 @@ impl RealtimeTranslationClientSecretCreateRequest {
         Ok(())
     }
 
+    /// Sets the expiration anchor and lifetime for the client secret.
     #[must_use]
     pub fn with_expires_after(
         mut self,
@@ -3044,12 +3476,14 @@ impl RealtimeTranslationClientSecretCreateRequest {
         self
     }
 
+    /// Omits the client-secret expiration override from the serialized request.
     #[must_use]
     pub fn clear_expires_after(mut self) -> Self {
         self.expires_after = Omittable::Omitted;
         self
     }
 
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
@@ -3059,14 +3493,19 @@ impl RealtimeTranslationClientSecretCreateRequest {
 /// Translation client secret and effective session.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RealtimeTranslationClientSecretCreateResponse {
+    /// The generated client secret value.
     pub value: WireSecret,
+    /// Expiration timestamp for the client secret, in seconds since epoch.
     pub expires_at: i64,
+    /// A Realtime translation session. Translation sessions continuously translate input audio into
+    /// the configured output language.
     pub session: RealtimeTranslationSession,
     #[serde(flatten)]
     extra: ExtraFields,
 }
 
 impl RealtimeTranslationClientSecretCreateResponse {
+    /// Returns unknown fields retained while decoding this object.
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
@@ -3088,6 +3527,7 @@ impl fmt::Debug for RealtimeTranslationClientSecretCreateResponse {
 /// Ergonomic aliases matching the verb-first naming used by other Realtime DTOs.
 pub type RealtimeCreateTranslationClientSecretRequest =
     RealtimeTranslationClientSecretCreateRequest;
+/// Response from creating an ephemeral client secret for Realtime translation.
 pub type RealtimeCreateTranslationClientSecretResponse =
     RealtimeTranslationClientSecretCreateResponse;
 
@@ -3125,7 +3565,10 @@ impl From<&str> for RealtimeSdp {
 /// Multipart request for creating a WebRTC Realtime call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeCallCreateRequest {
+    /// WebRTC Session Description Protocol (SDP) offer generated by the caller.
     pub sdp: RealtimeSdp,
+    /// Optional session configuration to apply before the realtime session is created. Use the same
+    /// parameters you would send in a `create client secret` request.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub session: Omittable<RealtimeSessionCreateRequest>,
     #[serde(flatten)]
@@ -3164,6 +3607,8 @@ pub type RealtimeCallAcceptRequest = RealtimeSessionCreateRequest;
 /// Request to transfer an active SIP call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeCallReferRequest {
+    /// URI that should appear in the SIP Refer-To header. Supports values like `tel:+14155550123`
+    /// or `sip:agent@example.com`.
     pub target_uri: url::Url,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -3180,6 +3625,11 @@ impl RealtimeCallReferRequest {
     }
 
     /// Parses and validates an absolute transfer URI.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn parse(target_uri: &str) -> Result<Self, url::ParseError> {
         url::Url::parse(target_uri).map(Self::new)
     }
@@ -3188,6 +3638,7 @@ impl RealtimeCallReferRequest {
 /// Request to reject an incoming SIP call.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeCallRejectRequest {
+    /// SIP response code to send back to the caller. Defaults to `603` (Decline) when omitted.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub status_code: Omittable<i64>,
     #[serde(flatten)]
@@ -3227,7 +3678,9 @@ pub struct RealtimeCallHangupRequest;
 /// header name or value.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeSipHeader {
+    /// Name assigned to this resource or operation.
     pub name: String,
+    /// SIP header value received with the incoming call.
     pub value: String,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -3248,7 +3701,9 @@ impl fmt::Debug for RealtimeSipHeader {
 /// implementation reports only their count.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeCallIncomingData {
+    /// Identifier that associates a tool invocation with its output.
     pub call_id: String,
+    /// SIP headers associated with the incoming call.
     pub sip_headers: Vec<RealtimeSipHeader>,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -3279,8 +3734,11 @@ literal_tag!(
 /// carry SIP credentials.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct WebhookRealtimeCallIncoming {
+    /// The Unix timestamp (in seconds) of when the model response was completed.
     pub created_at: i64,
+    /// The unique ID of the event.
     pub id: String,
+    /// Event data payload.
     pub data: RealtimeCallIncomingData,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     object: Omittable<RealtimeIncomingWebhookObjectTag>,
@@ -3327,11 +3785,16 @@ macro_rules! client_event_struct {
         $(#[$meta])*
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct $name {
+            /// Optional client-supplied identifier used to correlate this event.
             #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
             pub event_id: Omittable<String>,
             #[serde(rename = "type")]
             kind: $tag,
-            $($(#[$field_meta])* pub $field: $field_ty,)*
+            $(
+                $(#[$field_meta])*
+                #[doc = concat!("The `", stringify!($field), "` property of the `", $wire, "` event.")]
+                pub $field: $field_ty,
+            )*
             #[serde(flatten)]
             extra: ExtraFields,
         }
@@ -3639,7 +4102,10 @@ macro_rules! tagged_event_union {
         #[derive(Debug, Clone, PartialEq)]
         #[non_exhaustive]
         pub enum $name {
-            $($variant(Box<$ty>),)+
+            $(
+                #[doc = concat!("The `", $wire, "` event with its typed payload.")]
+                $variant(Box<$ty>),
+            )+
             /// A future event retained as complete semantic JSON.
             Unknown(UnknownRealtimeObject),
         }
@@ -3732,6 +4198,12 @@ impl RealtimeClientEvent {
     ///
     /// `output_audio_buffer.clear` has no official `event_id` `maxLength` and is
     /// skipped. Nested `session.update` bodies reuse session `validate()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
         match self {
             Self::ConversationItemCreate(event) => validate_omittable_event_id(&event.event_id),
@@ -3764,10 +4236,15 @@ macro_rules! server_event_struct {
         $(#[$meta])*
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct $name {
+            /// Server-assigned identifier for this event.
             pub event_id: String,
             #[serde(rename = "type")]
             kind: $tag,
-            $($(#[$field_meta])* pub $field: $field_ty,)*
+            $(
+                $(#[$field_meta])*
+                #[doc = concat!("The `", stringify!($field), "` property of the `", $wire, "` event.")]
+                pub $field: $field_ty,
+            )*
             #[serde(flatten)]
             extra: ExtraFields,
         }
@@ -3925,7 +4402,9 @@ literal_tag!(
 pub struct RealtimeServerEventInputAudioBufferDtmfEventReceived {
     #[serde(rename = "type")]
     kind: RealtimeServerInputAudioBufferDtmfReceivedTag,
+    /// The telephone keypad that was pressed by the user.
     pub event: String,
+    /// UTC Unix Timestamp when DTMF Event was received by server.
     pub received_at: i64,
     #[serde(flatten)]
     extra: ExtraFields,
@@ -4615,6 +5094,12 @@ pub const REALTIME_TRANSLATION_CLIENT_EVENT_BRANCHES: &[&str] = &[
 
 impl RealtimeTranslationClientEvent {
     /// Checks pinned OpenAPI translation client `event_id` `maxLength` 512.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), CreateRealtimeSessionConstraintError> {
         match self {
             Self::SessionUpdate(event) => validate_omittable_event_id(&event.event_id),

@@ -21,6 +21,11 @@ pub struct ApiKey(SecretString);
 
 impl ApiKey {
     /// Validates and wraps a Platform API key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the key is empty or contains whitespace, control characters, or
+    /// non-ASCII characters.
     pub fn new(key: impl Into<String>) -> Result<Self, ApiKeyError> {
         let key = key.into();
         if key.is_empty() {
@@ -152,16 +157,22 @@ impl fmt::Debug for ApiKey {
 /// Validation failures for [`ApiKey`].
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum ApiKeyError {
+    /// The API key is empty.
     #[error("the API key is empty")]
     Empty,
+    /// The API key has leading or trailing whitespace.
     #[error("the API key has leading or trailing whitespace")]
     SurroundingWhitespace,
+    /// The API key contains whitespace.
     #[error("the API key contains whitespace")]
     Whitespace,
+    /// The API key contains a control character.
     #[error("the API key contains a control character")]
     ControlCharacter,
+    /// The API key contains non-ASCII characters.
     #[error("the API key contains non-ASCII characters")]
     NonAscii,
+    /// The API key cannot be represented as an HTTP authorization header.
     #[error("the API key cannot be represented as an HTTP authorization header")]
     InvalidHeaderValue,
 }
@@ -193,6 +204,6 @@ mod tests {
             ApiKey::new("key with-space"),
             Err(ApiKeyError::Whitespace)
         ));
-        assert!(matches!(ApiKey::new("密钥"), Err(ApiKeyError::NonAscii)));
+        assert!(matches!(ApiKey::new("key-🦀"), Err(ApiKeyError::NonAscii)));
     }
 }

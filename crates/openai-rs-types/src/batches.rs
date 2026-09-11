@@ -179,6 +179,11 @@ impl BatchMetadata {
     }
 
     /// Validates and inserts one metadata pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn insert(
         &mut self,
         key: impl Into<String>,
@@ -201,6 +206,12 @@ impl BatchMetadata {
     /// Decoding accepts oversized metadata so responses stay readable; senders
     /// that want the documented limits enforced before a request call this
     /// method or [`CreateBatchRequest::validate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), BatchValidationError> {
         validate_metadata(&self.0)
     }
@@ -313,11 +324,21 @@ pub struct BatchFileExpirationAfter {
 
 impl BatchFileExpirationAfter {
     /// Creates a policy anchored at the generated file's creation time.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub fn new(seconds: u64) -> Result<Self, BatchValidationError> {
         Self::from_raw_anchor(BatchFileExpirationAnchor::CreatedAt, seconds)
     }
 
     /// Creates a policy with a forward-compatible anchor value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the anchor is unsupported for this expiration policy or the requested
+    /// lifetime violates its bounds.
     pub fn from_raw_anchor(
         anchor: BatchFileExpirationAnchor,
         seconds: u64,
@@ -419,6 +440,12 @@ impl CreateBatchRequest {
     /// Decoding stays lossless (see [`BatchMetadata`]), so oversized maps can
     /// still be constructed or echoed; this opt-in hook enforces the pinned
     /// 16/64/512 limits before the body is transmitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns the corresponding validation error if an enforced field limit, format requirement,
+    /// or cross-field constraint is violated. Invalid values are not sent to the service by this
+    /// check.
     pub fn validate(&self) -> Result<(), BatchValidationError> {
         if let Omittable::Value(Nullable::Value(metadata)) = &self.metadata {
             metadata.validate()?;
@@ -965,6 +992,11 @@ pub struct BatchListLimit(u32);
 
 impl BatchListLimit {
     /// Creates a page size of at least 1.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conversion error if the supplied value violates the documented
+    /// field, size, count, or cross-field constraints for this type.
     pub const fn new(value: u32) -> Result<Self, BatchListLimitError> {
         if value == 0 {
             Err(BatchListLimitError { value })
@@ -1127,6 +1159,11 @@ pub struct BatchCustomId(Box<str>);
 
 impl BatchCustomId {
     /// Creates a non-empty custom identifier for an input line.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the custom identifier is empty. Whitespace is retained rather than
+    /// silently trimmed.
     pub fn new(value: impl Into<Box<str>>) -> Result<Self, BatchValidationError> {
         let value = value.into();
         if value.is_empty() {
@@ -1176,6 +1213,11 @@ impl<O> BatchLine<O> {
     /// constraint is enforced when the line is encoded by
     /// [`BatchJsonlWriter::write_line`], which reports
     /// [`BatchJsonlError::NonObjectBody`] for a non-object body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the custom identifier is empty or the endpoint and body cannot form a
+    /// valid batch line.
     pub fn new(
         custom_id: impl Into<Box<str>>,
         endpoint: BatchEndpoint,
@@ -1243,6 +1285,10 @@ pub struct BatchLineResponse<O> {
 
 impl<O> BatchLineResponse<O> {
     /// Creates a typed successful response value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the supplied status is in `200..300`.
     pub fn new(
         status_code: u16,
         request_id: impl Into<String>,
@@ -1260,6 +1306,11 @@ impl<O> BatchLineResponse<O> {
     }
 
     /// Creates a non-success HTTP result while retaining the error body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the supplied status is in `200..300`, because that
+    /// range must use the success constructor.
     pub fn error(
         status_code: u16,
         request_id: impl Into<String>,
@@ -1757,6 +1808,11 @@ impl<W: Write> BatchJsonlWriter<W> {
     /// written, because the Batch API requires a unique, non-empty
     /// `custom_id` on every input line and would only reject the file after
     /// upload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if JSON encoding, batch-line validation, or writing to the underlying
+    /// output fails.
     pub fn write_line<O>(&mut self, line: &BatchLine<O>) -> Result<(), BatchJsonlError>
     where
         O: Serialize,
@@ -1842,6 +1898,11 @@ impl<W: Write> BatchJsonlWriter<W> {
     }
 
     /// Flushes the underlying writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if JSON encoding, batch-line validation, or writing to the underlying
+    /// output fails.
     pub fn flush(&mut self) -> Result<(), BatchJsonlError> {
         if self.poisoned {
             return Err(BatchJsonlError::Poisoned);

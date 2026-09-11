@@ -217,6 +217,44 @@ and replays full output items following the official
 History lasts for this process only; use `/clear` when starting a new topic or
 when the model's context limit is reached.
 
+DeepSeek Responses compatibility: `usage.input_tokens_details.cache_write_tokens`
+may be omitted. `InputTokensDetails::cache_write_tokens()` returns `Option<u64>`:
+`None` means the provider did not report it; `Some(0)` means an explicit zero.
+Other reported usage counts and response fields are preserved. This accessor
+previously returned `u64`, so applications using it must now handle `None`.
+
+## Logging
+
+All examples initialize a `tracing` subscriber that reads the standard `RUST_LOG`
+variable and writes to stderr. The default level is `warn`. For raw JSON:
+
+```powershell
+$env:RUST_LOG = "openai_rs_client=trace"
+cargo run -p openai-rs-sdk --example chat_loop
+```
+
+| Level | Diagnostics |
+|---|---|
+| `error` | Terminal HTTP rejection, transport/body read failures, JSON decoding category, path and line/column |
+| `warn` | Retry count, delay, reason, HTTP status/request ID when available, exhausted request deadlines |
+| `info` | Accepted HTTP status, operation ID, request ID, retry count, elapsed time until response headers |
+| `debug` | Request method and route template, attempts, remaining timeout, buffered body size, authentication refresh |
+| `trace` | Raw JSON request/response bodies from the Platform JSON transport, including retried HTTP errors |
+
+Levels include more severe events. `info` confirms receipt of response headers;
+it does not claim that JSON decoding or stream consumption has finished.
+JSON responses are logged before typed decoding, so malformed or incompatible JSON
+is visible even when decoding fails. HTTP error responses and retry attempts
+are included; existing body size limits still apply, and truncated error bodies
+are marked with `body.truncated=true`. Authentication headers are excluded;
+raw bodies include conversation content and may contain sensitive application data.
+SSE/WebSocket frames, multipart uploads and binary streams are not logged.
+Use `RUST_LOG=off` to disable logging, or `RUST_LOG=openai_rs_client=debug` for
+request metadata without bodies. To select just body events, use
+`RUST_LOG=openai_rs_client::http_body=trace`. In your own application, initialize
+a subscriber that reads `RUST_LOG`; the SDK does not install one globally. See
+the [logging guide](docs/logging.md) for application setup and file output.
+
 ## Legacy Completions (opt-in)
 
 The legacy text Completions endpoint is excluded by default. Enable it only for

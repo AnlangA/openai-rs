@@ -45,6 +45,11 @@ pub struct FetchArguments {
     pub url: Option<String>,
 }
 
+/// Parses repository-maintenance arguments into a typed command.
+///
+/// # Errors
+///
+/// Returns an error for an unknown command, missing argument, or invalid option.
 pub fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Command> {
     let arguments = arguments.into_iter().collect::<Vec<_>>();
     let Some(command) = arguments.first().map(String::as_str) else {

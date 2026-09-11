@@ -26,6 +26,7 @@ impl ChatGptAccountId {
         Ok(Self(value))
     }
 
+    /// Returns the validated account identifier as a string slice.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0

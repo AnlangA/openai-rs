@@ -39,6 +39,11 @@ pub struct SafetyAlerts {
 impl SafetyAlerts {
     /// Retrieves a project alert using the webhook's `data.id`, not its event ID.
     /// The project credential must have `api.safety.alerts.read` permission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a client error if request preparation, authentication, transport, service execution,
+    /// or response decoding fails.
     pub async fn retrieve(&self, id: impl AsRef<str>) -> Result<ApiResponse<SafetyAlert>, Error> {
         let path = [
             PathSegment::literal("safety"),

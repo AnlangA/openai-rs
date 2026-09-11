@@ -59,11 +59,13 @@ pub struct StoredCodexSession {
 }
 
 impl StoredCodexSession {
+    /// Returns the access-token expiration time as a Unix timestamp in seconds.
     #[must_use]
     pub fn expires_at(&self) -> u64 {
         self.expires_at
     }
 
+    /// Returns the account identifier validated for this stored session.
     #[must_use]
     pub fn account_id(&self) -> &ChatGptAccountId {
         &self.account_id
@@ -114,8 +116,23 @@ impl std::fmt::Debug for StoredCodexSession {
 /// Async persistence boundary for one subscription account.
 #[async_trait]
 pub trait CredentialStore: Send + Sync + 'static {
+    /// Loads the stored session, or returns `None` when no session is present.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage backend cannot read or decode the saved session.
     async fn load(&self) -> Result<Option<StoredCodexSession>, DirectError>;
+    /// Persists the supplied session for subsequent authentication.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage backend cannot persist the session.
     async fn save(&self, session: &StoredCodexSession) -> Result<(), DirectError>;
+    /// Removes the saved session from the credential store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage backend cannot remove the stored session.
     async fn delete(&self) -> Result<(), DirectError>;
 }
 
@@ -198,6 +215,11 @@ impl std::fmt::Debug for DirectAuthClient {
 }
 
 impl DirectAuthClient {
+    /// Creates an authentication client for the fixed experimental Codex endpoints.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client or fixed endpoint configuration cannot be initialized.
     pub fn new() -> Result<Self, DirectError> {
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -251,6 +273,11 @@ impl DirectAuthClient {
     }
 
     /// Bind a registered IPv4 loopback port and build a PKCE+state+nonce URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the loopback callback listener, authorization state, or PKCE challenge
+    /// cannot be initialized.
     pub async fn begin_browser_login(&self) -> Result<BrowserLogin, DirectError> {
         let listener = bind_callback_listener().await?;
         let port = listener
@@ -352,6 +379,12 @@ impl DirectAuthClient {
         OidcVerifier::new(self.endpoints.issuer.clone(), CLIENT_ID, jwks)
     }
 
+    /// Requests a device authorization code and its verification URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if nonce generation, transport, the authorization service, or response
+    /// decoding fails.
     #[cfg(feature = "experimental-direct-device")]
     pub async fn begin_device_login(&self) -> Result<DeviceCodeLogin, DirectError> {
         let nonce = random_base64url(32)?;
@@ -397,7 +430,9 @@ async fn bind_callback_listener() -> Result<TcpListener, DirectError> {
 
 /// In-progress browser flow. Debug never includes state, nonce, or verifier.
 pub struct BrowserLogin {
+    /// Authorization URL opened by the browser login flow.
     pub authorize_url: Url,
+    /// URI to which the browser returns after authorization.
     pub redirect_uri: Url,
     listener: TcpListener,
     verifier: SecretString,
@@ -424,6 +459,12 @@ impl std::fmt::Debug for BrowserLogin {
 }
 
 impl BrowserLogin {
+    /// Waits for the browser callback, exchanges the authorization code, and saves the session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if cancelled, the callback deadline expires, callback or token validation
+    /// fails, the exchange fails, or the credential store cannot save the session.
     pub async fn complete<S: CredentialStore>(
         self,
         store: &S,
@@ -526,7 +567,9 @@ impl BrowserLogin {
 /// In-progress device-code flow.
 #[cfg(feature = "experimental-direct-device")]
 pub struct DeviceCodeLogin {
+    /// URL where the user enters the device authorization code.
     pub verification_url: Url,
+    /// Short code the user enters to authorize a device login.
     pub user_code: String,
     device_auth_id: SecretString,
     nonce: SecretString,
@@ -553,6 +596,12 @@ impl std::fmt::Debug for DeviceCodeLogin {
 
 #[cfg(feature = "experimental-direct-device")]
 impl DeviceCodeLogin {
+    /// Polls for device authorization and saves the resulting authenticated session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if cancelled, the authorization deadline expires, validation or token
+    /// exchange fails, or the credential store cannot save the session.
     pub async fn complete<S: CredentialStore>(
         self,
         store: &S,
@@ -644,6 +693,7 @@ impl<S: CredentialStore> std::fmt::Debug for TokenManager<S> {
 }
 
 impl<S: CredentialStore> TokenManager<S> {
+    /// Creates a token manager using the supplied credential store and authentication client.
     #[must_use]
     pub fn new(store: Arc<S>, auth: DirectAuthClient) -> Self {
         Self {
@@ -654,6 +704,12 @@ impl<S: CredentialStore> TokenManager<S> {
         }
     }
 
+    /// Returns a usable session, loading stored credentials and refreshing tokens when needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no authenticated session is available, credentials cannot be loaded, or
+    /// token refresh or persistence fails.
     pub async fn session(&self) -> Result<StoredCodexSession, DirectError> {
         let now = now_epoch()?;
         if let Some(session) = self.cached.read().await.clone()

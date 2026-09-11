@@ -118,6 +118,11 @@ where
     /// constructor, indefinitely; [`ExecutionControl::unbounded`] is
     /// reasonable only for in-process executors whose `list_tools` cannot
     /// block on I/O.
+    ///
+    /// # Errors
+    ///
+    /// Returns tool-discovery errors from the executor and catalog-validation errors from the
+    /// selected policy.
     pub async fn discover(
         executor: E,
         policy: CatalogPolicy,
@@ -130,6 +135,11 @@ where
     }
 
     /// Execute a typed OpenAI function call through the mapped MCP tool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown function, invalid arguments, executor failure, cancellation
+    /// or timeout, or a result that the selected encoding cannot represent.
     pub async fn dispatch(
         &self,
         call: &FunctionCall,
@@ -148,6 +158,11 @@ where
     ///
     /// This is useful to dispatch a call assembled from stream deltas after the
     /// arguments-done event has been received.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown function, invalid arguments, executor failure, cancellation
+    /// or timeout, or a result that the selected encoding cannot represent.
     pub async fn dispatch_parts(
         &self,
         call_id: &str,
@@ -267,7 +282,7 @@ mod tests {
             "item_1",
             "call_1",
             function.name(),
-            JsonText::from_raw(r#"{"city":"杭州"}"#),
+            JsonText::from_raw(r#"{"city":"Montréal"}"#),
             FunctionCallItemStatus::Completed,
         );
 
@@ -289,7 +304,7 @@ mod tests {
         assert!(matches!(
             calls.as_slice(),
             [(name, arguments)]
-                if name == "weather/read" && arguments["city"] == "杭州"
+                if name == "weather/read" && arguments["city"] == "Montréal"
         ));
     }
 
@@ -387,7 +402,7 @@ mod tests {
             .dispatch_parts(
                 "call_unknown",
                 "weather/nonexistent",
-                r#"{"city":"杭州"}"#,
+                r#"{"city":"Montréal"}"#,
                 &ExecutionControl::default(),
             )
             .await;

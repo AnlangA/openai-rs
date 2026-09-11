@@ -266,6 +266,10 @@ impl ExtraFields {
 
     /// Builds additional properties after checking them against the known
     /// fields of their containing object.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an extra property uses one of the reserved typed-field names.
     pub fn try_from_map<I, K>(
         fields: Map<String, Value>,
         reserved_keys: I,
@@ -319,6 +323,10 @@ impl ExtraFields {
     }
 
     /// Ensures that no extra property would collide with a known object key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a retained property conflicts with a reserved typed-field name.
     pub fn ensure_no_reserved<I, K>(&self, reserved_keys: I) -> Result<(), ExtraFieldsConflict>
     where
         I: IntoIterator<Item = K>,
@@ -414,7 +422,10 @@ macro_rules! tagged_union {
         // a breaking public-API refactor tracked separately from wire fixes.
         #[allow(clippy::large_enum_variant)]
         pub enum $name {
-            $($variant($ty),)+
+            $(
+                #[doc = concat!("Carries a `", stringify!($ty), "` payload for its supported wire discriminator values.")]
+                $variant($ty),
+            )+
             /// A future variant retained as a complete semantic JSON object.
             Unknown($crate::UnknownTaggedObject),
         }
@@ -464,7 +475,10 @@ macro_rules! tagged_union_reject_known {
         #[derive(Debug, Clone, PartialEq)]
         #[non_exhaustive]
         pub enum $name {
-            $($variant($ty),)+
+            $(
+                #[doc = concat!("The `", $tag, "` payload, decoded as `", stringify!($ty), "`.")]
+                $variant($ty),
+            )+
             /// A genuinely future source tag retained verbatim.
             Unknown($crate::UnknownTaggedObject),
         }
@@ -529,6 +543,11 @@ pub struct UnknownTaggedObject {
 
 impl UnknownTaggedObject {
     /// Validates and retains an unknown tagged JSON object.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decoding error if the input is malformed or does not match the expected wire
+    /// representation.
     pub fn from_value(value: Value) -> Result<Self, UnknownTaggedObjectError> {
         let discriminator = object_discriminator(&value)
             .map_err(UnknownTaggedObjectError::Invalid)?

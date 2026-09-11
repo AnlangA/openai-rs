@@ -7,8 +7,11 @@ use crate::Error;
 pub const COMPILED_APP_SERVER_SCHEMA_SHA256: &str =
     "95f68321313fc4d64c8781737abf60657d6d100e2f516a036253ca936f4d73a2";
 
+/// Codex runtime version audited by the bundled compatibility manifest.
 pub const BUNDLED_CODEX_VERSION: &str = "0.144.5";
+/// Compilation target of the audited bundled Codex executable.
 pub const BUNDLED_CODEX_TARGET: &str = "aarch64-apple-darwin";
+/// Expected SHA-256 digest of the audited bundled Codex executable.
 pub const BUNDLED_CODEX_EXECUTABLE_SHA256: &str =
     "5e29ab10ca1171be158f7335dd6bd8ce1aaf9af1556939db36a5ee338be6f5f2";
 
@@ -26,6 +29,11 @@ impl RuntimeIdentity {
     ///
     /// Source builds reporting `0.0.0`, missing versions, malformed digests,
     /// and all-zero placeholder digests are rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the release version or either digest is invalid, or the supplied schema
+    /// digest does not match the compiled protocol schema.
     pub fn new(
         released_version: impl Into<String>,
         executable_sha256: impl AsRef<str>,
@@ -61,16 +69,19 @@ impl RuntimeIdentity {
         })
     }
 
+    /// Returns the version string of the audited runtime release.
     #[must_use]
     pub fn released_version(&self) -> &str {
         &self.released_version
     }
 
+    /// Returns the expected SHA-256 digest of the audited runtime executable.
     #[must_use]
     pub fn executable_sha256(&self) -> &str {
         &self.executable_sha256
     }
 
+    /// Returns the expected SHA-256 digest of the matching protocol schema.
     #[must_use]
     pub fn schema_sha256(&self) -> &str {
         &self.schema_sha256
@@ -86,6 +97,11 @@ pub struct RuntimeCompatibility {
 impl RuntimeCompatibility {
     /// Build a non-empty compatibility set. One executable digest may occur
     /// only once, so a matched artifact always selects one unambiguous schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the compatibility set is empty or repeats an
+    /// executable SHA-256 digest.
     pub fn new<I>(identities: I) -> Result<Self, Error>
     where
         I: IntoIterator<Item = RuntimeIdentity>,
@@ -107,6 +123,7 @@ impl RuntimeCompatibility {
         Ok(Self { identities })
     }
 
+    /// Returns the runtime identities accepted by this compatibility manifest.
     #[must_use]
     pub fn identities(&self) -> &[RuntimeIdentity] {
         &self.identities
@@ -115,6 +132,11 @@ impl RuntimeCompatibility {
     /// Return the exact runtime identity vendored for this compilation target.
     /// Unsupported targets fail explicitly instead of reusing another
     /// platform's same-version identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the compatibility manifest has no audited runtime for the current
+    /// compilation target.
     pub fn for_current_target() -> Result<Self, Error> {
         #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
         {
@@ -135,6 +157,11 @@ impl RuntimeCompatibility {
     }
 
     /// Alias for [`Self::for_current_target`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the bundled runtime metadata is missing, invalid, or incompatible with
+    /// the compiled protocol schema.
     pub fn bundled() -> Result<Self, Error> {
         Self::for_current_target()
     }
