@@ -147,11 +147,24 @@ impl RmcpExecutor {
         preflight_control(control)?;
         let params = CallToolRequestParams::new(name.to_owned()).with_arguments(arguments);
         let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
-        let mut handle = self
-            .peer
-            .send_cancellable_request(request, PeerRequestOptions::no_options())
-            .await
-            .map_err(BridgeError::from_service)?;
+        // Enqueueing can block on rmcp's bounded peer channel. Start the timer
+        // here and keep the same future for the response phase.
+        let timeout = wait_for_timeout(control.timeout());
+        tokio::pin!(timeout);
+        let mut handle = tokio::select! {
+            biased;
+            () = wait_for_cancellation(control.cancellation()) => {
+                return Err(BridgeError::Cancelled {
+                    reason: control.cancellation().and_then(crate::CancellationToken::reason),
+                });
+            }
+            () = &mut timeout => {
+                return Err(BridgeError::Timeout { timeout: control.timeout().unwrap_or_default() });
+            }
+            result = self.peer.send_cancellable_request(request, PeerRequestOptions::no_options()) => {
+                result.map_err(BridgeError::from_service)?
+            }
+        };
 
         tokio::select! {
             biased;
@@ -188,7 +201,7 @@ impl RmcpExecutor {
                 .await;
                 Err(BridgeError::Cancelled { reason })
             }
-            () = wait_for_timeout(control.timeout()) => {
+            () = &mut timeout => {
                 let timeout = control.timeout().unwrap_or_default();
                 let _ = tokio::time::timeout(
                     CANCEL_DELIVERY_TIMEOUT,

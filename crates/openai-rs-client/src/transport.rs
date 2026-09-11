@@ -113,8 +113,12 @@ impl Transport {
     }
 
     #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
-    pub(crate) async fn authorization(&self) -> Result<crate::auth::AuthLease, Error> {
-        self.auth.authorization().await
+    pub(crate) async fn authorization(
+        &self,
+        started: Instant,
+        timeout: Duration,
+    ) -> Result<(crate::auth::AuthLease, Duration), Error> {
+        self.auth.authorization_with_budget(started, timeout).await
     }
 
     #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
@@ -345,21 +349,13 @@ impl Transport {
         let mut auth_refreshed = false;
 
         loop {
-            // The deadline event fires only here, at loop entry; a stream or
-            // body truncated mid-read by the same budget surfaces as
-            // `Error::ResponseBody` without this event (14-M-1 follow-up: the
-            // read lanes are owned elsewhere and trace.rs is not in scope for
-            // this round).
-            let remaining = self
-                .overall_timeout
-                .checked_sub(started.elapsed())
-                .filter(|remaining| !remaining.is_zero())
-                .ok_or_else(|| {
-                    trace::emit_deadline_exceeded();
+            let (authorization, remaining) = self
+                .auth
+                .authorization_with_budget(started, self.overall_timeout)
+                .await
+                .inspect_err(|_| {
                     trace::record_retry_count(retries);
-                    Error::DeadlineExceeded
                 })?;
-            let authorization = self.auth.authorization().await?;
             let mut request = self
                 .http
                 .request(meta.method.clone(), url.clone())
@@ -440,13 +436,15 @@ impl Transport {
                     response.headers(),
                     self.retry_policy.max_server_delay,
                 ) {
-                    ServerDelay::Valid(delay) => delay,
-                    // A missing, non-positive, or over-bound server delay all
-                    // fall back to local exponential backoff; the retry budget
-                    // above still caps the total number of attempts.
-                    ServerDelay::TooLong | ServerDelay::Absent => local_retry_delay(retries),
+                    ServerDelay::Valid(delay) => Some(delay),
+                    ServerDelay::Absent => Some(local_retry_delay(retries)),
+                    // A server minimum must never be shortened. Return the API
+                    // error when the caller's wait policy cannot honor it.
+                    ServerDelay::TooLong => None,
                 };
-                if can_wait(started, delay, self.overall_timeout) {
+                if let Some(delay) = delay
+                    && can_wait(started, delay, self.overall_timeout)
+                {
                     retries += 1;
                     trace::emit_retry(retries, delay, RetryReason::HttpStatus);
                     drop(response);
@@ -784,13 +782,13 @@ pub(crate) fn should_retry_response(response: &reqwest::Response) -> bool {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ServerDelay {
+pub(crate) enum ServerDelay {
     Absent,
     Valid(Duration),
     TooLong,
 }
 
-fn server_retry_delay(headers: &http::HeaderMap, maximum: Duration) -> ServerDelay {
+pub(crate) fn server_retry_delay(headers: &http::HeaderMap, maximum: Duration) -> ServerDelay {
     if let Some(value) = headers
         .get("retry-after-ms")
         .and_then(|value| value.to_str().ok())
@@ -799,8 +797,8 @@ fn server_retry_delay(headers: &http::HeaderMap, maximum: Duration) -> ServerDel
         // A *parseable* `retry-after-ms` decides the delay on its own, exactly
         // like openai-python's `_parse_retry_after_header` and the multipart
         // copy (`multipart.rs::retry_delay`): a positive, in-bound value wins,
-        // while zero, negative, non-finite (`nan`/`inf`), and over-bound values
-        // all map to local exponential backoff without ever consulting
+        // while zero, negative and non-finite (`nan`/`inf`) values map to
+        // local backoff and over-bound values stop automatic retries. Neither consults
         // `Retry-After`, so a stale coarse header cannot override the
         // millisecond header the server actually emitted. Only an unparseable
         // value falls through to `Retry-After`. The zero/negative guards live
@@ -841,7 +839,7 @@ fn server_retry_delay(headers: &http::HeaderMap, maximum: Duration) -> ServerDel
 }
 
 fn bounded_delay(seconds: f64, maximum: Duration) -> ServerDelay {
-    if seconds <= 0.0 {
+    if !seconds.is_finite() || seconds <= 0.0 {
         // Only strictly positive delays are honored, matching openai-python's
         // `0 < retry_after` gate; zero or negative values fall back to local
         // exponential backoff rather than triggering an immediate retry.
@@ -851,9 +849,7 @@ fn bounded_delay(seconds: f64, maximum: Duration) -> ServerDelay {
     } else {
         match Duration::try_from_secs_f64(seconds) {
             Ok(delay) => ServerDelay::Valid(delay),
-            // The only in-bound value that fails to convert is `nan`, which
-            // carries no usable delay and lands on the same local-backoff
-            // fallback as the over-bound branch above.
+            // An unrepresentable positive delay cannot be honored safely.
             Err(_) => ServerDelay::TooLong,
         }
     }
@@ -1014,6 +1010,7 @@ mod tests {
     };
 
     use bytes::Bytes;
+    use http::StatusCode;
     use http_body_util::Full;
     use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
     use hyper_util::rt::TokioIo;
@@ -1160,9 +1157,9 @@ mod tests {
 
         // Non-finite values parse as floats, so they decide alone as well.
         headers.insert("retry-after-ms", HeaderValue::from_static("nan"));
-        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::Absent);
         headers.insert("retry-after-ms", HeaderValue::from_static("inf"));
-        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::Absent);
 
         // An over-bound millisecond value beside an in-bound `Retry-After`
         // still never adopts the coarse header.
@@ -1411,40 +1408,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retry_after_above_the_bound_falls_back_to_local_backoff_and_keeps_retrying() {
-        let (client, attempts) = serve_scripted_responses(vec![ScriptedResponse {
-            status: http::StatusCode::INTERNAL_SERVER_ERROR,
-            retry_after: Some(HeaderValue::from_static("130")),
-            x_should_retry: None,
-            body: r#"{"error":{"message":"retry","type":"server_error","code":"temporary"}}"#,
-        }])
-        .await;
-
-        let started = Instant::now();
-        let error = client
-            .models()
-            .list()
-            .await
-            .expect_err("retry budget exhausted");
-        let elapsed = started.elapsed();
-
-        // The over-bound delay no longer aborts delivery, and the default
-        // policy still caps attempts at the initial request plus two retries.
-        assert_eq!(attempts.load(Ordering::SeqCst), 3);
-        let Error::Api(api) = &error else {
-            panic!("expected an API error, got {error:?}");
-        };
-        assert_eq!(api.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
-        // Two local backoffs are bounded by 0.5s + 1.0s (plus jitter), so the
-        // 130-second server value must not have been slept.
-        assert!(
-            elapsed >= Duration::from_millis(1000),
-            "expected local backoff between retries, waited only {elapsed:?}"
-        );
-        assert!(
-            elapsed < Duration::from_secs(60),
-            "over-bound `Retry-After` must not be slept, waited {elapsed:?}"
-        );
+    async fn retry_after_above_the_bound_returns_the_api_error_without_retrying() {
+        for status in [
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            for lane in 0..4 {
+                let (client, attempts) = serve_scripted_responses(vec![ScriptedResponse {
+                    status,
+                    retry_after: Some(HeaderValue::from_static("121")),
+                    x_should_retry: None,
+                    body: r#"{"error":{"message":"retry later","type":"test","code":"temporary"}}"#,
+                }])
+                .await;
+                let call = async {
+                    match lane {
+                        0 => client.models().list().await.map(|_| ()),
+                        1 => client
+                            .files()
+                            .create(openai_rs_types::CreateFileRequest::new(
+                                openai_rs_types::ReplayableMultipartSource::from_bytes(
+                                    Arc::<[u8]>::from(&b"abc"[..]),
+                                ),
+                                openai_rs_types::FilePurpose::Batch,
+                            ))
+                            .await
+                            .map(|_| ()),
+                        2 => client
+                            .multipart_transport()
+                            .download_file(&openai_rs_types::FileId::new("file_1"))
+                            .await
+                            .map(|_| ()),
+                        _ => client
+                            .multipart_transport()
+                            .send_replayable_json(
+                                "CreateSpeech",
+                                &[
+                                    PathSegment::literal("audio"),
+                                    PathSegment::literal("speech"),
+                                ],
+                                &serde_json::json!({}),
+                                "application/octet-stream",
+                            )
+                            .await
+                            .map(|_| ()),
+                    }
+                };
+                let error = tokio::time::timeout(Duration::from_secs(2), call)
+                    .await
+                    .expect("must return without waiting 121 seconds")
+                    .expect_err("server minimum exceeds the wait policy");
+                assert_eq!(attempts.load(Ordering::SeqCst), 1, "lane {lane}");
+                let Error::Api(api) = error else {
+                    panic!("expected API error")
+                };
+                assert_eq!(api.status(), status);
+                assert_eq!(api.meta().retry_after(), Some("121"));
+            }
+        }
     }
 
     #[tokio::test]

@@ -257,6 +257,51 @@ struct Inner {
     stderr: Mutex<StderrTail>,
     limits: AppServerLimits,
     closed: AtomicBool,
+    shutdown_started: AtomicBool,
+}
+
+/// Release capacity even when an application drops its request future.
+struct PendingRequestGuard<'a> {
+    inner: &'a Inner,
+    id: u64,
+}
+
+impl Drop for PendingRequestGuard<'_> {
+    fn drop(&mut self) {
+        lock(&self.inner.pending).remove(&self.id);
+    }
+}
+
+/// A cancelled write may have emitted only part of a JSONL frame.
+struct WriteCancellationGuard {
+    inner: Arc<Inner>,
+    armed: bool,
+}
+
+impl Drop for WriteCancellationGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let failure = ConnectionFailure::new(
+            ConnectionFailureKind::Io,
+            "app-server write was cancelled; JSONL framing is no longer guaranteed",
+        );
+        // Block new writes synchronously, before releasing the writer lock.
+        self.inner.closed.store(true, Ordering::Release);
+        lock(&self.inner.terminal_failure).get_or_insert_with(|| failure.clone());
+        if let Ok(mut child) = self.inner.child.try_lock()
+            && let Some(child) = child.as_mut()
+        {
+            let _ = child.start_kill();
+        }
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let inner = Arc::clone(&self.inner);
+            runtime.spawn(async move {
+                let _ = terminate(&inner, failure).await;
+            });
+        }
+    }
 }
 
 impl Drop for Inner {
@@ -396,6 +441,7 @@ where
                 stderr: Mutex::new(StderrTail::new(config.limits.max_stderr_bytes)),
                 limits: config.limits,
                 closed: AtomicBool::new(false),
+                shutdown_started: AtomicBool::new(false),
             });
 
             spawn_stdout_reader(Arc::downgrade(&inner), stdout, stdout_span);
@@ -630,6 +676,10 @@ where
                 _permit: permit,
             },
         );
+        let _pending_guard = PendingRequestGuard {
+            inner: &self.inner,
+            id,
+        };
 
         let mut object = serde_json::Map::new();
         object.insert("method".to_owned(), Value::String(method.to_owned()));
@@ -680,17 +730,17 @@ where
                     // with the child is no longer guaranteed, so the
                     // connection fails closed instead of letting a later
                     // request ride a desynchronized stream.
-                    let _ = terminate(
-                        &self.inner,
-                        ConnectionFailure::new(
-                            ConnectionFailureKind::WriteTimeout,
-                            format!(
-                                "request {method} (id {id}) timed out mid-write; the \
-                                 possibly half-written frame desynchronizes the JSONL stream"
-                            ),
+                    let failure = ConnectionFailure::new(
+                        ConnectionFailureKind::WriteTimeout,
+                        format!(
+                            "request {method} (id {id}) timed out mid-write; the \
+                             possibly half-written frame desynchronizes the JSONL stream"
                         ),
-                    )
-                    .await;
+                    );
+                    // Preserve the more specific cause when our timer, rather
+                    // than the application, cancelled the guarded write.
+                    *lock(&self.inner.terminal_failure) = Some(failure.clone());
+                    let _ = terminate(&self.inner, failure).await;
                 }
                 Err(Error::RequestTimeout {
                     method,
@@ -737,16 +787,27 @@ where
         encoded.push(b'\n');
 
         let mut writer_guard = self.inner.writer.lock().await;
+        if self.is_closed() {
+            return Err(Error::Connection(ConnectionFailure::new(
+                ConnectionFailureKind::Closed,
+                "app-server connection closed while waiting to write",
+            )));
+        }
         let Some(writer) = writer_guard.as_mut() else {
             return Err(Error::Connection(ConnectionFailure::new(
                 ConnectionFailureKind::Closed,
                 "app-server stdin is closed",
             )));
         };
+        let mut cancellation_guard = WriteCancellationGuard {
+            inner: Arc::clone(&self.inner),
+            armed: true,
+        };
         let io_result = match writer.write_all(&encoded).await {
             Ok(()) => writer.flush().await.map_err(|error| ("flush", error)),
             Err(error) => Err(("write", error)),
         };
+        cancellation_guard.armed = false;
         drop(writer_guard);
         if let Err((action, error)) = io_result {
             let failure = ConnectionFailure::new(
@@ -1314,10 +1375,11 @@ async fn already_exited_status(inner: &Arc<Inner>) -> Option<std::process::ExitS
 }
 
 async fn terminate(inner: &Arc<Inner>, failure: ConnectionFailure) -> Result<(), Error> {
-    let first = !inner.closed.swap(true, Ordering::AcqRel);
+    let first = !inner.shutdown_started.swap(true, Ordering::AcqRel);
     if !first {
         return Ok(());
     }
+    inner.closed.store(true, Ordering::Release);
     // 4-38: a child that already exited is the more specific terminal fact.
     // Fold its reaped status into the failure before it is stored and
     // broadcast, so a crash is never downgraded to a generic transport
@@ -1340,7 +1402,7 @@ async fn terminate(inner: &Arc<Inner>, failure: ConnectionFailure) -> Result<(),
         }
         _ => failure,
     };
-    *lock(&inner.terminal_failure) = Some(failure.clone());
+    let failure = lock(&inner.terminal_failure).get_or_insert(failure).clone();
     lock(&inner.events_tx).take();
 
     let pending: Vec<PendingRequest> = lock(&inner.pending)
@@ -1396,14 +1458,18 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::ffi::OsString;
+    #[cfg(unix)]
     use std::path::Path;
 
+    #[cfg(unix)]
     use serde_json::{Value, json};
 
-    use super::{
-        AppServerClient, AppServerConfig, AppServerEvent, AppServerLimits, StderrTail, sha256_file,
-    };
+    #[cfg(unix)]
+    use super::{AppServerClient, AppServerConfig, AppServerEvent, sha256_file};
+    use super::{AppServerLimits, StderrTail};
+    #[cfg(unix)]
     use crate::{
         ApprovalsReviewer, AskForApprovalMode, BrowserLoginOptions, CancelLoginStatus, ClientInfo,
         ConnectionFailureKind, Error, Notification, PlanType, RateLimitReachedType, RpcError,
@@ -1411,8 +1477,10 @@ mod tests {
         SessionSourceMode, ThreadSourceKind, ThreadStartParams, ThreadStatus, TurnInterruptParams,
         TurnItemsView, TurnStartParams, TurnStatus, W3cTraceContext,
     };
+    #[cfg(unix)]
     use openai_rs_types::kernel::{Nullable, Omittable};
 
+    #[cfg(unix)]
     fn fake_runtime(executable: &Path) -> Result<RuntimeCompatibility, Box<dyn std::error::Error>> {
         let executable = executable.canonicalize()?;
         let executable_sha256 = sha256_file(&executable)?;
@@ -1441,6 +1509,98 @@ mod tests {
             32 * 1024 * 1024,
             "DEFAULT_LINE_LIMIT must stay aligned with the D0144-style rationale"
         );
+    }
+
+    fn client_without_child() -> super::AppServerClient {
+        let (events_tx, events_rx) = super::mpsc::channel(1);
+        super::AppServerClient {
+            inner: super::Arc::new(super::Inner {
+                writer: super::AsyncMutex::new(None),
+                child: super::AsyncMutex::new(None),
+                pending: super::Mutex::new(super::HashMap::new()),
+                pending_slots: super::Arc::new(super::Semaphore::new(1)),
+                next_id: super::AtomicU64::new(1),
+                events_tx: super::Mutex::new(Some(events_tx)),
+                events_rx: super::AsyncMutex::new(events_rx),
+                terminal_failure: super::Mutex::new(None),
+                stderr: super::Mutex::new(StderrTail::new(16)),
+                limits: AppServerLimits::default(),
+                closed: super::AtomicBool::new(false),
+                shutdown_started: super::AtomicBool::new(false),
+            }),
+            initialize_response: crate::InitializeResponse {
+                user_agent: String::new(),
+                codex_home: Default::default(),
+                platform_family: String::new(),
+                platform_os: String::new(),
+                extra: Default::default(),
+            },
+            runtime_identity: crate::RuntimeIdentity::new(
+                "1.0.0",
+                "a".repeat(64),
+                crate::COMPILED_APP_SERVER_SCHEMA_SHA256,
+            )
+            .expect("test identity"),
+            trace: super::Omittable::Omitted,
+            credential: super::PhantomData,
+        }
+    }
+
+    #[tokio::test]
+    async fn dropped_request_releases_its_pending_slot() {
+        use std::{
+            future::Future,
+            task::{Context, Waker},
+        };
+        let client = client_without_child();
+        let writer = client.inner.writer.lock().await;
+        {
+            let mut request = std::pin::pin!(client.account_rate_limits());
+            let mut context = Context::from_waker(Waker::noop());
+            assert!(request.as_mut().poll(&mut context).is_pending());
+            assert_eq!(super::lock(&client.inner.pending).len(), 1);
+            assert_eq!(client.inner.pending_slots.available_permits(), 0);
+        }
+        assert!(super::lock(&client.inner.pending).is_empty());
+        assert_eq!(client.inner.pending_slots.available_permits(), 1);
+        assert!(
+            !client.is_closed(),
+            "cancelling before a write keeps framing intact"
+        );
+        drop(writer);
+    }
+
+    #[tokio::test]
+    async fn cancelled_write_blocks_reuse_and_completes_shutdown() {
+        let client = client_without_child();
+        let permit = client
+            .inner
+            .pending_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("slot");
+        let (sender, receiver) = super::oneshot::channel();
+        super::lock(&client.inner.pending).insert(
+            1,
+            super::PendingRequest {
+                sender,
+                _permit: permit,
+            },
+        );
+        drop(super::WriteCancellationGuard {
+            inner: client.inner.clone(),
+            armed: true,
+        });
+        assert!(client.is_closed(), "close before another task can write");
+        assert!(client.account_rate_limits().await.is_err());
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), receiver)
+            .await
+            .expect("background shutdown must finish")
+            .expect("notify pending request");
+        assert!(matches!(result, super::PendingResult::Connection(_)));
+        assert!(super::lock(&client.inner.pending).is_empty());
+        assert!(client.inner.pending_slots.is_closed());
     }
 
     /// 4-38 / 4-39: a child that crashes (exit 1) after accepting two requests

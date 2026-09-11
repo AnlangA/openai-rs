@@ -830,7 +830,9 @@ impl BetaResponsesWebSocket {
         let mut retries = 0;
         let mut auth_refreshed = false;
         loop {
-            let authorization = transport.authorization().await?;
+            let (authorization, remaining) = transport
+                .authorization(std::time::Instant::now(), config.connect_timeout)
+                .await?;
             let generation = authorization.generation;
             let mut request = websocket_request(
                 &url,
@@ -847,7 +849,7 @@ impl BetaResponsesWebSocket {
                 request.headers_mut().insert(name.clone(), value.clone());
             }
             let connect = connect_socket(request, config.tungstenite(), connector.clone());
-            match tokio::time::timeout(config.connect_timeout, connect).await {
+            match tokio::time::timeout(remaining, connect).await {
                 Ok(Ok((socket, response))) => {
                     return Ok(Self {
                         socket,

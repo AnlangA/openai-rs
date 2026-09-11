@@ -20,6 +20,7 @@ pub mod files;
 pub mod fine_tuning;
 pub mod media;
 pub mod responses;
+pub mod safety;
 pub mod scalar;
 pub mod secret;
 pub mod skills;
@@ -55,6 +56,7 @@ pub use evals::*;
 pub use files::*;
 pub use kernel::{ExtraFields, ExtraFieldsConflict, Nullable, Omittable};
 pub use responses::*;
+pub use safety::{SafetyAlert, SafetyAlertErrorType};
 pub use scalar::{
     BatchId, FileId, FineTuningJobId, JsonText, ModelId, ResponseId, UploadId, VectorStoreId,
 };

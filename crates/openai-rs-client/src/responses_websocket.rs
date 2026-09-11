@@ -218,7 +218,9 @@ impl ResponsesWebSocket {
         let mut retries = 0;
         let mut auth_refreshed = false;
         loop {
-            let authorization = transport.authorization().await?;
+            let (authorization, remaining) = transport
+                .authorization(std::time::Instant::now(), config.connect_timeout)
+                .await?;
             let generation = authorization.generation;
             let request = websocket_request(
                 &url,
@@ -228,7 +230,7 @@ impl ResponsesWebSocket {
                 transport.client_request_id(),
             )?;
             let connect = connect_socket(request, config.tungstenite(), connector.clone());
-            match tokio::time::timeout(config.connect_timeout, connect).await {
+            match tokio::time::timeout(remaining, connect).await {
                 Ok(Ok((socket, response))) => {
                     let meta = ResponseMeta::from_headers(response.status(), response.headers());
                     return Ok(Self {
@@ -1361,19 +1363,37 @@ mod tests {
         (client, connections)
     }
 
+    async fn wait_for_handshake_attempt(connections: &Arc<Mutex<usize>>, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while *connections.lock().expect("connection counter") < expected {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("handshake must reach the server before advancing time");
+    }
+
     #[tokio::test]
     async fn a_hanging_handshake_times_out_with_a_transport_error() {
         // 8-11: the handshake-timeout branch. A server that accepts TCP but
         // never answers the upgrade surfaces the dedicated timeout error
         // rather than hanging for the caller's lifetime.
         let (client, connections) = hanging_handshake_server().await;
-        let error = client
-            .responses()
-            .connect_with(
-                ResponsesWebSocketConfig::new().connect_timeout(Duration::from_millis(50)),
-            )
+        let connect = tokio::spawn(async move {
+            client
+                .responses()
+                .connect_with(
+                    ResponsesWebSocketConfig::new().connect_timeout(Duration::from_secs(30)),
+                )
+                .await
+        });
+        wait_for_handshake_attempt(&connections, 1).await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        let error = connect
             .await
-            .expect_err("a silent handshake must time out");
+            .expect("connect task")
+            .expect_err("handshake timeout");
         match &error {
             Error::WebSocketTransport(reason) => assert!(
                 reason.contains("handshake timed out"),
@@ -1394,18 +1414,31 @@ mod tests {
         // retryable failure, so the budget is exactly `1 + max_retries`
         // attempts before the timeout error surfaces.
         let (client, connections) = hanging_handshake_server().await;
-        let error = client
-            .responses()
-            .connect_with(
-                ResponsesWebSocketConfig::new()
-                    .connect_timeout(Duration::from_millis(50))
-                    .reconnect_policy(WebSocketReconnectPolicy::InitialConnect {
-                        max_retries: 2,
-                        delay: Duration::from_millis(10),
-                    }),
-            )
+        let connect = tokio::spawn(async move {
+            client
+                .responses()
+                .connect_with(
+                    ResponsesWebSocketConfig::new()
+                        .connect_timeout(Duration::from_secs(30))
+                        .reconnect_policy(WebSocketReconnectPolicy::InitialConnect {
+                            max_retries: 2,
+                            delay: Duration::from_millis(10),
+                        }),
+                )
+                .await
+        });
+        for attempt in 1..=3 {
+            if attempt > 1 {
+                tokio::time::resume();
+            }
+            wait_for_handshake_attempt(&connections, attempt).await;
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(31)).await;
+        }
+        let error = connect
             .await
-            .expect_err("the retry budget must eventually run out");
+            .expect("connect task")
+            .expect_err("retry budget exhausted");
         assert!(
             matches!(&error, Error::WebSocketTransport(reason) if reason.contains("handshake timed out")),
             "expected the handshake-timeout error, got {error:?}"

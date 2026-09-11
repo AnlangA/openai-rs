@@ -530,8 +530,18 @@ impl MultipartTransport {
                     remaining_time(started, self.overall_timeout).inspect_err(|_| {
                         trace::record_retry_count(retries);
                     })?;
-                let form = prepared.build_form().await?;
-                let authorization = self.auth.authorization().await?;
+                let form = tokio::time::timeout(remaining, prepared.build_form())
+                    .await
+                    .map_err(|_| {
+                        trace::emit_deadline_exceeded();
+                        trace::record_retry_count(retries);
+                        Error::DeadlineExceeded
+                    })??;
+                let (authorization, remaining) = self
+                    .auth
+                    .authorization_with_budget(started, self.overall_timeout)
+                    .await
+                    .inspect_err(|_| trace::record_retry_count(retries))?;
                 let request = self
                     .request(
                         reqwest::Method::POST,
@@ -627,7 +637,10 @@ impl MultipartTransport {
         let span =
             trace::http_request_span_lazy(operation_id, "POST", || trace::route_template(path));
         async move {
-            let authorization = self.auth.authorization().await?;
+            let (authorization, remaining) = self
+                .auth
+                .authorization_with_budget(Instant::now(), self.overall_timeout)
+                .await?;
             let request = self
                 .request(
                     reqwest::Method::POST,
@@ -635,7 +648,7 @@ impl MultipartTransport {
                     accept,
                     authorization.header.clone(),
                 )
-                .timeout(self.overall_timeout)
+                .timeout(remaining)
                 .multipart(form)
                 .build()
                 .map_err(Error::from_reqwest)?;
@@ -691,11 +704,11 @@ impl MultipartTransport {
             let mut retries = 0;
             let mut auth_refreshed = false;
             loop {
-                let remaining =
-                    remaining_time(started, self.overall_timeout).inspect_err(|_| {
-                        trace::record_retry_count(retries);
-                    })?;
-                let authorization = self.auth.authorization().await?;
+                let (authorization, remaining) = self
+                    .auth
+                    .authorization_with_budget(started, self.overall_timeout)
+                    .await
+                    .inspect_err(|_| trace::record_retry_count(retries))?;
                 let request = self
                     .request(
                         reqwest::Method::POST,
@@ -789,11 +802,11 @@ impl MultipartTransport {
             let mut retries = 0;
             let mut auth_refreshed = false;
             loop {
-                let remaining =
-                    remaining_time(started, self.overall_timeout).inspect_err(|_| {
-                        trace::record_retry_count(retries);
-                    })?;
-                let authorization = self.auth.authorization().await?;
+                let (authorization, remaining) = self
+                    .auth
+                    .authorization_with_budget(started, self.overall_timeout)
+                    .await
+                    .inspect_err(|_| trace::record_retry_count(retries))?;
                 let request = self
                     .request(
                         reqwest::Method::GET,
@@ -1351,51 +1364,10 @@ fn remaining_time(started: Instant, overall_timeout: Duration) -> Result<Duratio
 // table as the JSON transport and the Administration channel.
 
 fn retry_delay(headers: &http::HeaderMap, retries: u32, maximum: Duration) -> Option<Duration> {
-    if let Some(value) = headers
-        .get("retry-after-ms")
-        .and_then(|value| value.to_str().ok())
-        && let Ok(milliseconds) = value.parse::<f64>()
-    {
-        // A parseable `retry-after-ms` short-circuits exactly like the shared
-        // transport: an over-limit, non-positive, or non-finite (`nan`/`inf`)
-        // value falls back to local exponential backoff instead of consulting
-        // `Retry-After`, so a stale coarse header cannot override the
-        // millisecond header the server actually emitted. An unparseable
-        // value keeps falling through, mirroring `server_retry_delay`.
-        if milliseconds > 0.0
-            && let Some(delay) = bounded_delay(milliseconds / 1000.0, maximum)
-        {
-            return Some(delay);
-        }
-        return Some(local_retry_delay(retries));
-    }
-    if let Some(value) = headers
-        .get(header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-    {
-        if let Ok(seconds) = value.parse::<f64>()
-            && seconds.is_finite()
-            && seconds > 0.0
-            && let Some(delay) = bounded_delay(seconds, maximum)
-        {
-            return Some(delay);
-        }
-        if let Ok(time) = httpdate::parse_http_date(value)
-            && let Ok(delay) = time.duration_since(SystemTime::now())
-            && delay > Duration::ZERO
-            && delay <= maximum
-        {
-            return Some(delay);
-        }
-    }
-    Some(local_retry_delay(retries))
-}
-
-fn bounded_delay(seconds: f64, maximum: Duration) -> Option<Duration> {
-    if seconds > maximum.as_secs_f64() {
-        None
-    } else {
-        Duration::try_from_secs_f64(seconds).ok()
+    match crate::transport::server_retry_delay(headers, maximum) {
+        crate::transport::ServerDelay::Valid(delay) => Some(delay),
+        crate::transport::ServerDelay::Absent => Some(local_retry_delay(retries)),
+        crate::transport::ServerDelay::TooLong => None,
     }
 }
 
@@ -1976,21 +1948,12 @@ mod tests {
     fn retry_after_ms_short_circuits_and_never_falls_back_to_retry_after() {
         let maximum = RetryPolicy::openai_compatible().max_server_delay;
 
-        // An over-limit `retry-after-ms` beside an in-bound `Retry-After` must
-        // use the local backoff (0.375-0.5s for the first retry) rather than
-        // the stale five-second coarse header.
+        // An excessive server minimum stops retries, even beside a shorter
+        // coarse header; neither value is replaced by an early local retry.
         let mut headers = http::HeaderMap::new();
         headers.insert("retry-after-ms", HeaderValue::from_static("130000"));
         headers.insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
-        let delay = retry_delay(&headers, 0, maximum).expect("local backoff");
-        assert!(
-            delay >= Duration::from_millis(375),
-            "expected the local backoff floor, got {delay:?}"
-        );
-        assert!(
-            delay <= Duration::from_secs(1),
-            "must not fall back to `Retry-After: 5`, got {delay:?}"
-        );
+        assert_eq!(retry_delay(&headers, 0, maximum), None);
 
         // Non-finite and non-positive parseable values short-circuit the same
         // way instead of letting `Retry-After` take over.

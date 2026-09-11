@@ -84,6 +84,7 @@ mod responses;
 #[cfg(any(feature = "realtime", feature = "beta-responses-multi-agent"))]
 mod responses_websocket;
 mod retry;
+mod safety;
 mod skills;
 pub mod sse;
 mod trace;
@@ -184,6 +185,7 @@ pub use responses_websocket::{
     ResponsesWebSocket, ResponsesWebSocketConfig, WebSocketReconnectPolicy,
 };
 pub use retry::RetryPolicy;
+pub use safety::{Safety, SafetyAlert, SafetyAlertErrorType, SafetyAlerts};
 pub use skills::{
     SkillContentStream, SkillPageStream, SkillVersionPageStream, SkillVersions, Skills,
 };

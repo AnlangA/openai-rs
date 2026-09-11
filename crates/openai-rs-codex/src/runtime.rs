@@ -174,10 +174,9 @@ fn is_released_version(version: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BUNDLED_CODEX_EXECUTABLE_SHA256, BUNDLED_CODEX_TARGET, BUNDLED_CODEX_VERSION,
-        COMPILED_APP_SERVER_SCHEMA_SHA256, RuntimeCompatibility, RuntimeIdentity,
-    };
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+    use super::{BUNDLED_CODEX_EXECUTABLE_SHA256, BUNDLED_CODEX_TARGET, BUNDLED_CODEX_VERSION};
+    use super::{COMPILED_APP_SERVER_SCHEMA_SHA256, RuntimeCompatibility, RuntimeIdentity};
 
     const HASH_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const HASH_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

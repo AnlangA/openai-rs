@@ -58,6 +58,8 @@ struct OperationsArtifact {
     counts: OperationCounts,
     client_operations: Vec<OperationContract>,
     webhook_operations: Vec<OperationContract>,
+    /// Independently sourced additions; never counted as part of the frozen pin.
+    documented_operations: Vec<DocumentedOperation>,
 }
 
 #[derive(Serialize)]
@@ -147,6 +149,20 @@ struct NonRestImplementation {
 struct ImplementationRegistry {
     operations: BTreeMap<String, ImplementationStatus>,
     non_rest: Vec<NonRestImplementation>,
+    documented_operations: Vec<DocumentedOperation>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct DocumentedOperation {
+    id: String,
+    method: String,
+    path: String,
+    feature: String,
+    source_url: String,
+    source_sha256: String,
+    reviewed_at: String,
+    units: Vec<String>,
+    tests: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -247,7 +263,8 @@ pub(super) fn render(repository_root: &Path) -> Result<Vec<RenderedArtifact>> {
     })?;
 
     let implementation_registry = load_implementation_registry(repository_root)?;
-    let operations = build_operations(&document, &implementation_registry.operations)?;
+    let mut operations = build_operations(&document, &implementation_registry.operations)?;
+    operations.documented_operations = implementation_registry.documented_operations;
     let non_rest = build_non_rest(&implementation_registry.non_rest);
     let discriminators = build_discriminators(&document)?;
     let nullability = build_nullability(&document)?;
@@ -371,6 +388,7 @@ fn build_operations(
         },
         client_operations,
         webhook_operations,
+        documented_operations: Vec::new(),
     })
 }
 
@@ -469,6 +487,8 @@ struct ImplementationToml {
     groups: Vec<GroupToml>,
     #[serde(default)]
     non_rest: Vec<NonRestToml>,
+    #[serde(default)]
+    documented_operations: Vec<DocumentedOperation>,
 }
 
 #[derive(Deserialize)]
@@ -578,9 +598,38 @@ fn load_implementation_registry(repository_root: &Path) -> Result<Implementation
     }
 
     non_rest.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut documented_operations = toml_data.documented_operations;
+    let mut documented_ids = BTreeSet::new();
+    for op in &documented_operations {
+        if op.id.is_empty()
+            || !documented_ids.insert(&op.id)
+            || operations.contains_key(&op.id)
+            || !HTTP_METHODS.contains(&op.method.to_ascii_lowercase().as_str())
+            || !op.path.starts_with('/')
+            || op.feature.is_empty()
+            || !op
+                .source_url
+                .starts_with("https://developers.openai.com/api/")
+            || op.source_sha256.len() != 64
+            || !op
+                .source_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || op.reviewed_at.is_empty()
+            || op.units.is_empty()
+            || op.tests.is_empty()
+        {
+            return Err(Error::message(format!(
+                "invalid documented operation `{}`",
+                op.id
+            )));
+        }
+    }
+    documented_operations.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(ImplementationRegistry {
         operations,
         non_rest,
+        documented_operations,
     })
 }
 

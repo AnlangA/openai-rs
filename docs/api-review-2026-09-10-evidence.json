@@ -1,0 +1,240 @@
+{
+  "audited_at_utc": "2026-09-10T11:35:48.416376+00:00",
+  "git_head": "7516d98f134b5ec4ed098c3b0abb395bbe54179e",
+  "working_tree_contains_previous_review_fixes": true,
+  "pinned_revision": "690521b1753dce0c6d6b275f583d22537679cff9",
+  "sources": [
+    {
+      "name": "changelog",
+      "url": "https://developers.openai.com/api/docs/changelog",
+      "snapshot_sha256": "606979582c737b052045e3a8850baedc71cd4f763898ff96371cdd694d02583f",
+      "snapshot_bytes": 66623
+    },
+    {
+      "name": "deprecations",
+      "url": "https://developers.openai.com/api/docs/deprecations",
+      "snapshot_sha256": "0f31da68b60eb9afc2e3e521d1c0f0091967455ef9e6556b454c974368a0a852",
+      "snapshot_bytes": 37198
+    },
+    {
+      "name": "structured-outputs",
+      "url": "https://developers.openai.com/api/docs/guides/structured-outputs",
+      "snapshot_sha256": "5aa9479e1f6b87ae01d05d8f478aee51c5b52996c52163ae0340c7da813adc8f",
+      "snapshot_bytes": 135471
+    },
+    {
+      "name": "responses-create",
+      "url": "https://developers.openai.com/api/reference/typescript/resources/responses/methods/create",
+      "snapshot_sha256": "48c7b216cdbc9b7d847f8ca520e04d3e72a0fb99124ce1f1a1324db23d066eaa",
+      "snapshot_bytes": 312939
+    },
+    {
+      "name": "llms",
+      "url": "https://developers.openai.com/llms.txt",
+      "snapshot_sha256": "d62a1e8e62eef9098fe2a120bf1b0413b7b014b2f1fa3e0109e63f32140bd5be",
+      "snapshot_bytes": 5853
+    },
+    {
+      "name": "cache-diagnostics",
+      "url": "https://developers.openai.com/api/docs/guides/prompt-caching/diagnostics",
+      "snapshot_sha256": "354abeea4daffa22efc6119608fb9995bed0282804a4ad1e5b28be0ec2046936",
+      "snapshot_bytes": 15797
+    },
+    {
+      "name": "image-generation",
+      "url": "https://developers.openai.com/api/docs/guides/image-generation",
+      "snapshot_sha256": "74ec2240ab2e82662388b9f4780f7c10c6b7386892c03b1c8f00f67376efd263",
+      "snapshot_bytes": 111275
+    },
+    {
+      "name": "async-tool-calling",
+      "url": "https://developers.openai.com/api/docs/guides/async-tool-calling",
+      "snapshot_sha256": "792ea9c33f6784803d32d25b45e0187ae13f24a05cb9064072862a75e1dce335",
+      "snapshot_bytes": 21147
+    },
+    {
+      "name": "steering",
+      "url": "https://developers.openai.com/api/docs/guides/steering",
+      "snapshot_sha256": "c949632d60e69481918f9741c958d54fbe619f31e9b90fbda1f84fa671f60f13",
+      "snapshot_bytes": 17173
+    },
+    {
+      "name": "reasoning",
+      "url": "https://developers.openai.com/api/docs/guides/reasoning",
+      "snapshot_sha256": "24fea701de256cde7aa544bd0aac5b387bae06d6f8e68b5b6ed168a01a6d49bd",
+      "snapshot_bytes": 70155
+    },
+    {
+      "name": "misalignment",
+      "url": "https://developers.openai.com/api/docs/guides/safety-checks/misalignment-monitoring",
+      "snapshot_sha256": "099b74a67ea13a497225e9b2e258270c055c6b7a0d7f336ea71304c5bc0cfa38",
+      "snapshot_bytes": 7321
+    },
+    {
+      "name": "error-codes",
+      "url": "https://developers.openai.com/api/docs/guides/error-codes",
+      "snapshot_sha256": "ca56d0600fdfd00b2c48011233317c3eb7a8e8e5e6aeb958bb2777ea8a042982",
+      "snapshot_bytes": 32170
+    },
+    {
+      "name": "websocket",
+      "url": "https://developers.openai.com/api/docs/guides/websocket-mode",
+      "snapshot_sha256": "4be5f4c3526d596d4321e3bb0fb5b837165e9809c72f1d04dca046c23eadf793",
+      "snapshot_bytes": 35422
+    },
+    {
+      "name": "prompt-caching",
+      "url": "https://developers.openai.com/api/docs/guides/prompt-caching",
+      "snapshot_sha256": "49c3376acf95d78845261db93a388ae314ee5a7bdc9a1519100307c3cc8fcd9f",
+      "snapshot_bytes": 43476
+    },
+    {
+      "name": "safety-alert",
+      "url": "https://developers.openai.com/api/reference/typescript/resources/safety/subresources/alerts/methods/retrieve",
+      "snapshot_sha256": "f5a3833e317bae7a74e1dfc84e81cde56dda4c155ee378880e91b5b078a4ff26",
+      "snapshot_bytes": 1608
+    },
+    {
+      "name": "images-generate",
+      "url": "https://developers.openai.com/api/reference/typescript/resources/images/methods/generate",
+      "snapshot_sha256": "5abcd3e8ce72361b8bec6f701e1c422f2ecc2341a3da520966e84050b6b9c234",
+      "snapshot_bytes": 12327
+    },
+    {
+      "name": "files-create",
+      "url": "https://developers.openai.com/api/reference/typescript/resources/files/methods/create",
+      "snapshot_sha256": "2a1bb91e9513accf303be0ce3c9a3cbbef3cb81ae912c09e233eed08fd673f31",
+      "snapshot_bytes": 5199
+    },
+    {
+      "name": "chat-create",
+      "url": "https://developers.openai.com/api/reference/typescript/resources/chat/subresources/completions/methods/create",
+      "snapshot_sha256": "795dc403c080996bacddb3848f18f51d81580153e5bfbb5eafedfa3cdef1a40f",
+      "snapshot_bytes": 74843
+    },
+    {
+      "name": "realtime-create-secret",
+      "url": "https://developers.openai.com/api/reference/typescript/resources/realtime/subresources/client_secrets/methods/create",
+      "snapshot_sha256": "00b4ffa233a88d65a086d79496ea90c9d000ff6e6a52a20050d316edfa24c5bf",
+      "snapshot_bytes": 73245
+    },
+    {
+      "name": "webhooks",
+      "url": "https://developers.openai.com/api/docs/guides/webhooks",
+      "snapshot_sha256": "3270a9ba295716822ebc312a86c5fcfe28c39a71add61af31524a595fff2b04b",
+      "snapshot_bytes": 14761
+    },
+    {
+      "name": "function-calling",
+      "url": "https://developers.openai.com/api/docs/guides/function-calling",
+      "snapshot_sha256": "e564e8dddb67d4cdf2ea50720c7e933bc5ae74f81171ea3e7bf33f9cb12a0b78",
+      "snapshot_bytes": 74234
+    },
+    {
+      "name": "responses-ws-events",
+      "url": "https://developers.openai.com/api/reference/resources/responses/websocket-events",
+      "snapshot_sha256": "551ce2892d432707a20cbc996584e81bf6e3903cdbd34912b6410646a002c1c7",
+      "snapshot_bytes": 17371904
+    },
+    {
+      "name": "responses-stream-events",
+      "url": "https://developers.openai.com/api/reference/resources/responses/streaming-events",
+      "snapshot_sha256": "add9df4ac1064e6dc7c613cfdf68d6f69eb8f1fabfa42aa0b0eca525490f83b6",
+      "snapshot_bytes": 15598850
+    },
+    {
+      "name": "realtime-resource",
+      "url": "https://developers.openai.com/api/reference/typescript/resources/realtime",
+      "snapshot_sha256": "a371d3b019065318c1f09a7a5fe4c71afefadef777ef9c74d6bece1cb427a4a1",
+      "snapshot_bytes": 891501
+    },
+    {
+      "name": "latest-model",
+      "url": "https://developers.openai.com/api/docs/guides/latest-model",
+      "snapshot_sha256": "2a59b26078e001a4e4e3da10693e80ad5ee1c02cbe472afa6b682308f27b8b22",
+      "snapshot_bytes": 16564
+    }
+  ],
+  "inventory_comparisons": {
+    "responses-create": {
+      "scope": "top_level_field_names_only",
+      "current_count": 31,
+      "pinned_count": 31,
+      "added": [],
+      "removed": []
+    },
+    "chat-create": {
+      "scope": "top_level_field_names_only",
+      "current_count": 37,
+      "pinned_count": 37,
+      "added": [],
+      "removed": []
+    },
+    "images-generate": {
+      "scope": "top_level_field_names_only",
+      "current_count": 14,
+      "pinned_count": 14,
+      "added": [],
+      "removed": []
+    },
+    "files-create": {
+      "scope": "top_level_field_names_only",
+      "current_count": 3,
+      "pinned_count": 3,
+      "added": [],
+      "removed": []
+    },
+    "responses_sse": {
+      "scope": "event_discriminators_only",
+      "current_count": 58,
+      "pinned_count": 58,
+      "added": [],
+      "removed": []
+    },
+    "RealtimeClientEvent": {
+      "scope": "event_discriminators_only",
+      "current_count": 11,
+      "pinned_count": 11,
+      "added": [],
+      "removed": []
+    },
+    "RealtimeServerEvent": {
+      "scope": "event_discriminators_only",
+      "current_count": 46,
+      "pinned_count": 46,
+      "added": [],
+      "removed": []
+    }
+  },
+  "probe_output": [
+    "function_async_retained=false",
+    "function_tool_encoded={\"type\":\"function\",\"name\":\"lookup\",\"parameters\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"strict\":true}",
+    "custom_async_retained=true",
+    "root_recursive_schema=Err(RecursiveReference { path: \"#/properties/children/items/$ref\", reference: \"#\" })",
+    "described_recursive_schema=Err(RecursiveReference { path: \"#/properties/node/properties/children/items/$ref\", reference: \"#/$defs/Node\" })",
+    "cache_comparison_retained=true",
+    "steering_uses_unknown_variant=true",
+    "steering_event_encoded={\"type\":\"response.steer\",\"previous_response_id\":\"resp_1\",\"input\":\"simplify\"}",
+    "configuration_update_uses_unknown_variant=true",
+    "configuration_update_validates=true",
+    "image_xhigh_validates=true",
+    "image_xhigh_encoded=\"xhigh\"",
+    "image_tool_xhigh_validates=true",
+    "image_max_validates=true",
+    "image_max_encoded=\"max\"",
+    "image_tool_max_validates=true",
+    "retry_429_call_succeeded=true",
+    "retry_429_server_minimum_ms=121000 actual_gap_ms=379",
+    "retry_503_call_succeeded=true",
+    "retry_503_server_minimum_ms=121000 actual_gap_ms=430"
+  ],
+  "probe_source_sha256": "7fd5f09650ddc8ca875cf587029988a5bbc985bedeaad5187d3078f583a0285b",
+  "code_sha256": {
+    "crates/openai-rs-types/src/responses.rs": "21462b4a7f9453785fa5b3b4bcfff130513b54fc607931aa6d4d4eb01e7835cb",
+    "crates/openai-rs-types/src/structured.rs": "bd16d5ed2e377eb032a9d0d36121a53917b0a273a3969bf646e67dc16d0f30c7",
+    "crates/openai-rs-client/src/transport.rs": "8d507164219c7a76b2b1ef712810a0ddc025d83960cdaac166de0f2d83ea3e73",
+    "crates/openai-rs-client/src/multipart.rs": "b051ece4d8fb27a2f9841ee24542b3f057c3b53847e5a5a819b231f1d36a375d",
+    "crates/openai-rs-client/src/admin.rs": "3b2e2e2b49aa569b558609a2193a0ef2706d264b057cdaa5dae227d49688e185",
+    "crates/openai-rs-client/src/client.rs": "c47e3c5350849ef052def01b688b12c0b4fe3e2e6a3461f33ad96bda8de652a8"
+  }
+}

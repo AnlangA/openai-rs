@@ -186,7 +186,9 @@ impl Realtime {
             PathSegment::literal("calls"),
         ])?;
         let RealtimeCallCreateRequest { sdp, session, .. } = request;
-        let authorization = transport.authorization().await?;
+        let (authorization, remaining) = transport
+            .authorization(std::time::Instant::now(), transport.overall_timeout())
+            .await?;
         let builder = match session {
             Omittable::Value(session) => {
                 let session = serde_json::to_string(&session).map_err(Error::Encode)?;
@@ -203,7 +205,7 @@ impl Realtime {
                         "application/sdp",
                         authorization.header.clone(),
                     )
-                    .timeout(transport.overall_timeout())
+                    .timeout(remaining)
                     .multipart(
                         Form::new()
                             .part("sdp", sdp_part)
@@ -220,7 +222,7 @@ impl Realtime {
                     "application/sdp",
                     authorization.header.clone(),
                 )
-                .timeout(transport.overall_timeout())
+                .timeout(remaining)
                 .header(header::CONTENT_TYPE, "application/sdp")
                 .body(sdp.0),
             _ => {
@@ -694,7 +696,9 @@ impl RealtimeWebSocket {
         let connector = websocket_connector(url.scheme(), transport.tls_backend())?;
         let mut auth_refreshed = false;
         let (socket, response) = loop {
-            let authorization = transport.authorization().await?;
+            let (authorization, remaining) = transport
+                .authorization(std::time::Instant::now(), config.connect_timeout)
+                .await?;
             let generation = authorization.generation;
             let request = websocket_request(
                 &url,
@@ -704,7 +708,7 @@ impl RealtimeWebSocket {
                 transport.client_request_id(),
             )?;
             let connect = connect_socket(request, config.tungstenite(), connector.clone());
-            match tokio::time::timeout(config.connect_timeout, connect).await {
+            match tokio::time::timeout(remaining, connect).await {
                 Ok(Ok(connection)) => break connection,
                 Ok(Err(error))
                     if generation.is_some()
@@ -2866,13 +2870,27 @@ mod tests {
         // reconnect knob at all, so a silent handshake surfaces the dedicated
         // timeout error after exactly one attempt.
         let (client, connections) = hanging_handshake_server().await;
-        let error = client
-            .realtime()
-            .connect_with(
-                "gpt-realtime/test",
-                RealtimeWebSocketConfig::new().connect_timeout(Duration::from_millis(50)),
-            )
+        let connect = tokio::spawn(async move {
+            client
+                .realtime()
+                .connect_with(
+                    "gpt-realtime/test",
+                    RealtimeWebSocketConfig::new().connect_timeout(Duration::from_secs(30)),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while *connections.lock().expect("connection counter") == 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("first handshake must reach the server");
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        let error = connect
             .await
+            .expect("connect task")
             .expect_err("a silent Realtime handshake must time out");
         match &error {
             Error::WebSocketTransport(reason) => assert!(

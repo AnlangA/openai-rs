@@ -1,5 +1,6 @@
 # Explicit implementation registry. Entries are reviewed evidence, never inferred
-# from filenames or symbols. REST operation ids must exist in the pinned OpenAPI.
+# from filenames or symbols. The operations/groups REST ids must exist in the
+# pinned OpenAPI. documented_operations separately records later official docs.
 # Webhook receivers are registered as webhook:{path}:{method} labels because the
 # pinned OpenAPI webhook map does not assign operationId values.
 
@@ -595,3 +596,16 @@ status = "verified"
 milestone = "M6-vector-stores-client"
 units = ["SearchVectorStore"]
 tests = ["openai-rs-client::vector_stores::tests::store_crud_list_and_search_match_pinned_routes"]
+
+# Additions documented after the frozen OpenAPI revision. The id is a local
+# trace label, not an asserted upstream OpenAPI operationId.
+[[documented_operations]]
+id = "safety.alerts.retrieve"
+method = "GET"
+path = "/safety/alerts/{id}"
+feature = "client"
+source_url = "https://developers.openai.com/api/reference/typescript/resources/safety/subresources/alerts/methods/retrieve"
+source_sha256 = "f5a3833e317bae7a74e1dfc84e81cde56dda4c155ee378880e91b5b078a4ff26"
+reviewed_at = "2026-09-10"
+units = ["Safety", "SafetyAlerts", "SafetyAlert", "RetrieveSafetyAlert"]
+tests = ["openai-rs-client::safety::tests::retrieve_uses_project_auth_and_an_encoded_bodyless_get", "openai-rs-client::safety::tests::retrieve_preserves_not_found_errors", "openai-rs-types::safety::tests::alert_preserves_nullable_reason_and_future_fields"]

@@ -773,6 +773,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn async_function_tool_flag_reaches_the_request_body() {
+        let (base_url, captured) = serve_once(StatusCode::OK, RESPONSE_FIXTURE).await;
+        let request = CreateResponseRequest::new("gpt-6-astra", "test")
+            .with_tool(openai_rs_types::responses::FunctionTool::new("lookup").asynchronous(true));
+        client(base_url)
+            .responses()
+            .create(request)
+            .await
+            .expect("response");
+        let captured = captured.await.expect("captured request");
+        let body: Value = serde_json::from_slice(&captured.body).expect("body");
+        assert_eq!(body["tools"][0]["async"], true);
+        assert_eq!(body["tools"][0]["name"], "lookup");
+    }
+
+    #[tokio::test]
     async fn create_response_uses_post_responses_and_typed_json_body() {
         let (base_url, captured) = serve_once(StatusCode::OK, RESPONSE_FIXTURE).await;
         let response = client(base_url)

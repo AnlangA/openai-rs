@@ -4404,6 +4404,15 @@ until a decision is recorded here and its fixtures pass.
 
 ## D0230 — Containers limits and translation secret lifetime join their families; `#/` joins the root-reference rejection
 
+- Correction (2026-09-10): the `#/` classification below is superseded. Under
+  [RFC 6901 section 6](https://www.rfc-editor.org/rfc/rfc6901#section-6), `#`
+  selects the document root and `#/` selects its empty property name. The
+  normalizer now resolves that property, reports `UnresolvableRef` when it is
+  absent, and preserves constraints when a referenced definition is itself an
+  alias. The replacement tests are
+  `slash_pointer_resolves_the_empty_property_name`,
+  `missing_empty_property_reference_is_unresolvable_in_both_forms`, and
+  `sibling_ref_follows_aliases_without_losing_constraints`.
 - Status: accepted
 - Reviewed: 2026-08-31
 - Scope: `ContainerListLimit`, `RealtimeTranslationClientSecretExpiration`, `structured.rs` root-reference classification
@@ -5040,3 +5049,44 @@ until a decision is recorded here and its fixtures pass.
 - Impact: experimental direct Codex streaming compatibility and diagnostics only.
 - Overrides: a direct-lane-only exception to D0187's content-type gate.
 - Tests: `typed_stream_decodes_sse_without_content_type`, `headerless_non_sse_body_fails_in_stream`, `typed_stream_rejects_explicit_non_sse_content_type`, and the mixed-case/parameter assertion in `typed_stream_decodes_sse`.
+
+
+## D0288 — Documented asynchronous function tools remain lossless
+
+- Status: accepted
+- Reviewed: 2026-09-10
+- Scope: `FunctionTool`, ordinary and namespace tool definitions
+- Sources: https://developers.openai.com/api/docs/guides/async-tool-calling and the Responses create reference, captured in `docs/api-review-2026-09-10-evidence.json`.
+- Decision: preserve optional non-null `async` booleans with `asynchronous(bool)` / `is_async()` and retain future fields in `ExtraFields`. Function-call outputs and custom-tool definitions already preserve the field through their extension maps.
+- Impact: additive API; omitted flags remain omitted and explicit false remains false. The upstream OpenAPI bytes stay frozen.
+- Tests: `async_function_tools_and_future_fields_survive_request_round_trips`, `async_function_tool_flag_reaches_the_request_body`.
+
+## D0289 — Preserve productive recursive Structured Outputs references
+
+- Status: accepted
+- Reviewed: 2026-09-10
+- Scope: strict schema normalization and typed schema helpers
+- Sources: https://developers.openai.com/api/docs/guides/structured-outputs#recursive-schemas-are-supported, captured in the API review evidence manifest.
+- Decision: bare root and local recursive references remain references. When sibling inlining reaches a recursive edge, a single-branch anyOf preserves the reference and its sibling fields without unbounded expansion. Pure alias cycles and dangling alias chains remain errors; the existing expansion budget still bounds acyclic fan-out.
+- Overrides: D0143's rejection of productive recursive references; the earlier D0230 root/empty-key correction remains in force.
+- Tests: `documented_recursive_array_retains_root_reference`, `root_self_reference_is_preserved_with_and_without_siblings`, `recursive_sibling_refs_are_preserved_without_overflowing`, `mutually_recursive_objects_preserve_back_references`, `bare_alias_cycles_and_dangling_aliases_are_rejected`, and the existing expansion-budget cases.
+
+## D0290 — Never shorten a valid server Retry-After minimum
+
+- Status: accepted
+- Reviewed: 2026-09-10
+- Scope: JSON, Administration, multipart, media JSON, and download retries
+- Sources: https://developers.openai.com/api/docs/guides/error-codes and https://developers.openai.com/api/docs/changelog (2026-09-02).
+- Decision: the shared server-delay parser distinguishes an absent/invalid hint from a valid minimum exceeding the caller's maximum. The latter stops retries and returns the original API error and retry metadata. Valid waits inside the limit still require enough remaining request budget. Non-finite and non-positive hints keep their local-backoff behavior.
+- Overrides: the older over-cap-to-local-backoff policy and tests. The maximum remains 120 seconds by default; it limits automatic waiting, not the server's requested minimum.
+- Tests: `retry_after_above_the_bound_returns_the_api_error_without_retrying` (JSON, multipart, download and media JSON; 429 and 503), `excessive_retry_after_stops_admin_retries`, shared header parsing and bounded-delay tests.
+
+## D0291 — Add the documented project Safety Alerts retrieval resource
+
+- Status: accepted
+- Reviewed: 2026-09-10
+- Scope: `Client::safety().alerts().retrieve(id)`, `SafetyAlert`, facade exports
+- Sources: https://developers.openai.com/api/reference/typescript/resources/safety/subresources/alerts/methods/retrieve and https://developers.openai.com/api/docs/guides/safety-checks/misalignment-monitoring.
+- Decision: GET `/safety/alerts/{id}` uses the Platform client's project credential, no request body, and the shared encoded route and JSON transport. Alert reason is required-nullable, error categories and extra response fields are forward compatible, and retrieval metadata stays distinct from the affected request ID in the body.
+- Registry: `implementation.toml` has a separate `documented_operations` entry with the captured official documentation digest. `operations.json` projects it separately from the 288 pinned client operations; `safety.alerts.retrieve` is a local label, not a fabricated upstream operationId.
+- Tests: `retrieve_uses_project_auth_and_an_encoded_bodyless_get`, `retrieve_preserves_not_found_errors`, `retrieve_rejects_invalid_ids_before_network_io`, the SafetyAlert DTO tests, and `safety_resources_are_available_with_the_platform_client`.

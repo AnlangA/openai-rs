@@ -34,11 +34,12 @@ pub use openai_rs_client::{
     Moderations, OneShotMultipartSource, PaginationFault, PollCancellationToken, PollError,
     PollOptions, ProvenanceDetectionOutcome, RateLimitMetadata, ResponseEventStream,
     ResponseInputItemPageStream, ResponseMeta, Responses, RetrieveResponseParams,
-    RetrieveResponseStreamParams, RetryPolicy, SkillContentStream, SkillPageStream,
-    SkillVersionPageStream, SkillVersions, Skills, SpeechEventStream, StreamError,
-    SynthIdProvenanceResult, TlsBackend, TranscriptionEventStream, TranscriptionOutput,
-    TranslationOutput, Uploads, VectorStoreFileBatches, VectorStoreFilePageStream,
-    VectorStoreFiles, VectorStorePageStream, VectorStores,
+    RetrieveResponseStreamParams, RetryPolicy, Safety, SafetyAlert, SafetyAlertErrorType,
+    SafetyAlerts, SkillContentStream, SkillPageStream, SkillVersionPageStream, SkillVersions,
+    Skills, SpeechEventStream, StreamError, SynthIdProvenanceResult, TlsBackend,
+    TranscriptionEventStream, TranscriptionOutput, TranslationOutput, Uploads,
+    VectorStoreFileBatches, VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream,
+    VectorStores,
 };
 
 /// Incremental SSE decoding primitives used by the streaming clients.

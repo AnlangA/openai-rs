@@ -953,24 +953,32 @@ mod tests {
 
     #[tokio::test]
     async fn wait_for_processing_times_out_with_the_last_observed_status() {
-        // Far more in-flight responses than the shortened deadline can
-        // consume, so the poll stops on the deadline rather than an empty
-        // queue or a decode failure.
         let in_flight = (0..50)
             .map(|_| (StatusCode::OK, file_json("file_1", "uploaded")))
             .collect();
-        let (client, _) = serve_sequence(in_flight).await;
-
-        let error = client
-            .files()
-            .wait_for_processing(
-                &FileId::new("file_1"),
-                PollOptions::new()
-                    .with_interval(Duration::from_millis(10))
-                    .with_timeout(Duration::from_millis(40)),
-            )
-            .await
-            .expect_err("an ever-processing file must hit the deadline");
+        let (client, mut captured) = serve_sequence(in_flight).await;
+        let poller = tokio::spawn(async move {
+            client
+                .files()
+                .wait_for_processing(
+                    &FileId::new("file_1"),
+                    PollOptions::new()
+                        .with_interval(Duration::from_millis(10))
+                        .with_timeout(Duration::from_secs(30)),
+                )
+                .await
+        });
+        // A second retrieve proves that the first response's status was
+        // observed. Do not rely on Windows completing its first I/O in 40ms.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            captured.recv().await.expect("first retrieve");
+            captured.recv().await.expect("second retrieve");
+        })
+        .await
+        .expect("poller must observe a response");
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        let error = poller.await.expect("poller").expect_err("poll deadline");
         match error {
             PollError::DeadlineExceeded { last_status } => {
                 assert_eq!(last_status.as_deref(), Some("uploaded"));
