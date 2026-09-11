@@ -617,6 +617,60 @@ struct ScriptedTransport {
 #[error("scripted transport write failed")]
 struct ScriptedWriteError;
 
+#[tokio::test]
+async fn cancellation_interrupts_a_full_request_queue() {
+    use crate::ResponsesToolExecutor;
+    use rmcp::model::{CallToolRequest, ClientRequest};
+    use rmcp::service::PeerRequestOptions;
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    let mut harness = Harness::connect().await;
+    let executor = harness.bridge.executor();
+    let mut context = Context::from_waker(Waker::noop());
+    let mut handles = Vec::new();
+    let mut full = false;
+    // Poll without yielding to the service task so its bounded outbound queue
+    // deterministically fills, independently of transport timing. Disable the
+    // cooperative poll budget so Pending really means a full queue.
+    for _ in 0..4096 {
+        let request = ClientRequest::CallToolRequest(CallToolRequest::new(
+            CallToolRequestParams::new(SLOW_TOOL),
+        ));
+        let mut send = std::pin::pin!(tokio::task::unconstrained(
+            executor
+                .peer()
+                .send_cancellable_request(request, PeerRequestOptions::no_options())
+        ));
+        match send.as_mut().poll(&mut context) {
+            Poll::Ready(Ok(handle)) => handles.push(handle),
+            Poll::Ready(Err(error)) => panic!("queue unexpectedly closed: {error}"),
+            Poll::Pending => {
+                full = true;
+                break;
+            }
+        }
+    }
+    assert!(full, "outbound queue must be saturated");
+    let token = CancellationToken::new();
+    let control = ExecutionControl::default().with_cancellation(token.clone());
+    {
+        let mut call = std::pin::pin!(tokio::task::unconstrained(executor.call_tool(
+            SLOW_TOOL,
+            JsonObject::new(),
+            &control
+        )));
+        assert!(call.as_mut().poll(&mut context).is_pending());
+        token.cancel_with_reason("stop queued call");
+        assert!(matches!(call.as_mut().poll(&mut context),
+            Poll::Ready(Err(BridgeError::Cancelled { reason: Some(reason) }))
+                if reason == "stop queued call"));
+    }
+    drop(handles);
+    harness.client.close().await.expect("close client");
+    harness.server_task.abort();
+}
+
 impl Transport<RoleClient> for ScriptedTransport {
     type Error = ScriptedWriteError;
 

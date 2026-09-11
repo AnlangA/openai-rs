@@ -329,6 +329,7 @@ struct TokenState {
 pub(crate) struct WorkloadIdentityAuth {
     config: WorkloadIdentityConfig,
     http: reqwest::Client,
+    exchange_timeout: Duration,
     state: Mutex<TokenState>,
     notify: Notify,
 }
@@ -372,6 +373,7 @@ impl WorkloadIdentityAuth {
         Ok(Arc::new(Self {
             config,
             http,
+            exchange_timeout: request_timeout,
             state: Mutex::new(TokenState::default()),
             notify: Notify::new(),
         }))
@@ -426,7 +428,15 @@ impl WorkloadIdentityAuth {
         let auth = Arc::clone(self);
         tokio::spawn(
             async move {
-                let result = auth.exchange(refresh.token_generation).await;
+                // Bound the whole refresh, including the caller's subject-token
+                // provider, so a stalled provider cannot occupy the shared slot
+                // forever after the original request has been cancelled.
+                let result = tokio::time::timeout(
+                    auth.exchange_timeout,
+                    auth.exchange(refresh.token_generation),
+                )
+                .await
+                .unwrap_or_else(|_| Err(Arc::new(WorkloadIdentityError::Transport)));
                 auth.finish_refresh(refresh, result).await;
             }
             .instrument(tracing::debug_span!("openai.workload_identity.refresh")),
@@ -895,6 +905,115 @@ mod tests {
         assert_eq!(requests[0]["identity_provider_id"], "idp_test");
         assert_eq!(requests[0]["service_account_id"], "svc_test");
         assert_eq!(requests[0]["client_id"], "client_test");
+    }
+
+    #[tokio::test]
+    async fn request_budgets_bound_pending_authentication_in_every_http_lane() {
+        for lane in 0..5 {
+            let (api_url, api_calls, _) = api_server(false, "{}").await;
+            let provider = SubjectTokenProviderFn::new(SubjectTokenType::Jwt, || async {
+                std::future::pending::<Result<SubjectToken, SubjectTokenProviderError>>().await
+            });
+            let config = WorkloadIdentityConfig::new("idp_test", "svc_test", provider)
+                .expect("config")
+                .with_token_exchange_url(api_url.clone());
+            let client = Client::workload_identity_builder(config)
+                .base_url(api_url)
+                .allow_insecure_loopback(true)
+                .request_timeout(Duration::from_secs(10))
+                .build()
+                .expect("client")
+                .with_request_timeout(Duration::from_millis(30));
+            let call = async {
+                match lane {
+                    0 => client.models().list().await.map(|_| ()),
+                    1 => client
+                        .files()
+                        .create(CreateFileRequest::new(
+                            ReplayableMultipartSource::from_bytes(Arc::<[u8]>::from(&b"abc"[..])),
+                            FilePurpose::Batch,
+                        ))
+                        .await
+                        .map(|_| ()),
+                    2 => client
+                        .files()
+                        .create_one_shot(CreateFileOneShotRequest::new(
+                            OneShotMultipartSource::from_reader(tokio::io::empty()),
+                            FilePurpose::Batch,
+                        ))
+                        .await
+                        .map(|_| ()),
+                    3 => client
+                        .multipart_transport()
+                        .send_replayable_json(
+                            "CreateSpeech",
+                            &[crate::transport::PathSegment::literal("audio")],
+                            &serde_json::json!({}),
+                            "application/octet-stream",
+                        )
+                        .await
+                        .map(|_| ()),
+                    _ => client
+                        .multipart_transport()
+                        .download_file(&openai_rs_types::FileId::from("file_test"))
+                        .await
+                        .map(|_| ()),
+                }
+            };
+            let result = tokio::time::timeout(Duration::from_millis(300), call)
+                .await
+                .expect("authentication must respect the request budget");
+            assert!(
+                matches!(result, Err(Error::DeadlineExceeded)),
+                "lane {lane}: {result:?}"
+            );
+            assert_eq!(api_calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn stalled_subject_provider_releases_the_refresh_slot() {
+        let (exchange_url, exchanges, _) = exchange_server(vec![Reply {
+            status: StatusCode::OK,
+            body: r#"{"access_token":"recovered","expires_in":3600}"#.to_owned(),
+            location: None,
+        }])
+        .await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = SubjectTokenProviderFn::new(SubjectTokenType::Jwt, {
+            let calls = Arc::clone(&calls);
+            move || {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt == 0 {
+                        std::future::pending::<()>().await;
+                    }
+                    SubjectToken::new("subject.token").map_err(|_| SubjectTokenProviderError)
+                }
+            }
+        });
+        let config = WorkloadIdentityConfig::new("idp_test", "svc_test", provider)
+            .expect("config")
+            .with_token_exchange_url(exchange_url);
+        let auth = WorkloadIdentityAuth::new(
+            config,
+            None,
+            Duration::from_secs(1),
+            Duration::from_millis(100),
+            None,
+        )
+        .expect("auth");
+        let failed = tokio::time::timeout(Duration::from_secs(1), auth.token())
+            .await
+            .expect("stalled provider must time out");
+        assert!(failed.is_err());
+        let recovered = tokio::time::timeout(Duration::from_secs(1), auth.token())
+            .await
+            .expect("next refresh must not hang")
+            .expect("refresh should recover");
+        assert_eq!(recovered.header, "Bearer recovered");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(exchanges.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

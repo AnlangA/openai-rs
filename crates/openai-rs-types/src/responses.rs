@@ -2033,6 +2033,15 @@ pub struct FunctionTool {
     defer_loading: Omittable<bool>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     allowed_callers: Omittable<Nullable<Vec<AllowedCaller>>>,
+    /// Whether the model may continue while the application executes this tool.
+    #[serde(
+        default,
+        rename = "async",
+        skip_serializing_if = "Omittable::is_omitted"
+    )]
+    asynchronous: Omittable<bool>,
+    #[serde(default, flatten)]
+    extra: ExtraFields,
 }
 
 impl FunctionTool {
@@ -2073,6 +2082,8 @@ impl FunctionTool {
             strict: Omittable::Omitted,
             defer_loading: Omittable::Omitted,
             allowed_callers: Omittable::Omitted,
+            asynchronous: Omittable::Omitted,
+            extra: ExtraFields::new(),
         }
     }
 
@@ -2128,6 +2139,28 @@ impl FunctionTool {
     pub fn defer_loading(mut self, defer_loading: bool) -> Self {
         self.defer_loading = Omittable::Value(defer_loading);
         self
+    }
+
+    /// Lets the model continue working before this function's result is returned.
+    #[must_use]
+    pub fn asynchronous(mut self, asynchronous: bool) -> Self {
+        self.asynchronous = Omittable::Value(asynchronous);
+        self
+    }
+
+    /// Returns the explicit asynchronous-execution flag, when supplied.
+    #[must_use]
+    pub const fn is_async(&self) -> Option<bool> {
+        match self.asynchronous {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
+    }
+
+    /// Future tool fields retained while decoding.
+    #[must_use]
+    pub const fn extra_fields(&self) -> &ExtraFields {
+        &self.extra
     }
 
     /// Restricts which invocation contexts may call this function.
@@ -19894,6 +19927,40 @@ mod tests {
         let decoded: PromptCacheBreakpoint =
             serde_json::from_value(json!({ "mode": "explicit" })).expect("decode");
         assert_eq!(decoded, PromptCacheBreakpoint::explicit());
+    }
+
+    #[test]
+    fn async_function_tools_and_future_fields_survive_request_round_trips() {
+        for asynchronous in [true, false] {
+            let function = json!({"type":"function", "name":"lookup", "async":asynchronous,
+                "future_setting":{"enabled":true}});
+            for tool in [
+                function.clone(),
+                json!({"type":"namespace", "name":"utilities",
+                "description":"Tools", "tools":[function]}),
+            ] {
+                let typed: ResponseTool = serde_json::from_value(tool.clone()).expect("tool");
+                let request = CreateResponseRequest::new("gpt-6-astra", "test").with_tool(typed);
+                request.validate().expect("request");
+                let encoded = serde_json::to_value(&request).expect("encode request");
+                assert_eq!(encoded["tools"][0], tool);
+            }
+            let tool = FunctionTool::new("lookup").asynchronous(asynchronous);
+            assert_eq!(tool.is_async(), Some(asynchronous));
+            assert_eq!(
+                serde_json::to_value(tool).expect("encode")["async"],
+                asynchronous
+            );
+        }
+        assert_eq!(FunctionTool::new("lookup").is_async(), None);
+        for invalid in [Value::Null, json!("true"), json!(1)] {
+            assert!(
+                serde_json::from_value::<FunctionTool>(json!({
+                    "type":"function", "name":"lookup", "async":invalid
+                }))
+                .is_err()
+            );
+        }
     }
 
     #[test]

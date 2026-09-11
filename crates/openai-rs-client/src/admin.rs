@@ -27,7 +27,7 @@ use url::{Host, Url};
 use zeroize::Zeroizing;
 
 use crate::operation::RetryClass;
-use crate::transport::should_retry_response;
+use crate::transport::{ServerDelay, server_retry_delay, should_retry_response};
 use crate::{
     ApiError, ApiResponse, BodyPreview, Error, ResponseMeta, RetryPolicy, TlsBackend, trace,
 };
@@ -2405,13 +2405,13 @@ impl AdminClient {
                 && should_retry_response(&response)
             {
                 let delay = match server_retry_delay(response.headers(), policy.max_server_delay) {
-                    ServerDelay::Valid(delay) => delay,
-                    // A missing, non-positive, or over-bound server delay all
-                    // fall back to local exponential backoff; the retry budget
-                    // above still caps the total number of attempts.
-                    ServerDelay::TooLong | ServerDelay::Absent => local_retry_delay(retries),
+                    ServerDelay::Valid(delay) => Some(delay),
+                    ServerDelay::Absent => Some(local_retry_delay(retries)),
+                    ServerDelay::TooLong => None,
                 };
-                if can_wait(started, delay, self.inner.request_timeout) {
+                if let Some(delay) = delay
+                    && can_wait(started, delay, self.inner.request_timeout)
+                {
                     retries += 1;
                     trace::emit_retry(retries, delay, trace::RetryReason::HttpStatus);
                     drop(response);
@@ -2734,83 +2734,6 @@ fn retryable_operation(class: RetryClass, policy: RetryPolicy) -> bool {
         RetryClass::Replayable => policy.retry_replayable_mutations,
         #[cfg(any(feature = "realtime", feature = "legacy-realtime"))]
         RetryClass::Never => false,
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ServerDelay {
-    Absent,
-    Valid(Duration),
-    TooLong,
-}
-
-fn server_retry_delay(headers: &http::HeaderMap, maximum: Duration) -> ServerDelay {
-    if let Some(value) = headers
-        .get("retry-after-ms")
-        .and_then(|value| value.to_str().ok())
-        && let Ok(milliseconds) = value.parse::<f64>()
-    {
-        // A *parseable* `retry-after-ms` decides the delay on its own, exactly
-        // like openai-python's `_parse_retry_after_header` and the sibling
-        // copies (`transport.rs::server_retry_delay`,
-        // `multipart.rs::retry_delay`): a positive, in-bound value wins, while
-        // zero, negative, non-finite (`nan`/`inf`), and over-bound values all
-        // map to local exponential backoff without ever consulting
-        // `Retry-After`, so a stale coarse header cannot override the
-        // millisecond header the server actually emitted. Only an unparseable
-        // value falls through to `Retry-After`. The zero/negative guards live
-        // inside `bounded_delay`.
-        return bounded_delay(milliseconds / 1000.0, maximum);
-    }
-
-    let Some(value) = headers
-        .get(header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return ServerDelay::Absent;
-    };
-    if let Ok(seconds) = value.parse::<f64>()
-        && seconds.is_finite()
-        && seconds >= 0.0
-    {
-        return bounded_delay(seconds, maximum);
-    }
-    match httpdate::parse_http_date(value) {
-        Ok(time) => {
-            let delay = time
-                .duration_since(SystemTime::now())
-                .unwrap_or(Duration::ZERO);
-            if delay.is_zero() {
-                // A date already in the past carries a non-positive delay, so
-                // it falls back to local exponential backoff like the numeric
-                // forms above.
-                ServerDelay::Absent
-            } else if delay <= maximum {
-                ServerDelay::Valid(delay)
-            } else {
-                ServerDelay::TooLong
-            }
-        }
-        Err(_) => ServerDelay::Absent,
-    }
-}
-
-fn bounded_delay(seconds: f64, maximum: Duration) -> ServerDelay {
-    if seconds <= 0.0 {
-        // Only strictly positive delays are honored, matching openai-python's
-        // `0 < retry_after` gate; zero or negative values fall back to local
-        // exponential backoff rather than triggering an immediate retry.
-        ServerDelay::Absent
-    } else if seconds > maximum.as_secs_f64() {
-        ServerDelay::TooLong
-    } else {
-        match Duration::try_from_secs_f64(seconds) {
-            Ok(delay) => ServerDelay::Valid(delay),
-            // The only in-bound value that fails to convert is `nan`, which
-            // carries no usable delay and lands on the same local-backoff
-            // fallback as the over-bound branch above.
-            Err(_) => ServerDelay::TooLong,
-        }
     }
 }
 
@@ -4312,6 +4235,29 @@ mod tests {
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
+    #[tokio::test]
+    async fn excessive_retry_after_stops_admin_retries() {
+        let (base_url, attempts) = serve_scripted_admin_responses(vec![ScriptedAdminResponse {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            retry_after: Some(HeaderValue::from_static("121")),
+            body: r#"{"error":{"message":"retry later","type":"service_unavailable_error","code":"server_is_overloaded"}}"#,
+        }]).await;
+        let client = loopback_admin_client(base_url, RetryPolicy::openai_compatible());
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.users().list(&AdminListParams::default()),
+        )
+        .await
+        .expect("bounded wait")
+        .expect_err("API error");
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        let Error::Api(api) = error else {
+            panic!("expected API error")
+        };
+        assert_eq!(api.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(api.retry_after(), Some("121"));
+    }
+
     #[test]
     fn parseable_retry_after_ms_decides_alone_and_never_falls_back() {
         // 4-31, admin sibling of `transport.rs`: once `retry-after-ms` parses
@@ -4334,9 +4280,9 @@ mod tests {
 
         // Non-finite values parse as floats, so they decide alone as well.
         headers.insert("retry-after-ms", HeaderValue::from_static("nan"));
-        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::Absent);
         headers.insert("retry-after-ms", HeaderValue::from_static("inf"));
-        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::TooLong);
+        assert_eq!(server_retry_delay(&headers, maximum), ServerDelay::Absent);
 
         // An over-bound millisecond value beside an in-bound `Retry-After`
         // still never adopts the coarse header.

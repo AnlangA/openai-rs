@@ -12,6 +12,16 @@ use openai_rs::{
 };
 
 #[test]
+fn safety_resources_are_available_with_the_platform_client() {
+    let client =
+        openai_rs::Client::new(openai_rs::ApiKey::new("test-key").expect("key")).expect("client");
+    let safety: openai_rs::Safety = client.safety();
+    let _: openai_rs::SafetyAlerts = safety.alerts();
+    let _: Option<openai_rs::SafetyAlert> = None;
+    assert_eq!(openai_rs::SafetyAlertErrorType::Other.as_str(), "other");
+}
+
+#[test]
 fn retrieve_params_are_nameable_through_the_facade() {
     use openai_rs::responses::ResponseIncludable;
 

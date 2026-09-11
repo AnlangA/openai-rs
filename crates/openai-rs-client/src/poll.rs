@@ -7,10 +7,11 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use tokio::sync::Notify;
+use tokio::time::Instant;
 
 use crate::{ApiResponse, Error};
 
@@ -497,6 +498,26 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn polling_deadline_uses_the_runtime_clock() {
+        let started = tokio::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            poll_resource_with_status(
+                || async { Ok(make_response("in_progress".to_owned())) },
+                |_| false,
+                Clone::clone,
+                PollOptions::new()
+                    .with_interval(Duration::from_millis(10))
+                    .with_timeout(Duration::from_millis(30)),
+            ),
+        )
+        .await
+        .expect("poll deadline must expire before the outer timer");
+        assert!(matches!(result, Err(PollError::DeadlineExceeded { .. })));
+        assert_eq!(started.elapsed(), Duration::from_millis(30));
     }
 
     /// Records the mocked-clock instant of every fetch so a test can assert

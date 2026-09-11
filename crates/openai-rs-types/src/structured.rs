@@ -9,14 +9,10 @@
 //! resolved against the document and inlined with the sibling keys taking
 //! priority; a reference that cannot be resolved locally is an error.
 //!
-//! Recursive types are not representable in strict mode: inlining tracks the
-//! chain of references it is currently expanding, and a reference that
-//! recurses into a definition on that chain - including a self-reference to
-//! the document root, `$ref: "#"` or its empty-pointer spelling `"#/"` - can
-//! never flatten into a finite schema, so it fails with
-//! [`StructuredError::RecursiveReference`] instead of expanding without
-//! bound. A `$ref` that is not a string is likewise rejected instead of being
-//! silently passed through.
+//! Legal recursive references, including `$ref: "#"`, are preserved. When
+//! inlining reaches a recursive reference with sibling fields, a single-branch
+//! `anyOf` keeps the reference separate from those fields without expanding it
+//! again. Alias-only cycles that never reach an actual schema are rejected.
 //!
 //! Cycle detection alone does not bound the work: a reference graph that
 //! fans out (a DAG rather than a cycle) can double the schema on every
@@ -50,8 +46,7 @@ use thiserror::Error;
 /// Maximum number of JSON nodes that sibling-key `$ref` inlining may produce
 /// during a single normalization pass.
 ///
-/// A cyclic reference chain is rejected outright by
-/// [`StructuredError::RecursiveReference`], but an acyclic reference graph can
+/// Recursive edges are retained, but an acyclic reference graph can
 /// still fan out: two sibling-key references per level double the expansion on
 /// every step, so a 40-level DAG would otherwise demand ~2^40 nodes. Charging
 /// every node the inliner emits against this budget turns that into
@@ -91,16 +86,12 @@ pub enum StructuredError {
         /// Reference that could not be resolved within the document.
         reference: String,
     },
-    /// The generated schema contains a reference that recurses into a
-    /// definition that is already being inlined, which no finite strict
-    /// schema can represent.
-    #[error(
-        "recursive JSON Schema reference `{reference}` at {path} cannot be represented in strict mode"
-    )]
+    /// A cycle of reference aliases never reaches a concrete schema.
+    #[error("JSON Schema reference `{reference}` at {path} belongs to an unresolved alias cycle")]
     RecursiveReference {
         /// JSON Pointer-like location of the reference.
         path: String,
-        /// Reference that recursed into a definition already being inlined.
+        /// Reference in the alias cycle.
         reference: String,
     },
     /// Sibling-key `$ref` inlining produced more nodes than
@@ -619,9 +610,8 @@ fn normalize(
     }
 
     // Classify `$ref` before anything else: a pointer that leaves the
-    // document is external, `#` and `#/` (the empty pointer) both point back
-    // at the document root and so always recurse, and a non-string `$ref` is
-    // never passed through.
+    // document is external, `#` points at the document root, and a non-string
+    // `$ref` is never passed through. `#/` addresses the empty property name.
     if let Some(node) = object.get("$ref") {
         let reference = match node {
             Value::String(reference) => reference.clone(),
@@ -632,28 +622,37 @@ fn normalize(
                 });
             }
         };
-        if reference == "#" || reference == "#/" {
-            return Err(StructuredError::RecursiveReference {
-                path: format!("{path}/$ref"),
-                reference,
-            });
-        }
-        if !reference.starts_with("#/") {
+        if reference != "#" && !reference.starts_with("#/") {
             return Err(StructuredError::ExternalReference {
                 path: format!("{path}/$ref"),
                 reference,
             });
         }
+        let Some(resolved) = resolve_ref(base, &reference).and_then(Value::as_object) else {
+            return Err(StructuredError::UnresolvableRef {
+                path: format!("{path}/$ref"),
+                reference,
+            });
+        };
+        validate_alias_chain(base, &reference, path)?;
         if object.len() == 1 {
             // A bare sole-key `$ref` is legal strict output and passes
             // through untouched.
             return Ok(());
         }
         if chain.contains(&reference) {
-            return Err(StructuredError::RecursiveReference {
-                path: format!("{path}/$ref"),
-                reference,
-            });
+            // Keep productive recursion instead of expanding the same schema
+            // again. Sibling annotations/constraints remain on this object.
+            // An existing anyOf cannot be overwritten without losing meaning.
+            if object.contains_key("anyOf") {
+                return Err(StructuredError::UnsupportedKeyword {
+                    path: format!("{path}/anyOf"),
+                    keyword: "anyOf beside a recursive $ref".into(),
+                });
+            }
+            object.remove("$ref");
+            object.insert("anyOf".into(), json!([{ "$ref": reference }]));
+            return normalize(value, path, base, chain, budget);
         }
         // Strict mode rejects a `$ref` that keeps sibling keys, e.g.
         // `{"$ref": "#/$defs/X", "description": "..."}` produced by a doc
@@ -661,16 +660,11 @@ fn normalize(
         // resolve the reference within the document, inline the target with
         // the sibling keys taking priority, then re-run normalization on the
         // merged schema with this reference added to the active chain.
-        let Some(resolved) = resolve_ref(base, &reference).and_then(Value::as_object) else {
-            return Err(StructuredError::UnresolvableRef {
-                path: format!("{path}/$ref"),
-                reference,
-            });
-        };
         let mut chain = chain.to_vec();
         chain.push(reference);
         let mut merged = resolved.clone();
-        merged.remove("$ref");
+        // The target may itself be an alias. Preserve its reference so the
+        // next normalization step resolves it and checks the active chain.
         for (key, sibling) in object.iter() {
             if key != "$ref" {
                 merged.insert(key.clone(), sibling.clone());
@@ -869,14 +863,51 @@ fn escape_pointer(segment: &str) -> String {
 
 /// Resolves a local JSON Pointer reference (`#/$defs/Name`) within `base`.
 fn resolve_ref<'a>(base: &'a Value, reference: &str) -> Option<&'a Value> {
+    if reference == "#" {
+        return Some(base);
+    }
     let pointer = reference.strip_prefix("#/")?;
     let mut current = base;
-    if !pointer.is_empty() {
-        for segment in pointer.split('/') {
-            current = current.as_object()?.get(&unescape_pointer(segment)?)?;
-        }
+    for segment in pointer.split('/') {
+        current = current.as_object()?.get(&unescape_pointer(segment)?)?;
     }
     Some(current)
+}
+
+/// Bare aliases must also terminate, even when no sibling-key inlining occurs.
+fn validate_alias_chain(base: &Value, reference: &str, path: &str) -> Result<(), StructuredError> {
+    let mut seen = std::collections::HashSet::new();
+    let mut current = reference;
+    loop {
+        if !seen.insert(current) {
+            return Err(StructuredError::RecursiveReference {
+                path: format!("{path}/$ref"),
+                reference: current.to_owned(),
+            });
+        }
+        if current != "#" && !current.starts_with("#/") {
+            return Err(StructuredError::ExternalReference {
+                path: format!("{path}/$ref"),
+                reference: current.to_owned(),
+            });
+        }
+        let object = resolve_ref(base, current)
+            .and_then(Value::as_object)
+            .ok_or_else(|| StructuredError::UnresolvableRef {
+                path: format!("{path}/$ref"),
+                reference: current.to_owned(),
+            })?;
+        match object.get("$ref") {
+            None => return Ok(()),
+            Some(Value::String(next)) => current = next,
+            Some(other) => {
+                return Err(StructuredError::UnresolvableRef {
+                    path: format!("{path}/$ref"),
+                    reference: other.to_string(),
+                });
+            }
+        }
+    }
 }
 
 /// Decodes a single RFC 6901 pointer token, rejecting malformed escapes.
@@ -1363,25 +1394,76 @@ mod tests {
     }
 
     #[test]
-    fn recursive_sibling_refs_error_instead_of_overflowing() {
-        // Regression for the D0129 stack overflow: schemars keeps the doc
-        // comment as a sibling of the self-`$ref`, and unbounded inlining
-        // used to abort the process.  It must return a catchable error.
-        let error = StructuredOutput::<RecursiveRoot>::new("tree")
-            .expect_err("recursive schema must fail, not overflow");
-        assert!(
-            matches!(
-                &error,
-                StructuredError::RecursiveReference { path, reference }
-                    if reference == "#/$defs/TreeBranch"
-                        && path == "#/properties/tree/properties/child/$ref"
-            ),
-            "unexpected error: {error:?}"
+    fn sibling_ref_follows_aliases_without_losing_constraints() {
+        let mut schema = json!({
+            "type": "object",
+            "required": ["field"],
+            "properties": {
+                "field": {"$ref": "#/$defs/Alias", "description": "field description"}
+            },
+            "$defs": {
+                "Alias": {"$ref": "#/$defs/Actual", "description": "alias description"},
+                "Actual": {"type": "string", "enum": ["allowed"]}
+            }
+        });
+        normalize_strict_schema(&mut schema).expect("resolve chained reference");
+        assert_eq!(
+            schema["properties"]["field"],
+            json!({
+                "type": "string", "enum": ["allowed"], "description": "field description"
+            })
         );
     }
 
     #[test]
-    fn transitive_ref_cycles_are_detected_through_the_chain() {
+    fn sibling_ref_rejects_an_alias_cycle() {
+        let mut schema = json!({
+            "type": "object",
+            "required": ["field"],
+            "properties": {"field": {"$ref": "#/$defs/A", "description": "entry"}},
+            "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}}
+        });
+        assert!(matches!(
+            normalize_strict_schema(&mut schema),
+            Err(StructuredError::RecursiveReference { .. })
+        ));
+    }
+
+    #[test]
+    fn slash_pointer_resolves_the_empty_property_name() {
+        let mut schema = json!({
+            "type": "object",
+            "required": ["field"],
+            "properties": {"field": {"$ref": "#/", "description": "empty key"}},
+            "": {"type": "string", "enum": ["allowed"]}
+        });
+        assert_eq!(super::resolve_ref(&schema, "#/"), Some(&schema[""]));
+        normalize_strict_schema(&mut schema).expect("empty property is not the root");
+        assert_eq!(schema["properties"]["field"]["type"], "string");
+        assert_eq!(schema["properties"]["field"]["enum"], json!(["allowed"]));
+    }
+
+    #[test]
+    fn recursive_sibling_refs_are_preserved_without_overflowing() {
+        let output = StructuredOutput::<RecursiveRoot>::new("tree")
+            .expect("documented recursive types are supported");
+        assert_no_ref_with_siblings(output.schema());
+        let mut refs = Vec::new();
+        collect_refs(output.schema(), &mut refs);
+        assert!(!refs.is_empty());
+        assert!(
+            refs.iter()
+                .all(|reference| super::resolve_ref(output.schema(), reference).is_some())
+        );
+        let mut again = output.schema().clone();
+        normalize_strict_schema(&mut again).expect("normalization is idempotent");
+        assert_eq!(&again, output.schema());
+        crate::responses::FunctionTool::for_type::<RecursiveRoot>("tree", "Build a tree")
+            .expect("typed functions share recursive schema support");
+    }
+
+    #[test]
+    fn mutually_recursive_objects_preserve_back_references() {
         let mut schema = json!({
             "type": "object",
             "required": ["a"],
@@ -1405,13 +1487,11 @@ mod tests {
                 }
             }
         });
-        let error = normalize_strict_schema(&mut schema).expect_err("cycle must fail");
-        assert!(matches!(
-            &error,
-            StructuredError::RecursiveReference { path, reference }
-                if reference == "#/$defs/A"
-                    && path == "#/properties/a/properties/b/properties/a/$ref"
-        ));
+        normalize_strict_schema(&mut schema).expect("mutually recursive objects are legal");
+        let back = &schema["properties"]["a"]["properties"]["b"]["properties"]["a"];
+        assert_eq!(back["anyOf"], json!([{ "$ref": "#/$defs/A" }]));
+        assert_eq!(back["description"], "back to A");
+        assert_no_ref_with_siblings(&schema);
     }
 
     /// Builds a DAG of `depth` definitions where every level fans out into
@@ -1511,7 +1591,7 @@ mod tests {
     }
 
     #[test]
-    fn root_self_reference_reports_recursion_not_external() {
+    fn root_self_reference_is_preserved_with_and_without_siblings() {
         let mut schema = json!({
             "type": "object",
             "required": ["self"],
@@ -1520,25 +1600,48 @@ mod tests {
                 "sibling": { "$ref": "#", "description": "self with sibling" }
             }
         });
-        let error =
-            normalize_strict_schema(&mut schema).expect_err("root self-reference must fail");
-        assert!(
-            matches!(
-                &error,
-                StructuredError::RecursiveReference { path, reference }
-                    if reference == "#" && path == "#/properties/self/$ref"
-            ),
-            "unexpected error: {error:?}"
-        );
+        normalize_strict_schema(&mut schema).expect("root recursion is supported");
+        assert_eq!(schema["properties"]["self"], json!({"$ref":"#"}));
+        let mut refs = Vec::new();
+        collect_refs(&schema, &mut refs);
+        assert!(refs.iter().any(|reference| reference == "#"));
+        assert_no_ref_with_siblings(&schema);
     }
 
     #[test]
-    fn empty_pointer_root_reference_reports_recursion_in_both_forms() {
-        // `#/` is the second spelling of the document-root self-reference
-        // (an empty JSON pointer). Both the bare and the sibling-key form
-        // must take the same `RecursiveReference` path as `#` (D0143): the
-        // bare form used to pass through untouched because only the
-        // sole-key fast path saw it.
+    fn bare_alias_cycles_and_dangling_aliases_are_rejected() {
+        for target in ["#/$defs/A", "#/$defs/Missing"] {
+            let mut schema = json!({
+                "type":"object", "required":["value"],
+                "properties":{"value":{"$ref":"#/$defs/A"}},
+                "$defs":{"A":{"$ref":"#/$defs/B"},"B":{"$ref":target}}
+            });
+            let error = normalize_strict_schema(&mut schema).expect_err("invalid alias graph");
+            if target.ends_with("Missing") {
+                assert!(matches!(error, StructuredError::UnresolvableRef { .. }));
+            } else {
+                assert!(matches!(error, StructuredError::RecursiveReference { .. }));
+            }
+        }
+    }
+
+    #[test]
+    fn documented_recursive_array_retains_root_reference() {
+        let mut schema = json!({
+            "type":"object", "required":["label","children"],
+            "properties":{
+                "label":{"type":"string"},
+                "children":{"type":"array","items":{"$ref":"#"}}
+            }, "additionalProperties":false
+        });
+        let original = schema.clone();
+        normalize_strict_schema(&mut schema).expect("official tree shape");
+        assert_eq!(schema, original);
+    }
+
+    #[test]
+    fn missing_empty_property_reference_is_unresolvable_in_both_forms() {
+        // RFC 6901: `#/` addresses an empty key, which is absent here.
         let mut bare = json!({
             "type": "object",
             "required": ["self"],
@@ -1548,7 +1651,7 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                StructuredError::RecursiveReference { path, reference }
+                StructuredError::UnresolvableRef { path, reference }
                     if reference == "#/" && path == "#/properties/self/$ref"
             ),
             "unexpected error: {error:?}"
@@ -1566,7 +1669,7 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                StructuredError::RecursiveReference { path, reference }
+                StructuredError::UnresolvableRef { path, reference }
                     if reference == "#/" && path == "#/properties/self/$ref"
             ),
             "unexpected error: {error:?}"

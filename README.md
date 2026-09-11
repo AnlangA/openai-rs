@@ -29,6 +29,10 @@ all 254 applicable client operations are verified; 33 sunset/deprecated
 operations are explicitly omitted and one conflicting operation is
 quarantined. The 18 webhook receiver operations are verified independently
 of that client disposition.
+The documented project Safety Alerts retrieval API is also implemented via
+`client.safety().alerts().retrieve(id)` and tracked separately from the frozen
+OpenAPI inventory. Function tools support `asynchronous(true)`, and typed
+Structured Outputs helpers preserve supported recursive schema references.
 
 | Area | Status |
 |---|---|

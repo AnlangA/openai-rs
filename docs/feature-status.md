@@ -25,7 +25,7 @@ Status terms:
 
 | Feature | Default | Status | Notes |
 |---|---:|---|---|
-| `client` | Yes | Implemented | Enables the Platform `Client`. Coverage includes Responses, Chat Completions, Files/Uploads, Batches, Vector Stores, Models, Embeddings, Moderations, media, Fine-tuning, Conversations, Containers, Skills, and Content Provenance. Evals is available via the default-off `legacy-evals` feature. |
+| `client` | Yes | Implemented | Enables the Platform `Client`. Coverage includes Responses, Chat Completions, Files/Uploads, Batches, Vector Stores, Models, Embeddings, Moderations, media, Fine-tuning, Conversations, Containers, Skills, Content Provenance, and project Safety Alerts retrieval. Evals is available via the default-off `legacy-evals` feature. |
 | `rustls-tls` | Yes | Implemented | Rustls-backed Platform transport. Implies `client`. |
 | `native-tls` | No | Implemented | Native TLS transport selection. Implies `client`. |
 | `structured-output` | Yes | Implemented | Typed schema generation and strict-subset normalization aligned with the official Structured Outputs keyword allowlist (`anyOf`/`items` plus object, number, and string constraints; `allOf`/`oneOf`/`not`/`if`/`then`/`else` and the advanced object/array keywords are rejected). |

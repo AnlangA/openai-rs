@@ -1,4 +1,7 @@
-use std::fmt;
+use std::{
+    fmt,
+    time::{Duration, Instant},
+};
 
 use http::HeaderValue;
 use secrecy::{ExposeSecret, SecretString};
@@ -76,6 +79,31 @@ impl AuthProvider {
             #[cfg(feature = "workload-identity")]
             Self::Workload(auth) => auth.token().await.map(AuthLease::from),
         }
+    }
+
+    /// Authentication and the HTTP attempt share the caller's remaining budget.
+    pub(crate) async fn authorization_with_budget(
+        &self,
+        started: Instant,
+        timeout: Duration,
+    ) -> Result<(AuthLease, Duration), crate::Error> {
+        let remaining = || {
+            timeout
+                .checked_sub(started.elapsed())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or(crate::Error::DeadlineExceeded)
+        };
+        let result = async {
+            let lease = tokio::time::timeout(remaining()?, self.authorization())
+                .await
+                .map_err(|_| crate::Error::DeadlineExceeded)??;
+            Ok((lease, remaining()?))
+        }
+        .await;
+        if matches!(&result, Err(crate::Error::DeadlineExceeded)) {
+            crate::trace::emit_deadline_exceeded();
+        }
+        result
     }
 
     pub(crate) async fn invalidate_if_generation(&self, generation: Option<u64>) -> bool {

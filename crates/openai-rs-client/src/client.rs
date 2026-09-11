@@ -23,7 +23,7 @@ use crate::Voices;
 use crate::{
     ApiKey, Audio, Batches, ChatCompletions, Containers, ContentProvenanceChecks, Conversations,
     Embeddings, Error, Files, FineTuning, Images, Models, Moderations, Responses, RetryPolicy,
-    Skills, Uploads, VectorStores, auth::AuthProvider, multipart::MultipartTransport,
+    Safety, Skills, Uploads, VectorStores, auth::AuthProvider, multipart::MultipartTransport,
     sse::SseLimits, transport::Transport,
 };
 #[cfg(feature = "workload-identity")]
@@ -264,6 +264,12 @@ impl Client {
     #[must_use]
     pub fn models(&self) -> Models {
         Models::new(self.clone())
+    }
+
+    /// Returns project-scoped safety resources.
+    #[must_use]
+    pub fn safety(&self) -> Safety {
+        Safety::new(self.clone())
     }
 
     /// Returns the Embeddings resource facade.

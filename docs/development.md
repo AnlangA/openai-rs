@@ -51,6 +51,10 @@ matches its recorded hash. M0 currently checks five registered contract
 projections for zero diff (`operations.json`, `discriminators.json`,
 `nullability.json`, `schema-ir.json`, `non-rest-implementation.json`), in
 addition to the vendored OpenAPI and Codex schema provenance.
+Operations documented after the frozen snapshot are registered separately in
+`implementation.toml` under `documented_operations`, with official source URLs,
+capture hashes, implementation units, and tests. They are projected into their
+own section of `operations.json` and do not change the pinned operation counts.
 
 Refresh commands, when added, must be separate and explicit. Normal builds,
 tests, and `xtask check` must not fetch a moving specification.
@@ -59,10 +63,11 @@ tests, and `xtask check` must not fetch a moving specification.
 
 The `fuzz/` directory is a standalone cargo-fuzz crate (excluded from the
 workspace in the root `Cargo.toml`, so `--workspace` commands never see it)
-with three targets: `kernel_omittable_extra` (the lossless
+with four targets: `kernel_omittable_extra` (the lossless
 `Omittable`/`Nullable`/extra-fields kernel round-trip), `sse_decoder` (the
 chunked SSE state machine across the three endpoint policies), and
-`responses_stream_event` (typed stream-event decode/re-encode parity).
+`responses_stream_event` (typed stream-event decode/re-encode parity), and
+`responses_input_item` (input-item decode/re-encode parity).
 
 Two layers of gating apply:
 
