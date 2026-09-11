@@ -8,10 +8,12 @@ Responses API.
 > a complete OpenAI API implementation, has not made a stable API promise, and
 > should not yet be used as a drop-in replacement for an official SDK. The
 > initial crates.io packages were published as `0.1.0`; the current workspace
-> version is `0.1.2` under the crate name
+> version is `0.2.0` under the crate name
 > [`openai-rs-sdk`](https://crates.io/crates/openai-rs-sdk) (import as
 > `openai_rs`); treat them as pre-release until a supported stable version is
 > documented.
+
+See the [0.2.0 release notes](CHANGELOG.md) for changes and migration guidance.
 
 ## Current status
 
@@ -262,7 +264,7 @@ an existing integration:
 
 ```toml
 [dependencies]
-openai-rs-sdk = { version = "0.1.2", features = ["legacy-completions"] }
+openai-rs-sdk = { version = "0.2.0", features = ["legacy-completions"] }
 ```
 
 ```rust

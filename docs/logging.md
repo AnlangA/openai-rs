@@ -69,7 +69,7 @@ already uses):
 
 ```toml
 [dependencies]
-openai-rs-sdk = "0.1.2"
+openai-rs-sdk = "0.2.0"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 ```
 
@@ -92,5 +92,5 @@ fn init_logging() -> std::io::Result<()> {
 the Cargo package name `openai-rs-client`. `RUST_LOG=trace` also works but enables
 other dependencies' trace events. See the upstream
 [EnvFilter documentation](https://docs.rs/tracing-subscriber/0.3.23/tracing_subscriber/filter/struct.EnvFilter.html)
-for directive syntax. The expanded events described here require the current
-source checkout; they are not included in the previously published 0.1.2 crates.
+for directive syntax. The expanded events described here are available starting
+with version 0.2.0; they are not included in the 0.1.2 crates.
