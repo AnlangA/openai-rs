@@ -773,6 +773,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deepseek_response_without_cache_write_tokens_decodes_and_replays_history() {
+        const DEEPSEEK_RESPONSE: &str = include_str!("../tests/fixtures/deepseek_response.json");
+        let original: Value =
+            serde_json::from_str(DEEPSEEK_RESPONSE).expect("captured DeepSeek response");
+        let (base_url, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, DEEPSEEK_RESPONSE.to_owned()),
+            (StatusCode::OK, DEEPSEEK_RESPONSE.to_owned()),
+        ])
+        .await;
+        let client = client(base_url);
+        let first_input: openai_rs_types::responses::ResponseInputItem =
+            openai_rs_types::responses::InputMessage::user("hi").into();
+        let response = client
+            .responses()
+            .create(
+                CreateResponseRequest::new("deepseek-flash", vec![first_input.clone()])
+                    .store(false),
+            )
+            .await
+            .expect("DeepSeek response without cache-write usage");
+        assert_eq!(response.output_text(), "Hi! How can I help you today?");
+        let usage = response.usage().expect("usage preserved");
+        assert_eq!(usage.input_tokens(), 31);
+        assert_eq!(usage.output_tokens(), 39);
+        assert_eq!(usage.total_tokens(), 70);
+        assert_eq!(usage.input_tokens_details().cached_tokens(), 0);
+        assert_eq!(usage.input_tokens_details().cache_write_tokens(), None);
+        assert_eq!(usage.output_tokens_details().reasoning_tokens(), 29);
+        assert_eq!(
+            serde_json::to_value(response.body()).expect("response round trip"),
+            original
+        );
+
+        let mut history = vec![first_input];
+        history.extend(response.to_input_items());
+        history.push(openai_rs_types::responses::InputMessage::user("Continue.").into());
+        let next = client
+            .responses()
+            .create(CreateResponseRequest::new("deepseek-flash", history).store(false))
+            .await
+            .expect("second conversation turn");
+        assert!(!next.output_text().is_empty());
+        let first = captured.recv().await.expect("first request");
+        let second = captured.recv().await.expect("second request");
+        assert_eq!(first.path_and_query, "/v1/responses");
+        let request: Value = serde_json::from_slice(&second.body).expect("replayed input");
+        assert_eq!(request["model"], "deepseek-flash");
+        assert_eq!(request["store"], false);
+        assert_eq!(request["input"][0]["content"], "hi");
+        assert_eq!(request["input"][1], original["output"][0]);
+        assert_eq!(request["input"][2], original["output"][1]);
+        assert_eq!(request["input"][3]["content"], "Continue.");
+    }
+
+    #[tokio::test]
     async fn async_function_tool_flag_reaches_the_request_body() {
         let (base_url, captured) = serve_once(StatusCode::OK, RESPONSE_FIXTURE).await;
         let request = CreateResponseRequest::new("gpt-6-astra", "test")

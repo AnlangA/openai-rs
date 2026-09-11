@@ -7098,7 +7098,8 @@ impl IncompleteDetails {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InputTokensDetails {
     cached_tokens: u64,
-    cache_write_tokens: u64,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    cache_write_tokens: Omittable<u64>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -7110,10 +7111,16 @@ impl InputTokensDetails {
         self.cached_tokens
     }
 
-    /// Returns the number of input tokens written to the cache.
+    /// Returns the number of input tokens written to the cache, when reported.
+    ///
+    /// OpenAI-compatible providers such as DeepSeek may omit this count.
+    /// `None` preserves that omission rather than treating it as zero.
     #[must_use]
-    pub const fn cache_write_tokens(&self) -> u64 {
-        self.cache_write_tokens
+    pub const fn cache_write_tokens(&self) -> Option<u64> {
+        match self.cache_write_tokens {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 }
 
@@ -21053,7 +21060,7 @@ mod tests {
     }
 
     #[test]
-    fn official_response_usage_requires_cache_write_tokens() {
+    fn response_usage_preserves_reported_and_omitted_cache_write_tokens() {
         let official = json!({
             "input_tokens": 139,
             "input_tokens_details": {
@@ -21067,21 +21074,44 @@ mod tests {
         let usage: ResponseUsage =
             serde_json::from_value(official.clone()).expect("official compact usage");
         assert_eq!(usage.input_tokens_details().cached_tokens(), 0);
-        assert_eq!(usage.input_tokens_details().cache_write_tokens(), 0);
+        assert_eq!(usage.input_tokens_details().cache_write_tokens(), Some(0));
         assert_eq!(
             serde_json::to_value(&usage).expect("re-encode official usage"),
             official
         );
+        let compatible = json!({
+            "input_tokens": 10,
+            "input_tokens_details": { "cached_tokens": 0, "future_count": 2 },
+            "output_tokens": 4,
+            "output_tokens_details": { "reasoning_tokens": 0 },
+            "total_tokens": 14
+        });
+        let usage: ResponseUsage =
+            serde_json::from_value(compatible.clone()).expect("compatible usage");
+        assert_eq!(usage.input_tokens_details().cache_write_tokens(), None);
+        assert_eq!(
+            serde_json::to_value(&usage).expect("re-encode compatible usage"),
+            compatible,
+            "absent counts stay absent and provider extensions are retained"
+        );
+
+        let mut counted = official;
+        counted["input_tokens_details"]["cache_write_tokens"] = json!(17);
+        let usage: ResponseUsage = serde_json::from_value(counted.clone()).expect("reported count");
+        assert_eq!(usage.input_tokens_details().cache_write_tokens(), Some(17));
+        assert_eq!(
+            serde_json::to_value(&usage).expect("re-encode count"),
+            counted
+        );
+
+        for invalid in [json!(null), json!(-1), json!(1.5), json!("17"), json!(true)] {
+            counted["input_tokens_details"]["cache_write_tokens"] = invalid;
+            assert!(serde_json::from_value::<ResponseUsage>(counted.clone()).is_err());
+        }
+        counted["input_tokens_details"] = json!({"cache_write_tokens": 0});
         assert!(
-            serde_json::from_value::<ResponseUsage>(json!({
-                "input_tokens": 10,
-                "input_tokens_details": { "cached_tokens": 0 },
-                "output_tokens": 4,
-                "output_tokens_details": { "reasoning_tokens": 0 },
-                "total_tokens": 14
-            }))
-            .is_err(),
-            "official required cache_write_tokens must not be omitted"
+            serde_json::from_value::<ResponseUsage>(counted).is_err(),
+            "cached_tokens remains required"
         );
     }
 
@@ -21140,7 +21170,7 @@ mod tests {
                 .usage()
                 .input_tokens_details()
                 .cache_write_tokens(),
-            0
+            Some(0)
         );
         assert!(
             serde_json::from_value::<CompactedResponse>(json!({

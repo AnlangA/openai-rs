@@ -1,0 +1,72 @@
+{
+  "id": "16255fab-755e-4694-a7e5-9e25ec75a1ba",
+  "object": "response",
+  "created_at": 1789094156,
+  "status": "completed",
+  "background": false,
+  "completed_at": 1789094157,
+  "content_filters": null,
+  "error": null,
+  "frequency_penalty": 0.0,
+  "incomplete_details": null,
+  "instructions": null,
+  "max_output_tokens": null,
+  "max_tool_calls": null,
+  "model": "deepseek-flash",
+  "moderation": null,
+  "output": [
+    {
+      "type": "reasoning",
+      "id": "1facf45f-d66a-40dc-a8d3-810db60ad7e4",
+      "status": "completed",
+      "content": [
+        {
+          "type": "reasoning_text",
+          "text": "We need answer to user \"hi\". Just greeting. Need concise, maybe ask how can help. Must not mention anything weird. Need final."
+        }
+      ],
+      "summary": [],
+      "encrypted_content": "16255fab-755e-4694-a7e5-9e25ec75a1ba-0"
+    },
+    {
+      "type": "message",
+      "id": "f2dfab48-4ecb-4dd3-9d3d-06f1902c4450",
+      "status": "completed",
+      "content": [
+        {
+          "type": "output_text",
+          "annotations": [],
+          "logprobs": [],
+          "text": "Hi! How can I help you today?"
+        }
+      ],
+      "phase": "final_answer",
+      "role": "assistant"
+    }
+  ],
+  "parallel_tool_calls": true,
+  "presence_penalty": 0.0,
+  "previous_response_id": null,
+  "prompt_cache_key": null,
+  "prompt_cache_retention": null,
+  "reasoning": { "effort": null, "summary": null },
+  "safety_identifier": null,
+  "service_tier": "default",
+  "store": false,
+  "temperature": 1.0,
+  "text": { "format": { "type": "text" }, "verbosity": null },
+  "tool_choice": "auto",
+  "tools": [],
+  "top_logprobs": 0,
+  "top_p": 1.0,
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 31,
+    "input_tokens_details": { "cached_tokens": 0 },
+    "output_tokens": 39,
+    "output_tokens_details": { "reasoning_tokens": 29 },
+    "total_tokens": 70
+  },
+  "user": null,
+  "metadata": {}
+}
