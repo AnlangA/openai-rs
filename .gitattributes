@@ -1,0 +1,5 @@
+# Upstream snapshots are verified against exact byte lengths and SHA-256 hashes.
+spec/upstream/** -text
+
+# Generated projections are compared byte-for-byte with the LF renderer output.
+spec/contracts/*.json text eol=lf
