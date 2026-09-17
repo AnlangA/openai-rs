@@ -2,21 +2,25 @@
   "schema_version": 1,
   "source": {
     "revision": "690521b1753dce0c6d6b275f583d22537679cff9",
-    "sha256": "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899"
+    "sha256": "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899",
+    "documentation_additions": {
+      "path": "spec/contracts/documentation-additions.json",
+      "sha256": "05cb1933dbe66fc6814d354ba1320e9c4275c35cda502aee787c02cee5866a75"
+    }
   },
   "counts": {
     "client": 288,
     "webhook": 18,
     "total": 306,
     "implementation_statuses": {
-      "omitted": 33,
+      "omitted": 23,
       "quarantined": 1,
-      "verified": 254
+      "verified": 264
     },
     "webhook_implementation_statuses": {
       "verified": 18
     },
-    "verified_units": 299
+    "verified_units": 309
   },
   "client_operations": [
     {
@@ -14288,8 +14292,8 @@
           "LegacyRealtimeSessions"
         ],
         "tests": [
-          "openai-rs-client::legacy_realtime::tests::session_creation_uses_fixed_beta_route_and_redacts_secret",
-          "openai-rs-client::legacy_realtime::tests::transcription_creation_uses_fixed_beta_route_and_nullable_secret"
+          "openai-rs-client::legacy_realtime::tests::session_creation_uses_pinned_route_without_beta_header",
+          "openai-rs-client::legacy_realtime::tests::transcription_creation_uses_pinned_route_and_nullable_secret"
         ],
         "registry_group": "legacy-realtime"
       },
@@ -14335,8 +14339,8 @@
           "LegacyRealtimeSessions"
         ],
         "tests": [
-          "openai-rs-client::legacy_realtime::tests::session_creation_uses_fixed_beta_route_and_redacts_secret",
-          "openai-rs-client::legacy_realtime::tests::transcription_creation_uses_fixed_beta_route_and_nullable_secret"
+          "openai-rs-client::legacy_realtime::tests::session_creation_uses_pinned_route_without_beta_header",
+          "openai-rs-client::legacy_realtime::tests::transcription_creation_uses_pinned_route_and_nullable_secret"
         ],
         "registry_group": "legacy-realtime"
       },
@@ -14543,7 +14547,7 @@
           "BetaResponseEventStream"
         ],
         "tests": [
-          "openai-rs-client::beta_responses::tests::create_uses_beta_query_and_typed_multi_agent_body_without_beta_header",
+          "openai-rs-client::beta_responses::tests::create_uses_beta_query_multi_agent_body_and_beta_header",
           "openai-rs-client::beta_responses::tests::retrieve_delete_cancel_and_compact_use_pinned_routes",
           "openai-rs-client::beta_responses::tests::input_items_and_input_tokens_use_operation_specific_contracts",
           "openai-rs-client::beta_responses::tests::beta_sse_decodes_agent_metadata_and_terminal_snapshot"
@@ -14653,7 +14657,7 @@
           "BetaResponseEventStream"
         ],
         "tests": [
-          "openai-rs-client::beta_responses::tests::create_uses_beta_query_and_typed_multi_agent_body_without_beta_header",
+          "openai-rs-client::beta_responses::tests::create_uses_beta_query_multi_agent_body_and_beta_header",
           "openai-rs-client::beta_responses::tests::retrieve_delete_cancel_and_compact_use_pinned_routes",
           "openai-rs-client::beta_responses::tests::input_items_and_input_tokens_use_operation_specific_contracts",
           "openai-rs-client::beta_responses::tests::beta_sse_decodes_agent_metadata_and_terminal_snapshot"
@@ -14900,7 +14904,7 @@
           "BetaResponseEventStream"
         ],
         "tests": [
-          "openai-rs-client::beta_responses::tests::create_uses_beta_query_and_typed_multi_agent_body_without_beta_header",
+          "openai-rs-client::beta_responses::tests::create_uses_beta_query_multi_agent_body_and_beta_header",
           "openai-rs-client::beta_responses::tests::retrieve_delete_cancel_and_compact_use_pinned_routes",
           "openai-rs-client::beta_responses::tests::input_items_and_input_tokens_use_operation_specific_contracts",
           "openai-rs-client::beta_responses::tests::beta_sse_decodes_agent_metadata_and_terminal_snapshot"
@@ -14993,7 +14997,7 @@
         ],
         "tests": [
           "openai-rs-client::responses::tests::list_input_items_uses_fixed_path_and_typed_cursor_query",
-          "openai-rs-client::responses::tests::input_items_encodes_cursor_query_without_following_a_url"
+          "openai-rs-client::responses::tests::list_input_item_pages_streams_and_advances_cursor"
         ]
       },
       "manual_overrides": []
@@ -15100,7 +15104,7 @@
           "BetaResponseEventStream"
         ],
         "tests": [
-          "openai-rs-client::beta_responses::tests::create_uses_beta_query_and_typed_multi_agent_body_without_beta_header",
+          "openai-rs-client::beta_responses::tests::create_uses_beta_query_multi_agent_body_and_beta_header",
           "openai-rs-client::beta_responses::tests::retrieve_delete_cancel_and_compact_use_pinned_routes",
           "openai-rs-client::beta_responses::tests::input_items_and_input_tokens_use_operation_specific_contracts",
           "openai-rs-client::beta_responses::tests::beta_sse_decodes_agent_metadata_and_terminal_snapshot"
@@ -15211,7 +15215,7 @@
           "BetaResponseEventStream"
         ],
         "tests": [
-          "openai-rs-client::beta_responses::tests::create_uses_beta_query_and_typed_multi_agent_body_without_beta_header",
+          "openai-rs-client::beta_responses::tests::create_uses_beta_query_multi_agent_body_and_beta_header",
           "openai-rs-client::beta_responses::tests::retrieve_delete_cancel_and_compact_use_pinned_routes",
           "openai-rs-client::beta_responses::tests::input_items_and_input_tokens_use_operation_specific_contracts",
           "openai-rs-client::beta_responses::tests::beta_sse_decodes_agent_metadata_and_terminal_snapshot"
@@ -15276,7 +15280,7 @@
           "BetaResponseEventStream"
         ],
         "tests": [
-          "openai-rs-client::beta_responses::tests::create_uses_beta_query_and_typed_multi_agent_body_without_beta_header",
+          "openai-rs-client::beta_responses::tests::create_uses_beta_query_multi_agent_body_and_beta_header",
           "openai-rs-client::beta_responses::tests::retrieve_delete_cancel_and_compact_use_pinned_routes",
           "openai-rs-client::beta_responses::tests::input_items_and_input_tokens_use_operation_specific_contracts",
           "openai-rs-client::beta_responses::tests::beta_sse_decodes_agent_metadata_and_terminal_snapshot"
@@ -15345,7 +15349,7 @@
           "BetaResponseEventStream"
         ],
         "tests": [
-          "openai-rs-client::beta_responses::tests::create_uses_beta_query_and_typed_multi_agent_body_without_beta_header",
+          "openai-rs-client::beta_responses::tests::create_uses_beta_query_multi_agent_body_and_beta_header",
           "openai-rs-client::beta_responses::tests::retrieve_delete_cancel_and_compact_use_pinned_routes",
           "openai-rs-client::beta_responses::tests::input_items_and_input_tokens_use_operation_specific_contracts",
           "openai-rs-client::beta_responses::tests::beta_sse_decodes_agent_metadata_and_terminal_snapshot"
@@ -18487,17 +18491,17 @@
         "mode": "json"
       },
       "lifecycle": "deprecated",
-      "feature": "legacy-video",
+      "feature": "legacy-videos",
       "implementation": {
-        "status": "omitted",
-        "milestone": "M10-sunset-policy",
+        "status": "verified",
+        "milestone": "M11-official-documentation-parity",
         "units": [
-          "OmittedDeprecatedVideo::ListVideos"
+          "Videos::ListVideos"
         ],
         "tests": [
-          "spec/contracts/decisions.md::D0013"
+          "openai-rs-client::videos::tests::all_ten_operations_match_official_wire_contracts"
         ],
-        "registry_group": "deprecated-videos-omitted"
+        "registry_group": "legacy-videos"
       },
       "manual_overrides": []
     },
@@ -18533,17 +18537,17 @@
         "mode": "json"
       },
       "lifecycle": "deprecated",
-      "feature": "legacy-video",
+      "feature": "legacy-videos",
       "implementation": {
-        "status": "omitted",
-        "milestone": "M10-sunset-policy",
+        "status": "verified",
+        "milestone": "M11-official-documentation-parity",
         "units": [
-          "OmittedDeprecatedVideo::createVideo"
+          "Videos::createVideo"
         ],
         "tests": [
-          "spec/contracts/decisions.md::D0013"
+          "openai-rs-client::videos::tests::all_ten_operations_match_official_wire_contracts"
         ],
-        "registry_group": "deprecated-videos-omitted"
+        "registry_group": "legacy-videos"
       },
       "manual_overrides": []
     },
@@ -18577,17 +18581,17 @@
         "mode": "json"
       },
       "lifecycle": "deprecated",
-      "feature": "legacy-video",
+      "feature": "legacy-videos",
       "implementation": {
-        "status": "omitted",
-        "milestone": "M10-sunset-policy",
+        "status": "verified",
+        "milestone": "M11-official-documentation-parity",
         "units": [
-          "OmittedDeprecatedVideo::CreateVideoCharacter"
+          "Videos::CreateVideoCharacter"
         ],
         "tests": [
-          "spec/contracts/decisions.md::D0013"
+          "openai-rs-client::videos::tests::all_ten_operations_match_official_wire_contracts"
         ],
-        "registry_group": "deprecated-videos-omitted"
+        "registry_group": "legacy-videos"
       },
       "manual_overrides": []
     },
@@ -18624,17 +18628,17 @@
         "mode": "json"
       },
       "lifecycle": "deprecated",
-      "feature": "legacy-video",
+      "feature": "legacy-videos",
       "implementation": {
-        "status": "omitted",
-        "milestone": "M10-sunset-policy",
+        "status": "verified",
+        "milestone": "M11-official-documentation-parity",
         "units": [
-          "OmittedDeprecatedVideo::GetVideoCharacter"
+          "Videos::GetVideoCharacter"
         ],
         "tests": [
-          "spec/contracts/decisions.md::D0013"
+          "openai-rs-client::videos::tests::all_ten_operations_match_official_wire_contracts"
         ],
-        "registry_group": "deprecated-videos-omitted"
+        "registry_group": "legacy-videos"
       },
       "manual_overrides": []
     },
@@ -18670,17 +18674,17 @@
         "mode": "json"
       },
       "lifecycle": "deprecated",
-      "feature": "legacy-video",
+      "feature": "legacy-videos",
       "implementation": {
-        "status": "omitted",
-        "milestone": "M10-sunset-policy",
+        "status": "verified",
+        "milestone": "M11-official-documentation-parity",
         "units": [
-          "OmittedDeprecatedVideo::CreateVideoEdit"
+          "Videos::CreateVideoEdit"
         ],
         "tests": [
-          "spec/contracts/decisions.md::D0013"
+          "openai-rs-client::videos::tests::all_ten_operations_match_official_wire_contracts"
         ],
-        "registry_group": "deprecated-videos-omitted"
+        "registry_group": "legacy-videos"
       },
       "manual_overrides": []
     },
@@ -18716,17 +18720,17 @@
         "mode": "json"
       },
       "lifecycle": "deprecated",
-      "feature": "legacy-video",
+      "feature": "legacy-videos",
       "implementation": {
-        "status": "omitted",
-        "milestone": "M10-sunset-policy",
+        "status": "verified",
+        "milestone": "M11-official-documentation-parity",
         "units": [
-          "OmittedDeprecatedVideo::CreateVideoExtend"
+          "Videos::CreateVideoExtend"
         ],
         "tests": [
-          "spec/contracts/decisions.md::D0013"
+          "openai-rs-client::videos::tests::all_ten_operations_match_official_wire_contracts"
         ],
-        "registry_group": "deprecated-videos-omitted"
+        "registry_group": "legacy-videos"
       },
       "manual_overrides": []
     },
@@ -18763,17 +18767,17 @@
         "mode": "json"
       },
       "lifecycle": "deprecated",
-      "feature": "legacy-video",
+      "feature": "legacy-videos",
       "implementation": {
-        "status": "omitted",
-        "milestone": "M10-sunset-policy",
+        "status": "verified",
+        "milestone": "M11-official-documentation-parity",
         "units": [
-          "OmittedDeprecatedVideo::GetVideo"
+          "Videos::GetVideo"
         ],
         "tests": [
-          "spec/contracts/decisions.md::D0013"
+          "openai-rs-client::videos::tests::all_ten_operations_match_official_wire_contracts"
         ],
-        "registry_group": "deprecated-videos-omitted"
+        "registry_group": "legacy-videos"
       },
       "manual_overrides": []
     },
@@ -18810,17 +18814,17 @@
         "mode": "json"
       },
       "lifecycle": "deprecated",
-      "feature": "legacy-video",
+      "feature": "legacy-videos",
       "implementation": {
-        "status": "omitted",
-        "milestone": "M10-sunset-policy",
+        "status": "verified",
+        "milestone": "M11-official-documentation-parity",
         "units": [
-          "OmittedDeprecatedVideo::DeleteVideo"
+          "Videos::DeleteVideo"
         ],
         "tests": [
-          "spec/contracts/decisions.md::D0013"
+          "openai-rs-client::videos::tests::all_ten_operations_match_official_wire_contracts"
         ],
-        "registry_group": "deprecated-videos-omitted"
+        "registry_group": "legacy-videos"
       },
       "manual_overrides": []
     },
@@ -18869,17 +18873,17 @@
         "mode": "dynamic"
       },
       "lifecycle": "deprecated",
-      "feature": "legacy-video",
+      "feature": "legacy-videos",
       "implementation": {
-        "status": "omitted",
-        "milestone": "M10-sunset-policy",
+        "status": "verified",
+        "milestone": "M11-official-documentation-parity",
         "units": [
-          "OmittedDeprecatedVideo::RetrieveVideoContent"
+          "Videos::RetrieveVideoContent"
         ],
         "tests": [
-          "spec/contracts/decisions.md::D0013"
+          "openai-rs-client::videos::tests::all_ten_operations_match_official_wire_contracts"
         ],
-        "registry_group": "deprecated-videos-omitted"
+        "registry_group": "legacy-videos"
       },
       "manual_overrides": []
     },
@@ -18925,17 +18929,17 @@
         "mode": "json"
       },
       "lifecycle": "deprecated",
-      "feature": "legacy-video",
+      "feature": "legacy-videos",
       "implementation": {
-        "status": "omitted",
-        "milestone": "M10-sunset-policy",
+        "status": "verified",
+        "milestone": "M11-official-documentation-parity",
         "units": [
-          "OmittedDeprecatedVideo::CreateVideoRemix"
+          "Videos::CreateVideoRemix"
         ],
         "tests": [
-          "spec/contracts/decisions.md::D0013"
+          "openai-rs-client::videos::tests::all_ten_operations_match_official_wire_contracts"
         ],
-        "registry_group": "deprecated-videos-omitted"
+        "registry_group": "legacy-videos"
       },
       "manual_overrides": []
     }
@@ -18978,7 +18982,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19023,7 +19027,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19068,7 +19072,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19113,7 +19117,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19158,7 +19162,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19203,7 +19207,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19248,7 +19252,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19293,7 +19297,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19338,7 +19342,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19383,7 +19387,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19428,7 +19432,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19473,7 +19477,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19518,7 +19522,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19563,7 +19567,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19608,7 +19612,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19653,7 +19657,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19698,7 +19702,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],
@@ -19743,7 +19747,7 @@
         ],
         "tests": [
           "openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature",
-          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists",
+          "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists",
           "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch",
           "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"
         ],

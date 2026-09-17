@@ -3,12 +3,13 @@
 use std::{
     fmt,
     future::Future,
+    panic::AssertUnwindSafe,
     pin::Pin,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use http::{HeaderValue, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -257,6 +258,9 @@ pub struct WorkloadIdentityConfigError;
 #[derive(Error)]
 #[non_exhaustive]
 pub enum WorkloadIdentityError {
+    /// The complete refresh budget, including the subject provider, expired.
+    #[error("workload identity refresh deadline exceeded")]
+    DeadlineExceeded,
     /// Subject token provider failed.
     #[error("subject token provider failed")]
     SubjectToken,
@@ -292,6 +296,9 @@ pub enum WorkloadIdentityError {
 impl fmt::Debug for WorkloadIdentityError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DeadlineExceeded => {
+                formatter.write_str("WorkloadIdentityError::DeadlineExceeded")
+            }
             Self::SubjectToken => formatter.write_str("WorkloadIdentityError::SubjectToken"),
             Self::Transport => formatter.write_str("WorkloadIdentityError::Transport"),
             Self::OAuthRejected { status, .. } => formatter
@@ -321,7 +328,10 @@ impl WorkloadIdentityError {
             Self::OAuthRejected { status, .. } | Self::ExchangeRejected { status, .. } => {
                 Some(*status)
             }
-            Self::SubjectToken | Self::Transport | Self::InvalidResponse { .. } => None,
+            Self::DeadlineExceeded
+            | Self::SubjectToken
+            | Self::Transport
+            | Self::InvalidResponse { .. } => None,
         }
     }
 }
@@ -368,8 +378,8 @@ struct TokenState {
 
 pub(crate) struct WorkloadIdentityAuth {
     config: WorkloadIdentityConfig,
+    refresh_timeout: Duration,
     http: reqwest::Client,
-    exchange_timeout: Duration,
     state: Mutex<TokenState>,
     notify: Notify,
 }
@@ -412,8 +422,8 @@ impl WorkloadIdentityAuth {
         .map_err(Error::from_reqwest)?;
         Ok(Arc::new(Self {
             config,
+            refresh_timeout: request_timeout,
             http,
-            exchange_timeout: request_timeout,
             state: Mutex::new(TokenState::default()),
             notify: Notify::new(),
         }))
@@ -423,13 +433,14 @@ impl WorkloadIdentityAuth {
         loop {
             let mut state = self.state.lock().await;
             let now = Instant::now();
-            if let Some(cached) = state.cached.clone()
+            if let Some(cached) = state.cached.as_ref()
                 && now < cached.expires_at
             {
+                let lease = token_lease(cached);
                 if now >= cached.refresh_at && state.refreshing.is_none() {
                     self.spawn_refresh(&mut state);
                 }
-                return token_lease(&cached);
+                return lease;
             }
 
             // The exchange always runs in a spawned task (the same detached
@@ -453,7 +464,13 @@ impl WorkloadIdentityAuth {
             if let Some((completed_id, error)) = &state.completed_failure
                 && *completed_id == refresh_id
             {
-                return Err(Error::from(Arc::clone(error)));
+                return Err(
+                    if matches!(error.as_ref(), WorkloadIdentityError::DeadlineExceeded) {
+                        Error::DeadlineExceeded
+                    } else {
+                        Error::from(Arc::clone(error))
+                    },
+                );
             }
             drop(state);
         }
@@ -471,12 +488,19 @@ impl WorkloadIdentityAuth {
                 // Bound the whole refresh, including the caller's subject-token
                 // provider, so a stalled provider cannot occupy the shared slot
                 // forever after the original request has been cancelled.
-                let result = tokio::time::timeout(
-                    auth.exchange_timeout,
-                    auth.exchange(refresh.token_generation),
-                )
+                // The unwind boundary also owns the timeout: cancelling a
+                // provider can panic in its future's Drop implementation.
+                let result = AssertUnwindSafe(async {
+                    tokio::time::timeout(
+                        auth.refresh_timeout,
+                        auth.exchange(refresh.token_generation),
+                    )
+                    .await
+                    .unwrap_or_else(|_| Err(Arc::new(WorkloadIdentityError::DeadlineExceeded)))
+                })
+                .catch_unwind()
                 .await
-                .unwrap_or_else(|_| Err(Arc::new(WorkloadIdentityError::Transport)));
+                .unwrap_or_else(|_| Err(Arc::new(WorkloadIdentityError::SubjectToken)));
                 auth.finish_refresh(refresh, result).await;
             }
             .instrument(tracing::debug_span!("openai.workload_identity.refresh")),
@@ -1053,8 +1077,121 @@ mod tests {
         let failed = tokio::time::timeout(Duration::from_secs(1), auth.token())
             .await
             .expect("stalled provider must time out");
-        assert!(failed.is_err());
+        assert!(matches!(failed, Err(Error::DeadlineExceeded)));
         let recovered = tokio::time::timeout(Duration::from_secs(1), auth.token())
+            .await
+            .expect("next refresh must not hang")
+            .expect("refresh should recover");
+        assert_eq!(recovered.header, "Bearer recovered");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(exchanges.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn panicking_subject_provider_releases_the_refresh_slot() {
+        for panic_on_construction in [true, false] {
+            let (exchange_url, exchanges, _) = exchange_server(vec![Reply {
+                status: StatusCode::OK,
+                body: r#"{"access_token":"recovered","expires_in":3600}"#.to_owned(),
+                location: None,
+            }])
+            .await;
+            let calls = Arc::new(AtomicUsize::new(0));
+            let provider = SubjectTokenProviderFn::new(SubjectTokenType::Jwt, {
+                let calls = Arc::clone(&calls);
+                move || {
+                    let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                    assert!(
+                        attempt != 0 || !panic_on_construction,
+                        "provider panicked while constructing its future"
+                    );
+                    async move {
+                        assert!(attempt != 0, "provider panicked while polling its future");
+                        SubjectToken::new("subject.token").map_err(|_| SubjectTokenProviderError)
+                    }
+                }
+            });
+            let config = WorkloadIdentityConfig::new("idp_test", "svc_test", provider)
+                .expect("config")
+                .with_token_exchange_url(exchange_url);
+            let auth = WorkloadIdentityAuth::new(
+                config,
+                None,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                None,
+            )
+            .expect("auth");
+
+            let failed = tokio::time::timeout(Duration::from_secs(2), auth.token())
+                .await
+                .expect("provider panic must release waiting callers");
+            assert!(matches!(
+                failed,
+                Err(Error::WorkloadIdentity(error))
+                    if matches!(error.as_ref(), WorkloadIdentityError::SubjectToken)
+            ));
+            let recovered = tokio::time::timeout(Duration::from_secs(2), auth.token())
+                .await
+                .expect("next refresh must not hang")
+                .expect("refresh should recover");
+            assert_eq!(recovered.header, "Bearer recovered");
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+            assert_eq!(exchanges.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_drop_panic_on_timeout_releases_the_refresh_slot() {
+        struct PanicOnDrop;
+
+        impl Drop for PanicOnDrop {
+            fn drop(&mut self) {
+                panic!("provider panicked while dropping its cancelled future");
+            }
+        }
+
+        let (exchange_url, exchanges, _) = exchange_server(vec![Reply {
+            status: StatusCode::OK,
+            body: r#"{"access_token":"recovered","expires_in":3600}"#.to_owned(),
+            location: None,
+        }])
+        .await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = SubjectTokenProviderFn::new(SubjectTokenType::Jwt, {
+            let calls = Arc::clone(&calls);
+            move || {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt == 0 {
+                        let _guard = PanicOnDrop;
+                        std::future::pending::<()>().await;
+                    }
+                    SubjectToken::new("subject.token").map_err(|_| SubjectTokenProviderError)
+                }
+            }
+        });
+        let config = WorkloadIdentityConfig::new("idp_test", "svc_test", provider)
+            .expect("config")
+            .with_token_exchange_url(exchange_url);
+        let auth = WorkloadIdentityAuth::new(
+            config,
+            None,
+            Duration::from_secs(1),
+            Duration::from_millis(100),
+            None,
+        )
+        .expect("auth");
+
+        let failed = tokio::time::timeout(Duration::from_secs(2), auth.token())
+            .await
+            .expect("panic while cancelling the provider must release waiting callers");
+        assert!(matches!(
+            failed,
+            Err(Error::WorkloadIdentity(error))
+                if matches!(error.as_ref(), WorkloadIdentityError::SubjectToken)
+        ));
+        let recovered = tokio::time::timeout(Duration::from_secs(2), auth.token())
             .await
             .expect("next refresh must not hang")
             .expect("refresh should recover");
@@ -1458,5 +1595,103 @@ mod tests {
                 .is_err(),
             "redirect target must never receive the subject token"
         );
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use crate::multipart::ReplayableMultipartForm;
+    use crate::transport::PathSegment;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn config(provider: impl SubjectTokenProvider + 'static) -> WorkloadIdentityConfig {
+        WorkloadIdentityConfig::new("idp_test", "svc_test", provider)
+            .expect("config")
+            .with_token_exchange_url(
+                "http://127.0.0.1:9/oauth/token"
+                    .parse()
+                    .expect("unused URL"),
+            )
+    }
+
+    async fn assert_deadline<T>(future: impl Future<Output = Result<T, Error>>) {
+        let result = tokio::time::timeout(Duration::from_millis(250), future)
+            .await
+            .expect("credential wait must obey the 20ms request budget");
+        assert!(matches!(result, Err(Error::DeadlineExceeded)));
+    }
+
+    #[tokio::test]
+    async fn every_http_lane_bounds_a_stalled_subject_provider() {
+        let provider = SubjectTokenProviderFn::new(SubjectTokenType::Jwt, || async {
+            std::future::pending::<Result<SubjectToken, SubjectTokenProviderError>>().await
+        });
+        let client = crate::Client::workload_identity_builder(config(provider))
+            .request_timeout(Duration::from_secs(1))
+            .build()
+            .expect("client")
+            .with_request_timeout(Duration::from_millis(20));
+        assert_deadline(client.models().list()).await;
+        let path = [PathSegment::literal("files")];
+        let transport = client.multipart_transport();
+        assert_deadline(transport.download_path("deadline.download", &path, "*/*")).await;
+        assert_deadline(transport.send_replayable_form(
+            "deadline.multipart",
+            &path,
+            &ReplayableMultipartForm::new(),
+            "application/json",
+        ))
+        .await;
+        assert_deadline(transport.send_one_shot_form(
+            "deadline.one_shot",
+            &path,
+            reqwest::multipart::Form::new(),
+            "application/json",
+        ))
+        .await;
+        assert_deadline(transport.send_replayable_json(
+            "deadline.json",
+            &path,
+            &serde_json::json!({}),
+            "application/json",
+        ))
+        .await;
+    }
+
+    #[tokio::test]
+    async fn timed_out_refresh_releases_singleflight_after_caller_cancellation() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider_calls = calls.clone();
+        let provider = SubjectTokenProviderFn::new(SubjectTokenType::Jwt, move || {
+            let call = provider_calls.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if call == 0 {
+                    std::future::pending::<()>().await;
+                }
+                Err(SubjectTokenProviderError::new())
+            }
+        });
+        let auth = WorkloadIdentityAuth::new(
+            config(provider),
+            None,
+            Duration::from_secs(1),
+            Duration::from_millis(30),
+            None,
+        )
+        .expect("auth");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), auth.token())
+                .await
+                .is_err()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let result = tokio::time::timeout(Duration::from_millis(250), auth.token())
+            .await
+            .expect("refresh slot released");
+        assert!(
+            matches!(result, Err(Error::WorkloadIdentity(error)) if matches!(error.as_ref(), WorkloadIdentityError::SubjectToken))
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

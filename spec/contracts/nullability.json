@@ -2,13 +2,17 @@
   "schema_version": 1,
   "source": {
     "revision": "690521b1753dce0c6d6b275f583d22537679cff9",
-    "sha256": "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899"
+    "sha256": "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899",
+    "documentation_additions": {
+      "path": "spec/contracts/documentation-additions.json",
+      "sha256": "05cb1933dbe66fc6814d354ba1320e9c4275c35cda502aee787c02cee5866a75"
+    }
   },
-  "count": 1835,
+  "count": 1849,
   "counts_by_encoding": {
-    "any_of_null": 863,
+    "any_of_null": 870,
     "legacy_nullable": 109,
-    "type_null": 863
+    "type_null": 870
   },
   "entries": [
     {
@@ -3087,6 +3091,34 @@
     {
       "schema": "BetaPrompt",
       "pointer": "#/components/schemas/BetaPrompt/anyOf/1",
+      "encodings": [
+        "type_null"
+      ]
+    },
+    {
+      "schema": "BetaPromptCacheOptions",
+      "pointer": "#/components/schemas/BetaPromptCacheOptions/properties/comparison_response_id",
+      "encodings": [
+        "any_of_null"
+      ]
+    },
+    {
+      "schema": "BetaPromptCacheOptions",
+      "pointer": "#/components/schemas/BetaPromptCacheOptions/properties/comparison_response_id/anyOf/1",
+      "encodings": [
+        "type_null"
+      ]
+    },
+    {
+      "schema": "BetaPromptCacheOptionsParam",
+      "pointer": "#/components/schemas/BetaPromptCacheOptionsParam/properties/comparison_response_id",
+      "encodings": [
+        "any_of_null"
+      ]
+    },
+    {
+      "schema": "BetaPromptCacheOptionsParam",
+      "pointer": "#/components/schemas/BetaPromptCacheOptionsParam/properties/comparison_response_id/anyOf/1",
       "encodings": [
         "type_null"
       ]
@@ -6202,6 +6234,20 @@
     {
       "schema": "CreateModerationResponse",
       "pointer": "#/components/schemas/CreateModerationResponse/properties/results/items/properties/categories/properties/illicit~1violent/anyOf/1",
+      "encodings": [
+        "type_null"
+      ]
+    },
+    {
+      "schema": "CreateProjectServiceAccountApiKeyBody",
+      "pointer": "#/components/schemas/CreateProjectServiceAccountApiKeyBody/properties/expires_in_seconds",
+      "encodings": [
+        "any_of_null"
+      ]
+    },
+    {
+      "schema": "CreateProjectServiceAccountApiKeyBody",
+      "pointer": "#/components/schemas/CreateProjectServiceAccountApiKeyBody/properties/expires_in_seconds/anyOf/1",
       "encodings": [
         "type_null"
       ]
@@ -9602,6 +9648,34 @@
       ]
     },
     {
+      "schema": "PromptCacheOptions",
+      "pointer": "#/components/schemas/PromptCacheOptions/properties/comparison_response_id",
+      "encodings": [
+        "any_of_null"
+      ]
+    },
+    {
+      "schema": "PromptCacheOptions",
+      "pointer": "#/components/schemas/PromptCacheOptions/properties/comparison_response_id/anyOf/1",
+      "encodings": [
+        "type_null"
+      ]
+    },
+    {
+      "schema": "PromptCacheOptionsParam",
+      "pointer": "#/components/schemas/PromptCacheOptionsParam/properties/comparison_response_id",
+      "encodings": [
+        "any_of_null"
+      ]
+    },
+    {
+      "schema": "PromptCacheOptionsParam",
+      "pointer": "#/components/schemas/PromptCacheOptionsParam/properties/comparison_response_id/anyOf/1",
+      "encodings": [
+        "type_null"
+      ]
+    },
+    {
       "schema": "PublicCreateOrganizationRoleBody",
       "pointer": "#/components/schemas/PublicCreateOrganizationRoleBody/properties/description",
       "encodings": [
@@ -10918,6 +10992,20 @@
       ]
     },
     {
+      "schema": "SafetyAlert",
+      "pointer": "#/components/schemas/SafetyAlert/properties/reason",
+      "encodings": [
+        "any_of_null"
+      ]
+    },
+    {
+      "schema": "SafetyAlert",
+      "pointer": "#/components/schemas/SafetyAlert/properties/reason/anyOf/1",
+      "encodings": [
+        "type_null"
+      ]
+    },
+    {
       "schema": "ScrollParam",
       "pointer": "#/components/schemas/ScrollParam/properties/keys",
       "encodings": [
@@ -10927,6 +11015,20 @@
     {
       "schema": "ScrollParam",
       "pointer": "#/components/schemas/ScrollParam/properties/keys/anyOf/1",
+      "encodings": [
+        "type_null"
+      ]
+    },
+    {
+      "schema": "ServiceAccountApiKeyBody",
+      "pointer": "#/components/schemas/ServiceAccountApiKeyBody/properties/expires_at",
+      "encodings": [
+        "any_of_null"
+      ]
+    },
+    {
+      "schema": "ServiceAccountApiKeyBody",
+      "pointer": "#/components/schemas/ServiceAccountApiKeyBody/properties/expires_at/anyOf/1",
       "encodings": [
         "type_null"
       ]

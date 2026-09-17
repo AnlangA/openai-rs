@@ -46,7 +46,7 @@ operation_id = "listInputItems"
 status = "verified"
 milestone = "M1-responses-client"
 units = ["ListInputItems"]
-tests = ["openai-rs-client::responses::tests::list_input_items_uses_fixed_path_and_typed_cursor_query", "openai-rs-client::responses::tests::input_items_encodes_cursor_query_without_following_a_url"]
+tests = ["openai-rs-client::responses::tests::list_input_items_uses_fixed_path_and_typed_cursor_query", "openai-rs-client::responses::tests::list_input_item_pages_streams_and_advances_cursor"]
 
 [[operations]]
 operation_id = "Getinputtokencounts"
@@ -359,7 +359,7 @@ operation_ids = ["beta_createResponse", "beta_getResponse", "beta_deleteResponse
 status = "verified"
 milestone = "M10-beta-responses"
 units = ["CreateBetaResponse", "CreateStreamingBetaResponse", "RetrieveBetaResponse", "RetrieveStreamingBetaResponse", "DeleteBetaResponse", "CancelBetaResponse", "CompactBetaResponse", "ListBetaResponseInputItems", "CountBetaResponseInputTokens", "BetaResponseEventStream"]
-tests = ["openai-rs-client::beta_responses::tests::create_uses_beta_query_and_typed_multi_agent_body_without_beta_header", "openai-rs-client::beta_responses::tests::retrieve_delete_cancel_and_compact_use_pinned_routes", "openai-rs-client::beta_responses::tests::input_items_and_input_tokens_use_operation_specific_contracts", "openai-rs-client::beta_responses::tests::beta_sse_decodes_agent_metadata_and_terminal_snapshot"]
+tests = ["openai-rs-client::beta_responses::tests::create_uses_beta_query_multi_agent_body_and_beta_header", "openai-rs-client::beta_responses::tests::retrieve_delete_cancel_and_compact_use_pinned_routes", "openai-rs-client::beta_responses::tests::input_items_and_input_tokens_use_operation_specific_contracts", "openai-rs-client::beta_responses::tests::beta_sse_decodes_agent_metadata_and_terminal_snapshot"]
 
 [[groups]]
 name = "custom-voice"
@@ -391,7 +391,7 @@ operation_ids = ["create-realtime-session", "create-realtime-transcription-sessi
 status = "verified"
 milestone = "M10-legacy-realtime"
 units = ["CreateLegacyRealtimeSession", "CreateLegacyRealtimeTranscriptionSession", "LegacyRealtimeSessions"]
-tests = ["openai-rs-client::legacy_realtime::tests::session_creation_uses_fixed_beta_route_and_redacts_secret", "openai-rs-client::legacy_realtime::tests::transcription_creation_uses_fixed_beta_route_and_nullable_secret"]
+tests = ["openai-rs-client::legacy_realtime::tests::session_creation_uses_pinned_route_without_beta_header", "openai-rs-client::legacy_realtime::tests::transcription_creation_uses_pinned_route_and_nullable_secret"]
 
 [[groups]]
 name = "admin-checkpoint-permissions"
@@ -418,12 +418,12 @@ units = ["OmittedLegacyAssistants::{operation_id}"]
 tests = ["xtask::codegen::contracts::tests::classifies_beta_alpha_legacy_and_access_controlled_surfaces", "spec/contracts/decisions.md::D0013"]
 
 [[groups]]
-name = "deprecated-videos-omitted"
+name = "legacy-videos"
 operation_ids = ["ListVideos", "createVideo", "CreateVideoCharacter", "GetVideoCharacter", "CreateVideoEdit", "CreateVideoExtend", "GetVideo", "DeleteVideo", "RetrieveVideoContent", "CreateVideoRemix"]
-status = "omitted"
-milestone = "M10-sunset-policy"
-units = ["OmittedDeprecatedVideo::{operation_id}"]
-tests = ["spec/contracts/decisions.md::D0013"]
+status = "verified"
+milestone = "M11-official-documentation-parity"
+units = ["Videos::{operation_id}"]
+tests = ["openai-rs-client::videos::tests::all_ten_operations_match_official_wire_contracts"]
 
 [[groups]]
 name = "image-variation-quarantine"
@@ -482,7 +482,7 @@ id = "webhook-receiver"
 status = "verified"
 milestone = "M6-webhooks"
 units = ["WebhookVerifier", "VerifiedWebhook<WebhookEvent>", "WebhookEvent[18]"]
-tests = ["openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature", "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists", "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch", "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"]
+tests = ["openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature", "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists", "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch", "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"]
 
 [[groups]]
 name = "webhook-receivers"
@@ -490,7 +490,7 @@ operation_ids = ["webhook:batch_cancelled:post", "webhook:batch_completed:post",
 status = "verified"
 milestone = "M6-webhooks"
 units = ["WebhookVerifier", "VerifiedWebhook<WebhookEvent>", "WebhookEvent[18]"]
-tests = ["openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature", "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unbounded_signature_lists", "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch", "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"]
+tests = ["openai-rs-client::webhooks::tests::verifies_before_decoding_and_accepts_any_matching_rotation_signature", "openai-rs-client::webhooks::tests::rejects_replay_future_tamper_and_unusable_signature_lists", "openai-rs-types::webhooks::tests::every_manifest_variant_round_trips_through_its_known_branch", "openai-rs-types::webhooks::tests::every_known_tag_rejects_a_malformed_payload"]
 
 [[operations]]
 operation_id = "createVectorStore"

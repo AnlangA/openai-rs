@@ -552,12 +552,9 @@ where
                         return;
                     }
                 };
-                let dispatches = match decoder.push(&chunk) {
-                    Ok(dispatches) => dispatches,
-                    Err(source) => {
-                        yield Err(media_sse_error(source, &stream_meta));
-                        return;
-                    }
+                let (dispatches, chunk_error) = match decoder.push_with_flushed(&chunk) {
+                    Ok(dispatches) => (dispatches, None),
+                    Err((source, flushed)) => (flushed, Some(source)),
                 };
                 for dispatch in dispatches {
                     match dispatch {
@@ -584,6 +581,10 @@ where
                             return;
                         }
                     }
+                }
+                if let Some(source) = chunk_error {
+                    yield Err(media_sse_error(source, &stream_meta));
+                    return;
                 }
                 if decoder.state() != SseStreamState::Active {
                     return;
@@ -1269,6 +1270,45 @@ mod tests {
             captured.authorization.as_deref(),
             Some("Bearer test-placeholder-key")
         );
+    }
+
+    #[tokio::test]
+    async fn malformed_tail_preserves_prior_event_before_reporting_error() {
+        let mut body = concat!(
+            "event: speech.audio.delta\n",
+            "data: {\"type\":\"speech.audio.delta\",\"audio\":\"UklGRg==\"}\n\n",
+        )
+        .as_bytes()
+        .to_vec();
+        body.extend_from_slice(b"data: \xff\n\n");
+        let response = http::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, SSE_MIME)
+            .body(reqwest::Body::from(body))
+            .expect("build SSE response");
+        let mut stream = MediaEventStream::<SpeechStreamEvent>::from_response(
+            response.into(),
+            SseLimits::default(),
+            &["speech.audio.done"],
+            |event| matches!(event, SpeechStreamEvent::AudioDone(_)),
+        )
+        .expect("stream handshake");
+        assert!(matches!(
+            stream
+                .next()
+                .await
+                .expect("prior event")
+                .expect("valid event"),
+            SpeechStreamEvent::AudioDelta(_)
+        ));
+        assert!(matches!(
+            stream.next().await.expect("framing error"),
+            Err(Error::Sse {
+                source: crate::sse::SseDecodeError::InvalidUtf8 { .. },
+                ..
+            })
+        ));
+        assert!(stream.next().await.is_none());
     }
 
     #[tokio::test]

@@ -62,6 +62,12 @@ impl SseDecoder {
     pub(crate) fn feed(&mut self, chunk: &[u8]) -> Result<Vec<SseItem>, DirectError> {
         let mut output = Vec::new();
         for &byte in chunk {
+            // A terminal frame owns the rest of the stream, including bytes
+            // already read into this HTTP chunk. Do not let trailing malformed
+            // input turn a completed stream into a decoding failure.
+            if self.done {
+                break;
+            }
             if !self.bom_checked {
                 if byte == UTF8_BOM[self.bom_len] {
                     self.bom_len += 1;
@@ -226,6 +232,31 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(matches!(items.first(), Some(SseItem::Data(_))));
         assert!(matches!(items.get(1), Some(SseItem::Done)));
+        Ok(())
+    }
+
+    #[test]
+    fn done_ignores_malformed_trailing_input_at_every_chunk_split() -> Result<(), super::DirectError>
+    {
+        for delimiter in ["\n", "\r\n", "\r"] {
+            for trailing in [b"data: \xff\n".as_slice(), &[b'x'; 40]] {
+                let mut input =
+                    format!("data: first{delimiter}{delimiter}data: [DONE]{delimiter}{delimiter}")
+                        .into_bytes();
+                input.extend_from_slice(trailing);
+                for split_at in 0..=input.len() {
+                    let mut decoder = SseDecoder::new(32, 32);
+                    let mut items = decoder.feed(&input[..split_at])?;
+                    items.extend(decoder.feed(&input[split_at..])?);
+                    items.extend(decoder.finish()?);
+                    assert_eq!(items.len(), 2, "split {split_at}");
+                    assert!(matches!(&items[0], SseItem::Data(data) if data == "first"));
+                    assert!(matches!(items[1], SseItem::Done));
+                    assert!(decoder.line.is_empty());
+                    assert!(decoder.data.is_empty());
+                }
+            }
+        }
         Ok(())
     }
 

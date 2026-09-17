@@ -362,9 +362,7 @@ impl Transport {
                 .auth
                 .authorization_with_budget(started, self.overall_timeout)
                 .await
-                .inspect_err(|_| {
-                    trace::record_retry_count(retries);
-                })?;
+                .inspect_err(|_| trace::record_retry_count(retries))?;
             let mut request = self
                 .http
                 .request(meta.method.clone(), url.clone())
@@ -963,7 +961,7 @@ fn validate_operation_route(route: &str, path: &[PathSegment<'_>]) -> Result<(),
 /// channel's bracket rule (`admin.rs::append_query_value`, D0238).
 /// When every field is dropped this leaves the URL untouched, without a
 /// dangling `?`.
-fn append_query<T>(url: &mut Url, query: &T) -> Result<(), Error>
+pub(crate) fn append_query<T>(url: &mut Url, query: &T) -> Result<(), Error>
 where
     T: Serialize + ?Sized,
 {

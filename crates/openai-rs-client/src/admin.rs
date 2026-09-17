@@ -6064,3 +6064,52 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod expiration_regression_tests {
+    use super::*;
+    use openai_rs_types::{Nullable, Omittable};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn service_account_expiry_is_sent_with_admin_credentials() {
+        for expiry in [json!(null), json!(60)] {
+            let response = json!({"object":"organization.project.service_account.api_key","id":"key_test","name":"temporary","created_at":1,"value":"test-created-key","expires_at":null});
+            let (platform, capture) = crate::test_support::serve_json(response).await;
+            let client = AdminClient::builder(AdminApiKey::new("test-admin-key").expect("key"))
+                .base_url(platform.base_url().clone())
+                .allow_insecure_loopback(true)
+                .build()
+                .expect("admin client");
+            let body = json!({"name":"temporary","expires_in_seconds":expiry});
+            let request =
+                serde_json::from_value::<CreateProjectServiceAccountApiKeyBody>(body.clone())
+                    .expect("request");
+            let response = client
+                .request::<operations::OpCreateanAPIkeyforaserviceaccount>()
+                .path_parameter("proj/a")
+                .expect("project")
+                .path_parameter("sa/b")
+                .expect("service account")
+                .body(request)
+                .send()
+                .await
+                .expect("create key");
+            assert!(matches!(
+                response.expires_at,
+                Omittable::Value(Nullable::Null)
+            ));
+            let request = capture.await.expect("capture");
+            assert_eq!(request.method, Method::POST);
+            assert_eq!(
+                request.uri,
+                "/v1/organization/projects/proj%2Fa/service_accounts/sa%2Fb/api_keys"
+            );
+            assert_eq!(request.headers["authorization"], "Bearer test-admin-key");
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&request.body).expect("body"),
+                body
+            );
+        }
+    }
+}

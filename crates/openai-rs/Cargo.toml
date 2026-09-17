@@ -14,6 +14,7 @@ categories.workspace = true
 name = "openai_rs"
 
 [features]
+legacy-videos = ["client", "openai-rs-types/legacy-videos", "openai-rs-client/legacy-videos"]
 default = ["client", "rustls-tls", "structured-output"]
 client = ["dep:openai-rs-client"]
 rustls-tls = ["client", "openai-rs-client/rustls-tls"]

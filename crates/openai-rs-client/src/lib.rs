@@ -222,7 +222,7 @@ pub use responses_websocket::{
     ResponsesWebSocket, ResponsesWebSocketConfig, WebSocketReconnectPolicy,
 };
 pub use retry::RetryPolicy;
-pub use safety::{Safety, SafetyAlert, SafetyAlertErrorType, SafetyAlerts};
+pub use safety::{Safety, SafetyAlert, SafetyAlertErrorType, SafetyAlertObject, SafetyAlerts};
 pub use skills::{
     SkillContentStream, SkillPageStream, SkillVersionPageStream, SkillVersions, Skills,
 };
@@ -245,3 +245,11 @@ pub use x509::{
     X509Client, X509ClientBuilder, X509Error, X509IdentityPem, X509Models, X509OAuthCode,
     X509Region, X509Responses,
 };
+
+#[cfg(feature = "legacy-videos")]
+mod videos;
+#[cfg(feature = "legacy-videos")]
+pub use videos::*;
+
+#[cfg(test)]
+mod test_support;

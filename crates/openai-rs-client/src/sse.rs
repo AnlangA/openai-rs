@@ -825,13 +825,32 @@ impl SseStreamDecoder {
     /// Once a terminal or remote-error dispatch is returned, later frames from
     /// the same chunk are ignored and parser-owned input is released. The HTTP
     /// layer should immediately drop/close the authenticated response body.
+    /// Use [`Self::push_with_flushed`] to preserve complete events preceding a
+    /// malformed line in the same chunk.
     ///
     /// # Errors
     ///
     /// Returns an error if framing or UTF-8 validation fails, an event exceeds the configured
     /// limits, or the stream violates its endpoint policy.
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<SseDispatch>, SseDecodeError> {
-        self.ensure_active()?;
+        self.push_with_flushed(chunk)
+            .map_err(|(error, _dispatches)| error)
+    }
+
+    /// Feed a transport chunk, retaining complete events before a parsing error.
+    ///
+    /// Transports should deliver the returned dispatches before surfacing the
+    /// error so event delivery does not depend on HTTP chunk boundaries. The
+    /// decoder remains fail-stop and releases buffered input after the error.
+    ///
+    /// # Errors
+    ///
+    /// Returns the parsing error together with any events completed before it.
+    pub fn push_with_flushed(
+        &mut self,
+        chunk: &[u8],
+    ) -> Result<Vec<SseDispatch>, (SseDecodeError, Vec<SseDispatch>)> {
+        self.ensure_active().map_err(|error| (error, Vec::new()))?;
         let mut dispatches = Vec::new();
         let mut offset = 0;
 
@@ -854,7 +873,7 @@ impl SseStreamDecoder {
                 Ok(frames) => frames,
                 Err(error) => {
                     self.state = SseStreamState::Failed;
-                    return Err(error);
+                    return Err((error, dispatches));
                 }
             };
             dispatches.extend(self.classify_frames(frames));
@@ -1346,6 +1365,66 @@ mod tests {
                 state: SseStreamState::Completed,
             })
         );
+    }
+
+    #[test]
+    fn push_with_flushed_preserves_events_before_errors_at_every_chunk_split() {
+        let limits = ok(SseLimits::new(24, 8, 1));
+        let cases: &[(&[u8], SseDecodeError)] = &[
+            (
+                b"data: ok\n\ndata: \xff\n\n",
+                SseDecodeError::InvalidUtf8 {
+                    valid_up_to: 6,
+                    error_len: Some(1),
+                },
+            ),
+            (
+                b"data: ok\r\rdata: \xff\r\r",
+                SseDecodeError::InvalidUtf8 {
+                    valid_up_to: 6,
+                    error_len: Some(1),
+                },
+            ),
+            (
+                b"data: ok\n\nxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+                SseDecodeError::LineTooLarge { limit: 24 },
+            ),
+            (
+                b"data: ok\n\ndata: 123456789\n",
+                SseDecodeError::EventTooLarge { limit: 8 },
+            ),
+            (
+                b"data: ok\n\ndata: a\ndata: b\n",
+                SseDecodeError::TooManyDataLines { limit: 1 },
+            ),
+        ];
+        for (input, expected_error) in cases {
+            for split_at in 0..=input.len() {
+                let mut decoder = SseStreamDecoder::new(limits, SseEndpointPolicy::legacy_done());
+                let mut dispatched = Vec::new();
+                let mut failure = None;
+                for chunk in [&input[..split_at], &input[split_at..]] {
+                    match decoder.push_with_flushed(chunk) {
+                        Ok(frames) => dispatched.extend(frames),
+                        Err((error, flushed)) => {
+                            dispatched.extend(flushed);
+                            failure = Some(error);
+                            break;
+                        }
+                    }
+                }
+                assert_eq!(failure.as_ref(), Some(expected_error), "split {split_at}");
+                assert_eq!(dispatched.len(), 1, "split {split_at}");
+                assert_eq!(dispatched[0].frame().data.as_ref(), "ok");
+                assert_eq!(decoder.state(), SseStreamState::Failed);
+                assert_eq!(decoder.decoder().buffered_bytes(), 0);
+                let (error, flushed) = decoder
+                    .push_with_flushed(b"data: later\n\n")
+                    .expect_err("failed decoder rejects later input");
+                assert!(matches!(error, SseDecodeError::StreamInactive { .. }));
+                assert!(flushed.is_empty());
+            }
+        }
     }
 
     #[test]

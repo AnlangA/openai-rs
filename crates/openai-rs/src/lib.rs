@@ -40,6 +40,7 @@
 
 pub use openai_rs_types as types;
 pub use openai_rs_types::responses::{self, OutputParseError};
+pub use openai_rs_types::safety;
 
 #[cfg(feature = "legacy-completions")]
 pub use openai_rs_types::legacy;
@@ -73,8 +74,8 @@ pub use openai_rs_client::{
     PollOptions, ProvenanceDetectionOutcome, RateLimitMetadata, ResponseEventStream,
     ResponseInputItemPageStream, ResponseMeta, Responses, RetrieveResponseParams,
     RetrieveResponseStreamParams, RetryPolicy, Safety, SafetyAlert, SafetyAlertErrorType,
-    SafetyAlerts, SkillContentStream, SkillPageStream, SkillVersionPageStream, SkillVersions,
-    Skills, SpeechEventStream, StreamError, SynthIdProvenanceResult, TlsBackend,
+    SafetyAlertObject, SafetyAlerts, SkillContentStream, SkillPageStream, SkillVersionPageStream,
+    SkillVersions, Skills, SpeechEventStream, StreamError, SynthIdProvenanceResult, TlsBackend,
     TranscriptionEventStream, TranscriptionOutput, TranslationOutput, Uploads,
     VectorStoreFileBatches, VectorStoreFilePageStream, VectorStoreFiles, VectorStorePageStream,
     VectorStores,
@@ -190,6 +191,11 @@ pub use openai_rs_codex as codex;
     feature = "rmcp-auth"
 ))]
 pub use openai_rs_rmcp as rmcp;
+
+#[cfg(feature = "legacy-videos")]
+pub use openai_rs_client::Videos;
+#[cfg(feature = "legacy-videos")]
+pub use openai_rs_types::videos;
 
 #[cfg(test)]
 mod tests {

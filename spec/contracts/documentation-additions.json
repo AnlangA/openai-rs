@@ -1,0 +1,458 @@
+{
+  "schema_version": 1,
+  "reviewed_at": "2026-09-05",
+  "description": "Reviewed additions transcribed from the official API reference; not a replacement for the immutable upstream OpenAPI. Each entry only adds an absent member.",
+  "additions": [
+    {
+      "target": "/components/schemas/CreateProjectServiceAccountApiKeyBody/properties/expires_in_seconds",
+      "value": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 31536000
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/projects/subresources/service_accounts/subresources/api_keys/methods/create"
+    },
+    {
+      "target": "/components/schemas/ServiceAccountApiKeyBody/properties/expires_at",
+      "value": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "unixtime"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/projects/subresources/service_accounts/subresources/api_keys/methods/create"
+    },
+    {
+      "target": "/components/schemas/PromptCacheOptions/properties/comparison_response_id",
+      "value": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/PromptCacheOptionsParam/properties/comparison_response_id",
+      "value": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/FunctionTool/properties/async",
+      "value": {
+        "type": "boolean"
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/FunctionToolParam/properties/async",
+      "value": {
+        "type": "boolean"
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/CustomToolParam/properties/async",
+      "value": {
+        "type": "boolean"
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/FunctionToolCall/properties/async",
+      "value": {
+        "type": "boolean"
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/CustomToolCall/properties/async",
+      "value": {
+        "type": "boolean"
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/BetaPromptCacheOptions/properties/comparison_response_id",
+      "value": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/beta/subresources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/BetaPromptCacheOptionsParam/properties/comparison_response_id",
+      "value": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/beta/subresources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/BetaFunctionTool/properties/async",
+      "value": {
+        "type": "boolean"
+      },
+      "source": "https://developers.openai.com/api/reference/resources/beta/subresources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/BetaFunctionToolParam/properties/async",
+      "value": {
+        "type": "boolean"
+      },
+      "source": "https://developers.openai.com/api/reference/resources/beta/subresources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/BetaCustomToolParam/properties/async",
+      "value": {
+        "type": "boolean"
+      },
+      "source": "https://developers.openai.com/api/reference/resources/beta/subresources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/BetaFunctionToolCall/properties/async",
+      "value": {
+        "type": "boolean"
+      },
+      "source": "https://developers.openai.com/api/reference/resources/beta/subresources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/BetaCustomToolCall/properties/async",
+      "value": {
+        "type": "boolean"
+      },
+      "source": "https://developers.openai.com/api/reference/resources/beta/subresources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/SafetyAlertErrorType",
+      "value": {
+        "type": "string",
+        "enum": [
+          "potentially_unintended_data_transfer",
+          "potentially_unintended_data_access",
+          "potentially_unintended_destructive_activity",
+          "other"
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/safety/subresources/alerts/methods/retrieve"
+    },
+    {
+      "target": "/components/schemas/SafetyAlert",
+      "value": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "safety.alert"
+            ]
+          },
+          "created_at": {
+            "type": "number"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "response_id": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "request_paused": {
+            "type": "boolean"
+          },
+          "error_type": {
+            "$ref": "#/components/schemas/SafetyAlertErrorType"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "created_at",
+          "request_id",
+          "response_id",
+          "model",
+          "request_paused",
+          "error_type",
+          "reason"
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/safety/subresources/alerts/methods/retrieve"
+    },
+    {
+      "target": "/components/schemas/ResponseMisalignmentSteer",
+      "value": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/ResponseMisalignment",
+      "value": {
+        "type": "object",
+        "properties": {
+          "detailed_explanation": {
+            "type": "string"
+          },
+          "error_type": {
+            "type": "string"
+          },
+          "steer": {
+            "$ref": "#/components/schemas/ResponseMisalignmentSteer"
+          }
+        },
+        "required": []
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/PromptCacheMissReason",
+      "value": {
+        "type": "string",
+        "enum": [
+          "model_changed",
+          "prompt_cache_key_changed",
+          "tools_changed",
+          "text_format_changed",
+          "reasoning_effort_changed",
+          "verbosity_changed",
+          "context_compacted",
+          "input_changed",
+          "service_tier_changed"
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/PromptCacheMiss",
+      "value": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "cache_miss"
+            ]
+          },
+          "cache_missed_tokens": {
+            "type": "integer"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/PromptCacheMissReason"
+          },
+          "comparison_reusable_tokens": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "cache_missed_tokens",
+          "reason"
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/PromptCacheHit",
+      "value": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "cache_hit"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/ComparisonResponseNotFound",
+      "value": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "comparison_response_not_found"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/PromptCacheUnavailable",
+      "value": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "unavailable"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/components/schemas/PromptCacheDiagnostics",
+      "value": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/PromptCacheMiss"
+          },
+          {
+            "$ref": "#/components/schemas/PromptCacheHit"
+          },
+          {
+            "$ref": "#/components/schemas/ComparisonResponseNotFound"
+          },
+          {
+            "$ref": "#/components/schemas/PromptCacheUnavailable"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "type"
+        }
+      },
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create"
+    },
+    {
+      "target": "/paths/~1safety~1alerts~1{id}",
+      "source": "https://developers.openai.com/api/reference/resources/safety/subresources/alerts/methods/retrieve",
+      "value": {
+        "get": {
+          "parameters": [
+            {
+              "in": "path",
+              "name": "id",
+              "required": true,
+              "schema": {
+                "type": "string",
+                "maxLength": 38
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Project safety alert",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SafetyAlert"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "target": "/components/schemas/Response/allOf/2/properties/prompt_cache_diagnostics",
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create",
+      "value": {
+        "$ref": "#/components/schemas/PromptCacheDiagnostics"
+      }
+    },
+    {
+      "target": "/components/schemas/ResponseError/anyOf/0/properties/misalignment",
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create",
+      "value": {
+        "$ref": "#/components/schemas/ResponseMisalignment"
+      }
+    },
+    {
+      "target": "/components/schemas/BetaResponse/allOf/2/properties/prompt_cache_diagnostics",
+      "source": "https://developers.openai.com/api/reference/resources/beta/subresources/responses/methods/create",
+      "value": {
+        "$ref": "#/components/schemas/PromptCacheDiagnostics"
+      }
+    },
+    {
+      "target": "/components/schemas/BetaResponseError/anyOf/0/properties/misalignment",
+      "source": "https://developers.openai.com/api/reference/resources/beta/subresources/responses/methods/create",
+      "value": {
+        "$ref": "#/components/schemas/ResponseMisalignment"
+      }
+    },
+    {
+      "target": "/components/schemas/Error-2/properties/misalignment",
+      "source": "https://developers.openai.com/api/reference/resources/videos/methods/retrieve",
+      "value": {
+        "$ref": "#/components/schemas/ResponseMisalignment"
+      }
+    }
+  ]
+}

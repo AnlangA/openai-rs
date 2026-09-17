@@ -28,11 +28,11 @@ Status terms:
 | `client` | Yes | Implemented | Enables the Platform `Client`. Coverage includes Responses, Chat Completions, Files/Uploads, Batches, Vector Stores, Models, Embeddings, Moderations, media, Fine-tuning, Conversations, Containers, Skills, Content Provenance, and project Safety Alerts retrieval. Evals is available via the default-off `legacy-evals` feature. |
 | `rustls-tls` | Yes | Implemented | Rustls-backed Platform transport. Implies `client`. |
 | `native-tls` | No | Implemented | Native TLS transport selection. Implies `client`. |
-| `structured-output` | Yes | Implemented | Typed schema generation and strict-subset normalization aligned with the official Structured Outputs keyword allowlist (`anyOf`/`items` plus object, number, and string constraints; `allOf`/`oneOf`/`not`/`if`/`then`/`else` and the advanced object/array keywords are rejected). |
+| `structured-output` | Yes | Implemented | Typed schema generation and strict-subset normalization preserve supported recursive schema references and follow the official Structured Outputs keyword allowlist (`anyOf`/`items` plus object, number, and string constraints; `allOf`/`oneOf`/`not`/`if`/`then`/`else` and the advanced object/array keywords are rejected). |
 | `realtime` | No | Implemented | Pinned GA 11-client/46-server event unions, Realtime WebSocket connection, client-secret and translation-secret REST methods, WebRTC SDP signaling, SIP call control, and the persistent Responses WebSocket client. |
 | `webhook-verification` | No | Implemented | Typed verification for the pinned 18-event webhook union with explicit secret handling. |
 | `admin` | No | Implemented | Dedicated `AdminApiKey`/`AdminClient`, sealed typed requests for the 119-operation Administration manifest, convenience resource facades, and three fine-tuning checkpoint-permission methods. Never added to the ordinary `Client`. |
-| `workload-identity` | No | Implemented | RFC 8693 subject-token exchange for the ordinary Platform `Client`, with token caching, singleflight/proactive refresh, and bounded one-time 401 replay where the request is replayable. Not a Codex subscription credential. |
+| `workload-identity` | No | Implemented | RFC 8693 subject-token exchange for the ordinary Platform `Client`, with token caching, singleflight/proactive refresh, and bounded one-time 401 replay where the request is replayable. Credential waits share the HTTP request or WebSocket connection deadline; detached refreshes also have a finite lifetime. Not a Codex subscription credential. |
 | `x509` | No | Implemented | Isolated rustls mTLS `X509Client` with pinned regional origins, X.509 token exchange, non-streaming Responses create/retrieve/cancel/compact/count, and Models list/retrieve. It exposes neither Realtime nor arbitrary URLs. |
 | `legacy-evals` (alias `evals`) | No | Legacy | Default-off typed Evals operations. The OpenAI Evals platform becomes read-only on 2026-10-31 and shuts down on 2026-11-30. |
 | `custom-voice` | No | Implemented | Six typed Custom Voice/consent operations. Access remains controlled by the service. |
@@ -40,6 +40,7 @@ Status terms:
 | `beta-chatkit` | No | Beta | Six typed ChatKit session/thread operations and pagination. |
 | `beta-responses-multi-agent` | No | Beta | Seven typed beta Responses operations, SSE, and persistent WebSocket create/inject support for the multi-agent contract. |
 | `legacy-completions` | No | Legacy | Default-off typed JSON/SSE support for only `POST /completions`; Responses is preferred. |
+| `legacy-videos` | No | Legacy | Ten typed Sora video operations, including uploads, asset downloads, and characters. Official shutdown is scheduled for 2026-09-24. |
 | `legacy-realtime` | No | Legacy | Two deprecated pre-GA Realtime session-token operations. Use the GA `realtime` feature for new integrations. |
 | `full` | No | Bundle | Exactly `client`, `rustls-tls`, `structured-output`, `realtime`, `webhook-verification`, `rmcp`, and `rmcp-http-rustls`. It excludes Custom Voice, all experimental/alpha/beta/legacy features, Administration, workload identity, X.509, and the remaining RMCP transport/server/auth features. |
 
@@ -47,6 +48,9 @@ The Administration inventory consists of 119 sealed manifest operations plus a
 separate three-operation checkpoint-permission manifest (list, create, and
 delete). Both execute only through `AdminClient` with `AdminApiKey`; neither is
 reachable through the ordinary Platform `Client`.
+
+`legacy-videos` enables typed create/list/retrieve/delete, raw asset download,
+remix/edit/extend, and character create/retrieve. It is excluded from `full`.
 
 ## RMCP features
 
@@ -102,26 +106,42 @@ experimental.
 
 ## API coverage policy
 
-The generated pinned inventory contains 288 client operations. Its current
-disposition is 254 `verified`, 33 `omitted`, and one `quarantined`; there are no
-`planned` or `partial` entries. The omitted entries are Assistants/Threads/Runs
-and deprecated Videos operations. `createImageVariation` is quarantined because
-the official sources conflict. Neither category is exposed as a callable
-client feature. The 18 OpenAPI webhook receiver operations are separately
-`verified` through `WebhookVerifier` and the 18-event `WebhookEvent` union;
-they are counted in `counts.webhook_implementation_statuses`, not mixed into
-the 254 client figure.
+The immutable upstream inventory contains 288 client operations: 264 `verified`,
+23 `omitted`, and one `quarantined`. The reviewed
+`spec/contracts/documentation-additions.json` supplement adds Safety Alerts
+retrieval, tracked once in the separate `documented_operations` manifest section.
+Together, these sources describe 289 client operations, of which 265 are
+implemented. The omitted entries are Assistants/Threads/Runs, whose official
+shutdown date has passed. Image variation remains quarantined because its
+required DALL-E 2 model is listed as removed.
+The 10 Videos operations are callable only through the default-off `legacy-videos`
+feature until the service's announced September 24, 2026 shutdown. Feature selection
+does not promise availability after shutdown or grant account access.
+
+The 18 webhook receiver operations are separately verified through
+`WebhookVerifier` and `WebhookEvent`, including the existing safety alert events.
+Generated artifacts retain the immutable upstream identity and a SHA-256 identity
+for the reviewed supplement; generation rejects additions that overwrite existing
+upstream members. See [official API parity](official-api-parity.md).
 
 The verified surface includes:
 
 - Responses REST covers create, retrieve, delete, cancel, compact, input-item
   listing, and input-token counting.
+- Function tools retain `asynchronous(true)` and the `with_async(true)` alias;
+  function/custom tools and calls expose their optional async flag. Typed
+  Structured Outputs helpers preserve supported recursive schema references.
 - Responses SSE create-stream, bounded decoding, and all 58 events in the
   pinned stable union are typed.
 - Enabling `realtime` also provides the persistent typed Responses WebSocket
   transport.
 - Models list/retrieve/delete, Embeddings create, and Moderations create have
   typed client resource methods.
+- Project Safety Alerts retrieval is available through
+  `client.safety().alerts().retrieve(id)` and the `client.safety_alerts()`
+  convenience facade, separately from the frozen OpenAPI operation count.
+- Videos provides ten typed operations through the default-off `legacy-videos`
+  feature, including multipart uploads, asset downloads, and character resources.
 - Chat Completions includes non-streaming/SSE creation, stored completion
   resources, messages, and pagination.
 - Files/Uploads includes replayable and one-shot multipart requests, streaming
@@ -180,12 +200,12 @@ one deliberate exception is the Administration client (decision D0223): its
 sealed manifest pages manually via `AdminCursorPage::next_after_with` rather
 than a `list_pages` stream.
 
-## Official API lifecycle and deprecation timeline (2026-08-30)
+## Official API lifecycle and deprecation timeline (reviewed sources through 2026-09-05)
 
 | Official service / endpoint | Lifecycle status & milestone | SDK disposition |
 |---|---|---|
 | Assistants / Threads / Runs | Sunset on 2026-08-26 | Omitted; no `beta-assistants` feature |
-| Videos / Sora 2 | Sunset on 2026-09-24 | Omitted; no `create_and_poll` |
+| Videos / Sora 2 | Sunset on 2026-09-24 | Ten operations implemented behind default-off `legacy-videos`; no `create_and_poll` |
 | Evals platform (`v1/evals`) | Read-only on 2026-10-31, shutdown on 2026-11-30 | Moved out of default `Client` and `openai-rs-types` to default-off `legacy-evals` feature |
 | Alpha Graders | Follows Evals shutdown on 2026-11-30 | Gated under default-off `alpha-graders` feature |
 | Prompts (`v1/prompts`) | Shutdown on 2026-11-30 | Omitted; no Prompts resource; `prompt` field in Responses retained until next pin disposition |

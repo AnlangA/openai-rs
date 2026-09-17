@@ -99,12 +99,9 @@ impl ChatCompletionEventStream {
                         return;
                     }
                 };
-                let dispatches = match decoder.push(&chunk) {
-                    Ok(dispatches) => dispatches,
-                    Err(source) => {
-                        yield Err(sse_error(source, &stream_meta));
-                        return;
-                    }
+                let (dispatches, chunk_error) = match decoder.push_with_flushed(&chunk) {
+                    Ok(dispatches) => (dispatches, None),
+                    Err((source, flushed)) => (flushed, Some(source)),
                 };
                 for dispatch in dispatches {
                     match dispatch {
@@ -125,6 +122,10 @@ impl ChatCompletionEventStream {
                             return;
                         }
                     }
+                }
+                if let Some(source) = chunk_error {
+                    yield Err(sse_error(source, &stream_meta));
+                    return;
                 }
                 if decoder.state() != SseStreamState::Active {
                     return;
@@ -294,12 +295,12 @@ mod tests {
 
     const CHUNK: &str = "{\"id\":\"chatcmpl_1\",\"choices\":[{\"delta\":{\"content\":\"hello\",\"refusal\":null,\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1,\"model\":\"test-model\",\"object\":\"chat.completion.chunk\"}";
 
-    fn stream_over(body: &str) -> ChatCompletionEventStream {
+    fn stream_over(body: impl AsRef<[u8]>) -> ChatCompletionEventStream {
         let response = http::Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "text/event-stream")
             .header("x-request-id", "req_chat_stream")
-            .body(reqwest::Body::from(body.to_owned()))
+            .body(reqwest::Body::from(body.as_ref().to_vec()))
             .expect("build SSE response");
         ChatCompletionEventStream::from_response(
             reqwest::Response::from(response),
@@ -334,6 +335,27 @@ mod tests {
         ] {
             assert!(error_is_truthy(&truthy), "expected truthy: {truthy}");
         }
+    }
+
+    #[tokio::test]
+    async fn malformed_tail_preserves_prior_chunk_before_reporting_error() {
+        let mut body = format!("data: {CHUNK}\n\n").into_bytes();
+        body.extend_from_slice(b"data: \xff\n\n");
+        let mut stream = stream_over(body);
+        let chunk = stream
+            .next()
+            .await
+            .expect("prior chunk")
+            .expect("valid chunk");
+        assert_eq!(chunk.id, "chatcmpl_1");
+        assert!(matches!(
+            stream.next().await.expect("framing error"),
+            Err(Error::Sse {
+                source: SseDecodeError::InvalidUtf8 { .. },
+                request_id,
+            }) if request_id.as_deref() == Some("req_chat_stream")
+        ));
+        assert!(stream.next().await.is_none());
     }
 
     #[tokio::test]

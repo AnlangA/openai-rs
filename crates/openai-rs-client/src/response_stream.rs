@@ -60,12 +60,9 @@ impl ResponseEventStream {
                         return;
                     }
                 };
-                let dispatches = match decoder.push(&chunk) {
-                    Ok(dispatches) => dispatches,
-                    Err(source) => {
-                        yield Err(sse_error(source, &stream_meta));
-                        return;
-                    }
+                let (dispatches, chunk_error) = match decoder.push_with_flushed(&chunk) {
+                    Ok(dispatches) => (dispatches, None),
+                    Err((source, flushed)) => (flushed, Some(source)),
                 };
                 for dispatch in dispatches {
                     match dispatch {
@@ -95,6 +92,10 @@ impl ResponseEventStream {
                             return;
                         }
                     }
+                }
+                if let Some(source) = chunk_error {
+                    yield Err(sse_error(source, &stream_meta));
+                    return;
                 }
                 if decoder.state() != SseStreamState::Active {
                     return;
@@ -245,5 +246,42 @@ fn sse_error(source: crate::sse::SseDecodeError, meta: &ResponseMeta) -> Error {
     Error::Sse {
         source,
         request_id: meta.request_id().map(Box::<str>::from),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sse::SseDecodeError;
+
+    #[tokio::test]
+    async fn malformed_tail_preserves_prior_event_before_reporting_error() {
+        let mut body = concat!(
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\",\"sequence_number\":1,\"logprobs\":[]}\n\n",
+        )
+        .as_bytes()
+        .to_vec();
+        body.extend_from_slice(b"data: \xff\n\n");
+        let response = http::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .header("x-request-id", "req_response_stream")
+            .body(reqwest::Body::from(body))
+            .expect("build SSE response");
+        let mut stream = ResponseEventStream::from_response(response.into(), SseLimits::default())
+            .expect("stream handshake");
+        assert!(matches!(
+            stream.next().await.expect("prior event").expect("valid event"),
+            ResponseStreamEvent::OutputTextDelta(event) if event.delta() == "hello"
+        ));
+        assert!(matches!(
+            stream.next().await.expect("framing error"),
+            Err(Error::Sse {
+                source: SseDecodeError::InvalidUtf8 { .. },
+                request_id,
+            }) if request_id.as_deref() == Some("req_response_stream")
+        ));
+        assert!(stream.next().await.is_none());
     }
 }

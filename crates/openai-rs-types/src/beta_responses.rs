@@ -2543,6 +2543,8 @@ pub struct BetaPromptCacheOptionsParam {
     mode: Omittable<BetaPromptCacheMode>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     ttl: Omittable<BetaPromptCacheTtl>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    comparison_response_id: Omittable<Nullable<String>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -2573,6 +2575,25 @@ impl BetaPromptCacheOptionsParam {
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
     }
+    /// Sets the response used for prompt-cache diagnostics.
+    #[must_use]
+    pub fn comparison_response_id(mut self, id: impl Into<String>) -> Self {
+        self.comparison_response_id = Omittable::Value(Nullable::Value(id.into()));
+        self
+    }
+
+    /// Sends an explicit null comparison response id.
+    #[must_use]
+    pub fn comparison_response_id_null(mut self) -> Self {
+        self.comparison_response_id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Returns the exact omitted/null/value comparison id.
+    #[must_use]
+    pub const fn comparison_response_id_presence(&self) -> &Omittable<Nullable<String>> {
+        &self.comparison_response_id
+    }
 }
 
 /// Official beta response-echo `BetaPromptCacheOptions`.
@@ -2582,6 +2603,8 @@ impl BetaPromptCacheOptionsParam {
 pub struct BetaPromptCacheOptions {
     mode: BetaPromptCacheMode,
     ttl: BetaPromptCacheTtl,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    comparison_response_id: Omittable<Nullable<String>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -2593,6 +2616,7 @@ impl BetaPromptCacheOptions {
         Self {
             mode,
             ttl,
+            comparison_response_id: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -2613,6 +2637,25 @@ impl BetaPromptCacheOptions {
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
+    }
+    /// Sets the response used for prompt-cache diagnostics.
+    #[must_use]
+    pub fn comparison_response_id(mut self, id: impl Into<String>) -> Self {
+        self.comparison_response_id = Omittable::Value(Nullable::Value(id.into()));
+        self
+    }
+
+    /// Sends an explicit null comparison response id.
+    #[must_use]
+    pub fn comparison_response_id_null(mut self) -> Self {
+        self.comparison_response_id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Returns the exact omitted/null/value comparison id.
+    #[must_use]
+    pub const fn comparison_response_id_presence(&self) -> &Omittable<Nullable<String>> {
+        &self.comparison_response_id
     }
 }
 
@@ -3448,11 +3491,22 @@ pub struct BetaResponse {
     usage: Omittable<Nullable<ResponseUsage>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     user: Omittable<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_diagnostics: Omittable<crate::responses::PromptCacheDiagnostics>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
 
 impl BetaResponse {
+    /// Returns the applied prompt-cache options when supplied.
+    #[must_use]
+    pub fn prompt_cache_options(&self) -> Option<&BetaPromptCacheOptions> {
+        match &self.prompt_cache_options {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
+    }
+
     /// Returns the opaque response id.
     #[must_use]
     pub fn id(&self) -> &str {
@@ -3577,6 +3631,14 @@ impl BetaResponse {
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
+    }
+    /// Returns prompt-cache diagnostics when requested and available.
+    #[must_use]
+    pub fn prompt_cache_diagnostics(&self) -> Option<&crate::responses::PromptCacheDiagnostics> {
+        match &self.prompt_cache_diagnostics {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 }
 

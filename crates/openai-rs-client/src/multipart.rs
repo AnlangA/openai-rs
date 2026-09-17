@@ -519,6 +519,19 @@ impl MultipartTransport {
             .map(FileContentStream::from_response)
     }
 
+    #[cfg(feature = "legacy-videos")]
+    pub(crate) async fn download_path_with_query<T: Serialize + ?Sized>(
+        &self,
+        operation_id: &'static str,
+        path: &[PathSegment<'_>],
+        accept: &'static str,
+        query: &T,
+    ) -> Result<FileContentStream, Error> {
+        self.send_download_with_query(operation_id, path, accept, Some(query))
+            .await
+            .map(FileContentStream::from_response)
+    }
+
     /// Sends a replayable multipart form, rebuilding it for each permitted
     /// retry.
     ///
@@ -826,7 +839,21 @@ impl MultipartTransport {
         path: &[PathSegment<'_>],
         accept: &'static str,
     ) -> Result<reqwest::Response, Error> {
-        let url = self.operation_url(path)?;
+        self.send_download_with_query::<()>(operation_id, path, accept, None)
+            .await
+    }
+
+    async fn send_download_with_query<T: Serialize + ?Sized>(
+        &self,
+        operation_id: &'static str,
+        path: &[PathSegment<'_>],
+        accept: &'static str,
+        query: Option<&T>,
+    ) -> Result<reqwest::Response, Error> {
+        let mut url = self.operation_url(path)?;
+        if let Some(query) = query {
+            crate::transport::append_query(&mut url, query)?;
+        }
         let span =
             trace::http_request_span_lazy(operation_id, "GET", || trace::route_template(path));
         async move {

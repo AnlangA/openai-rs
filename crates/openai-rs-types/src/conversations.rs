@@ -1174,6 +1174,8 @@ pub struct ConversationFunctionCall {
     status: responses::ResponseItemStatus,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     created_by: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    r#async: Omittable<bool>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1208,6 +1210,7 @@ impl ConversationFunctionCall {
             caller: Omittable::Omitted,
             status: status.into(),
             created_by: Omittable::Omitted,
+            r#async: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -1267,6 +1270,21 @@ impl ConversationFunctionCall {
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
+    }
+    /// Sets the official `async` tool/call flag.
+    #[must_use]
+    pub fn with_async(mut self, value: bool) -> Self {
+        self.r#async = Omittable::Value(value);
+        self
+    }
+
+    /// Returns the official `async` flag without assigning a default.
+    #[must_use]
+    pub fn is_async(&self) -> Option<bool> {
+        match self.r#async {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 }
 

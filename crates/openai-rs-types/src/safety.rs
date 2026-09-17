@@ -13,10 +13,22 @@ crate::open_string_enum! {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-enum SafetyAlertObject {
+/// Object discriminator for a project safety alert.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SafetyAlertObject {
+    /// A safety alert belonging to the authenticated API project.
     #[serde(rename = "safety.alert")]
     SafetyAlert,
+}
+
+impl SafetyAlertObject {
+    /// Returns the wire discriminator.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::SafetyAlert => "safety.alert",
+        }
+    }
 }
 
 /// Details of a safety alert belonging to the authenticated API project.
@@ -36,6 +48,12 @@ pub struct SafetyAlert {
 }
 
 impl SafetyAlert {
+    /// Returns the object discriminator.
+    #[must_use]
+    pub const fn object(&self) -> &SafetyAlertObject {
+        &self.object
+    }
+
     /// The alert identifier carried by webhook `data.id`.
     #[must_use]
     pub fn id(&self) -> &str {

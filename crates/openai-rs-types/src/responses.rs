@@ -16,6 +16,9 @@ use crate::{ExtraFields, JsonText, Nullable, Omittable, WireSecret, open_string_
 
 pub use crate::kernel::{UnknownTaggedObject, UnknownTaggedObjectError};
 
+mod diagnostics;
+pub use diagnostics::*;
+
 fn object_discriminator(value: &Value) -> Result<String, &'static str> {
     crate::kernel::object_discriminator(value)
 }
@@ -529,6 +532,8 @@ pub struct PromptCacheOptionsParam {
     mode: Omittable<PromptCacheMode>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     ttl: Omittable<PromptCacheTtl>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    comparison_response_id: Omittable<Nullable<String>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -541,6 +546,8 @@ pub struct PromptCacheOptionsParam {
 pub struct PromptCacheOptions {
     mode: PromptCacheMode,
     ttl: PromptCacheTtl,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    comparison_response_id: Omittable<Nullable<String>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -1013,6 +1020,7 @@ impl PromptCacheOptionsParam {
         Self {
             mode: Omittable::Value(mode),
             ttl: Omittable::Omitted,
+            comparison_response_id: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -1061,6 +1069,25 @@ impl PromptCacheOptionsParam {
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
     }
+    /// Sets the response used for prompt-cache diagnostics.
+    #[must_use]
+    pub fn comparison_response_id(mut self, id: impl Into<String>) -> Self {
+        self.comparison_response_id = Omittable::Value(Nullable::Value(id.into()));
+        self
+    }
+
+    /// Sends an explicit null comparison response id.
+    #[must_use]
+    pub fn comparison_response_id_null(mut self) -> Self {
+        self.comparison_response_id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Returns the exact omitted/null/value comparison id.
+    #[must_use]
+    pub const fn comparison_response_id_presence(&self) -> &Omittable<Nullable<String>> {
+        &self.comparison_response_id
+    }
 }
 
 impl PromptCacheOptions {
@@ -1070,6 +1097,7 @@ impl PromptCacheOptions {
         Self {
             mode,
             ttl,
+            comparison_response_id: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -1090,6 +1118,25 @@ impl PromptCacheOptions {
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
+    }
+    /// Sets the response used for prompt-cache diagnostics.
+    #[must_use]
+    pub fn comparison_response_id(mut self, id: impl Into<String>) -> Self {
+        self.comparison_response_id = Omittable::Value(Nullable::Value(id.into()));
+        self
+    }
+
+    /// Sends an explicit null comparison response id.
+    #[must_use]
+    pub fn comparison_response_id_null(mut self) -> Self {
+        self.comparison_response_id = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Returns the exact omitted/null/value comparison id.
+    #[must_use]
+    pub const fn comparison_response_id_presence(&self) -> &Omittable<Nullable<String>> {
+        &self.comparison_response_id
     }
 }
 
@@ -2279,6 +2326,11 @@ impl FunctionTool {
             Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
     }
+    /// Sets the official `async` flag; an alias for [`Self::asynchronous`].
+    #[must_use]
+    pub fn with_async(self, value: bool) -> Self {
+        self.asynchronous(value)
+    }
 }
 
 pub(crate) fn validate_websocket_stream_id(
@@ -3162,6 +3214,8 @@ pub struct FunctionCall {
     status: Omittable<ResponseItemStatus>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     created_by: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    r#async: Omittable<bool>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -3191,6 +3245,7 @@ impl FunctionCall {
             caller: Omittable::Omitted,
             status: Omittable::Value(status.into()),
             created_by: Omittable::Omitted,
+            r#async: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -3208,6 +3263,7 @@ impl FunctionCall {
             caller: Omittable::Omitted,
             status: Omittable::Omitted,
             created_by: Omittable::Omitted,
+            r#async: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -3321,6 +3377,21 @@ impl FunctionCall {
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
+    }
+    /// Sets the official `async` tool/call flag.
+    #[must_use]
+    pub fn with_async(mut self, value: bool) -> Self {
+        self.r#async = Omittable::Value(value);
+        self
+    }
+
+    /// Returns the official `async` flag without assigning a default.
+    #[must_use]
+    pub fn is_async(&self) -> Option<bool> {
+        match self.r#async {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 }
 
@@ -7147,8 +7218,10 @@ literal_tag!(ResponseObjectTag, Response, "response");
 pub struct ResponseError {
     code: ResponseErrorCode,
     message: String,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    misalignment: Omittable<Box<ResponseMisalignment>>,
     #[serde(flatten)]
-    extra: ExtraFields,
+    extra: Box<ExtraFields>,
 }
 
 impl ResponseError {
@@ -7169,6 +7242,14 @@ impl ResponseError {
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
+    }
+    /// Returns safety details supplied with the response error.
+    #[must_use]
+    pub fn misalignment(&self) -> Option<&ResponseMisalignment> {
+        match &self.misalignment {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 }
 
@@ -7383,6 +7464,8 @@ pub struct Response {
     user: Omittable<Nullable<String>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     moderation: Omittable<Nullable<ResponseModeration>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    prompt_cache_diagnostics: Omittable<crate::responses::PromptCacheDiagnostics>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -7554,9 +7637,10 @@ impl Response {
                 // The pin pairs `status: "failed"` with a populated error
                 // object; keep a readable fallback for the degenerate null.
                 Nullable::Null => ResponseError {
+                    misalignment: Omittable::Omitted,
                     code: ResponseErrorCode::from_raw("failed_without_error"),
                     message: "response failed without an error payload".to_owned(),
-                    extra: ExtraFields::new(),
+                    extra: Box::default(),
                 },
             };
             return Err(OutputParseError::Failed(error));
@@ -7782,6 +7866,14 @@ impl Response {
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
+    }
+    /// Returns prompt-cache diagnostics when requested and available.
+    #[must_use]
+    pub fn prompt_cache_diagnostics(&self) -> Option<&crate::responses::PromptCacheDiagnostics> {
+        match &self.prompt_cache_diagnostics {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 }
 
@@ -14005,6 +14097,8 @@ pub struct CustomToolCall {
     status: Omittable<ResponseItemStatus>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     created_by: Omittable<String>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    r#async: Omittable<bool>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -14027,6 +14121,7 @@ impl CustomToolCall {
             caller: Omittable::Omitted,
             status: Omittable::Omitted,
             created_by: Omittable::Omitted,
+            r#async: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -14074,6 +14169,21 @@ impl CustomToolCall {
     #[must_use]
     pub const fn extra_fields(&self) -> &ExtraFields {
         &self.extra
+    }
+    /// Sets the official `async` tool/call flag.
+    #[must_use]
+    pub fn with_async(mut self, value: bool) -> Self {
+        self.r#async = Omittable::Value(value);
+        self
+    }
+
+    /// Returns the official `async` flag without assigning a default.
+    #[must_use]
+    pub fn is_async(&self) -> Option<bool> {
+        match self.r#async {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 }
 
@@ -16377,6 +16487,8 @@ pub struct CustomTool {
     defer_loading: Omittable<bool>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     allowed_callers: Omittable<Nullable<Vec<AllowedCaller>>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    r#async: Omittable<bool>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -16392,6 +16504,7 @@ impl CustomTool {
             format: Omittable::Omitted,
             defer_loading: Omittable::Omitted,
             allowed_callers: Omittable::Omitted,
+            r#async: Omittable::Omitted,
             extra: ExtraFields::new(),
         }
     }
@@ -16438,6 +16551,21 @@ impl CustomTool {
 
     fn validate(&self) -> Result<(), CreateResponseConstraintError> {
         validate_allowed_callers(&self.allowed_callers)
+    }
+    /// Sets the official `async` tool/call flag.
+    #[must_use]
+    pub fn with_async(mut self, value: bool) -> Self {
+        self.r#async = Omittable::Value(value);
+        self
+    }
+
+    /// Returns the official `async` flag without assigning a default.
+    #[must_use]
+    pub fn is_async(&self) -> Option<bool> {
+        match self.r#async {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 }
 
@@ -18975,6 +19103,7 @@ mod tests {
     fn response_output_parsed_branches() {
         // Success case
         let success_response = Response {
+            prompt_cache_diagnostics: Omittable::Omitted,
             id: "resp_1".into(),
             created_at: 1000,
             error: Nullable::Null,
@@ -19025,6 +19154,7 @@ mod tests {
 
         // Refusal case
         let refusal_response = Response {
+            prompt_cache_diagnostics: Omittable::Omitted,
             id: "resp_2".into(),
             created_at: 1000,
             error: Nullable::Null,
@@ -19075,6 +19205,7 @@ mod tests {
 
         // Incomplete case
         let incomplete_response = Response {
+            prompt_cache_diagnostics: Omittable::Omitted,
             id: "resp_3".into(),
             created_at: 1000,
             error: Nullable::Null,
@@ -19129,9 +19260,10 @@ mod tests {
         // Failed case routes the service error payload instead of losing it.
         let failed_response = Response {
             error: Nullable::Value(ResponseError {
+                misalignment: Omittable::Omitted,
                 code: ResponseErrorCode::RateLimitExceeded,
                 message: "Rate limit reached".into(),
-                extra: ExtraFields::new(),
+                extra: Box::default(),
             }),
             status: Omittable::Value(ResponseStatus::Failed),
             ..incomplete_response
@@ -19306,6 +19438,7 @@ mod tests {
         assert_eq!(outputs.len(), 29);
 
         let response = Response {
+            prompt_cache_diagnostics: Omittable::Omitted,
             id: "resp_test".into(),
             created_at: 1000,
             error: Nullable::Null,
@@ -20407,6 +20540,7 @@ mod tests {
             .instructions("Stay concise.")
             .tool(FunctionTool::new("lookup"));
         let response = Response {
+            prompt_cache_diagnostics: Omittable::Omitted,
             id: "resp_1".into(),
             created_at: 1,
             error: Nullable::Null,

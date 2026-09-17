@@ -27,13 +27,14 @@ and 46 server-event unions, WebSocket connection, WebRTC signaling, client-secre
 operations, and SIP call control. Administration, workload identity, and X.509
 are implemented behind separate default-off trust boundaries. The repository
 still does not claim a stable public API. Against the pinned OpenAPI inventory,
-all 254 applicable client operations are verified; 33 sunset/deprecated
-operations are explicitly omitted and one conflicting operation is
-quarantined. The 18 webhook receiver operations are verified independently
-of that client disposition.
+264 of the 288 client operations are verified; 23 sunset operations are
+explicitly omitted and one conflicting operation is quarantined. The 18 webhook
+receiver operations are verified independently of that client disposition.
 The documented project Safety Alerts retrieval API is also implemented via
-`client.safety().alerts().retrieve(id)` and tracked separately from the frozen
-OpenAPI inventory. Function tools support `asynchronous(true)`, and typed
+`client.safety().alerts().retrieve(id)` or `client.safety_alerts().retrieve(id)`
+and tracked separately from the frozen OpenAPI inventory, for 265 implemented
+client operations in total. Function tools support `asynchronous(true)` and
+the `with_async(true)` alias, and typed
 Structured Outputs helpers preserve supported recursive schema references.
 
 | Area | Status |
@@ -41,7 +42,8 @@ Structured Outputs helpers preserve supported recursive schema references.
 | Lossless Serde primitives | Implemented; still pre-release |
 | Typed Responses REST slice | Implemented; contract coverage is still growing |
 | Responses SSE streaming | Public path and 58-event stable union implemented |
-| Models, Embeddings, Moderations | Typed resource methods implemented |
+| Models, Embeddings, Moderations, Safety Alerts | Typed resource methods implemented |
+| Videos | All 10 operations implemented behind `legacy-videos`; official shutdown scheduled for 2026-09-24 |
 | Chat Completions | Typed create/SSE, stored resources, messages, and pagination implemented |
 | Files and Uploads | Typed replayable/one-shot multipart, download, and upload lifecycle implemented |
 | Batches and Vector Stores | Typed resource methods, pagination/polling, and workflow helpers implemented |
@@ -50,8 +52,8 @@ Structured Outputs helpers preserve supported recursive schema references.
 | Realtime GA | 11 client events, 46 server events, WebSocket transport, client secrets, WebRTC SDP, and SIP call control implemented |
 | Administration | Separate `AdminClient`/`AdminApiKey`; 119 sealed operations plus 3 fine-tuning checkpoint-permission operations implemented |
 | Workload identity and X.509 | RFC 8693-backed `Client` auth and an isolated mTLS `X509Client` implemented |
-| Pinned operation disposition | 254 applicable client operations verified; 33 sunset/deprecated operations omitted; 1 conflicting operation quarantined; 18 webhook receivers verified |
-| Default-off gated/compatibility APIs | Custom Voice, alpha Graders, beta ChatKit, beta multi-agent Responses, legacy Completions, legacy Evals (shutdown 2026-11-30), and legacy Realtime are implemented only behind explicit features |
+| Operation disposition | Frozen OpenAPI: 264 client operations verified, 23 sunset operations omitted, 1 conflicting operation quarantined; Safety Alerts retrieval tracked separately; 265 implemented client operations in total; 18 webhook receivers verified separately |
+| Default-off gated/compatibility APIs | Custom Voice, alpha Graders, beta ChatKit, beta multi-agent Responses, legacy Completions, legacy Evals (shutdown 2026-11-30), legacy Videos (shutdown 2026-09-24), and legacy Realtime are implemented only behind explicit features |
 | RMCP bridge | Typed local Responses-function bridge implemented; transport, server, and auth feature flags pass through to the pinned `rmcp` dependency |
 | Codex app-server integration | Experimental JSONL client implemented for one exact audited Codex 0.144.5 macOS arm64 artifact |
 | Direct Codex Responses transport | Private experimental host-locked create/SSE and browser auth implemented, with separately gated device auth; off by default |
@@ -59,6 +61,9 @@ Structured Outputs helpers preserve supported recursive schema references.
 See [feature status](docs/feature-status.md) for the exact Cargo feature matrix
 and [architecture boundaries](docs/architecture.md) for credential and protocol
 separation.
+
+See [official API parity additions](docs/official-api-parity.md) for the reviewed
+2026-09-05 source supplement, historical regression coverage, and remaining lifecycle limits.
 
 ## Design goals
 
@@ -96,7 +101,7 @@ Default features are `client`, `rustls-tls`, and `structured-output`.
 | Platform transport | `client`, `rustls-tls`, `native-tls` | Standard OpenAI Platform API client |
 | Typed helpers | `structured-output`, `realtime`, `webhook-verification` | Structured output, GA Realtime transports, Responses WebSocket, and webhook verification |
 | Privileged identity boundaries | `admin`, `workload-identity`, `x509` | Implemented and default-off; Administration and X.509 use dedicated client/credential boundaries |
-| Gated and compatibility APIs | `custom-voice`, `alpha-graders`, `beta-chatkit`, `beta-responses-multi-agent`, `legacy-completions`, `legacy-evals`, `legacy-realtime` | Implemented, default-off, and explicitly access-controlled, alpha, beta, or legacy |
+| Gated and compatibility APIs | `custom-voice`, `alpha-graders`, `beta-chatkit`, `beta-responses-multi-agent`, `legacy-completions`, `legacy-evals`, `legacy-videos`, `legacy-realtime` | Implemented, default-off, and explicitly access-controlled, alpha, beta, or legacy |
 | RMCP | `rmcp`, `rmcp-stdio`, `rmcp-http-rustls`, `rmcp-http-native-tls`, `rmcp-server`, `rmcp-server-stdio`, `rmcp-auth` | Local bridge implemented; transport/server/auth selections are upstream `rmcp` feature pass-throughs; no implicit tool exposure |
 | Codex app-server | `codex-app-server`, `codex-access-token` | Experimental and isolated from Platform credentials |
 | Direct Codex | `experimental-codex-direct`, `experimental-codex-direct-device`, `experimental-codex-direct-keyring` | Unstable private-backend compatibility; off by default; app-server is preferred |

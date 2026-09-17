@@ -2770,6 +2770,9 @@ pub struct ServiceAccountApiKeyBody {
     pub created_at: u64,
     /// The identifier of the API key.
     pub id: String,
+    /// Expiry as Unix seconds, retaining omitted and explicitly null values.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub expires_at: Omittable<Nullable<u64>>,
     #[serde(default, flatten)]
     extra: ExtraFields,
 }
@@ -2827,6 +2830,45 @@ pub struct CreateProjectServiceAccountApiKeyBody {
     /// API key scopes.
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     pub scopes: Omittable<Vec<String>>,
+    /// Requested lifetime in seconds; omission and null retain service semantics.
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    pub expires_in_seconds: Omittable<Nullable<u64>>,
+}
+
+impl CreateProjectServiceAccountApiKeyBody {
+    /// Sets the requested key lifetime in seconds.
+    #[must_use]
+    pub fn expires_in_seconds(mut self, value: u64) -> Self {
+        self.expires_in_seconds = Omittable::Value(Nullable::Value(value));
+        self
+    }
+
+    /// Sends an explicit null expiry, distinct from omission.
+    #[must_use]
+    pub fn expires_in_seconds_null(mut self) -> Self {
+        self.expires_in_seconds = Omittable::Value(Nullable::Null);
+        self
+    }
+
+    /// Checks the documented key lifetime limits without sending a request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdminConstraintError::ApiKeyExpiresInSeconds`] when a supplied
+    /// non-null lifetime lies outside the documented inclusive limits.
+    pub fn validate(&self) -> Result<(), AdminConstraintError> {
+        if let Omittable::Value(Nullable::Value(actual)) = self.expires_in_seconds
+            && !(MIN_ADMIN_API_KEY_EXPIRES_IN_SECONDS..=MAX_ADMIN_API_KEY_EXPIRES_IN_SECONDS)
+                .contains(&actual)
+        {
+            return Err(AdminConstraintError::ApiKeyExpiresInSeconds {
+                actual,
+                minimum: MIN_ADMIN_API_KEY_EXPIRES_IN_SECONDS,
+                maximum: MAX_ADMIN_API_KEY_EXPIRES_IN_SECONDS,
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Paginated Administration response containing `ProjectServiceAccount` entries.

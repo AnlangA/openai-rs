@@ -23,8 +23,8 @@ use crate::Voices;
 use crate::{
     ApiKey, Audio, Batches, ChatCompletions, Containers, ContentProvenanceChecks, Conversations,
     Embeddings, Error, Files, FineTuning, Images, Models, Moderations, Responses, RetryPolicy,
-    Safety, Skills, Uploads, VectorStores, auth::AuthProvider, multipart::MultipartTransport,
-    sse::SseLimits, transport::Transport,
+    Safety, SafetyAlerts, Skills, Uploads, VectorStores, auth::AuthProvider,
+    multipart::MultipartTransport, sse::SseLimits, transport::Transport,
 };
 #[cfg(feature = "workload-identity")]
 use crate::{WorkloadIdentityConfig, workload_identity::WorkloadIdentityAuth};
@@ -290,6 +290,19 @@ impl Client {
         Embeddings::new(self.clone())
     }
 
+    /// Returns the deprecated Sora API, scheduled to shut down on 2026-09-24.
+    #[cfg(feature = "legacy-videos")]
+    #[must_use]
+    pub fn videos(&self) -> crate::Videos {
+        crate::Videos::new(self.clone())
+    }
+
+    /// Returns project safety alerts directly.
+    #[must_use]
+    pub fn safety_alerts(&self) -> SafetyAlerts {
+        SafetyAlerts::new(self.clone())
+    }
+
     /// Returns the Moderations resource facade.
     #[must_use]
     pub fn moderations(&self) -> Moderations {
@@ -507,7 +520,7 @@ impl ClientBuilder {
 
     /// Sets the total budget for one logical request.
     ///
-    /// This budget covers connection, request write, server processing, body
+    /// This budget covers credential acquisition, connection, request write, server processing, body
     /// streaming, and any in-budget retries from start to finish — it is a
     /// *total* budget. The three implementations differ on what that 600s
     /// default buys (14-M-1 corrects the attribution):

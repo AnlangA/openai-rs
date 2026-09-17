@@ -11,6 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
+legacy-videos = ["openai-rs-types/legacy-videos"]
 default = ["rustls-tls"]
 rustls-tls = [
     "reqwest/rustls-tls",

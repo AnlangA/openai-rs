@@ -16,6 +16,7 @@ const SCHEMA_IR_PATH: &str = "spec/contracts/schema-ir.json";
 const NON_REST_PATH: &str = "spec/contracts/non-rest-implementation.json";
 const IMPLEMENTATION_PATH: &str = "spec/contracts/implementation.toml";
 const EXPECTED_CLIENT_OPERATIONS: usize = 288;
+const DOCUMENTATION_ADDITIONS_PATH: &str = "spec/contracts/documentation-additions.json";
 const EXPECTED_WEBHOOK_OPERATIONS: usize = 18;
 const HTTP_METHODS: [&str; 8] = [
     "get", "put", "post", "delete", "options", "head", "patch", "trace",
@@ -45,10 +46,17 @@ const COMPLEX_SCHEMAS: [&str; 22] = [
     "Annotation",
 ];
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct SourceIdentity {
     revision: &'static str,
     sha256: &'static str,
+    documentation_additions: DocumentationSource,
+}
+
+#[derive(Clone, Serialize)]
+struct DocumentationSource {
+    path: &'static str,
+    sha256: String,
 }
 
 #[derive(Serialize)]
@@ -257,18 +265,38 @@ pub(super) fn render(repository_root: &Path) -> Result<Vec<RenderedArtifact>> {
     let snapshot_path = repository_root.join(SNAPSHOT_PATH);
     let bytes = fs::read(&snapshot_path)
         .map_err(|source| Error::io("read pinned OpenAPI for codegen", &snapshot_path, source))?;
-    let document: Value = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+    let mut document: Value = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
         path: snapshot_path,
         source,
     })?;
 
+    let additions_path = repository_root.join(DOCUMENTATION_ADDITIONS_PATH);
+    let additions_bytes = fs::read(&additions_path).map_err(|source| {
+        Error::io(
+            "read reviewed documentation additions",
+            &additions_path,
+            source,
+        )
+    })?;
+    let additions: Value =
+        serde_json::from_slice(&additions_bytes).map_err(|source| Error::Json {
+            path: additions_path,
+            source,
+        })?;
+    let source = source_identity(&additions_bytes);
     let implementation_registry = load_implementation_registry(repository_root)?;
-    let mut operations = build_operations(&document, &implementation_registry.operations)?;
+    let mut operations = build_operations(&document, &implementation_registry.operations, &source)?;
+    apply_documentation_additions(&mut document, &additions)?;
+    validate_documented_routes(
+        &operations.client_operations,
+        &document,
+        &implementation_registry.documented_operations,
+    )?;
     operations.documented_operations = implementation_registry.documented_operations;
-    let non_rest = build_non_rest(&implementation_registry.non_rest);
-    let discriminators = build_discriminators(&document)?;
-    let nullability = build_nullability(&document)?;
-    let schema_ir = build_schema_ir(&document)?;
+    let non_rest = build_non_rest(&implementation_registry.non_rest, &source);
+    let discriminators = build_discriminators(&document, &source)?;
+    let nullability = build_nullability(&document, &source)?;
+    let schema_ir = build_schema_ir(&document, &source)?;
 
     Ok(vec![
         artifact(OPERATIONS_PATH, &operations)?,
@@ -279,7 +307,7 @@ pub(super) fn render(repository_root: &Path) -> Result<Vec<RenderedArtifact>> {
     ])
 }
 
-fn build_non_rest(units: &[NonRestImplementation]) -> NonRestArtifact {
+fn build_non_rest(units: &[NonRestImplementation], source: &SourceIdentity) -> NonRestArtifact {
     let mut implementation_statuses = BTreeMap::new();
     let mut verified_units = BTreeSet::new();
     for unit in units {
@@ -292,7 +320,7 @@ fn build_non_rest(units: &[NonRestImplementation]) -> NonRestArtifact {
     }
     NonRestArtifact {
         schema_version: 1,
-        source: source_identity(),
+        source: source.clone(),
         count: units.len(),
         implementation_statuses,
         verified_units: verified_units.len(),
@@ -300,11 +328,155 @@ fn build_non_rest(units: &[NonRestImplementation]) -> NonRestArtifact {
     }
 }
 
-fn source_identity() -> SourceIdentity {
+/// Adds reviewed members without allowing an upstream contract to be overwritten.
+fn apply_documentation_additions(document: &mut Value, additions: &Value) -> Result<()> {
+    if additions.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        return Err(Error::message(
+            "unsupported documentation additions version",
+        ));
+    }
+    let entries = additions
+        .get("additions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::message("documentation additions must be an array"))?;
+    for entry in entries {
+        let source = entry
+            .get("source")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::message("documentation addition requires an official source"))?;
+        if !source.starts_with("https://developers.openai.com/api/") {
+            return Err(Error::message(
+                "documentation addition source must be official API documentation",
+            ));
+        }
+        let target = entry
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::message("documentation addition requires a JSON pointer"))?;
+        if !(target.starts_with("/paths/") || target.starts_with("/components/schemas/")) {
+            return Err(Error::message(
+                "documentation additions may only extend paths or schemas",
+            ));
+        }
+        let (parent, key) = target
+            .rsplit_once('/')
+            .ok_or_else(|| Error::message("invalid documentation addition pointer"))?;
+        let key = key.replace("~1", "/").replace("~0", "~");
+        let object = document
+            .pointer_mut(parent)
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                Error::message(format!("documentation addition parent missing: {parent}"))
+            })?;
+        if object.contains_key(&key) {
+            return Err(Error::message(format!(
+                "documentation addition would overwrite {target}"
+            )));
+        }
+        let value = entry
+            .get("value")
+            .ok_or_else(|| Error::message("documentation addition requires a value"))?;
+        object.insert(key, value.clone());
+    }
+    Ok(())
+}
+
+fn source_identity(additions_bytes: &[u8]) -> SourceIdentity {
+    use sha2::{Digest, Sha256};
+
     SourceIdentity {
         revision: PINNED_REVISION,
         sha256: PINNED_SHA256,
+        documentation_additions: DocumentationSource {
+            path: DOCUMENTATION_ADDITIONS_PATH,
+            sha256: format!("{:x}", Sha256::digest(additions_bytes)),
+        },
     }
+}
+
+/// Reconciles later documented routes without inflating the frozen inventory.
+fn validate_documented_routes(
+    pinned: &[OperationContract],
+    supplemented: &Value,
+    documented: &[DocumentedOperation],
+) -> Result<()> {
+    let pinned_routes = pinned
+        .iter()
+        .map(|operation| operation_route(&operation.method, &operation.path))
+        .collect::<BTreeSet<_>>();
+    let pinned_exact_routes = pinned
+        .iter()
+        .map(|operation| {
+            (
+                operation.method.to_ascii_uppercase(),
+                operation.path.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let pinned_ids = pinned
+        .iter()
+        .filter_map(|operation| operation.operation_id.as_deref())
+        .collect::<BTreeSet<_>>();
+    let mut documented_routes = BTreeSet::new();
+    for operation in documented {
+        let route = operation_route(&operation.method, &operation.path);
+        if pinned_routes.contains(&route)
+            || pinned_ids.contains(operation.id.as_str())
+            || !documented_routes.insert(route)
+        {
+            return Err(Error::message(format!(
+                "documented operation `{}` duplicates an inventoried operation",
+                operation.id
+            )));
+        }
+    }
+
+    let mut added_routes = BTreeSet::new();
+    for (path, path_item) in object_at(supplemented, "/paths")? {
+        let path_item = path_item.as_object().ok_or_else(|| {
+            Error::message(format!("documentation path `{path}` must be an object"))
+        })?;
+        for method in HTTP_METHODS {
+            let Some(operation) = path_item.get(method) else {
+                continue;
+            };
+            if !operation.is_object() {
+                return Err(Error::message(format!(
+                    "documentation operation `{method} {path}` must be an object"
+                )));
+            }
+            let route = operation_route(method, path);
+            if pinned_exact_routes.contains(&(method.to_ascii_uppercase(), path.clone())) {
+                continue;
+            }
+            if pinned_routes.contains(&route) || !added_routes.insert(route) {
+                return Err(Error::message(format!(
+                    "duplicate documentation route `{method} {path}`"
+                )));
+            }
+        }
+    }
+    if added_routes != documented_routes {
+        return Err(Error::message(
+            "documentation additions and documented operation registry contain different routes",
+        ));
+    }
+    Ok(())
+}
+
+fn operation_route(method: &str, path: &str) -> (String, String) {
+    let normalized_path = path
+        .split('/')
+        .map(|segment| {
+            if segment.starts_with('{') && segment.ends_with('}') {
+                "{}"
+            } else {
+                segment
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    (method.to_ascii_uppercase(), normalized_path)
 }
 
 fn artifact(path: &str, value: &impl Serialize) -> Result<RenderedArtifact> {
@@ -321,6 +493,7 @@ fn artifact(path: &str, value: &impl Serialize) -> Result<RenderedArtifact> {
 fn build_operations(
     document: &Value,
     implementation_registry: &BTreeMap<String, ImplementationStatus>,
+    source: &SourceIdentity,
 ) -> Result<OperationsArtifact> {
     let client_operations = collect_operations(document, "/paths", false, implementation_registry)?;
     let webhook_operations =
@@ -377,7 +550,7 @@ fn build_operations(
 
     Ok(OperationsArtifact {
         schema_version: 1,
-        source: source_identity(),
+        source: source.clone(),
         counts: OperationCounts {
             client: client_operations.len(),
             webhook: webhook_operations.len(),
@@ -885,7 +1058,7 @@ fn initial_feature(path: &str, webhook: bool, lifecycle: &str) -> &'static str {
     {
         "legacy-assistants"
     } else if path == "/videos" || path.starts_with("/videos/") {
-        "legacy-video"
+        "legacy-videos"
     } else if path == "/organization"
         || path.starts_with("/organization/")
         || path.starts_with("/projects/")
@@ -992,7 +1165,10 @@ fn method_rank(method: &str) -> usize {
         .unwrap_or(HTTP_METHODS.len())
 }
 
-fn build_discriminators(document: &Value) -> Result<DiscriminatorsArtifact> {
+fn build_discriminators(
+    document: &Value,
+    source: &SourceIdentity,
+) -> Result<DiscriminatorsArtifact> {
     let schemas = object_at(document, "/components/schemas")?;
     let mut entries = Vec::new();
     for (schema_name, schema) in schemas {
@@ -1057,13 +1233,13 @@ fn build_discriminators(document: &Value) -> Result<DiscriminatorsArtifact> {
 
     Ok(DiscriminatorsArtifact {
         schema_version: 1,
-        source: source_identity(),
+        source: source.clone(),
         count: entries.len(),
         entries,
     })
 }
 
-fn build_nullability(document: &Value) -> Result<NullabilityArtifact> {
+fn build_nullability(document: &Value, source: &SourceIdentity) -> Result<NullabilityArtifact> {
     let schemas = object_at(document, "/components/schemas")?;
     let mut entries = Vec::new();
     let mut counts = BTreeMap::new();
@@ -1089,7 +1265,7 @@ fn build_nullability(document: &Value) -> Result<NullabilityArtifact> {
 
     Ok(NullabilityArtifact {
         schema_version: 1,
-        source: source_identity(),
+        source: source.clone(),
         count: entries.len(),
         counts_by_encoding: counts,
         entries,
@@ -1136,7 +1312,7 @@ fn is_null_schema(node: &Value) -> bool {
             .is_some_and(|values| values.len() == 1 && values[0].is_null())
 }
 
-fn build_schema_ir(document: &Value) -> Result<SchemaIrArtifact> {
+fn build_schema_ir(document: &Value, source: &SourceIdentity) -> Result<SchemaIrArtifact> {
     let schemas = object_at(document, "/components/schemas")?;
     let mut lowered = Vec::new();
     let mut selected_names = BTreeSet::new();
@@ -1168,7 +1344,7 @@ fn build_schema_ir(document: &Value) -> Result<SchemaIrArtifact> {
 
     Ok(SchemaIrArtifact {
         schema_version: 1,
-        source: source_identity(),
+        source: source.clone(),
         selection: "tagged unions, event streams, and high-complexity proof schemas; references remain local and unresolved",
         count: lowered.len(),
         schemas: lowered,
@@ -1531,6 +1707,160 @@ mod tests {
     };
 
     #[test]
+    fn documentation_additions_reject_overwrites_and_unverified_sources()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let original = json!({"paths":{},"components":{"schemas":{"Existing":{"type":"string"}}}});
+        let entry = json!({"target":"/paths/~1safety~1alerts~1{id}","source":"https://developers.openai.com/api/reference/resources/safety/subresources/alerts/methods/retrieve","value":{"get":{"operationId":"retrieveSafetyAlert"}}});
+        let additions = json!({"schema_version":1,"additions":[entry.clone()]});
+        let mut document = original.clone();
+        super::apply_documentation_additions(&mut document, &additions)?;
+        assert!(
+            document
+                .pointer("/paths/~1safety~1alerts~1{id}/get")
+                .is_some()
+        );
+        assert!(super::apply_documentation_additions(&mut document, &additions).is_err());
+        let mut overwrite = entry.clone();
+        overwrite["target"] = json!("/components/schemas/Existing");
+        assert!(
+            super::apply_documentation_additions(
+                &mut original.clone(),
+                &json!({"schema_version":1,"additions":[overwrite]})
+            )
+            .is_err()
+        );
+        let mut unverified = entry;
+        unverified["source"] = json!("https://example.com/unreviewed");
+        assert!(
+            super::apply_documentation_additions(
+                &mut original.clone(),
+                &json!({"schema_version":1,"additions":[unverified]})
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generation_reads_runtime_supplement_and_keeps_the_pin_separate()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use sha2::{Digest, Sha256};
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        struct TestDirectory(std::path::PathBuf);
+        impl Drop for TestDirectory {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .ok_or("repository root")?;
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let temporary = TestDirectory(std::env::temp_dir().join(format!(
+            "openai-rs-contracts-{}-{nonce}",
+            std::process::id()
+        )));
+        for relative in [
+            crate::spec::SNAPSHOT_PATH,
+            super::IMPLEMENTATION_PATH,
+            super::DOCUMENTATION_ADDITIONS_PATH,
+        ] {
+            let destination = temporary.0.join(relative);
+            fs::create_dir_all(destination.parent().ok_or("input parent")?)?;
+            fs::copy(repository.join(relative), &destination)?;
+        }
+        let first = super::render(&temporary.0)?;
+        let supplement_path = temporary.0.join(super::DOCUMENTATION_ADDITIONS_PATH);
+        let mut changed_bytes = fs::read(&supplement_path)?;
+        changed_bytes.push(b'\n');
+        fs::write(&supplement_path, &changed_bytes)?;
+        let expected_hash = format!("{:x}", Sha256::digest(&changed_bytes));
+        let second = super::render(&temporary.0)?;
+        for (before, after) in first.iter().zip(&second) {
+            let before: Value = serde_json::from_slice(&before.bytes)?;
+            let after: Value = serde_json::from_slice(&after.bytes)?;
+            let pointer = "/source/documentation_additions/sha256";
+            assert_ne!(before.pointer(pointer), after.pointer(pointer));
+            assert_eq!(after.pointer(pointer), Some(&json!(expected_hash)));
+        }
+        let operations = second
+            .iter()
+            .find(|artifact| artifact.relative_path == std::path::Path::new(super::OPERATIONS_PATH))
+            .ok_or("operations artifact")?;
+        let operations: Value = serde_json::from_slice(&operations.bytes)?;
+        assert_eq!(operations.pointer("/counts/client"), Some(&json!(288)));
+        assert_eq!(operations.pointer("/counts/webhook"), Some(&json!(18)));
+        let pinned = operations["client_operations"]
+            .as_array()
+            .ok_or("client operations")?;
+        assert!(
+            !pinned
+                .iter()
+                .any(|operation| operation["path"] == "/safety/alerts/{id}")
+        );
+        let documented = operations["documented_operations"]
+            .as_array()
+            .ok_or("documented operations")?;
+        assert_eq!(documented.len(), 1);
+        assert_eq!(documented[0]["path"], "/safety/alerts/{id}");
+        Ok(())
+    }
+
+    #[test]
+    fn documented_routes_reject_duplicates_missing_entries_and_pin_aliases()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let operation: super::DocumentedOperation = serde_json::from_value(json!({
+            "id": "safety.alerts.retrieve",
+            "method": "GET",
+            "path": "/safety/alerts/{id}",
+            "feature": "client",
+            "source_url": "https://developers.openai.com/api/reference/resources/safety",
+            "source_sha256": "a".repeat(64),
+            "reviewed_at": "2026-09-17",
+            "units": ["SafetyAlert"],
+            "tests": ["retrieve_alert"]
+        }))?;
+        let document = json!({"paths": {"/safety/alerts/{id}": {"get": {}}}});
+        super::validate_documented_routes(&[], &document, std::slice::from_ref(&operation))?;
+        assert!(super::validate_documented_routes(&[], &document, &[]).is_err());
+        assert!(
+            super::validate_documented_routes(
+                &[],
+                &json!({"paths": {}}),
+                std::slice::from_ref(&operation)
+            )
+            .is_err()
+        );
+        let mut alias = operation.clone();
+        alias.id = "another.local.label".to_owned();
+        alias.path = "/safety/alerts/{alert_id}".to_owned();
+        assert!(
+            super::validate_documented_routes(&[], &document, &[operation.clone(), alias]).is_err()
+        );
+
+        let pinned_document = json!({"paths": {
+            "/safety/alerts/{id}": {"get": {
+                "operationId": "getSafetyAlert",
+                "responses": {"200": {"description": "A safety alert"}}
+            }}
+        }});
+        let pinned = super::collect_operations(
+            &pinned_document,
+            "/paths",
+            false,
+            &std::collections::BTreeMap::new(),
+        )?;
+        assert!(super::validate_documented_routes(&pinned, &document, &[operation]).is_err());
+        let mut supplemented = pinned_document;
+        supplemented["paths"]["/safety/alerts/{alert_id}"] = json!({"get": {}});
+        assert!(super::validate_documented_routes(&pinned, &supplemented, &[]).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn classifies_success_statuses() {
         assert!(is_success_status("200"));
         assert!(is_success_status("2XX"));
@@ -1622,7 +1952,7 @@ mod tests {
             .ok_or("repo root")?;
         let snapshot = std::fs::read(repo_root.join(crate::spec::SNAPSHOT_PATH))?;
         let document: Value = serde_json::from_slice(&snapshot)?;
-        let ir = super::build_schema_ir(&document)?;
+        let ir = super::build_schema_ir(&document, &super::source_identity(b""))?;
 
         let known = [
             ("PromptCacheModeEnum", &["implicit", "explicit"][..]),

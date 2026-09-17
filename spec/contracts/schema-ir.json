@@ -2,10 +2,14 @@
   "schema_version": 1,
   "source": {
     "revision": "690521b1753dce0c6d6b275f583d22537679cff9",
-    "sha256": "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899"
+    "sha256": "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899",
+    "documentation_additions": {
+      "path": "spec/contracts/documentation-additions.json",
+      "sha256": "05cb1933dbe66fc6814d354ba1320e9c4275c35cda502aee787c02cee5866a75"
+    }
   },
   "selection": "tagged unions, event streams, and high-complexity proof schemas; references remain local and unresolved",
-  "count": 332,
+  "count": 333,
   "schemas": [
     {
       "name": "Annotation",
@@ -2920,7 +2924,7 @@
       "name": "BetaCustomToolParam",
       "pointer": "#/components/schemas/BetaCustomToolParam",
       "metrics": {
-        "node_count": 12,
+        "node_count": 13,
         "reference_count": 3,
         "nullable_node_count": 2,
         "one_of_branch_count": 2,
@@ -3011,6 +3015,25 @@
                 "unmodeled_keywords": []
               }
             ],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          "async": {
+            "kind": "scalar",
+            "types": [
+              "boolean"
+            ],
+            "reference": null,
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
             "all_of": [],
             "discriminator": null,
             "constraints": {},
@@ -23222,7 +23245,7 @@
       "name": "CustomToolParam",
       "pointer": "#/components/schemas/CustomToolParam",
       "metrics": {
-        "node_count": 12,
+        "node_count": 13,
         "reference_count": 3,
         "nullable_node_count": 2,
         "one_of_branch_count": 2,
@@ -23313,6 +23336,25 @@
                 "unmodeled_keywords": []
               }
             ],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          "async": {
+            "kind": "scalar",
+            "types": [
+              "boolean"
+            ],
+            "reference": null,
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
             "all_of": [],
             "discriminator": null,
             "constraints": {},
@@ -28608,6 +28650,108 @@
       }
     },
     {
+      "name": "PromptCacheDiagnostics",
+      "pointer": "#/components/schemas/PromptCacheDiagnostics",
+      "metrics": {
+        "node_count": 5,
+        "reference_count": 4,
+        "nullable_node_count": 0,
+        "one_of_branch_count": 4,
+        "any_of_branch_count": 0,
+        "all_of_branch_count": 0,
+        "max_inline_depth": 1
+      },
+      "node": {
+        "kind": "union",
+        "types": [],
+        "reference": null,
+        "nullable": false,
+        "const_value": null,
+        "enum_values": [],
+        "required": [],
+        "properties": {},
+        "items": null,
+        "one_of": [
+          {
+            "kind": "reference",
+            "types": [],
+            "reference": "#/components/schemas/PromptCacheMiss",
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          {
+            "kind": "reference",
+            "types": [],
+            "reference": "#/components/schemas/PromptCacheHit",
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          {
+            "kind": "reference",
+            "types": [],
+            "reference": "#/components/schemas/ComparisonResponseNotFound",
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
+          {
+            "kind": "reference",
+            "types": [],
+            "reference": "#/components/schemas/PromptCacheUnavailable",
+            "nullable": false,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          }
+        ],
+        "any_of": [],
+        "all_of": [],
+        "discriminator": {
+          "property_name": "type",
+          "mapping": {}
+        },
+        "constraints": {},
+        "unmodeled_keywords": []
+      }
+    },
+    {
       "name": "PromptCacheModeEnum",
       "pointer": "#/components/schemas/PromptCacheModeEnum",
       "metrics": {
@@ -28646,13 +28790,13 @@
       "name": "PromptCacheOptions",
       "pointer": "#/components/schemas/PromptCacheOptions",
       "metrics": {
-        "node_count": 3,
+        "node_count": 6,
         "reference_count": 2,
-        "nullable_node_count": 0,
+        "nullable_node_count": 2,
         "one_of_branch_count": 0,
-        "any_of_branch_count": 0,
+        "any_of_branch_count": 2,
         "all_of_branch_count": 0,
-        "max_inline_depth": 1
+        "max_inline_depth": 2
       },
       "node": {
         "kind": "object",
@@ -28668,6 +28812,62 @@
           "mode"
         ],
         "properties": {
+          "comparison_response_id": {
+            "kind": "union",
+            "types": [],
+            "reference": null,
+            "nullable": true,
+            "const_value": null,
+            "enum_values": [],
+            "required": [],
+            "properties": {},
+            "items": null,
+            "one_of": [],
+            "any_of": [
+              {
+                "kind": "scalar",
+                "types": [
+                  "string"
+                ],
+                "reference": null,
+                "nullable": false,
+                "const_value": null,
+                "enum_values": [],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {},
+                "unmodeled_keywords": []
+              },
+              {
+                "kind": "scalar",
+                "types": [
+                  "null"
+                ],
+                "reference": null,
+                "nullable": true,
+                "const_value": null,
+                "enum_values": [],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {},
+                "unmodeled_keywords": []
+              }
+            ],
+            "all_of": [],
+            "discriminator": null,
+            "constraints": {},
+            "unmodeled_keywords": []
+          },
           "mode": {
             "kind": "reference",
             "types": [],
@@ -55406,8 +55606,8 @@
       "name": "Response",
       "pointer": "#/components/schemas/Response",
       "metrics": {
-        "node_count": 46,
-        "reference_count": 11,
+        "node_count": 47,
+        "reference_count": 12,
         "nullable_node_count": 18,
         "one_of_branch_count": 2,
         "any_of_branch_count": 18,
@@ -56068,6 +56268,23 @@
                   "boolean"
                 ],
                 "reference": null,
+                "nullable": false,
+                "const_value": null,
+                "enum_values": [],
+                "required": [],
+                "properties": {},
+                "items": null,
+                "one_of": [],
+                "any_of": [],
+                "all_of": [],
+                "discriminator": null,
+                "constraints": {},
+                "unmodeled_keywords": []
+              },
+              "prompt_cache_diagnostics": {
+                "kind": "reference",
+                "types": [],
+                "reference": "#/components/schemas/PromptCacheDiagnostics",
                 "nullable": false,
                 "const_value": null,
                 "enum_values": [],

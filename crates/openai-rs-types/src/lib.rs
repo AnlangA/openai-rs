@@ -87,7 +87,7 @@ pub use evals::*;
 pub use files::*;
 pub use kernel::{ExtraFields, ExtraFieldsConflict, Nullable, Omittable};
 pub use responses::*;
-pub use safety::{SafetyAlert, SafetyAlertErrorType};
+pub use safety::{SafetyAlert, SafetyAlertErrorType, SafetyAlertObject};
 pub use scalar::{
     BatchId, FileId, FineTuningJobId, JsonText, ModelId, ResponseId, UploadId, VectorStoreId,
 };
@@ -114,3 +114,6 @@ pub use structured::{
     StructuredError, StructuredOutput, ToolContext, ToolExecutionError, ToolHandler, ToolRegistry,
     ToolSpec, TypedFunction, normalize_strict_schema,
 };
+
+#[cfg(feature = "legacy-videos")]
+pub mod videos;

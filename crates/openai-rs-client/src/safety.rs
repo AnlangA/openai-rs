@@ -9,7 +9,7 @@ use crate::{
     transport::PathSegment,
 };
 use http::{Method, StatusCode};
-pub use openai_rs_types::safety::{SafetyAlert, SafetyAlertErrorType};
+pub use openai_rs_types::safety::{SafetyAlert, SafetyAlertErrorType, SafetyAlertObject};
 
 /// Project-scoped safety resources.
 #[derive(Clone, Debug)]
@@ -24,9 +24,7 @@ impl Safety {
     /// Safety alerts for the authenticated project.
     #[must_use]
     pub fn alerts(&self) -> SafetyAlerts {
-        SafetyAlerts {
-            client: self.client.clone(),
-        }
+        SafetyAlerts::new(self.client.clone())
     }
 }
 
@@ -37,6 +35,10 @@ pub struct SafetyAlerts {
 }
 
 impl SafetyAlerts {
+    pub(crate) const fn new(client: Client) -> Self {
+        Self { client }
+    }
+
     /// Retrieves a project alert using the webhook's `data.id`, not its event ID.
     /// The project credential must have `api.safety.alerts.read` permission.
     ///
@@ -168,6 +170,29 @@ mod tests {
         assert_eq!(error.code(), Some("safety_alert_not_found"));
         assert_eq!(error.meta().request_id(), Some("req_retrieve"));
         captured.await.expect("request");
+    }
+
+    #[tokio::test]
+    async fn direct_alerts_accessor_preserves_the_project_request_contract() {
+        let (client, captured) = crate::test_support::serve_json(json!({
+            "id":"alert_1","created_at":1787659200.25,"object":"safety.alert",
+            "error_type":"potentially_unintended_data_access","model":"gpt-6-astra",
+            "reason":null,"request_id":"req_affected","request_paused":false,
+            "response_id":"resp_1"
+        }))
+        .await;
+        let alert = client
+            .safety_alerts()
+            .retrieve("alert/a?b#c%")
+            .await
+            .expect("retrieve through the convenience accessor");
+        assert_eq!(alert.created_at(), 1787659200.25);
+        let request = captured.await.expect("request");
+        assert_eq!(request.method, Method::GET);
+        assert_eq!(request.uri, "/v1/safety/alerts/alert%2Fa%3Fb%23c%25");
+        assert!(request.body.is_empty());
+        assert_eq!(request.headers["authorization"], "Bearer test-contract-key");
+        assert!(!request.headers.contains_key("openai-beta"));
     }
 
     #[tokio::test]

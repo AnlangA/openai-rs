@@ -11,6 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
+legacy-videos = []
 default = ["structured-output"]
 structured-output = ["dep:schemars"]
 realtime = []

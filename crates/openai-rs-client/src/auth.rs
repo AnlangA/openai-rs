@@ -87,6 +87,7 @@ impl AuthProvider {
     }
 
     /// Authentication and the HTTP attempt share the caller's remaining budget.
+    /// Returns the budget remaining after authentication, never a stale duration.
     pub(crate) async fn authorization_with_budget(
         &self,
         started: Instant,

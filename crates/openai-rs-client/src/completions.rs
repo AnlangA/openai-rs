@@ -116,12 +116,9 @@ impl CompletionEventStream {
                         return;
                     }
                 };
-                let dispatches = match decoder.push(&chunk) {
-                    Ok(dispatches) => dispatches,
-                    Err(source) => {
-                        yield Err(sse_error(source, &stream_meta));
-                        return;
-                    }
+                let (dispatches, chunk_error) = match decoder.push_with_flushed(&chunk) {
+                    Ok(dispatches) => (dispatches, None),
+                    Err((source, flushed)) => (flushed, Some(source)),
                 };
                 for dispatch in dispatches {
                     match dispatch {
@@ -142,6 +139,10 @@ impl CompletionEventStream {
                             return;
                         }
                     }
+                }
+                if let Some(source) = chunk_error {
+                    yield Err(sse_error(source, &stream_meta));
+                    return;
                 }
                 if decoder.state() != SseStreamState::Active {
                     return;
@@ -438,6 +439,34 @@ mod tests {
         assert_eq!(body["suffix"], "!");
         assert_eq!(body["best_of"], 2);
         assert!(body.get("stream").is_none());
+    }
+
+    #[tokio::test]
+    async fn malformed_tail_preserves_prior_chunk_before_reporting_error() {
+        let mut body = format!("data: {}\n\n", completion_json("hello", Value::Null)).into_bytes();
+        body.extend_from_slice(b"data: \xff\n\n");
+        let response = http::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .body(reqwest::Body::from(body))
+            .expect("build SSE response");
+        let mut stream =
+            CompletionEventStream::from_response(response.into(), SseLimits::default())
+                .expect("stream handshake");
+        let chunk = stream
+            .next()
+            .await
+            .expect("prior chunk")
+            .expect("valid chunk");
+        assert_eq!(chunk.choices()[0].text(), "hello");
+        assert!(matches!(
+            stream.next().await.expect("framing error"),
+            Err(Error::Sse {
+                source: crate::sse::SseDecodeError::InvalidUtf8 { .. },
+                ..
+            })
+        ));
+        assert!(stream.next().await.is_none());
     }
 
     #[tokio::test]

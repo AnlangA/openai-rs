@@ -5121,3 +5121,32 @@ until a decision is recorded here and its fixtures pass.
 - Decision: translate terminal messages, test fixtures, historical review reports, and remaining audit references. Preserve Unicode test coverage with English text, accented characters, and symbols. Document public fields, variants, methods, aliases, and shared macros; add crate-level examples and explicit error/panic sections. Enforce `missing_docs`, `doc_markdown`, `missing_errors_doc`, and `missing_panics_doc` through workspace lints. Product names remain ordinary prose through the Clippy documentation identifier allowlist.
 - Feature boundaries: documentation must build both with all features and with each published crate's default features disabled. References to optional APIs state the required feature without creating unresolved links in minimal builds.
 - Verification: strict Rustdoc builds, documentation examples, workspace tests, Clippy, project-text scanning (including decoded JSON and Unicode escapes), terminal smoke checks, and the existing pinned-artifact verifier. Pinned upstream snapshots are unchanged.
+
+## D0295 — Current official documentation supplements the frozen OpenAPI
+
+- Status: accepted
+- Reviewed: 2026-09-05
+- Scope: service-account key expiry, Responses diagnostics and async tool/call fields, Safety Alerts, and Videos
+- Sources: official reference URLs embedded per entry in `spec/contracts/documentation-additions.json`; https://developers.openai.com/api/docs/deprecations; https://developers.openai.com/api/reference/resources/videos/methods/create
+- Decision: retain the immutable 2026-08-29 OpenAPI bytes and apply a separately reviewed, hash-identified, additions-only supplement before generating contracts. New path and schema members cannot overwrite the pin. Keep Safety Alerts retrieval in the separately sourced documented-operation registry, preserve service-account key expiry, and expose prompt-cache diagnostics, comparison ids, safety error details, and async tool/call flags. Missing/null/value distinctions and future fields remain intact. Under the user's explicit request to fill missing official support, supersede D0013 for Videos only: all 10 operations are callable behind default-off `legacy-videos` until the announced 2026-09-24 shutdown; already retired Assistants and conflicting image variation remain non-callable.
+- Impact: 288 pinned client operations, with 264 verified, 23 omitted, and 1 quarantined; one separately documented Safety Alerts operation brings implemented client coverage to 265. The 18 webhook receiver operations remain unchanged. Actual account and service availability remain server decisions.
+- Tests: current official-schema regression fixtures, Safety Alerts wire tests, all ten Videos operations, upload/reference encoding, and admin expiry wire tests.
+
+## D0296 — Credential acquisition shares the logical request deadline
+
+- Status: accepted
+- Reviewed: 2026-09-05
+- Scope: WIF credential acquisition and refresh, JSON/multipart/download, Realtime SDP, GA/beta WebSocket handshakes
+- Sources: the public `ClientBuilder::request_timeout` total-budget contract and a stalled subject-provider reproduction.
+- Decision: bound authentication by the caller's remaining budget and recompute the HTTP/handshake allowance after it completes. Each WebSocket attempt includes auth within its existing connect budget. Independently bound the detached WIF refresh by its construction-time request budget, clearing the singleflight slot and waking waiters on timeout even after the initiating caller has been canceled. Do not convert the SDK's documented total request budget into a per-I/O timeout.
+- Impact: a stalled provider can no longer make a request wait indefinitely or permanently occupy the refresh slot. `WorkloadIdentityError::DeadlineExceeded` classifies internal refresh expiry; waiting callers receive `Error::DeadlineExceeded`.
+- Tests: stalled-provider coverage for all five HTTP lanes and refresh-slot recovery following caller cancellation, plus existing concurrent refresh/retry and WebSocket tests.
+
+## D0297 — Separate pinned operation counts from reviewed schema additions
+
+- Status: accepted
+- Reviewed: 2026-09-17
+- Scope: contract generation, documented route reconciliation, and source fingerprints
+- Decision: lower the 288 pinned client operations before applying documentation additions. Keep later routes exclusively in `documented_operations`, reject duplicate or unregistered routes across these inventories, and apply the additions only to reviewed schema projections. Documented route labels are local identities and never asserted upstream operation IDs. Derive every supplement fingerprint from the actual bytes read for that generation run, rather than a compile-time embedded copy.
+- Impact: Safety Alerts is counted once and its `created_at` schema accepts fractional timestamps, consistent with the reviewed DTO. Schema supplements remain additions-only and preserve the immutable upstream snapshot.
+- Tests: generator regressions cover inventory separation, duplicate/unregistered documented routes, and runtime supplement fingerprints.

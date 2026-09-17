@@ -2,9 +2,13 @@
   "schema_version": 1,
   "source": {
     "revision": "690521b1753dce0c6d6b275f583d22537679cff9",
-    "sha256": "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899"
+    "sha256": "5be8cde8490bd8422e1b3502b80e858e7c162ec3e01b187b633577dab6d0c899",
+    "documentation_additions": {
+      "path": "spec/contracts/documentation-additions.json",
+      "sha256": "05cb1933dbe66fc6814d354ba1320e9c4275c35cda502aee787c02cee5866a75"
+    }
   },
-  "count": 107,
+  "count": 108,
   "entries": [
     {
       "schema": "Annotation",
@@ -1431,6 +1435,20 @@
       "branch_refs": [
         "#/components/schemas/OutputTextContent",
         "#/components/schemas/RefusalContent"
+      ]
+    },
+    {
+      "schema": "PromptCacheDiagnostics",
+      "pointer": "#/components/schemas/PromptCacheDiagnostics",
+      "property_name": "type",
+      "mapping": {},
+      "one_of_branches": 4,
+      "any_of_branches": 0,
+      "branch_refs": [
+        "#/components/schemas/ComparisonResponseNotFound",
+        "#/components/schemas/PromptCacheHit",
+        "#/components/schemas/PromptCacheMiss",
+        "#/components/schemas/PromptCacheUnavailable"
       ]
     },
     {
