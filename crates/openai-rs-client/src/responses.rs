@@ -887,9 +887,16 @@ mod tests {
         assert_eq!(usage.input_tokens(), 31);
         assert_eq!(usage.output_tokens(), 39);
         assert_eq!(usage.total_tokens(), 70);
-        assert_eq!(usage.input_tokens_details().cached_tokens(), 0);
-        assert_eq!(usage.input_tokens_details().cache_write_tokens(), None);
-        assert_eq!(usage.output_tokens_details().reasoning_tokens(), 29);
+        let input_details = usage.input_tokens_details().expect("input token details");
+        assert_eq!(input_details.cached_tokens(), 0);
+        assert_eq!(input_details.cache_write_tokens(), None);
+        assert_eq!(
+            usage
+                .output_tokens_details()
+                .expect("output token details")
+                .reasoning_tokens(),
+            29
+        );
         assert_eq!(
             serde_json::to_value(response.body()).expect("response round trip"),
             original
@@ -910,6 +917,175 @@ mod tests {
         let request: Value = serde_json::from_slice(&second.body).expect("replayed input");
         assert_eq!(request["model"], "deepseek-flash");
         assert_eq!(request["store"], false);
+        assert_eq!(request["input"][0]["content"], "hi");
+        assert_eq!(request["input"][1], original["output"][0]);
+        assert_eq!(request["input"][2], original["output"][1]);
+        assert_eq!(request["input"][3]["content"], "Continue.");
+    }
+
+    #[tokio::test]
+    async fn glm_minimal_response_decodes_and_replays_history() {
+        // Match the minimal envelope and totals-only usage observed from GLM.
+        let original = json!({
+            "id": "resp_glm",
+            "object": "response",
+            "created_at": 1_789_899_978,
+            "model": "glm-5.3-flash",
+            "status": "completed",
+            "output": [
+                {"type": "reasoning", "id": "rs_glm", "summary": []},
+                {
+                    "type": "message",
+                    "id": "msg_glm",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "Hi! How can I help you today?",
+                        "annotations": [],
+                        "logprobs": []
+                    }]
+                }
+            ],
+            "usage": {"input_tokens": 13, "output_tokens": 264, "total_tokens": 277}
+        });
+        let body = serde_json::to_string(&original).expect("synthetic GLM response");
+        let (base_url, mut captured) =
+            serve_sequence(vec![(StatusCode::OK, body.clone()), (StatusCode::OK, body)]).await;
+        let client = client(base_url);
+        let first_input: openai_rs_types::responses::ResponseInputItem =
+            openai_rs_types::responses::InputMessage::user("hi").into();
+        let response = client
+            .responses()
+            .create(
+                CreateResponseRequest::new("glm-5.3-flash", vec![first_input.clone()])
+                    .store(false)
+                    .include(
+                        openai_rs_types::responses::ResponseIncludable::ReasoningEncryptedContent,
+                    ),
+            )
+            .await
+            .expect("minimal GLM response");
+        assert_eq!(response.output_text(), "Hi! How can I help you today?");
+        let usage = response.usage().expect("usage preserved");
+        assert_eq!(usage.input_tokens(), 13);
+        assert_eq!(usage.output_tokens(), 264);
+        assert_eq!(usage.total_tokens(), 277);
+        assert_eq!(usage.input_tokens_details(), None);
+        assert_eq!(usage.output_tokens_details(), None);
+        assert_eq!(
+            serde_json::to_value(response.body()).expect("response round trip"),
+            original,
+            "omitted token details stay absent"
+        );
+
+        let mut history = vec![first_input];
+        history.extend(response.to_input_items());
+        history.push(openai_rs_types::responses::InputMessage::user("Continue.").into());
+        let next = client
+            .responses()
+            .create(CreateResponseRequest::new("glm-5.3-flash", history).store(false))
+            .await
+            .expect("second conversation turn");
+        assert_eq!(next.output_text(), "Hi! How can I help you today?");
+        let first = captured.recv().await.expect("first request");
+        let second = captured.recv().await.expect("second request");
+        assert_eq!(first.path_and_query, "/v1/responses");
+        assert_eq!(second.path_and_query, "/v1/responses");
+        let request: Value = serde_json::from_slice(&second.body).expect("replayed input");
+        assert_eq!(request["model"], "glm-5.3-flash");
+        assert_eq!(request["store"], false);
+        assert_eq!(request["input"].as_array().expect("input array").len(), 4);
+        assert_eq!(request["input"][0]["content"], "hi");
+        assert_eq!(request["input"][1], original["output"][0]);
+        assert_eq!(request["input"][2], original["output"][1]);
+        assert_eq!(request["input"][3]["content"], "Continue.");
+    }
+
+    #[tokio::test]
+    async fn step_response_with_null_output_fields_decodes_and_replays_history() {
+        use openai_rs_types::responses::{
+            InputMessage, OutputContent, ResponseIncludable, ResponseInputItem, ResponseOutputItem,
+        };
+
+        const STEP_RESPONSE: &str = include_str!("../tests/fixtures/step_response.json");
+        let original: Value = serde_json::from_str(STEP_RESPONSE).expect("synthetic Step response");
+        let (base_url, mut captured) = serve_sequence(vec![
+            (StatusCode::OK, STEP_RESPONSE.to_owned()),
+            (StatusCode::OK, STEP_RESPONSE.to_owned()),
+        ])
+        .await;
+        let client = client(base_url);
+        let first_input: ResponseInputItem = InputMessage::user("hi").into();
+        let response = client
+            .responses()
+            .create(
+                CreateResponseRequest::new("step-5-preview", vec![first_input.clone()])
+                    .store(false)
+                    .include(ResponseIncludable::ReasoningEncryptedContent),
+            )
+            .await
+            .expect("Step response with null reasoning status and text logprobs");
+
+        assert_eq!(response.output_text(), "Hello! How can I help you today?");
+        let usage = response.usage().expect("usage preserved");
+        assert_eq!(usage.input_tokens(), 13);
+        assert_eq!(usage.output_tokens(), 123);
+        assert_eq!(usage.total_tokens(), 136);
+        let input_details = usage.input_tokens_details().expect("input token details");
+        assert_eq!(input_details.cached_tokens(), 0);
+        assert_eq!(input_details.cache_write_tokens(), None);
+        assert_eq!(
+            usage
+                .output_tokens_details()
+                .expect("output token details")
+                .reasoning_tokens(),
+            110
+        );
+        let ResponseOutputItem::Reasoning(reasoning) = &response.output()[0] else {
+            panic!("reasoning item must remain typed");
+        };
+        assert_eq!(reasoning.encrypted_content_ref(), None);
+        assert_eq!(
+            reasoning.content_ref().expect("reasoning text")[0].text(),
+            "Respond to the greeting."
+        );
+        let ResponseOutputItem::Message(message) = &response.output()[1] else {
+            panic!("assistant message must remain typed");
+        };
+        let OutputContent::Text(text) = &message.content()[0] else {
+            panic!("output text must remain typed");
+        };
+        assert!(text.logprobs().is_empty());
+        assert_eq!(
+            serde_json::to_value(response.body()).expect("response round trip"),
+            original,
+            "null status and logprobs, token details, and provider fields stay intact"
+        );
+
+        let replay = response.to_input_items();
+        assert_eq!(
+            serde_json::to_value(&replay).expect("replay items"),
+            original["output"],
+            "input conversion preserves null output fields"
+        );
+        let mut history = vec![first_input];
+        history.extend(replay);
+        history.push(InputMessage::user("Continue.").into());
+        let next = client
+            .responses()
+            .create(CreateResponseRequest::new("step-5-preview", history).store(false))
+            .await
+            .expect("second conversation turn");
+        assert_eq!(next.output_text(), "Hello! How can I help you today?");
+        let first = captured.recv().await.expect("first request");
+        let second = captured.recv().await.expect("second request");
+        assert_eq!(first.path_and_query, "/v1/responses");
+        assert_eq!(second.path_and_query, "/v1/responses");
+        let request: Value = serde_json::from_slice(&second.body).expect("replayed input");
+        assert_eq!(request["model"], "step-5-preview");
+        assert_eq!(request["store"], false);
+        assert_eq!(request["input"].as_array().expect("input array").len(), 4);
         assert_eq!(request["input"][0]["content"], "hi");
         assert_eq!(request["input"][1], original["output"][0]);
         assert_eq!(request["input"][2], original["output"][1]);

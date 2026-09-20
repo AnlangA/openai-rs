@@ -1,0 +1,63 @@
+{
+  "id": "resp_step_synthetic",
+  "object": "response",
+  "created_at": 1789900800,
+  "model": "step-5-preview",
+  "status": "completed",
+  "error": null,
+  "output": [
+    {
+      "content": [{ "type": "reasoning_text", "text": "Respond to the greeting." }],
+      "encrypted_content": null,
+      "status": null,
+      "id": "rs_step_synthetic",
+      "summary": [],
+      "type": "reasoning"
+    },
+    {
+      "content": [
+        {
+          "annotations": [],
+          "text": "Hello! How can I help you today?",
+          "type": "output_text",
+          "logprobs": null
+        }
+      ],
+      "role": "assistant",
+      "status": "completed",
+      "type": "message",
+      "phase": null,
+      "id": "msg_step_synthetic"
+    }
+  ],
+  "usage": {
+    "input_tokens": 13,
+    "input_tokens_details": { "cached_tokens": 0 },
+    "output_tokens": 123,
+    "output_tokens_details": { "reasoning_tokens": 110, "tool_output_tokens": 0 },
+    "total_tokens": 136
+  },
+  "incomplete_details": null,
+  "instructions": null,
+  "metadata": {},
+  "input_messages": null,
+  "output_messages": null,
+  "parallel_tool_calls": true,
+  "temperature": 1.0,
+  "tool_choice": "auto",
+  "tools": [],
+  "top_p": 1.0,
+  "background": false,
+  "max_output_tokens": 1048563,
+  "max_tool_calls": null,
+  "previous_response_id": null,
+  "prompt": null,
+  "reasoning": { "effort": null, "summary": null },
+  "service_tier": "auto",
+  "text": { "format": { "type": "text" } },
+  "top_logprobs": null,
+  "truncation": "disabled",
+  "user": null,
+  "store": false,
+  "completed_at": 1789900801
+}

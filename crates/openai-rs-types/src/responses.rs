@@ -4553,10 +4553,16 @@ pub struct OutputText {
     text: String,
     #[serde(default)]
     annotations: Vec<Annotation>,
-    #[serde(default)]
-    logprobs: Vec<LogProb>,
+    #[serde(default = "empty_output_logprobs")]
+    logprobs: Nullable<Vec<LogProb>>,
     #[serde(flatten)]
     extra: ExtraFields,
+}
+
+// Keep the existing empty-array default for omitted logprobs while preserving
+// explicit nulls reported by compatible providers such as StepFun.
+fn empty_output_logprobs() -> Nullable<Vec<LogProb>> {
+    Nullable::Value(Vec::new())
 }
 
 impl OutputText {
@@ -4567,7 +4573,7 @@ impl OutputText {
             kind: OutputTextTag::OutputText,
             text: text.into(),
             annotations: Vec::new(),
-            logprobs: Vec::new(),
+            logprobs: empty_output_logprobs(),
             extra: ExtraFields::new(),
         }
     }
@@ -4584,10 +4590,13 @@ impl OutputText {
         &self.annotations
     }
 
-    /// Returns logprobs if included.
+    /// Returns logprobs if included, or an empty slice when omitted or null.
     #[must_use]
     pub fn logprobs(&self) -> &[LogProb] {
-        &self.logprobs
+        match &self.logprobs {
+            Nullable::Value(value) => value,
+            Nullable::Null => &[],
+        }
     }
 
     /// Returns future fields retained while decoding.
@@ -7323,9 +7332,11 @@ impl OutputTokensDetails {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResponseUsage {
     input_tokens: u64,
-    input_tokens_details: InputTokensDetails,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    input_tokens_details: Omittable<InputTokensDetails>,
     output_tokens: u64,
-    output_tokens_details: OutputTokensDetails,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    output_tokens_details: Omittable<OutputTokensDetails>,
     total_tokens: u64,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     compute_units: Omittable<Nullable<u64>>,
@@ -7340,10 +7351,16 @@ impl ResponseUsage {
         self.input_tokens
     }
 
-    /// Returns the official input-token breakdown.
+    /// Returns the input-token breakdown when reported.
+    ///
+    /// OpenAI-compatible providers may omit this object. `None` preserves
+    /// that omission rather than treating unreported counts as zero.
     #[must_use]
-    pub const fn input_tokens_details(&self) -> &InputTokensDetails {
-        &self.input_tokens_details
+    pub const fn input_tokens_details(&self) -> Option<&InputTokensDetails> {
+        match &self.input_tokens_details {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 
     /// Returns total output tokens.
@@ -7352,10 +7369,16 @@ impl ResponseUsage {
         self.output_tokens
     }
 
-    /// Returns the official output-token breakdown.
+    /// Returns the output-token breakdown when reported.
+    ///
+    /// OpenAI-compatible providers may omit this object. `None` preserves
+    /// that omission rather than treating unreported counts as zero.
     #[must_use]
-    pub const fn output_tokens_details(&self) -> &OutputTokensDetails {
-        &self.output_tokens_details
+    pub const fn output_tokens_details(&self) -> Option<&OutputTokensDetails> {
+        match &self.output_tokens_details {
+            Omittable::Value(value) => Some(value),
+            Omittable::Omitted => None,
+        }
     }
 
     /// Returns input plus output tokens.
@@ -7409,19 +7432,28 @@ pub enum OutputParseError {
 pub struct Response {
     id: String,
     created_at: i64,
-    error: Nullable<ResponseError>,
-    incomplete_details: Nullable<IncompleteDetails>,
-    instructions: Nullable<ResponseInstructions>,
-    metadata: Nullable<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    error: Omittable<Nullable<ResponseError>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    incomplete_details: Omittable<Nullable<IncompleteDetails>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    instructions: Omittable<Nullable<ResponseInstructions>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    metadata: Omittable<Nullable<BTreeMap<String, String>>>,
     model: String,
     #[serde(rename = "object")]
     object: ResponseObjectTag,
     output: Vec<ResponseOutputItem>,
-    parallel_tool_calls: bool,
-    temperature: Nullable<f64>,
-    tool_choice: ToolChoice,
-    tools: Vec<ResponseTool>,
-    top_p: Nullable<f64>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    parallel_tool_calls: Omittable<bool>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    temperature: Omittable<Nullable<f64>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    tool_choice: Omittable<ToolChoice>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    tools: Omittable<Vec<ResponseTool>>,
+    #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
+    top_p: Omittable<Nullable<f64>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     status: Omittable<ResponseStatus>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
@@ -7606,12 +7638,12 @@ impl Response {
         })
     }
 
-    /// Returns details explaining why the response was incomplete.
+    /// Returns details explaining why the response was incomplete, when provided and non-null.
     #[must_use]
     pub fn incomplete_details(&self) -> Option<&IncompleteDetails> {
         match &self.incomplete_details {
-            Nullable::Value(value) => Some(value),
-            Nullable::Null => None,
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
     }
 
@@ -7632,11 +7664,11 @@ impl Response {
             return Err(OutputParseError::Incomplete(reason));
         }
         if matches!(self.status(), Some(ResponseStatus::Failed)) {
-            let error = match &self.error {
-                Nullable::Value(error) => error.clone(),
+            let error = match self.error() {
+                Some(error) => error.clone(),
                 // The pin pairs `status: "failed"` with a populated error
-                // object; keep a readable fallback for the degenerate null.
-                Nullable::Null => ResponseError {
+                // object; keep a readable fallback if it is absent or null.
+                None => ResponseError {
                     misalignment: Omittable::Omitted,
                     code: ResponseErrorCode::from_raw("failed_without_error"),
                     message: "response failed without an error payload".to_owned(),
@@ -7853,12 +7885,12 @@ impl Response {
         }
     }
 
-    /// Returns a model-generation error when non-null.
+    /// Returns a model-generation error when provided and non-null.
     #[must_use]
     pub fn error(&self) -> Option<&ResponseError> {
         match &self.error {
-            Nullable::Value(value) => Some(value),
-            Nullable::Null => None,
+            Omittable::Value(Nullable::Value(value)) => Some(value),
+            Omittable::Omitted | Omittable::Value(Nullable::Null) => None,
         }
     }
 
@@ -12207,7 +12239,7 @@ pub struct ReasoningItem {
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
     content: Omittable<Vec<ReasoningTextContent>>,
     #[serde(default, skip_serializing_if = "Omittable::is_omitted")]
-    status: Omittable<ResponseItemStatus>,
+    status: Omittable<Nullable<ResponseItemStatus>>,
     #[serde(flatten)]
     extra: ExtraFields,
 }
@@ -12285,7 +12317,7 @@ impl ReasoningItem {
     /// keeps the shared open [`ResponseItemStatus`].
     #[must_use]
     pub fn status(mut self, status: FunctionCallItemStatus) -> Self {
-        self.status = Omittable::Value(status.into());
+        self.status = Omittable::Value(Nullable::Value(status.into()));
         self
     }
 
@@ -18368,6 +18400,155 @@ mod tests {
         })
     }
 
+    fn minimal_response_value() -> Value {
+        json!({
+            "id": "resp_glm",
+            "object": "response",
+            "created_at": 1_700_000_000,
+            "model": "glm-5.3-flash",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "id": "msg_glm",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": "Hello!",
+                    "annotations": [],
+                    "logprobs": []
+                }]
+            }],
+            "usage": {"input_tokens": 13, "output_tokens": 264, "total_tokens": 277}
+        })
+    }
+
+    #[test]
+    fn response_preserves_omitted_metadata_and_configuration() {
+        let original = minimal_response_value();
+        let response: Response =
+            serde_json::from_value(original.clone()).expect("minimal compatible response");
+        assert_eq!(response.output_text(), "Hello!");
+        assert_eq!(response.error(), None);
+        assert_eq!(response.incomplete_details(), None);
+        assert_eq!(response.usage().map(ResponseUsage::total_tokens), Some(277));
+        assert_eq!(
+            serde_json::to_value(response).expect("round trip"),
+            original
+        );
+
+        for (field, values) in [
+            (
+                "error",
+                vec![
+                    json!(null),
+                    json!({"code": "server_error", "message": "Failed"}),
+                ],
+            ),
+            (
+                "incomplete_details",
+                vec![json!(null), json!({"reason": "max_output_tokens"})],
+            ),
+            ("instructions", vec![json!(null), json!("Stay concise.")]),
+            ("metadata", vec![json!(null), json!({"trace": "one"})]),
+            ("parallel_tool_calls", vec![json!(false)]),
+            ("temperature", vec![json!(null), json!(1.0)]),
+            ("tool_choice", vec![json!("auto")]),
+            ("tools", vec![json!([])]),
+            ("top_p", vec![json!(null), json!(1.0)]),
+        ] {
+            for reported in values {
+                let mut value = original.clone();
+                value[field] = reported;
+                value["future_response_field"] = json!({"kept": true});
+                let response: Response =
+                    serde_json::from_value(value.clone()).expect("reported optional field");
+                assert_eq!(serde_json::to_value(response).expect("round trip"), value);
+            }
+        }
+    }
+
+    #[test]
+    fn minimal_response_rejects_missing_core_and_malformed_reported_fields() {
+        let original = minimal_response_value();
+        for (field, malformed) in [
+            ("id", json!(42)),
+            ("object", json!("chat.completion")),
+            ("created_at", json!(1.5)),
+            ("model", json!(false)),
+            ("output", json!({})),
+        ] {
+            let mut missing = original.clone();
+            missing
+                .as_object_mut()
+                .expect("response object")
+                .remove(field);
+            assert!(
+                serde_json::from_value::<Response>(missing).is_err(),
+                "missing {field}"
+            );
+            for invalid in [json!(null), malformed] {
+                let mut value = original.clone();
+                value[field] = invalid;
+                assert!(
+                    serde_json::from_value::<Response>(value).is_err(),
+                    "invalid {field}"
+                );
+            }
+        }
+        for (field, invalid_values) in [
+            ("error", vec![json!(false), json!({})]),
+            (
+                "incomplete_details",
+                vec![json!(false), json!({"reason": 3})],
+            ),
+            ("instructions", vec![json!(false), json!({})]),
+            ("metadata", vec![json!(false), json!({"trace": 3})]),
+            ("parallel_tool_calls", vec![json!(null), json!("true")]),
+            ("temperature", vec![json!(false), json!("1")]),
+            ("tool_choice", vec![json!(null), json!(false)]),
+            ("tools", vec![json!(null), json!({})]),
+            ("top_p", vec![json!(false), json!("1")]),
+        ] {
+            for invalid in invalid_values {
+                let mut value = original.clone();
+                value[field] = invalid;
+                assert!(
+                    serde_json::from_value::<Response>(value).is_err(),
+                    "invalid {field}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn minimal_response_routes_failed_and_incomplete_without_details() {
+        let mut failed = minimal_response_value();
+        failed["status"] = json!("failed");
+        let response: Response = serde_json::from_value(failed).expect("failed without error");
+        assert_eq!(response.error(), None);
+        match response
+            .output_parsed::<Value>()
+            .expect_err("failed status")
+        {
+            OutputParseError::Failed(error) => {
+                assert_eq!(error.code().as_str(), "failed_without_error");
+                assert_eq!(error.message(), "response failed without an error payload");
+            }
+            other => panic!("expected failed status, got {other:?}"),
+        }
+
+        let mut incomplete = minimal_response_value();
+        incomplete["status"] = json!("incomplete");
+        let response: Response =
+            serde_json::from_value(incomplete).expect("incomplete without details");
+        assert_eq!(response.incomplete_details(), None);
+        assert!(matches!(
+            response.output_parsed::<Value>(),
+            Err(OutputParseError::Incomplete(None))
+        ));
+    }
+
     #[test]
     fn response_retains_extra_fields_and_exposes_safe_helpers() {
         let original = sample_response_value();
@@ -19106,10 +19287,10 @@ mod tests {
             prompt_cache_diagnostics: Omittable::Omitted,
             id: "resp_1".into(),
             created_at: 1000,
-            error: Nullable::Null,
-            incomplete_details: Nullable::Null,
-            instructions: Nullable::Null,
-            metadata: Nullable::Null,
+            error: Omittable::Value(Nullable::Null),
+            incomplete_details: Omittable::Value(Nullable::Null),
+            instructions: Omittable::Value(Nullable::Null),
+            metadata: Omittable::Value(Nullable::Null),
             model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: vec![ResponseOutputItem::Message(OutputMessage::new(
@@ -19119,11 +19300,11 @@ mod tests {
                     "{\"temperature\":20.5,\"summary\":\"Cloudy\"}",
                 ))],
             ))],
-            parallel_tool_calls: false,
-            temperature: Nullable::Null,
-            tool_choice: ToolChoice::Auto,
-            tools: vec![],
-            top_p: Nullable::Null,
+            parallel_tool_calls: Omittable::Value(false),
+            temperature: Omittable::Value(Nullable::Null),
+            tool_choice: Omittable::Value(ToolChoice::Auto),
+            tools: Omittable::Value(vec![]),
+            top_p: Omittable::Value(Nullable::Null),
             status: Omittable::Value(ResponseStatus::Completed),
             background: Omittable::Omitted,
             completed_at: Omittable::Omitted,
@@ -19157,10 +19338,10 @@ mod tests {
             prompt_cache_diagnostics: Omittable::Omitted,
             id: "resp_2".into(),
             created_at: 1000,
-            error: Nullable::Null,
-            incomplete_details: Nullable::Null,
-            instructions: Nullable::Null,
-            metadata: Nullable::Null,
+            error: Omittable::Value(Nullable::Null),
+            incomplete_details: Omittable::Value(Nullable::Null),
+            instructions: Omittable::Value(Nullable::Null),
+            metadata: Omittable::Value(Nullable::Null),
             model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: vec![ResponseOutputItem::Message(OutputMessage::new(
@@ -19170,11 +19351,11 @@ mod tests {
                     "Cannot assist with that request",
                 ))],
             ))],
-            parallel_tool_calls: false,
-            temperature: Nullable::Null,
-            tool_choice: ToolChoice::Auto,
-            tools: vec![],
-            top_p: Nullable::Null,
+            parallel_tool_calls: Omittable::Value(false),
+            temperature: Omittable::Value(Nullable::Null),
+            tool_choice: Omittable::Value(ToolChoice::Auto),
+            tools: Omittable::Value(vec![]),
+            top_p: Omittable::Value(Nullable::Null),
             status: Omittable::Value(ResponseStatus::Completed),
             background: Omittable::Omitted,
             completed_at: Omittable::Omitted,
@@ -19208,21 +19389,21 @@ mod tests {
             prompt_cache_diagnostics: Omittable::Omitted,
             id: "resp_3".into(),
             created_at: 1000,
-            error: Nullable::Null,
-            incomplete_details: Nullable::Value(IncompleteDetails {
+            error: Omittable::Value(Nullable::Null),
+            incomplete_details: Omittable::Value(Nullable::Value(IncompleteDetails {
                 reason: Omittable::Value(IncompleteReason::MaxOutputTokens),
                 extra: ExtraFields::new(),
-            }),
-            instructions: Nullable::Null,
-            metadata: Nullable::Null,
+            })),
+            instructions: Omittable::Value(Nullable::Null),
+            metadata: Omittable::Value(Nullable::Null),
             model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: vec![],
-            parallel_tool_calls: false,
-            temperature: Nullable::Null,
-            tool_choice: ToolChoice::Auto,
-            tools: vec![],
-            top_p: Nullable::Null,
+            parallel_tool_calls: Omittable::Value(false),
+            temperature: Omittable::Value(Nullable::Null),
+            tool_choice: Omittable::Value(ToolChoice::Auto),
+            tools: Omittable::Value(vec![]),
+            top_p: Omittable::Value(Nullable::Null),
             status: Omittable::Value(ResponseStatus::Incomplete),
             background: Omittable::Omitted,
             completed_at: Omittable::Omitted,
@@ -19259,12 +19440,12 @@ mod tests {
 
         // Failed case routes the service error payload instead of losing it.
         let failed_response = Response {
-            error: Nullable::Value(ResponseError {
+            error: Omittable::Value(Nullable::Value(ResponseError {
                 misalignment: Omittable::Omitted,
                 code: ResponseErrorCode::RateLimitExceeded,
                 message: "Rate limit reached".into(),
                 extra: Box::default(),
-            }),
+            })),
             status: Omittable::Value(ResponseStatus::Failed),
             ..incomplete_response
         };
@@ -19285,7 +19466,7 @@ mod tests {
 
         // A failed status without an error object still reports readably.
         let null_error_response = Response {
-            error: Nullable::Null,
+            error: Omittable::Value(Nullable::Null),
             status: Omittable::Value(ResponseStatus::Failed),
             ..failed_response
         };
@@ -19299,6 +19480,85 @@ mod tests {
             null_err.to_string(),
             "response failed: response failed without an error payload"
         );
+    }
+
+    #[test]
+    fn step_reasoning_item_preserves_nullable_status() {
+        for status in [
+            None,
+            Some(json!(null)),
+            Some(json!("completed")),
+            Some(json!("future_status")),
+        ] {
+            let mut value = json!({
+                "type": "reasoning",
+                "id": "rs_step",
+                "summary": [],
+                "content": [{"type": "reasoning_text", "text": "A greeting."}],
+                "encrypted_content": null
+            });
+            if let Some(status) = status {
+                value["status"] = status;
+            }
+            let output: ResponseOutputItem =
+                serde_json::from_value(value.clone()).expect("nullable reasoning status");
+            assert!(matches!(output, ResponseOutputItem::Reasoning(_)));
+            assert_eq!(
+                serde_json::to_value(output).expect("output round trip"),
+                value
+            );
+            let input: ResponseInputItem =
+                serde_json::from_value(value.clone()).expect("replay reasoning status");
+            assert_eq!(
+                serde_json::to_value(input).expect("input round trip"),
+                value
+            );
+            for invalid in [json!(true), json!(1), json!({}), json!([])] {
+                value["status"] = invalid;
+                assert!(serde_json::from_value::<ResponseOutputItem>(value.clone()).is_err());
+            }
+        }
+        let constructed =
+            ReasoningItem::new("rs_step", vec![]).status(FunctionCallItemStatus::Completed);
+        assert_eq!(
+            serde_json::to_value(constructed).expect("constructed status")["status"],
+            "completed"
+        );
+    }
+
+    #[test]
+    fn step_output_text_preserves_nullable_logprobs() {
+        let base = json!({"type": "output_text", "text": "Hi", "annotations": []});
+        for logprobs in [
+            json!(null),
+            json!([]),
+            json!([{"token": "Hi", "logprob": -0.1, "bytes": [72, 105], "top_logprobs": [], "future": true}]),
+        ] {
+            let mut value = base.clone();
+            value["logprobs"] = logprobs;
+            let text: OutputText =
+                serde_json::from_value(value.clone()).expect("nullable logprobs");
+            assert_eq!(
+                text.logprobs().len(),
+                value["logprobs"].as_array().map_or(0, Vec::len)
+            );
+            assert_eq!(
+                serde_json::to_value(text).expect("logprobs round trip"),
+                value
+            );
+        }
+        for invalid in [
+            json!(false),
+            json!(0),
+            json!("logprobs"),
+            json!({}),
+            json!([null]),
+            json!([{}]),
+        ] {
+            let mut value = base.clone();
+            value["logprobs"] = invalid;
+            assert!(serde_json::from_value::<OutputContent>(value).is_err());
+        }
     }
 
     #[test]
@@ -19441,18 +19701,18 @@ mod tests {
             prompt_cache_diagnostics: Omittable::Omitted,
             id: "resp_test".into(),
             created_at: 1000,
-            error: Nullable::Null,
-            incomplete_details: Nullable::Null,
-            instructions: Nullable::Null,
-            metadata: Nullable::Null,
+            error: Omittable::Value(Nullable::Null),
+            incomplete_details: Omittable::Value(Nullable::Null),
+            instructions: Omittable::Value(Nullable::Null),
+            metadata: Omittable::Value(Nullable::Null),
             model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: outputs,
-            parallel_tool_calls: false,
-            temperature: Nullable::Null,
-            tool_choice: ToolChoice::Auto,
-            tools: vec![],
-            top_p: Nullable::Null,
+            parallel_tool_calls: Omittable::Value(false),
+            temperature: Omittable::Value(Nullable::Null),
+            tool_choice: Omittable::Value(ToolChoice::Auto),
+            tools: Omittable::Value(vec![]),
+            top_p: Omittable::Value(Nullable::Null),
             status: Omittable::Value(ResponseStatus::Completed),
             background: Omittable::Omitted,
             completed_at: Omittable::Omitted,
@@ -20543,18 +20803,18 @@ mod tests {
             prompt_cache_diagnostics: Omittable::Omitted,
             id: "resp_1".into(),
             created_at: 1,
-            error: Nullable::Null,
-            incomplete_details: Nullable::Null,
-            instructions: Nullable::Null,
-            metadata: Nullable::Null,
+            error: Omittable::Value(Nullable::Null),
+            incomplete_details: Omittable::Value(Nullable::Null),
+            instructions: Omittable::Value(Nullable::Null),
+            metadata: Omittable::Value(Nullable::Null),
             model: "gpt-5.6-sol".into(),
             object: ResponseObjectTag::Response,
             output: vec![],
-            parallel_tool_calls: false,
-            temperature: Nullable::Null,
-            tool_choice: ToolChoice::Auto,
-            tools: vec![],
-            top_p: Nullable::Null,
+            parallel_tool_calls: Omittable::Value(false),
+            temperature: Omittable::Value(Nullable::Null),
+            tool_choice: Omittable::Value(ToolChoice::Auto),
+            tools: Omittable::Value(vec![]),
+            top_p: Omittable::Value(Nullable::Null),
             status: Omittable::Omitted,
             background: Omittable::Omitted,
             completed_at: Omittable::Omitted,
@@ -21386,6 +21646,84 @@ mod tests {
     }
 
     #[test]
+    fn response_usage_preserves_omitted_token_details() {
+        // A glm-5.3-flash Responses reply reported only the three totals.
+        // Each breakdown can be omitted independently without inventing zeros.
+        for input_details in [false, true] {
+            for output_details in [false, true] {
+                let mut value = json!({
+                    "input_tokens": 13,
+                    "output_tokens": 264,
+                    "total_tokens": 277,
+                    "future_usage": true
+                });
+                if input_details {
+                    value["input_tokens_details"] =
+                        json!({"cached_tokens": 0, "future_input_count": 2});
+                }
+                if output_details {
+                    value["output_tokens_details"] =
+                        json!({"reasoning_tokens": 0, "future_output_count": 3});
+                }
+                let usage: ResponseUsage =
+                    serde_json::from_value(value.clone()).expect("optional token details");
+                assert_eq!(usage.input_tokens(), 13);
+                assert_eq!(usage.output_tokens(), 264);
+                assert_eq!(usage.total_tokens(), 277);
+                assert_eq!(
+                    usage
+                        .input_tokens_details()
+                        .map(InputTokensDetails::cached_tokens),
+                    input_details.then_some(0)
+                );
+                assert_eq!(
+                    usage
+                        .output_tokens_details()
+                        .map(OutputTokensDetails::reasoning_tokens),
+                    output_details.then_some(0)
+                );
+                assert_eq!(serde_json::to_value(usage).expect("round trip"), value);
+            }
+        }
+    }
+
+    #[test]
+    fn response_usage_rejects_missing_totals_and_malformed_token_details() {
+        let totals = json!({"input_tokens": 13, "output_tokens": 264, "total_tokens": 277});
+        for field in ["input_tokens", "output_tokens", "total_tokens"] {
+            let mut missing = totals.clone();
+            missing.as_object_mut().expect("usage object").remove(field);
+            assert!(serde_json::from_value::<ResponseUsage>(missing).is_err());
+            for invalid in [json!(null), json!(-1), json!(1.5), json!("13"), json!(true)] {
+                let mut value = totals.clone();
+                value[field] = invalid;
+                assert!(serde_json::from_value::<ResponseUsage>(value).is_err());
+            }
+        }
+        for (field, count) in [
+            ("input_tokens_details", "cached_tokens"),
+            ("output_tokens_details", "reasoning_tokens"),
+        ] {
+            for invalid in [
+                json!(null),
+                json!({}),
+                json!([]),
+                json!(0),
+                json!("details"),
+            ] {
+                let mut value = totals.clone();
+                value[field] = invalid;
+                assert!(serde_json::from_value::<ResponseUsage>(value).is_err());
+            }
+            for invalid in [json!(null), json!(-1), json!(1.5), json!("0"), json!(true)] {
+                let mut value = totals.clone();
+                value[field] = json!({count: invalid});
+                assert!(serde_json::from_value::<ResponseUsage>(value).is_err());
+            }
+        }
+    }
+
+    #[test]
     fn response_usage_decodes_compute_units() {
         let value = json!({
             "input_tokens": 10,
@@ -21426,8 +21764,9 @@ mod tests {
         });
         let usage: ResponseUsage =
             serde_json::from_value(official.clone()).expect("official compact usage");
-        assert_eq!(usage.input_tokens_details().cached_tokens(), 0);
-        assert_eq!(usage.input_tokens_details().cache_write_tokens(), Some(0));
+        let details = usage.input_tokens_details().expect("input details");
+        assert_eq!(details.cached_tokens(), 0);
+        assert_eq!(details.cache_write_tokens(), Some(0));
         assert_eq!(
             serde_json::to_value(&usage).expect("re-encode official usage"),
             official
@@ -21441,7 +21780,13 @@ mod tests {
         });
         let usage: ResponseUsage =
             serde_json::from_value(compatible.clone()).expect("compatible usage");
-        assert_eq!(usage.input_tokens_details().cache_write_tokens(), None);
+        assert_eq!(
+            usage
+                .input_tokens_details()
+                .expect("input details")
+                .cache_write_tokens(),
+            None
+        );
         assert_eq!(
             serde_json::to_value(&usage).expect("re-encode compatible usage"),
             compatible,
@@ -21451,7 +21796,13 @@ mod tests {
         let mut counted = official;
         counted["input_tokens_details"]["cache_write_tokens"] = json!(17);
         let usage: ResponseUsage = serde_json::from_value(counted.clone()).expect("reported count");
-        assert_eq!(usage.input_tokens_details().cache_write_tokens(), Some(17));
+        assert_eq!(
+            usage
+                .input_tokens_details()
+                .expect("input details")
+                .cache_write_tokens(),
+            Some(17)
+        );
         assert_eq!(
             serde_json::to_value(&usage).expect("re-encode count"),
             counted
@@ -21522,6 +21873,7 @@ mod tests {
             compacted
                 .usage()
                 .input_tokens_details()
+                .expect("input details")
                 .cache_write_tokens(),
             Some(0)
         );

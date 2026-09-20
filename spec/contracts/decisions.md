@@ -5150,3 +5150,25 @@ until a decision is recorded here and its fixtures pass.
 - Decision: lower the 288 pinned client operations before applying documentation additions. Keep later routes exclusively in `documented_operations`, reject duplicate or unregistered routes across these inventories, and apply the additions only to reviewed schema projections. Documented route labels are local identities and never asserted upstream operation IDs. Derive every supplement fingerprint from the actual bytes read for that generation run, rather than a compile-time embedded copy.
 - Impact: Safety Alerts is counted once and its `created_at` schema accepts fractional timestamps, consistent with the reviewed DTO. Schema supplements remain additions-only and preserve the immutable upstream snapshot.
 - Tests: generator regressions cover inventory separation, duplicate/unregistered documented routes, and runtime supplement fingerprints.
+
+## D0298 — Accept minimal Responses resources from compatible providers
+
+- Status: accepted
+- Reviewed: 2026-09-20
+- Scope: `Response` error/incomplete details and echoed settings; `ResponseUsage.input_tokens_details` and `output_tokens_details` shared by Responses, compact and beta Responses
+- Sources: a live reproduction of the user's `glm-5.3-flash` HTTP 200 response returned only `id`, `object`, `created_at`, `model`, `status`, `output`, and `usage`, with `usage` equal to `{"input_tokens":13,"output_tokens":264,"total_tokens":277}`. The official baseline remains https://developers.openai.com/api/reference/cli/resources/responses/methods/create and the pinned schemas in `spec/upstream/openapi-2026-08-29.json`.
+- Decision: store each usage breakdown as `Omittable<T>` and expose it as `Option<&T>`. Wrap `Response.error`, `incomplete_details`, `instructions`, `metadata`, `parallel_tool_calls`, `temperature`, `tool_choice`, `tools`, and `top_p` in `Omittable` while retaining their existing value/null validation. Preserve omissions, reported values, and provider extensions on serialization. Response identity, creation time, model, output, token totals, and counts inside a reported breakdown remain required. Failed responses without error details retain the existing structured-output failure fallback.
+- Overrides: D0293's retention of all other required usage fields is relaxed only for these two objects. The listed top-level `Response` fields also become omittable based on the observed compatible-provider response; beta Response top-level fields are unchanged. These are handwritten DTO compatibility exceptions; official contract projections and pinned upstream bytes remain unchanged.
+- Impact: both breakdown getters change from references to optional references. Callers must handle an unreported breakdown without inventing zero counts. Existing response error/incomplete accessors keep their signatures. No release version is changed in this fix.
+- Tests: `response_usage_preserves_omitted_token_details`, `response_usage_rejects_missing_totals_and_malformed_token_details`, minimal Response round-trip and malformed-field tests, and `glm_minimal_response_decodes_and_replays_history` cover independent omissions, strict invalid values, failure handling, and two-turn history replay.
+
+## D0299 — Preserve nullable output fields in StepFun Responses
+
+- Status: accepted
+- Reviewed: 2026-09-20
+- Scope: `ReasoningItem.status` and `OutputText.logprobs`
+- Sources: the user's captured `step-5-preview` HTTP 200 response contains `output[0].status: null` on a reasoning item and `output[1].content[0].logprobs: null` on output text. `crates/openai-rs-client/tests/fixtures/step_response.json` reproduces the shape with synthetic ids and text.
+- Decision: store reasoning status as `Omittable<Nullable<ResponseItemStatus>>` and output-text logprobs as `Nullable<Vec<LogProb>>`. Preserve explicit nulls and reported values through serialization and `to_input_items()` history replay. Invalid present types and malformed known items still fail. Omitted logprobs retain the existing empty-array default; status omission remains distinct from null.
+- Overrides: the handwritten DTOs accept these two observed compatible-provider nulls. D0136's explicit empty-array preservation and missing-array defaults stay intact. Global nullable behavior, event logprobs, required identifiers/text, official projections, and pinned upstream bytes remain unchanged.
+- Impact: public constructor and accessor signatures are unchanged; `OutputText::logprobs()` returns an empty slice for null, as it does for unavailable probabilities. No dependency or release-version changes.
+- Tests: `step_reasoning_item_preserves_nullable_status`, `step_output_text_preserves_nullable_logprobs`, and `step_response_with_null_output_fields_decodes_and_replays_history` cover null/omitted/value states, invalid types, lossless full responses, and two-turn history replay.
