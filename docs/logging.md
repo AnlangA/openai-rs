@@ -69,7 +69,7 @@ already uses):
 
 ```toml
 [dependencies]
-openai-rs-sdk = "0.2.0"
+openai-rs-sdk = "0.2.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 ```
 

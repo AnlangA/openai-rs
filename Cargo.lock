@@ -1494,7 +1494,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "openai-rs-client"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -1532,7 +1532,7 @@ dependencies = [
 
 [[package]]
 name = "openai-rs-codex"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1559,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "openai-rs-contract-tests"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1580,7 +1580,7 @@ dependencies = [
 
 [[package]]
 name = "openai-rs-rmcp"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "openai-rs-types",
@@ -1596,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "openai-rs-sdk"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "openai-rs-client",
  "openai-rs-codex",
@@ -1611,7 +1611,7 @@ dependencies = [
 
 [[package]]
 name = "openai-rs-types"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "proptest",
@@ -3590,7 +3590,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",

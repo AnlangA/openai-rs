@@ -8,12 +8,12 @@ Responses API.
 > a complete OpenAI API implementation, has not made a stable API promise, and
 > should not yet be used as a drop-in replacement for an official SDK. The
 > initial crates.io packages were published as `0.1.0`; the current workspace
-> version is `0.2.0` under the crate name
+> version is `0.2.1` under the crate name
 > [`openai-rs-sdk`](https://crates.io/crates/openai-rs-sdk) (import as
 > `openai_rs`); treat them as pre-release until a supported stable version is
 > documented.
 
-See the [0.2.0 release notes](CHANGELOG.md) for changes and migration guidance.
+See the [0.2.1 release notes](CHANGELOG.md) for changes and migration guidance.
 
 ## Current status
 
@@ -230,6 +230,23 @@ may be omitted. `InputTokensDetails::cache_write_tokens()` returns `Option<u64>`
 Other reported usage counts and response fields are preserved. This accessor
 previously returned `u64`, so applications using it must now handle `None`.
 
+GLM Responses compatibility: `usage.input_tokens_details` and
+`usage.output_tokens_details` may each be omitted. The corresponding
+`ResponseUsage` accessors now return `Option<&InputTokensDetails>` and
+`Option<&OutputTokensDetails>` instead of references. `None` means the provider
+did not report that breakdown; serialization preserves its absence. The three
+token totals remain required, and malformed reported breakdowns are rejected.
+GLM may also omit response error/incomplete details and echoed request settings
+(`instructions`, `metadata`, `parallel_tool_calls`, `temperature`, `tool_choice`,
+`tools`, and `top_p`). These fields retain their absence on serialization;
+response identity, creation time, model, and output remain required.
+
+StepFun Responses compatibility: reasoning items may report `status: null`, and
+output text may report `logprobs: null`. Both nulls survive decoding and history
+replay. `OutputText::logprobs()` continues to return an empty slice when no
+probabilities are available; omitted `logprobs` retain the existing empty-array
+serialization behavior.
+
 ## Logging
 
 All examples initialize a `tracing` subscriber that reads the standard `RUST_LOG`
@@ -269,7 +286,7 @@ an existing integration:
 
 ```toml
 [dependencies]
-openai-rs-sdk = { version = "0.2.0", features = ["legacy-completions"] }
+openai-rs-sdk = { version = "0.2.1", features = ["legacy-completions"] }
 ```
 
 ```rust
